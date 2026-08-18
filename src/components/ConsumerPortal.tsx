@@ -2019,26 +2019,26 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         {activeTab === 'bills' && (
           <div className="space-y-6 animate-fade-in" id="consumer-tab-bills">
             
-            {/* Header & Filter Controls */}
-            <div className="bg-white border border-slate-200/80 rounded-3xl p-6 sm:p-7 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+            {/* Header & Filter Controls - Eye-friendly Dark Slate Theme */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-5 text-white">
               <div>
-                <div className="flex items-center space-x-2">
-                  <span className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">
+                <div className="flex items-center space-x-2.5">
+                  <span className="p-2 bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl">
                     <ReceiptText className="h-4 w-4" />
                   </span>
-                  <h3 className="text-base font-black text-slate-900 uppercase tracking-wider">
+                  <h3 className="text-base font-black text-white uppercase tracking-wider">
                     Complete Water Bill History
                   </h3>
                 </div>
-                <p className="text-xs text-slate-500 mt-1">
+                <p className="text-xs text-slate-400 mt-1.5 font-medium">
                   Audit all historical bills, due dates, outstanding dues, and official receipts.
                 </p>
               </div>
 
-              {/* Status Filter Tabs - Prominent, high-contrast buttons */}
-              <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-100 rounded-2xl border border-slate-200 shadow-2xs">
-                <div className="hidden sm:flex items-center space-x-1 pl-2 pr-1 text-slate-500 text-[11px] font-black uppercase tracking-wider">
-                  <ListFilter className="h-3.5 w-3.5 text-blue-600" />
+              {/* Status Filter Tabs - Eye-friendly dark container with clear, comfortable pill states */}
+              <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-950/90 rounded-2xl border border-slate-800 shadow-inner">
+                <div className="hidden sm:flex items-center space-x-1.5 pl-2.5 pr-1 text-slate-400 text-[11px] font-black uppercase tracking-wider">
+                  <ListFilter className="h-3.5 w-3.5 text-blue-400" />
                   <span>Filter:</span>
                 </div>
 
@@ -2046,14 +2046,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   onClick={() => setBillFilter('all')}
                   className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
                     billFilter === 'all' 
-                      ? 'bg-slate-900 text-white shadow-md' 
-                      : 'bg-white text-slate-700 hover:text-slate-900 hover:bg-slate-50 border border-slate-200/80'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30 border border-blue-500' 
+                      : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/80'
                   }`}
                   id="filter-bills-all"
                 >
                   <span>All</span>
-                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
-                    billFilter === 'all' ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600'
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                    billFilter === 'all' ? 'bg-black/30 text-white' : 'bg-slate-800 text-slate-300'
                   }`}>
                     {readings.length}
                   </span>
@@ -2063,15 +2063,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   onClick={() => setBillFilter('unpaid')}
                   className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
                     billFilter === 'unpaid' 
-                      ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20' 
-                      : 'bg-white text-rose-700 hover:text-rose-800 hover:bg-rose-50 border border-rose-200'
+                      ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 border border-rose-500' 
+                      : 'bg-slate-900 text-rose-300 hover:text-rose-200 hover:bg-rose-950/40 border border-rose-900/60'
                   }`}
                   id="filter-bills-unpaid"
                 >
                   <Clock className="h-3.5 w-3.5 shrink-0" />
                   <span>Unpaid</span>
-                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
-                    billFilter === 'unpaid' ? 'bg-rose-800 text-white' : 'bg-rose-100 text-rose-700'
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                    billFilter === 'unpaid' ? 'bg-black/30 text-white' : 'bg-rose-950/80 text-rose-300'
                   }`}>
                     {unpaidBills.length}
                   </span>
@@ -2081,15 +2081,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   onClick={() => setBillFilter('partial')}
                   className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
                     billFilter === 'partial' 
-                      ? 'bg-amber-600 text-white shadow-md shadow-amber-600/20' 
-                      : 'bg-white text-amber-700 hover:text-amber-800 hover:bg-amber-50 border border-amber-200'
+                      ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30 border border-amber-500' 
+                      : 'bg-slate-900 text-amber-300 hover:text-amber-200 hover:bg-amber-950/40 border border-amber-900/60'
                   }`}
                   id="filter-bills-partial"
                 >
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                   <span>Partial</span>
-                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
-                    billFilter === 'partial' ? 'bg-amber-800 text-white' : 'bg-amber-100 text-amber-700'
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                    billFilter === 'partial' ? 'bg-black/30 text-white' : 'bg-amber-950/80 text-amber-300'
                   }`}>
                     {partialBills.length}
                   </span>
@@ -2099,15 +2099,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   onClick={() => setBillFilter('paid')}
                   className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
                     billFilter === 'paid' 
-                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20' 
-                      : 'bg-white text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 border border-emerald-200'
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 border border-emerald-500' 
+                      : 'bg-slate-900 text-emerald-300 hover:text-emerald-200 hover:bg-emerald-950/40 border border-emerald-900/60'
                   }`}
                   id="filter-bills-paid"
                 >
                   <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                   <span>Paid</span>
-                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
-                    billFilter === 'paid' ? 'bg-emerald-800 text-white' : 'bg-emerald-100 text-emerald-700'
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                    billFilter === 'paid' ? 'bg-black/30 text-white' : 'bg-emerald-950/80 text-emerald-300'
                   }`}>
                     {paidBills.length}
                   </span>
@@ -2117,20 +2117,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             {/* Interactive Checkout Modal (if active) */}
             {activePaymentBill && (
-              <div className="bg-white border-2 border-blue-500/50 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xl animate-fade-in">
-                <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl animate-fade-in text-white">
+                <div className="flex justify-between items-center pb-4 border-b border-slate-800">
                   <div>
-                    <h3 className="text-base font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                      <ShieldCheck className="h-5 w-5 text-blue-600" />
+                    <h3 className="text-base font-black text-white uppercase tracking-wider flex items-center gap-2">
+                      <ShieldCheck className="h-5 w-5 text-blue-400" />
                       <span>Online Payment Terminal</span>
                     </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
+                    <p className="text-xs text-slate-400 mt-0.5">
                       Settling {activePaymentBill.billingPeriod} Statement for Account #{activePaymentBill.accountNumber}
                     </p>
                   </div>
                   <button
                     onClick={() => setActivePaymentBill(null)}
-                    className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                    className="p-1.5 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition cursor-pointer"
                   >
                     <X className="h-5 w-5" />
                   </button>
@@ -2140,23 +2140,23 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   /* Processing Loader */
                   <div className="py-12 text-center space-y-5">
                     <div className="relative h-16 w-16 mx-auto">
-                      <div className="absolute inset-0 rounded-full border-4 border-slate-100 border-t-blue-600 animate-spin"></div>
-                      <div className="absolute inset-3 rounded-full bg-blue-50 flex items-center justify-center">
-                        <Activity className="h-4 w-4 text-blue-600 animate-pulse" />
+                      <div className="absolute inset-0 rounded-full border-4 border-slate-800 border-t-blue-500 animate-spin"></div>
+                      <div className="absolute inset-3 rounded-full bg-blue-950/60 flex items-center justify-center">
+                        <Activity className="h-4 w-4 text-blue-400 animate-pulse" />
                       </div>
                     </div>
                     <div className="max-w-sm mx-auto space-y-2">
-                      <div className="flex justify-between text-xs font-bold text-slate-500 px-1">
+                      <div className="flex justify-between text-xs font-bold text-slate-400 px-1">
                         <span>Authorizing Settlement</span>
                         <span>{paymentStep.percentage}%</span>
                       </div>
-                      <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
                         <div 
-                          className="h-full bg-blue-600 transition-all duration-500 ease-out"
+                          className="h-full bg-blue-500 transition-all duration-500 ease-out"
                           style={{ width: `${paymentStep.percentage}%` }}
                         ></div>
                       </div>
-                      <p className="text-xs font-bold text-slate-800 pt-1">{paymentStep.text}</p>
+                      <p className="text-xs font-bold text-slate-200 pt-1">{paymentStep.text}</p>
                     </div>
                   </div>
                 ) : (
@@ -2173,20 +2173,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                       return (
                         <>
-                          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                          <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                             <div>
                               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Billing Period</span>
-                              <span className="font-extrabold text-slate-900 text-sm">{activePaymentBill.billingPeriod} Water Tariff</span>
-                              <div className="text-[11px] text-slate-500 mt-0.5">
-                                Gross Bill: <strong className="font-mono text-slate-700">₱{totalBill.toFixed(2)}</strong>
+                              <span className="font-extrabold text-white text-sm">{activePaymentBill.billingPeriod} Water Tariff</span>
+                              <div className="text-[11px] text-slate-400 mt-0.5">
+                                Gross Bill: <strong className="font-mono text-slate-200">₱{totalBill.toFixed(2)}</strong>
                                 {credited > 0 && (
-                                  <span> • Previously Paid: <strong className="font-mono text-emerald-600">₱{credited.toFixed(2)}</strong></span>
+                                  <span> • Previously Paid: <strong className="font-mono text-emerald-400">₱{credited.toFixed(2)}</strong></span>
                                 )}
                               </div>
                             </div>
                             <div className="text-left sm:text-right">
                               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Net Remaining Due</span>
-                              <span className="font-mono font-black text-rose-700 text-2xl">
+                              <span className="font-mono font-black text-rose-400 text-2xl">
                                 ₱{maxPayable.toFixed(2)}
                               </span>
                             </div>
@@ -2194,7 +2194,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                           {/* Payment Mode Selector (Full vs Partial) */}
                           <div className="space-y-3">
-                            <label className="block text-xs font-black text-slate-700 uppercase tracking-wider">
+                            <label className="block text-xs font-black text-slate-300 uppercase tracking-wider">
                               Choose Payment Option
                             </label>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2203,20 +2203,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                 onClick={() => setPaymentMode('full')}
                                 className={`p-4 border-2 rounded-2xl text-left transition cursor-pointer flex flex-col justify-between space-y-2 ${
                                   paymentMode === 'full'
-                                    ? 'border-blue-600 bg-blue-50/70 shadow-sm'
-                                    : 'border-slate-200 bg-white hover:border-slate-300'
+                                    ? 'border-blue-500 bg-blue-950/60 shadow-md shadow-blue-950'
+                                    : 'border-slate-800 bg-slate-950/80 hover:border-slate-700 hover:bg-slate-800/70 text-slate-300'
                                 }`}
                               >
                                 <div className="flex justify-between items-center">
-                                  <span className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                                  <span className="text-xs font-black text-white uppercase tracking-wider">
                                     Pay Full Amount
                                   </span>
-                                  <CheckCircle2 className={`h-4 w-4 ${paymentMode === 'full' ? 'text-blue-600' : 'text-slate-300'}`} />
+                                  <CheckCircle2 className={`h-4 w-4 ${paymentMode === 'full' ? 'text-blue-400' : 'text-slate-600'}`} />
                                 </div>
-                                <div className="font-mono font-black text-blue-700 text-lg">
+                                <div className="font-mono font-black text-blue-400 text-lg">
                                   ₱{maxPayable.toFixed(2)}
                                 </div>
-                                <span className="text-[10px] text-slate-500 font-medium">Clears entire statement balance instantly</span>
+                                <span className="text-[10px] text-slate-400 font-medium">Clears entire statement balance instantly</span>
                               </button>
 
                               <button
@@ -2229,32 +2229,32 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                 }}
                                 className={`p-4 border-2 rounded-2xl text-left transition cursor-pointer flex flex-col justify-between space-y-2 ${
                                   paymentMode === 'partial'
-                                    ? 'border-amber-600 bg-amber-50/70 shadow-sm'
-                                    : 'border-slate-200 bg-white hover:border-slate-300'
+                                    ? 'border-amber-500 bg-amber-950/60 shadow-md shadow-amber-950'
+                                    : 'border-slate-800 bg-slate-950/80 hover:border-slate-700 hover:bg-slate-800/70 text-slate-300'
                                 }`}
                               >
                                 <div className="flex justify-between items-center">
-                                  <span className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                                  <span className="text-xs font-black text-white uppercase tracking-wider">
                                     Pay Partial / Staggered
                                   </span>
-                                  <AlertTriangle className={`h-4 w-4 ${paymentMode === 'partial' ? 'text-amber-600' : 'text-slate-300'}`} />
+                                  <AlertTriangle className={`h-4 w-4 ${paymentMode === 'partial' ? 'text-amber-400' : 'text-slate-600'}`} />
                                 </div>
-                                <div className="font-mono font-black text-amber-700 text-lg">
+                                <div className="font-mono font-black text-amber-400 text-lg">
                                   ₱{currentPaying.toFixed(2)}
                                 </div>
-                                <span className="text-[10px] text-slate-500 font-medium">Tender partial amount & keep balance active</span>
+                                <span className="text-[10px] text-slate-400 font-medium">Tender partial amount & keep balance active</span>
                               </button>
                             </div>
                           </div>
 
                           {/* Partial Amount Input & Quick Chips */}
                           {paymentMode === 'partial' && (
-                            <div className="bg-amber-50/60 border border-amber-200 rounded-2xl p-4 space-y-3 animate-fade-in">
+                            <div className="bg-slate-950/90 border border-amber-900/60 rounded-2xl p-4 space-y-3 animate-fade-in">
                               <div className="flex justify-between items-center">
-                                <label className="block text-[11px] font-black text-amber-900 uppercase tracking-wider">
+                                <label className="block text-[11px] font-black text-amber-400 uppercase tracking-wider">
                                   Enter Partial Amount to Pay (₱)
                                 </label>
-                                <span className="text-[10px] font-bold text-amber-700">
+                                <span className="text-[10px] font-bold text-amber-300">
                                   Max: ₱{maxPayable.toFixed(2)}
                                 </span>
                               </div>
@@ -2268,41 +2268,41 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   required
                                   value={partialCustomAmount}
                                   onChange={(e) => setPartialCustomAmount(e.target.value)}
-                                  className="w-full bg-white border border-amber-300 pl-8 pr-3 py-2.5 text-base rounded-xl font-mono font-black text-slate-900 focus:border-amber-600"
+                                  className="w-full bg-slate-900 border border-amber-700/80 pl-8 pr-3 py-2.5 text-base rounded-xl font-mono font-black text-white focus:border-amber-500"
                                   placeholder="0.00"
                                 />
                               </div>
 
                               {/* Quick Selection Chips */}
                               <div className="flex flex-wrap items-center gap-2 pt-1">
-                                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Quick:</span>
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Quick:</span>
                                 <button
                                   type="button"
                                   onClick={() => setPartialCustomAmount((maxPayable * 0.25).toFixed(2))}
-                                  className="px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-lg text-xs font-bold font-mono cursor-pointer"
+                                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/60 rounded-lg text-xs font-bold font-mono cursor-pointer"
                                 >
                                   25% (₱{(maxPayable * 0.25).toFixed(2)})
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setPartialCustomAmount((maxPayable * 0.50).toFixed(2))}
-                                  className="px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-lg text-xs font-bold font-mono cursor-pointer"
+                                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/60 rounded-lg text-xs font-bold font-mono cursor-pointer"
                                 >
                                   50% (₱{(maxPayable * 0.50).toFixed(2)})
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setPartialCustomAmount((maxPayable * 0.75).toFixed(2))}
-                                  className="px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-lg text-xs font-bold font-mono cursor-pointer"
+                                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/60 rounded-lg text-xs font-bold font-mono cursor-pointer"
                                 >
                                   75% (₱{(maxPayable * 0.75).toFixed(2)})
                                 </button>
                               </div>
 
                               {/* Real-time Aftermath Calculation */}
-                              <div className="pt-2 border-t border-amber-200/80 flex justify-between items-center text-xs">
-                                <span className="text-amber-800 font-bold">Remaining Balance After Payment:</span>
-                                <span className="font-mono font-black text-rose-700">₱{remainingAfter.toFixed(2)}</span>
+                              <div className="pt-2 border-t border-slate-800 flex justify-between items-center text-xs">
+                                <span className="text-amber-300 font-bold">Remaining Balance After Payment:</span>
+                                <span className="font-mono font-black text-rose-400">₱{remainingAfter.toFixed(2)}</span>
                               </div>
                             </div>
                           )}
@@ -2312,7 +2312,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                     {/* Method Selector */}
                     <div>
-                      <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2.5">
+                      <label className="block text-xs font-black text-slate-300 uppercase tracking-wider mb-2.5">
                         Select Payment Method
                       </label>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -2321,11 +2321,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           onClick={() => setPaymentMethod('gcash')}
                           className={`p-3.5 border rounded-2xl flex flex-col items-center justify-center space-y-2 transition cursor-pointer ${
                             paymentMethod === 'gcash' 
-                              ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-xs' 
-                              : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                              ? 'border-blue-500 bg-blue-950/80 text-blue-300 shadow-xs' 
+                              : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-800 text-slate-300'
                           }`}
                         >
-                          <Smartphone className="h-5 w-5 text-blue-600" />
+                          <Smartphone className="h-5 w-5 text-blue-400" />
                           <span className="text-xs font-bold">GCash Mobile</span>
                         </button>
                         <button
@@ -2333,11 +2333,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           onClick={() => setPaymentMethod('maya')}
                           className={`p-3.5 border rounded-2xl flex flex-col items-center justify-center space-y-2 transition cursor-pointer ${
                             paymentMethod === 'maya' 
-                              ? 'border-emerald-600 bg-emerald-50 text-emerald-700 shadow-xs' 
-                              : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                              ? 'border-emerald-500 bg-emerald-950/80 text-emerald-300 shadow-xs' 
+                              : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-800 text-slate-300'
                           }`}
                         >
-                          <Smartphone className="h-5 w-5 text-emerald-600" />
+                          <Smartphone className="h-5 w-5 text-emerald-400" />
                           <span className="text-xs font-bold">Maya Wallet</span>
                         </button>
                         <button
@@ -2345,11 +2345,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           onClick={() => setPaymentMethod('card')}
                           className={`p-3.5 border rounded-2xl flex flex-col items-center justify-center space-y-2 transition cursor-pointer ${
                             paymentMethod === 'card' 
-                              ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-xs' 
-                              : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                              ? 'border-indigo-500 bg-indigo-950/80 text-indigo-300 shadow-xs' 
+                              : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-800 text-slate-300'
                           }`}
                         >
-                          <CreditCard className="h-5 w-5 text-indigo-600" />
+                          <CreditCard className="h-5 w-5 text-indigo-400" />
                           <span className="text-xs font-bold">Debit/Credit Card</span>
                         </button>
                         <button
@@ -2357,11 +2357,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           onClick={() => setPaymentMethod('bank')}
                           className={`p-3.5 border rounded-2xl flex flex-col items-center justify-center space-y-2 transition cursor-pointer ${
                             paymentMethod === 'bank' 
-                              ? 'border-amber-600 bg-amber-50 text-amber-800 shadow-xs' 
-                              : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                              ? 'border-amber-500 bg-amber-950/80 text-amber-300 shadow-xs' 
+                              : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-800 text-slate-300'
                           }`}
                         >
-                          <Waves className="h-5 w-5 text-amber-600" />
+                          <Waves className="h-5 w-5 text-amber-400" />
                           <span className="text-xs font-bold">Landbank Link</span>
                         </button>
                       </div>
@@ -2369,66 +2369,66 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                     {/* Method Inputs */}
                     {(paymentMethod === 'gcash' || paymentMethod === 'maya') && (
-                      <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 space-y-2">
-                        <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                      <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
+                        <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">
                           Registered {paymentMethod === 'gcash' ? 'GCash' : 'Maya'} Mobile Number
                         </label>
                         <div className="relative">
-                          <span className="absolute left-3.5 top-2.5 text-slate-400 font-mono font-bold text-xs">+63</span>
+                          <span className="absolute left-3.5 top-2.5 text-slate-500 font-mono font-bold text-xs">+63</span>
                           <input
                             type="tel"
                             required
                             value={gcashPhone}
                             onChange={(e) => setGcashPhone(e.target.value)}
                             placeholder="917 123 4567"
-                            className="w-full bg-white border border-slate-300 pl-12 pr-3 py-2.5 text-xs rounded-xl focus:border-blue-600 font-mono font-bold text-slate-900"
+                            className="w-full bg-slate-900 border border-slate-700 pl-12 pr-3 py-2.5 text-xs rounded-xl focus:border-blue-500 font-mono font-bold text-white"
                           />
                         </div>
                       </div>
                     )}
 
                     {paymentMethod === 'card' && (
-                      <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 space-y-3">
+                      <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3">
                         <div>
-                          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">Cardholder Name</label>
+                          <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">Cardholder Name</label>
                           <input
                             type="text"
                             required
                             value={cardName}
                             onChange={(e) => setCardName(e.target.value)}
-                            className="w-full bg-white border border-slate-300 px-3 py-2 text-xs rounded-xl focus:border-blue-600"
+                            className="w-full bg-slate-900 border border-slate-700 px-3 py-2 text-xs rounded-xl focus:border-blue-500 text-white"
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">Card Number</label>
+                          <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">Card Number</label>
                           <input
                             type="text"
                             required
                             value={cardNumber}
                             onChange={(e) => setCardNumber(e.target.value)}
-                            className="w-full bg-white border border-slate-300 px-3 py-2 text-xs rounded-xl focus:border-blue-600 font-mono"
+                            className="w-full bg-slate-900 border border-slate-700 px-3 py-2 text-xs rounded-xl focus:border-blue-500 font-mono text-white"
                           />
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">Expiry Date</label>
+                            <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">Expiry Date</label>
                             <input
                               type="text"
                               required
                               value={cardExpiry}
                               onChange={(e) => setCardExpiry(e.target.value)}
                               placeholder="MM/YY"
-                              className="w-full bg-white border border-slate-300 px-3 py-2 text-xs rounded-xl text-center font-mono"
+                              className="w-full bg-slate-900 border border-slate-700 px-3 py-2 text-xs rounded-xl text-center font-mono text-white"
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">CVV</label>
+                            <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">CVV</label>
                             <input
                               type="password"
                               required
                               value={cardCvv}
                               onChange={(e) => setCardCvv(e.target.value)}
-                              className="w-full bg-white border border-slate-300 px-3 py-2 text-xs rounded-xl text-center font-mono"
+                              className="w-full bg-slate-900 border border-slate-700 px-3 py-2 text-xs rounded-xl text-center font-mono text-white"
                             />
                           </div>
                         </div>
@@ -2436,8 +2436,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     )}
 
                     {paymentMethod === 'bank' && (
-                      <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 space-y-2">
-                        <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                      <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
+                        <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">
                           Landbank Account / Partner ID
                         </label>
                         <input
@@ -2445,7 +2445,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           required
                           value={bankAccountNum}
                           onChange={(e) => setBankAccountNum(e.target.value)}
-                          className="w-full bg-white border border-slate-300 px-3 py-2.5 text-xs rounded-xl font-mono"
+                          className="w-full bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs rounded-xl font-mono text-white"
                         />
                       </div>
                     )}
@@ -2454,13 +2454,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <button
                         type="button"
                         onClick={() => setActivePaymentBill(null)}
-                        className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
+                        className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl cursor-pointer border border-slate-700"
                       >
                         Cancel
                       </button>
                       <button
                         type="submit"
-                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-md transition cursor-pointer"
+                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-md transition cursor-pointer"
                       >
                         {(() => {
                           const total = calculateCostOf(activePaymentBill.consumption, consumerRecord.consumerType);
@@ -2475,12 +2475,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
             )}
 
-            {/* Complete Bills Table & Responsive Grid */}
-            <div className="bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs">
+            {/* Complete Bills Table & Responsive Grid - Eye-Friendly Dark Navy Slate Theme */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl text-slate-100">
               {/* Desktop & Tablet Table View */}
               <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-xs text-left border-collapse">
-                  <thead className="bg-slate-100 text-slate-800 font-black uppercase text-[11px] tracking-wider border-b border-slate-200">
+                  <thead className="bg-slate-950 text-slate-300 font-black uppercase text-[11px] tracking-wider border-b border-slate-800">
                     <tr>
                       <th className="px-4 py-3.5 whitespace-nowrap">Billing Period</th>
                       <th className="px-4 py-3.5 whitespace-nowrap">Index (m³)</th>
@@ -2493,7 +2493,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <th className="px-4 py-3.5 text-right whitespace-nowrap">Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-150 text-slate-900 font-medium">
+                  <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium">
                     {readings
                       .filter(r => {
                         if (billFilter === 'unpaid') return r.paymentStatus !== 'paid';
@@ -2514,48 +2514,48 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             key={r.id} 
                             className={`transition-colors duration-150 ${
                               isHighlight 
-                                ? 'bg-sky-100/90 border-l-4 border-l-blue-700 ring-1 ring-blue-300' 
-                                : 'hover:bg-slate-50/90'
+                                ? 'bg-blue-950/80 border-l-4 border-l-blue-500 ring-1 ring-blue-500/40 text-white' 
+                                : 'hover:bg-slate-800/60'
                             }`}
                           >
                             {/* Billing Period & ID */}
                             <td className="px-4 py-3.5 whitespace-nowrap">
                               <div className="flex items-center space-x-2">
-                                <span className={`font-black text-xs ${isHighlight ? 'text-blue-950 font-extrabold' : 'text-slate-900'}`}>
+                                <span className={`font-black text-xs ${isHighlight ? 'text-blue-300 font-extrabold' : 'text-white'}`}>
                                   {r.billingPeriod}
                                 </span>
                                 {isHighlight && (
-                                  <span className="px-2 py-0.5 bg-blue-700 text-white font-black text-[9px] uppercase tracking-wider rounded shadow-xs">
+                                  <span className="px-2 py-0.5 bg-blue-600 text-white font-black text-[9px] uppercase tracking-wider rounded shadow-xs">
                                     Selected
                                   </span>
                                 )}
                               </div>
-                              <span className="text-[11px] text-slate-600 font-mono font-semibold block">
+                              <span className="text-[11px] text-slate-400 font-mono font-medium block">
                                 Statement #{r.id}
                               </span>
                             </td>
 
                             {/* Meter Readings Index */}
-                            <td className="px-4 py-3.5 whitespace-nowrap font-mono text-slate-800 font-medium">
-                              {r.previousReading} → <strong className="text-slate-950 font-bold">{r.currentReading}</strong>
+                            <td className="px-4 py-3.5 whitespace-nowrap font-mono text-slate-300 font-medium">
+                              {r.previousReading} → <strong className="text-white font-bold">{r.currentReading}</strong>
                             </td>
 
                             {/* Consumption Volume */}
-                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-black text-blue-900">
-                              <span className="inline-block px-2 py-0.5 bg-blue-50 border border-blue-200/80 rounded-md">
+                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-bold text-blue-300">
+                              <span className="inline-block px-2 py-0.5 bg-blue-950/80 border border-blue-800/80 rounded-md">
                                 {r.consumption} m³
                               </span>
                             </td>
 
                             {/* Gross Bill */}
-                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-black text-slate-950 text-sm">
+                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-black text-white text-sm">
                               ₱{totalAmount.toFixed(2)}
                             </td>
 
                             {/* Paid / Credited */}
-                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-bold text-emerald-800">
+                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-bold text-emerald-300">
                               {paidAmt > 0 ? (
-                                <span className="bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                <span className="bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800/80">
                                   ₱{paidAmt.toFixed(2)}
                                 </span>
                               ) : (
@@ -2566,20 +2566,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             {/* Remaining Balance Due */}
                             <td className="px-4 py-3.5 whitespace-nowrap font-mono font-black text-sm">
                               {isPaid ? (
-                                <span className="text-emerald-700 font-bold">₱0.00</span>
+                                <span className="text-emerald-400 font-bold">₱0.00</span>
                               ) : isPartial ? (
-                                <span className="text-amber-800 font-black bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                <span className="text-amber-300 font-black bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800/80">
                                   ₱{remainingDue.toFixed(2)}
                                 </span>
                               ) : (
-                                <span className="text-rose-700 font-black bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                                <span className="text-rose-300 font-black bg-rose-950/80 px-2 py-0.5 rounded border border-rose-800/80">
                                   ₱{totalAmount.toFixed(2)}
                                 </span>
                               )}
                             </td>
 
                             {/* Due Date */}
-                            <td className="px-4 py-3.5 whitespace-nowrap text-slate-800 font-semibold">
+                            <td className="px-4 py-3.5 whitespace-nowrap text-slate-300 font-semibold">
                               {r.dueDate || '20th of Month'}
                             </td>
 
@@ -2587,10 +2587,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             <td className="px-4 py-3.5 whitespace-nowrap">
                               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
                                 isPaid 
-                                  ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' 
+                                  ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-800' 
                                   : isPartial
-                                  ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                                  : 'bg-rose-100 text-rose-900 border border-rose-300'
+                                  ? 'bg-amber-950/90 text-amber-300 border border-amber-800'
+                                  : 'bg-rose-950/90 text-rose-300 border border-rose-800'
                               }`}>
                                 {isPaid ? 'Paid in Full' : isPartial ? 'Partial Balance' : 'Unpaid'}
                               </span>
@@ -2601,7 +2601,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               {isPaid ? (
                                 <button
                                   onClick={() => setReceiptDetailModal(r)}
-                                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer border border-emerald-500"
+                                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer border border-emerald-500"
                                   id={`table-receipt-btn-${r.id}`}
                                   title="View Official Electronic Payment Receipt"
                                 >
@@ -2612,14 +2612,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                 <div className="inline-flex items-center space-x-1.5">
                                   <button
                                     onClick={() => setReceiptDetailModal(r)}
-                                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-200"
+                                    className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
                                     title="View Partial Receipt"
                                   >
                                     <ReceiptText className="h-3.5 w-3.5" />
                                   </button>
                                   <button
                                     onClick={() => handleStartPayment(r, 'full')}
-                                    className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                    className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
                                     id={`table-pay-partial-${r.id}`}
                                   >
                                     <CreditCard className="h-3.5 w-3.5" />
@@ -2629,7 +2629,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               ) : (
                                 <button
                                   onClick={() => handleStartPayment(r, 'full')}
-                                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
                                   id={`table-pay-btn-${r.id}`}
                                 >
                                   <CreditCard className="h-3.5 w-3.5" />
@@ -2645,7 +2645,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
 
               {/* Mobile Card List View for Perfect Fitting on Small Screens */}
-              <div className="block md:hidden divide-y divide-slate-150">
+              <div className="block md:hidden divide-y divide-slate-800/80">
                 {readings
                   .filter(r => {
                     if (billFilter === 'unpaid') return r.paymentStatus !== 'paid';
@@ -2665,48 +2665,48 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <div 
                         key={`mob-${r.id}`}
                         className={`p-4 space-y-3 transition-colors ${
-                          isHighlight ? 'bg-sky-50 border-l-4 border-l-blue-700' : 'hover:bg-slate-50'
+                          isHighlight ? 'bg-blue-950/60 border-l-4 border-l-blue-500' : 'hover:bg-slate-850'
                         }`}
                       >
                         <div className="flex items-center justify-between">
                           <div>
                             <div className="flex items-center space-x-2">
-                              <span className="font-black text-slate-950 text-sm">{r.billingPeriod}</span>
+                              <span className="font-black text-white text-sm">{r.billingPeriod}</span>
                               {isHighlight && (
-                                <span className="px-1.5 py-0.2 bg-blue-700 text-white font-black text-[9px] uppercase rounded">
+                                <span className="px-1.5 py-0.2 bg-blue-600 text-white font-black text-[9px] uppercase rounded">
                                   Selected
                                 </span>
                               )}
                             </div>
-                            <span className="text-[11px] text-slate-600 font-mono font-semibold">#{r.id}</span>
+                            <span className="text-[11px] text-slate-400 font-mono font-medium">#{r.id}</span>
                           </div>
                           <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
                             isPaid 
-                              ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' 
+                              ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-800' 
                               : isPartial
-                              ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                              : 'bg-rose-100 text-rose-900 border border-rose-300'
+                              ? 'bg-amber-950/90 text-amber-300 border border-amber-800'
+                              : 'bg-rose-950/90 text-rose-300 border border-rose-800'
                           }`}>
                             {isPaid ? 'Paid' : isPartial ? 'Partial' : 'Unpaid'}
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-200/80">
+                        <div className="grid grid-cols-2 gap-2 text-xs bg-slate-950/80 p-2.5 rounded-xl border border-slate-800">
                           <div>
-                            <span className="text-[10px] text-slate-500 font-bold uppercase block">Consumption</span>
-                            <span className="font-mono font-black text-blue-900">{r.consumption} m³</span>
+                            <span className="text-[10px] text-slate-400 font-bold uppercase block">Consumption</span>
+                            <span className="font-mono font-black text-blue-300">{r.consumption} m³</span>
                           </div>
                           <div>
-                            <span className="text-[10px] text-slate-500 font-bold uppercase block">Gross Bill</span>
-                            <span className="font-mono font-black text-slate-950">₱{totalAmount.toFixed(2)}</span>
+                            <span className="text-[10px] text-slate-400 font-bold uppercase block">Gross Bill</span>
+                            <span className="font-mono font-black text-white">₱{totalAmount.toFixed(2)}</span>
                           </div>
                           <div>
-                            <span className="text-[10px] text-slate-500 font-bold uppercase block">Due Date</span>
-                            <span className="text-slate-800 font-semibold">{r.dueDate || '20th'}</span>
+                            <span className="text-[10px] text-slate-400 font-bold uppercase block">Due Date</span>
+                            <span className="text-slate-300 font-semibold">{r.dueDate || '20th'}</span>
                           </div>
                           <div>
-                            <span className="text-[10px] text-slate-500 font-bold uppercase block">Balance Due</span>
-                            <span className={`font-mono font-black ${isPaid ? 'text-emerald-700' : isPartial ? 'text-amber-800' : 'text-rose-700'}`}>
+                            <span className="text-[10px] text-slate-400 font-bold uppercase block">Balance Due</span>
+                            <span className={`font-mono font-black ${isPaid ? 'text-emerald-400' : isPartial ? 'text-amber-300' : 'text-rose-300'}`}>
                               ₱{(isPaid ? 0 : isPartial ? remainingDue : totalAmount).toFixed(2)}
                             </span>
                           </div>
@@ -2716,7 +2716,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           {isPaid ? (
                             <button
                               onClick={() => setReceiptDetailModal(r)}
-                              className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                              className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
                             >
                               <ReceiptText className="h-3.5 w-3.5" />
                               <span>View Receipt</span>
@@ -2725,13 +2725,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             <div className="flex items-center space-x-2 w-full">
                               <button
                                 onClick={() => setReceiptDetailModal(r)}
-                                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-200"
+                                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
                               >
                                 <ReceiptText className="h-3.5 w-3.5" />
                               </button>
                               <button
                                 onClick={() => handleStartPayment(r, 'full')}
-                                className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                                className="flex-1 py-2 bg-amber-600 hover:bg-amber-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
                               >
                                 <CreditCard className="h-3.5 w-3.5" />
                                 <span>Pay ₱{remainingDue.toFixed(2)}</span>
@@ -2740,7 +2740,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           ) : (
                             <button
                               onClick={() => handleStartPayment(r, 'full')}
-                              className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                              className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
                             >
                               <CreditCard className="h-3.5 w-3.5" />
                               <span>Pay Bill Now</span>
