@@ -1,0 +1,6 @@
+{
+  "name": "Tagoloan Water District Portal",
+  "description": "Unified administrative and consumer portals for Tagoloan Water District, with water meter monitoring, route assignments, reading history, and detailed analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
