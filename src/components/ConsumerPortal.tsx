@@ -1859,35 +1859,35 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         <div 
                           key={r.id} 
                           className={`py-3.5 px-3 rounded-2xl transition flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 ${
-                            isHighlight ? 'bg-blue-50/80 border-2 border-blue-500 ring-2 ring-blue-400/20' : ''
+                            isHighlight ? 'bg-sky-100/90 border-l-4 border-l-blue-700 ring-1 ring-blue-300 shadow-xs' : 'hover:bg-slate-50'
                           }`}
                         >
                           <div className="space-y-1">
                             <div className="flex items-center space-x-2">
-                              <span className="text-xs font-black text-slate-900">
+                              <span className={`text-xs font-black ${isHighlight ? 'text-blue-950 font-extrabold' : 'text-slate-950'}`}>
                                 {r.billingPeriod} Statement
                               </span>
                               {isHighlight && (
-                                <span className="px-2 py-0.2 bg-blue-600 text-white font-black text-[9px] uppercase tracking-wider rounded-md animate-pulse">
+                                <span className="px-2 py-0.5 bg-blue-700 text-white font-black text-[9px] uppercase tracking-wider rounded-md shadow-xs">
                                   Selected
                                 </span>
                               )}
                               {/* COLOR CODED BILL STATUS BADGE */}
                               <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
                                 isPaid 
-                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                                  ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' 
                                   : isPartial
-                                  ? 'bg-amber-100 text-amber-800 border border-amber-300 font-bold'
-                                  : 'bg-rose-100 text-rose-800 border border-rose-300'
+                                  ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                  : 'bg-rose-100 text-rose-900 border border-rose-300'
                               }`}>
                                 {isPaid ? 'Paid in Full' : isPartial ? `Partial (₱${remainingDue.toFixed(2)} Due)` : 'Unpaid'}
                               </span>
                             </div>
-                            <p className="text-[11px] text-slate-500 font-medium">
-                              Consumption: <strong className="text-slate-800 font-mono">{r.consumption} m³</strong> • Due: {r.dueDate || '20th of Month'}
+                            <p className="text-[11px] text-slate-700 font-medium">
+                              Consumption: <strong className="text-slate-950 font-mono font-bold">{r.consumption} m³</strong> • Due: <span className="text-slate-900 font-semibold">{r.dueDate || '20th of Month'}</span>
                             </p>
                             {isPartial && (
-                              <p className="text-[11px] text-amber-700 font-bold">
+                              <p className="text-[11px] text-amber-900 font-bold">
                                 Credited: ₱{paidAmt.toFixed(2)} • Remaining: ₱{remainingDue.toFixed(2)}
                               </p>
                             )}
@@ -1895,10 +1895,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                           <div className="flex items-center space-x-3 text-right shrink-0 w-full sm:w-auto justify-between sm:justify-end">
                             <div>
-                              <span className="font-mono font-black text-slate-900 text-sm block">
+                              <span className="font-mono font-black text-slate-950 text-sm block">
                                 {isPartial ? `₱${remainingDue.toFixed(2)}` : `₱${cost.toFixed(2)}`}
                               </span>
-                              <span className="text-[10px] text-slate-400 font-mono block">
+                              <span className="text-[10px] text-slate-600 font-mono font-medium block">
                                 {isPaid 
                                   ? (r.paymentDate ? `Paid ${r.paymentDate}` : 'Settled')
                                   : isPartial 
@@ -2475,24 +2475,25 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
             )}
 
-            {/* Complete Bills Table */}
-            <div className="bg-white border border-slate-200/80 rounded-3xl overflow-hidden shadow-xs">
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs text-left">
-                  <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-100">
+            {/* Complete Bills Table & Responsive Grid */}
+            <div className="bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs">
+              {/* Desktop & Tablet Table View */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead className="bg-slate-100 text-slate-800 font-black uppercase text-[11px] tracking-wider border-b border-slate-200">
                     <tr>
-                      <th className="px-6 py-4">Billing Period</th>
-                      <th className="px-6 py-4">Index Difference</th>
-                      <th className="px-6 py-4">Consumption (m³)</th>
-                      <th className="px-6 py-4">Gross Bill</th>
-                      <th className="px-6 py-4">Paid / Credited</th>
-                      <th className="px-6 py-4">Remaining Balance</th>
-                      <th className="px-6 py-4">Due Date</th>
-                      <th className="px-6 py-4">Status</th>
-                      <th className="px-6 py-4 text-right">Actions</th>
+                      <th className="px-4 py-3.5 whitespace-nowrap">Billing Period</th>
+                      <th className="px-4 py-3.5 whitespace-nowrap">Index (m³)</th>
+                      <th className="px-4 py-3.5 whitespace-nowrap">Consumption</th>
+                      <th className="px-4 py-3.5 whitespace-nowrap">Gross Amount</th>
+                      <th className="px-4 py-3.5 whitespace-nowrap">Paid / Credit</th>
+                      <th className="px-4 py-3.5 whitespace-nowrap">Net Balance Due</th>
+                      <th className="px-4 py-3.5 whitespace-nowrap">Due Date</th>
+                      <th className="px-4 py-3.5 whitespace-nowrap">Status</th>
+                      <th className="px-4 py-3.5 text-right whitespace-nowrap">Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
+                  <tbody className="divide-y divide-slate-150 text-slate-900 font-medium">
                     {readings
                       .filter(r => {
                         if (billFilter === 'unpaid') return r.paymentStatus !== 'paid';
@@ -2506,101 +2507,132 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         const isPartial = r.paymentStatus === 'partial';
                         const paidAmt = r.paidAmount || 0;
                         const remainingDue = Math.max(0, totalAmount - paidAmt);
-
                         const isHighlight = highlightedReadingId === r.id;
 
                         return (
                           <tr 
                             key={r.id} 
-                            className={`transition ${
+                            className={`transition-colors duration-150 ${
                               isHighlight 
-                                ? 'bg-blue-50/90 ring-2 ring-blue-500/50' 
-                                : 'hover:bg-slate-50/80'
+                                ? 'bg-sky-100/90 border-l-4 border-l-blue-700 ring-1 ring-blue-300' 
+                                : 'hover:bg-slate-50/90'
                             }`}
                           >
-                            <td className="px-6 py-4">
+                            {/* Billing Period & ID */}
+                            <td className="px-4 py-3.5 whitespace-nowrap">
                               <div className="flex items-center space-x-2">
-                                <span className="font-extrabold text-slate-900 block">{r.billingPeriod}</span>
+                                <span className={`font-black text-xs ${isHighlight ? 'text-blue-950 font-extrabold' : 'text-slate-900'}`}>
+                                  {r.billingPeriod}
+                                </span>
                                 {isHighlight && (
-                                  <span className="px-1.5 py-0.2 bg-blue-600 text-white font-black text-[9px] uppercase rounded">
+                                  <span className="px-2 py-0.5 bg-blue-700 text-white font-black text-[9px] uppercase tracking-wider rounded shadow-xs">
                                     Selected
                                   </span>
                                 )}
                               </div>
-                              <span className="text-[10px] text-slate-400 font-mono">{r.id}</span>
+                              <span className="text-[11px] text-slate-600 font-mono font-semibold block">
+                                Statement #{r.id}
+                              </span>
                             </td>
-                            <td className="px-6 py-4 font-mono text-slate-600">
-                              {r.previousReading} m³ → {r.currentReading} m³
+
+                            {/* Meter Readings Index */}
+                            <td className="px-4 py-3.5 whitespace-nowrap font-mono text-slate-800 font-medium">
+                              {r.previousReading} → <strong className="text-slate-950 font-bold">{r.currentReading}</strong>
                             </td>
-                            <td className="px-6 py-4 font-mono font-black text-blue-700">
-                              {r.consumption} m³
+
+                            {/* Consumption Volume */}
+                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-black text-blue-900">
+                              <span className="inline-block px-2 py-0.5 bg-blue-50 border border-blue-200/80 rounded-md">
+                                {r.consumption} m³
+                              </span>
                             </td>
-                            <td className="px-6 py-4 font-mono font-black text-slate-900 text-sm">
+
+                            {/* Gross Bill */}
+                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-black text-slate-950 text-sm">
                               ₱{totalAmount.toFixed(2)}
                             </td>
-                            <td className="px-6 py-4 font-mono text-emerald-700 font-bold">
-                              {paidAmt > 0 ? `₱${paidAmt.toFixed(2)}` : '₱0.00'}
-                            </td>
-                            <td className="px-6 py-4 font-mono font-black text-sm">
-                              {isPaid ? (
-                                <span className="text-emerald-600">₱0.00</span>
-                              ) : isPartial ? (
-                                <span className="text-amber-700 font-bold">₱{remainingDue.toFixed(2)}</span>
+
+                            {/* Paid / Credited */}
+                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-bold text-emerald-800">
+                              {paidAmt > 0 ? (
+                                <span className="bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                  ₱{paidAmt.toFixed(2)}
+                                </span>
                               ) : (
-                                <span className="text-rose-700">₱{totalAmount.toFixed(2)}</span>
+                                <span className="text-slate-500">₱0.00</span>
                               )}
                             </td>
-                            <td className="px-6 py-4 text-slate-600">
+
+                            {/* Remaining Balance Due */}
+                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-black text-sm">
+                              {isPaid ? (
+                                <span className="text-emerald-700 font-bold">₱0.00</span>
+                              ) : isPartial ? (
+                                <span className="text-amber-800 font-black bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                  ₱{remainingDue.toFixed(2)}
+                                </span>
+                              ) : (
+                                <span className="text-rose-700 font-black bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                                  ₱{totalAmount.toFixed(2)}
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Due Date */}
+                            <td className="px-4 py-3.5 whitespace-nowrap text-slate-800 font-semibold">
                               {r.dueDate || '20th of Month'}
                             </td>
-                            <td className="px-6 py-4">
-                              {/* COLOR CODED STATUS BADGES */}
-                              <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+
+                            {/* Payment Status Badge */}
+                            <td className="px-4 py-3.5 whitespace-nowrap">
+                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
                                 isPaid 
-                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                                  ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' 
                                   : isPartial
-                                  ? 'bg-amber-100 text-amber-800 border border-amber-300 font-bold'
-                                  : 'bg-rose-100 text-rose-800 border border-rose-300'
+                                  ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                  : 'bg-rose-100 text-rose-900 border border-rose-300'
                               }`}>
                                 {isPaid ? 'Paid in Full' : isPartial ? 'Partial Balance' : 'Unpaid'}
                               </span>
                             </td>
-                            <td className="px-6 py-4 text-right space-x-2">
+
+                            {/* Action Buttons */}
+                            <td className="px-4 py-3.5 text-right whitespace-nowrap">
                               {isPaid ? (
                                 <button
                                   onClick={() => setReceiptDetailModal(r)}
-                                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer border border-emerald-500"
+                                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer border border-emerald-500"
                                   id={`table-receipt-btn-${r.id}`}
                                   title="View Official Electronic Payment Receipt"
                                 >
-                                  <ReceiptText className="h-4 w-4" />
+                                  <ReceiptText className="h-3.5 w-3.5" />
                                   <span>Receipt</span>
                                 </button>
                               ) : isPartial ? (
                                 <div className="inline-flex items-center space-x-1.5">
                                   <button
                                     onClick={() => setReceiptDetailModal(r)}
-                                    className="px-2.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer"
+                                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-200"
                                     title="View Partial Receipt"
                                   >
-                                    <ReceiptText className="h-4 w-4" />
+                                    <ReceiptText className="h-3.5 w-3.5" />
                                   </button>
                                   <button
                                     onClick={() => handleStartPayment(r, 'full')}
-                                    className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                    className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer"
                                     id={`table-pay-partial-${r.id}`}
                                   >
-                                    <CreditCard className="h-4 w-4" />
+                                    <CreditCard className="h-3.5 w-3.5" />
                                     <span>Pay ₱{remainingDue.toFixed(2)}</span>
                                   </button>
                                 </div>
                               ) : (
                                 <button
                                   onClick={() => handleStartPayment(r, 'full')}
-                                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer"
                                   id={`table-pay-btn-${r.id}`}
                                 >
-                                  <CreditCard className="h-4 w-4" />
+                                  <CreditCard className="h-3.5 w-3.5" />
                                   <span>Pay Bill</span>
                                 </button>
                               )}
@@ -2610,6 +2642,114 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       })}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Mobile Card List View for Perfect Fitting on Small Screens */}
+              <div className="block md:hidden divide-y divide-slate-150">
+                {readings
+                  .filter(r => {
+                    if (billFilter === 'unpaid') return r.paymentStatus !== 'paid';
+                    if (billFilter === 'paid') return r.paymentStatus === 'paid';
+                    if (billFilter === 'partial') return r.paymentStatus === 'partial';
+                    return true;
+                  })
+                  .map((r) => {
+                    const totalAmount = calculateCostOf(r.consumption, consumerRecord.consumerType);
+                    const isPaid = r.paymentStatus === 'paid';
+                    const isPartial = r.paymentStatus === 'partial';
+                    const paidAmt = r.paidAmount || 0;
+                    const remainingDue = Math.max(0, totalAmount - paidAmt);
+                    const isHighlight = highlightedReadingId === r.id;
+
+                    return (
+                      <div 
+                        key={`mob-${r.id}`}
+                        className={`p-4 space-y-3 transition-colors ${
+                          isHighlight ? 'bg-sky-50 border-l-4 border-l-blue-700' : 'hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <span className="font-black text-slate-950 text-sm">{r.billingPeriod}</span>
+                              {isHighlight && (
+                                <span className="px-1.5 py-0.2 bg-blue-700 text-white font-black text-[9px] uppercase rounded">
+                                  Selected
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] text-slate-600 font-mono font-semibold">#{r.id}</span>
+                          </div>
+                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                            isPaid 
+                              ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' 
+                              : isPartial
+                              ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                              : 'bg-rose-100 text-rose-900 border border-rose-300'
+                          }`}>
+                            {isPaid ? 'Paid' : isPartial ? 'Partial' : 'Unpaid'}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-200/80">
+                          <div>
+                            <span className="text-[10px] text-slate-500 font-bold uppercase block">Consumption</span>
+                            <span className="font-mono font-black text-blue-900">{r.consumption} m³</span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-slate-500 font-bold uppercase block">Gross Bill</span>
+                            <span className="font-mono font-black text-slate-950">₱{totalAmount.toFixed(2)}</span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-slate-500 font-bold uppercase block">Due Date</span>
+                            <span className="text-slate-800 font-semibold">{r.dueDate || '20th'}</span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-slate-500 font-bold uppercase block">Balance Due</span>
+                            <span className={`font-mono font-black ${isPaid ? 'text-emerald-700' : isPartial ? 'text-amber-800' : 'text-rose-700'}`}>
+                              ₱{(isPaid ? 0 : isPartial ? remainingDue : totalAmount).toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end pt-1">
+                          {isPaid ? (
+                            <button
+                              onClick={() => setReceiptDetailModal(r)}
+                              className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                            >
+                              <ReceiptText className="h-3.5 w-3.5" />
+                              <span>View Receipt</span>
+                            </button>
+                          ) : isPartial ? (
+                            <div className="flex items-center space-x-2 w-full">
+                              <button
+                                onClick={() => setReceiptDetailModal(r)}
+                                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-200"
+                              >
+                                <ReceiptText className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleStartPayment(r, 'full')}
+                                className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                              >
+                                <CreditCard className="h-3.5 w-3.5" />
+                                <span>Pay ₱{remainingDue.toFixed(2)}</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => handleStartPayment(r, 'full')}
+                              className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                            >
+                              <CreditCard className="h-3.5 w-3.5" />
+                              <span>Pay Bill Now</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
               </div>
             </div>
 

@@ -4,6 +4,7 @@
  */
 
 import { User, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerNotification, Barangay } from './types';
+import { initializeFirestoreSeed, syncBatchToFirestore, syncDocToFirestore, COLLECTIONS } from './services/firebaseDb';
 
 // Storage keys
 const STORAGE_PREFIX = 'twd_';
@@ -590,15 +591,42 @@ export const mockDb = {
     }
   },
 
-  saveUsers: (users: User[]): void => setStored(KEYS.USERS, users),
-  saveConsumers: (consumers: Consumer[]): void => setStored(KEYS.CONSUMERS, consumers),
-  saveReaders: (readers: MeterReader[]): void => setStored(KEYS.READERS, readers),
-  saveMeters: (meters: WaterMeter[]): void => setStored(KEYS.METERS, meters),
-  saveReadings: (readings: MeterReading[]): void => setStored(KEYS.READINGS, readings),
-  saveRoutes: (routes: RouteAssignment[]): void => setStored(KEYS.ROUTES, routes),
-  saveAnnouncements: (anns: Announcement[]): void => setStored(KEYS.ANNOUNCEMENTS, anns),
-  saveAuditLogs: (logs: AuditLog[]): void => setStored(KEYS.AUDIT_LOGS, logs),
-  saveBarangays: (barangays: Barangay[]): void => setStored(KEYS.BARANGAYS, barangays),
+  saveUsers: (users: User[]): void => {
+    setStored(KEYS.USERS, users);
+    syncBatchToFirestore(COLLECTIONS.USERS, users, 'id');
+  },
+  saveConsumers: (consumers: Consumer[]): void => {
+    setStored(KEYS.CONSUMERS, consumers);
+    syncBatchToFirestore(COLLECTIONS.CONSUMERS, consumers, 'accountNumber');
+  },
+  saveReaders: (readers: MeterReader[]): void => {
+    setStored(KEYS.READERS, readers);
+    syncBatchToFirestore(COLLECTIONS.READERS, readers, 'id');
+  },
+  saveMeters: (meters: WaterMeter[]): void => {
+    setStored(KEYS.METERS, meters);
+    syncBatchToFirestore(COLLECTIONS.METERS, meters, 'meterNumber');
+  },
+  saveReadings: (readings: MeterReading[]): void => {
+    setStored(KEYS.READINGS, readings);
+    syncBatchToFirestore(COLLECTIONS.READINGS, readings, 'id');
+  },
+  saveRoutes: (routes: RouteAssignment[]): void => {
+    setStored(KEYS.ROUTES, routes);
+    syncBatchToFirestore(COLLECTIONS.ROUTES, routes, 'id');
+  },
+  saveAnnouncements: (anns: Announcement[]): void => {
+    setStored(KEYS.ANNOUNCEMENTS, anns);
+    syncBatchToFirestore(COLLECTIONS.ANNOUNCEMENTS, anns, 'id');
+  },
+  saveAuditLogs: (logs: AuditLog[]): void => {
+    setStored(KEYS.AUDIT_LOGS, logs);
+    syncBatchToFirestore(COLLECTIONS.AUDIT_LOGS, logs, 'id');
+  },
+  saveBarangays: (barangays: Barangay[]): void => {
+    setStored(KEYS.BARANGAYS, barangays);
+    syncBatchToFirestore(COLLECTIONS.BARANGAYS, barangays, 'id');
+  },
 
   findOrCreateBarangay: (barangayName: string): Barangay => {
     const list = mockDb.getBarangays();
@@ -660,6 +688,7 @@ export const mockDb = {
     };
     list.push(newNotif);
     setStored(KEYS.NOTIFICATIONS, list);
+    syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, newNotif.id, newNotif as unknown as Record<string, unknown>);
     return newNotif;
   },
 
@@ -667,6 +696,7 @@ export const mockDb = {
     const list = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
     const updated = list.map(n => n.id === id ? { ...n, read: true } : n);
     setStored(KEYS.NOTIFICATIONS, updated);
+    syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, id, { read: true });
   },
 
   addAuditLog: (userId: string, userName: string, userRole: 'admin' | 'consumer' | 'system', action: string, details: string): void => {
@@ -685,6 +715,19 @@ export const mockDb = {
     mockDb.saveAuditLogs(logs);
   },
 
+  initFirestore: (): void => {
+    initializeFirestoreSeed({
+      users: INITIAL_USERS,
+      consumers: INITIAL_CONSUMERS,
+      readers: INITIAL_READERS,
+      meters: INITIAL_METERS,
+      readings: INITIAL_READINGS,
+      routes: INITIAL_ROUTES,
+      announcements: INITIAL_ANNOUNCEMENTS,
+      barangays: INITIAL_BARANGAYS,
+    });
+  },
+
   resetDatabase: (): void => {
     localStorage.removeItem(KEYS.USERS);
     localStorage.removeItem(KEYS.CONSUMERS);
@@ -698,3 +741,7 @@ export const mockDb = {
     localStorage.removeItem(KEYS.BARANGAYS);
   }
 };
+
+// Auto initialize Firestore baseline data
+mockDb.initFirestore();
+

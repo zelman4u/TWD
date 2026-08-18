@@ -1,0 +1,190 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Registered system user profile (Administrator or Registered Consumer)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique user ID" },
+        "email": { "type": "string", "description": "User email address" },
+        "name": { "type": "string", "description": "Full name of the user" },
+        "role": { "type": "string", "enum": ["admin", "consumer"], "description": "System role" },
+        "linkedAccountNumber": { "type": "string", "description": "Associated water meter account number" },
+        "status": { "type": "string", "enum": ["active", "suspended", "pending"], "description": "Account status" },
+        "createdAt": { "type": "string", "description": "Creation ISO timestamp" }
+      },
+      "required": ["id", "email", "name", "role", "status"]
+    },
+    "Consumer": {
+      "title": "Consumer",
+      "description": "Water service connection profile and billing master record",
+      "type": "object",
+      "properties": {
+        "accountNumber": { "type": "string", "description": "Official account number" },
+        "name": { "type": "string", "description": "Account holder name" },
+        "address": { "type": "string", "description": "Physical connection address" },
+        "barangayId": { "type": "string", "description": "Barangay code identifier" },
+        "barangay": { "type": "string", "description": "Barangay name" },
+        "sitioZone": { "type": "string", "description": "Zone or sitio details" },
+        "contactNumber": { "type": "string", "description": "Contact phone number" },
+        "email": { "type": "string", "description": "Email address" },
+        "meterNumber": { "type": "string", "description": "Physical meter serial identifier" },
+        "status": { "type": "string", "enum": ["active", "disconnected", "pending", "temporary_cutoff"], "description": "Connection status" },
+        "isRegistered": { "type": "boolean", "description": "Whether consumer has created an online account" },
+        "registrationDate": { "type": "string", "description": "Date registered" },
+        "linkedUserId": { "type": "string", "description": "Linked user profile ID" },
+        "consumerType": { "type": "string", "enum": ["Residential", "Commercial", "Institutional"], "description": "Tariff classification" },
+        "meterSize": { "type": "string", "description": "Meter physical pipe size" },
+        "householdInfo": { "type": "string", "description": "Additional consumer metadata" }
+      },
+      "required": ["accountNumber", "name", "address", "barangay", "meterNumber", "status"]
+    },
+    "WaterMeter": {
+      "title": "WaterMeter",
+      "description": "Physical water meter asset registration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Meter device ID" },
+        "meterNumber": { "type": "string", "description": "Serial number" },
+        "consumerId": { "type": "string", "description": "Linked consumer account number" },
+        "consumerName": { "type": "string", "description": "Consumer name" },
+        "installationDate": { "type": "string", "description": "Installation date" },
+        "brand": { "type": "string", "description": "Brand manufacturer" },
+        "size": { "type": "string", "description": "Pipe size" },
+        "status": { "type": "string", "enum": ["active", "damaged", "maintenance", "unassigned"], "description": "Asset condition status" },
+        "lastReading": { "type": "number", "description": "Most recent reading value" },
+        "lastReadingDate": { "type": "string", "description": "Date of latest reading" },
+        "qrCode": { "type": "string", "description": "QR identification code" },
+        "notes": { "type": "string", "description": "Maintenance notes" }
+      },
+      "required": ["id", "meterNumber", "status", "lastReading"]
+    },
+    "MeterReading": {
+      "title": "MeterReading",
+      "description": "Monthly water volume reading and billing statement record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Reading statement unique ID" },
+        "meterId": { "type": "string", "description": "Water meter ID" },
+        "meterNumber": { "type": "string", "description": "Meter serial number" },
+        "consumerId": { "type": "string", "description": "Consumer account number" },
+        "consumerName": { "type": "string", "description": "Consumer name" },
+        "previousReading": { "type": "number", "description": "Previous meter reading in m3" },
+        "currentReading": { "type": "number", "description": "Current meter reading in m3" },
+        "consumption": { "type": "number", "description": "Net consumption volume in m3" },
+        "readingDate": { "type": "string", "description": "Date reading was captured" },
+        "billingPeriod": { "type": "string", "description": "Billing period month and year" },
+        "readerId": { "type": "string", "description": "ID of field meter reader" },
+        "readerName": { "type": "string", "description": "Name of meter reader" },
+        "notes": { "type": "string", "description": "Field reading remarks" },
+        "amount": { "type": "number", "description": "Calculated total billing amount" },
+        "dueDate": { "type": "string", "description": "Bill due date" },
+        "paymentStatus": { "type": "string", "enum": ["unpaid", "paid", "partial", "processing"], "description": "Payment status" },
+        "paymentDate": { "type": "string", "description": "Date payment was processed" },
+        "paymentMethod": { "type": "string", "description": "Channel used for payment" },
+        "receiptNumber": { "type": "string", "description": "Official receipt number" },
+        "paidAmount": { "type": "number", "description": "Amount settled" },
+        "remainingBalance": { "type": "number", "description": "Remaining unpaid balance" }
+      },
+      "required": ["id", "meterNumber", "consumerId", "previousReading", "currentReading", "consumption", "readingDate", "billingPeriod", "amount"]
+    },
+    "RouteAssignment": {
+      "title": "RouteAssignment",
+      "description": "Field reading route schedule and reader allocation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Route ID" },
+        "barangayId": { "type": "string", "description": "Barangay code" },
+        "barangayName": { "type": "string", "description": "Barangay name" },
+        "zone": { "type": "string", "description": "Zone description" },
+        "assignedReaderId": { "type": "string", "description": "Reader personnel ID" },
+        "assignedReaderName": { "type": "string", "description": "Reader personnel name" },
+        "readingSchedule": { "type": "string", "description": "Designated schedule days" },
+        "totalConsumers": { "type": "number", "description": "Total connection count" },
+        "completedReadings": { "type": "number", "description": "Readings captured count" },
+        "status": { "type": "string", "enum": ["scheduled", "in_progress", "completed", "delayed"], "description": "Progress state" },
+        "notes": { "type": "string", "description": "Route schedule notes" }
+      },
+      "required": ["id", "barangayName", "assignedReaderName", "readingSchedule", "status"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Public water district advisory and service maintenance bulletin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Announcement bulletin ID" },
+        "title": { "type": "string", "description": "Subject header" },
+        "content": { "type": "string", "description": "Detailed advisory text" },
+        "date": { "type": "string", "description": "Publish date" },
+        "category": { "type": "string", "enum": ["maintenance", "disruption", "event", "info"], "description": "Topic category" },
+        "author": { "type": "string", "description": "Publishing officer" },
+        "isPinned": { "type": "boolean", "description": "Pinned status" }
+      },
+      "required": ["id", "title", "content", "date", "category"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "System security and administrative change trail",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Log record ID" },
+        "timestamp": { "type": "string", "description": "ISO execution timestamp" },
+        "userId": { "type": "string", "description": "Actor user ID" },
+        "userName": { "type": "string", "description": "Actor user name" },
+        "userRole": { "type": "string", "enum": ["admin", "consumer", "system"], "description": "Actor system role" },
+        "action": { "type": "string", "description": "Action performed" },
+        "details": { "type": "string", "description": "Operation details" }
+      },
+      "required": ["id", "timestamp", "userId", "userName", "userRole", "action", "details"]
+    },
+    "ConsumerNotification": {
+      "title": "ConsumerNotification",
+      "description": "Account alerts, billing notifications, and advisories",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Notification ID" },
+        "consumerId": { "type": "string", "description": "Target consumer account number or user ID" },
+        "title": { "type": "string", "description": "Title" },
+        "message": { "type": "string", "description": "Message text" },
+        "date": { "type": "string", "description": "Sent date" },
+        "read": { "type": "boolean", "description": "Read status" },
+        "type": { "type": "string", "enum": ["bill", "announcement", "warning", "general"], "description": "Notification category" }
+      },
+      "required": ["id", "consumerId", "title", "message", "date", "read", "type"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile records"
+    },
+    "/consumers/{accountNumber}": {
+      "schema": "Consumer",
+      "description": "Official water connection accounts"
+    },
+    "/meters/{meterId}": {
+      "schema": "WaterMeter",
+      "description": "Physical water meter asset registry"
+    },
+    "/readings/{readingId}": {
+      "schema": "MeterReading",
+      "description": "Historical meter readings and monthly bills"
+    },
+    "/routes/{routeId}": {
+      "schema": "RouteAssignment",
+      "description": "Field reading route management"
+    },
+    "/announcements/{announcementId}": {
+      "schema": "Announcement",
+      "description": "Public district advisories"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "System and administrative action logs"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "ConsumerNotification",
+      "description": "Direct consumer alerts and billing reminders"
+    }
+  }
+}
