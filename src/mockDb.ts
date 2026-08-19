@@ -295,7 +295,7 @@ export const mockDb = {
     syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, id, { read: true });
   },
 
-  addAuditLog: (userId: string, userName: string, userRole: 'admin' | 'consumer' | 'system' | 'staff' | 'cashier', action: string, details: string): void => {
+  addAuditLog: (userId: string, userName: string, userRole: 'admin' | 'consumer' | 'system' | 'staff' | 'cashier' | 'meter_reader', action: string, details: string): void => {
     const logs = mockDb.getAuditLogs();
     const newLog: AuditLog = {
       id: `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`,

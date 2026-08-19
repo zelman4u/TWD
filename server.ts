@@ -350,6 +350,62 @@ app.post(["/api/sync/push", "/api/readings/submit"], (req, res) => {
   });
 });
 
+// 5.1 Batch Sync Readings: Upload Queued Offline Readings (POST /api/readings/batch)
+app.post("/api/readings/batch", (req, res) => {
+  const readingsList = Array.isArray(req.body) ? req.body : (req.body.readings || []);
+
+  if (!readingsList || readingsList.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "No readings payload provided in batch upload."
+    });
+  }
+
+  const processed: MobileReadingSubmission[] = [];
+
+  for (const item of readingsList) {
+    const prev = item.previousReading !== undefined ? Number(item.previousReading) : 0;
+    const curr = Number(item.currentReading || 0);
+    const consumption = Math.max(0, curr - prev);
+
+    const submission: MobileReadingSubmission = {
+      id: item.id || `READ-${Math.floor(10000 + Math.random() * 90000)}`,
+      accountNumber: item.accountNumber || "UNKNOWN",
+      consumerName: item.consumerName || "Consumer",
+      meterNumber: item.meterNumber || "MT-TAG",
+      billingPeriod: item.billingPeriod || "August 2026",
+      readingDate: item.readingDate || new Date().toISOString().split("T")[0],
+      previousReading: prev,
+      currentReading: curr,
+      consumption,
+      readerId: item.readerId || "WDT-FIELD",
+      readerName: item.readerName || "Field Meter Officer",
+      route: item.route || item.barangay || "Poblacion",
+      status: "pending_approval",
+      photoUrl: item.photoUrl || item.dialPhotoUrl || "",
+      coordinates: item.coordinates || { latitude: 8.5372, longitude: 124.7523 },
+      notes: item.notes || "Batch synced from Mobile Offline Queue",
+      submittedAt: new Date().toISOString()
+    };
+
+    pendingMobileReadings.unshift(submission);
+    processed.push(submission);
+  }
+
+  // Broadcast batch submission event to Admin
+  broadcast("READINGS_BATCH_SYNCED", {
+    count: processed.length,
+    message: `${processed.length} offline field readings batch synced by field staff.`
+  });
+
+  res.status(201).json({
+    success: true,
+    message: `Successfully processed and synced ${processed.length} field readings.`,
+    count: processed.length,
+    syncedIds: processed.map(p => p.id)
+  });
+});
+
 // 6. Admin Approval Queue Listing (GET /api/readings/pending)
 app.get("/api/readings/pending", (req, res) => {
   res.json({

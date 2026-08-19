@@ -7,10 +7,14 @@ export interface User {
   id: string;
   email: string;
   name: string;
-  role: 'admin' | 'consumer' | 'staff' | 'cashier';
+  role: 'admin' | 'consumer' | 'staff' | 'cashier' | 'meter_reader';
   linkedAccountNumber?: string; // For consumers
-  status: 'active' | 'inactive';
+  employeeId?: string; // For staff / meter readers
+  assignedBarangay?: string;
+  readerId?: string;
+  status: 'active' | 'inactive' | 'pending_approval';
   password?: string;
+  registrationDate?: string;
 }
 
 export interface Barangay {
@@ -52,12 +56,18 @@ export interface Consumer {
 export interface MeterReader {
   id: string;
   name: string;
+  email?: string;
   contactNumber: string;
-  employmentStatus: 'active' | 'inactive';
+  employeeId?: string;
+  employmentStatus: 'active' | 'inactive' | 'pending_approval';
   assignedRoutes: string[]; // List of routes
   completedReadings: number;
   pendingReadings: number;
   performanceRating: number; // Scale of 1-5
+  registrationDate?: string;
+  approvedBy?: string;
+  approvalDate?: string;
+  linkedUserId?: string;
 }
 
 export interface WaterMeter {
@@ -139,7 +149,7 @@ export interface AuditLog {
   timestamp: string;
   userId: string;
   userName: string;
-  userRole: 'admin' | 'consumer' | 'system' | 'staff' | 'cashier';
+  userRole: 'admin' | 'consumer' | 'system' | 'staff' | 'cashier' | 'meter_reader';
   action: string;
   details: string;
   ipAddress: string;

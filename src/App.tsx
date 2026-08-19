@@ -10,6 +10,7 @@ import UnifiedLogin from './components/UnifiedLogin';
 import RegistrationPage from './components/RegistrationPage';
 import AdminPortal from './components/AdminPortal';
 import ConsumerPortal from './components/ConsumerPortal';
+import MobileMeterReaderPortal from './components/MobileMeterReaderPortal';
 import { mockDb } from './mockDb';
 import { User } from './types';
 import { LoadingProvider, useLoading } from './context/LoadingContext';
@@ -38,7 +39,7 @@ const pageMotionVariants = {
 };
 
 function AppContent() {
-  const [currentPage, setCurrentPage] = useState<'landing' | 'login' | 'admin' | 'consumer'>('landing');
+  const [currentPage, setCurrentPage] = useState<'landing' | 'login' | 'admin' | 'consumer' | 'meter_reader'>('landing');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [announcements, setAnnouncements] = useState<any[]>([]);
   const [isRegisterOpen, setIsRegisterOpen] = useState(false);
@@ -56,6 +57,8 @@ function AppContent() {
       setCurrentUser(activeUser);
       if (activeUser.role === 'admin') {
         setCurrentPage('admin');
+      } else if (activeUser.role === 'meter_reader') {
+        setCurrentPage('meter_reader');
       } else {
         setCurrentPage('consumer');
       }
@@ -72,6 +75,8 @@ function AppContent() {
     setCurrentUser(user);
     if (user.role === 'admin') {
       setCurrentPage('admin');
+    } else if (user.role === 'meter_reader') {
+      setCurrentPage('meter_reader');
     } else {
       setCurrentPage('consumer');
     }
@@ -187,6 +192,20 @@ function AppContent() {
             className="w-full min-h-screen"
           >
             <ConsumerPortal 
+              currentUser={currentUser} 
+              onLogout={handleLogout} 
+            />
+          </motion.div>
+        ) : currentPage === 'meter_reader' && currentUser ? (
+          <motion.div
+            key={`meter_reader-${currentUser.id}`}
+            variants={pageMotionVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="w-full min-h-screen"
+          >
+            <MobileMeterReaderPortal 
               currentUser={currentUser} 
               onLogout={handleLogout} 
             />

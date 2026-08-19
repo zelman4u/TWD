@@ -2355,6 +2355,118 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 </button>
               </div>
 
+              {/* PENDING APPROVAL QUEUE BANNER */}
+              {readers.some(r => r.employmentStatus === 'pending_approval') && (
+                <div className="bg-amber-50 border border-amber-200 p-5 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2.5">
+                      <div className="h-8 w-8 rounded-xl bg-amber-500/20 text-amber-800 flex items-center justify-center font-bold">
+                        ⏳
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-extrabold text-amber-950">
+                          Pending Field Reader Registrations ({readers.filter(r => r.employmentStatus === 'pending_approval').length})
+                        </h4>
+                        <p className="text-xs text-amber-800">
+                          Newly registered mobile meter readers require administrator confirmation before gaining full mobile app access.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                    {readers.filter(r => r.employmentStatus === 'pending_approval').map(pendingReader => (
+                      <div key={pendingReader.id} className="bg-white border border-amber-200 rounded-xl p-4 shadow-sm flex flex-col justify-between space-y-3">
+                        <div>
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <h5 className="text-sm font-bold text-slate-900">{pendingReader.name}</h5>
+                              <p className="text-[11px] text-slate-500 font-mono">Badge: {pendingReader.employeeId || pendingReader.id}</p>
+                            </div>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                              PENDING APPROVAL
+                            </span>
+                          </div>
+
+                          <div className="mt-2 space-y-1 text-xs text-slate-600 bg-slate-50 p-2.5 rounded-lg">
+                            <div className="flex justify-between">
+                              <span>Email:</span>
+                              <span className="font-mono text-slate-800">{pendingReader.email || 'N/A'}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Phone:</span>
+                              <span className="font-mono text-slate-800">{pendingReader.contactNumber || 'N/A'}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Assigned Route:</span>
+                              <span className="font-bold text-blue-600">{pendingReader.assignedRoutes.join(', ') || 'Poblacion'}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-2 pt-2 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              // Approve reader
+                              const updatedReaders = readers.map(r => {
+                                if (r.id === pendingReader.id) {
+                                  return { ...r, employmentStatus: 'active' as const };
+                                }
+                                return r;
+                              });
+                              mockDb.saveReaders(updatedReaders);
+                              setReaders(updatedReaders);
+
+                              // Update linked User if exists
+                              const allUsers = mockDb.getUsers();
+                              const updatedUsers = allUsers.map(u => {
+                                if (u.id === pendingReader.linkedUserId || (pendingReader.email && u.email.toLowerCase() === pendingReader.email.toLowerCase())) {
+                                  return { ...u, status: 'active' as const };
+                                }
+                                return u;
+                              });
+                              mockDb.saveUsers(updatedUsers);
+
+                              // Audit log
+                              mockDb.addAuditLog(
+                                currentUser.id,
+                                currentUser.name,
+                                'admin',
+                                'Approve Meter Reader',
+                                `Approved field meter reader account for ${pendingReader.name} (Badge: ${pendingReader.employeeId || pendingReader.id}). Full mobile app access unlocked.`
+                              );
+
+                              toast.success('Reader Approved', `${pendingReader.name} has been authorized with full mobile meter reader access.`);
+                            }}
+                            className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition shadow-sm"
+                          >
+                            ✓ Approve & Grant Access
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const confirmReject = window.confirm(`Decline application for ${pendingReader.name}?`);
+                              if (!confirmReject) return;
+
+                              const updatedReaders = readers.filter(r => r.id !== pendingReader.id);
+                              mockDb.saveReaders(updatedReaders);
+                              setReaders(updatedReaders);
+
+                              toast.info('Application Removed', `Reader registration for ${pendingReader.name} declined.`);
+                            }}
+                            className="px-3 py-2 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 font-bold text-xs rounded-lg transition border border-slate-200"
+                          >
+                            Decline
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Add Meter Reader Form */}
               {showAddReader && (
                 <form onSubmit={handleCreateReader} className="bg-white border border-slate-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-2xl">
@@ -2422,14 +2534,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       <div className="flex justify-between items-start">
                         <div>
                           <h4 className="text-base font-extrabold text-slate-900">{r.name}</h4>
-                          <p className="text-[10px] text-slate-400 tracking-wider font-mono">ID: {r.id}</p>
+                          <p className="text-[10px] text-slate-400 tracking-wider font-mono">ID: {r.id} {r.employeeId ? `(${r.employeeId})` : ''}</p>
                         </div>
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                           r.employmentStatus === 'active' 
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' 
+                            : r.employmentStatus === 'pending_approval'
+                            ? 'bg-amber-50 text-amber-700 border border-amber-200'
                             : 'bg-rose-50 text-rose-700 border border-rose-100'
                         }`}>
-                          {r.employmentStatus === 'active' ? 'ACTIVE FIELD DUTY' : 'SUSPENDED/LEAVE'}
+                          {r.employmentStatus === 'active' ? 'ACTIVE FIELD DUTY' : r.employmentStatus === 'pending_approval' ? 'PENDING APPROVAL' : 'SUSPENDED/LEAVE'}
                         </span>
                       </div>
 
@@ -2456,22 +2570,67 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     <div className="pt-4 border-t border-slate-50 mt-4 flex items-center justify-between">
                       <p className="text-[10px] text-slate-500 font-mono">Phone: {r.contactNumber || 'N/A'}</p>
                       
-                      <button
-                        onClick={() => {
-                          const updated = readers.map(x => {
-                            if (x.id === r.id) {
-                              return { ...x, employmentStatus: x.employmentStatus === 'active' ? 'inactive' as const : 'active' as const };
-                            }
-                            return x;
-                          });
-                          mockDb.saveReaders(updated);
-                          setReaders(updated);
-                          mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Toggle Employment Status', `Switched staff status of reader: ${r.name}`);
-                        }}
-                        className="text-xs text-blue-600 font-bold hover:underline"
-                      >
-                        Change Status
-                      </button>
+                      <div className="flex items-center space-x-2">
+                        {r.employmentStatus === 'pending_approval' ? (
+                          <button
+                            onClick={() => {
+                              const updated = readers.map(x => {
+                                if (x.id === r.id) {
+                                  return { ...x, employmentStatus: 'active' as const };
+                                }
+                                return x;
+                              });
+                              mockDb.saveReaders(updated);
+                              setReaders(updated);
+
+                              const allUsers = mockDb.getUsers();
+                              const updatedUsers = allUsers.map(u => {
+                                if (u.id === r.linkedUserId || (r.email && u.email.toLowerCase() === r.email.toLowerCase())) {
+                                  return { ...u, status: 'active' as const };
+                                }
+                                return u;
+                              });
+                              mockDb.saveUsers(updatedUsers);
+
+                              mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Approve Meter Reader', `Approved meter reader: ${r.name}`);
+                              toast.success('Approved', `${r.name} authorized for mobile access.`);
+                            }}
+                            className="text-xs bg-emerald-600 text-white px-2.5 py-1 rounded-md font-bold hover:bg-emerald-700"
+                          >
+                            Approve
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              const nextStatus = r.employmentStatus === 'active' ? 'inactive' as const : 'active' as const;
+                              const updated = readers.map(x => {
+                                if (x.id === r.id) {
+                                  return { ...x, employmentStatus: nextStatus };
+                                }
+                                return x;
+                              });
+                              mockDb.saveReaders(updated);
+                              setReaders(updated);
+
+                              // Sync user status
+                              const allUsers = mockDb.getUsers();
+                              const updatedUsers = allUsers.map(u => {
+                                if (u.id === r.linkedUserId || (r.email && u.email.toLowerCase() === r.email.toLowerCase())) {
+                                  return { ...u, status: nextStatus };
+                                }
+                                return u;
+                              });
+                              mockDb.saveUsers(updatedUsers);
+
+                              mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Toggle Employment Status', `Switched staff status of reader ${r.name} to ${nextStatus}.`);
+                              toast.info('Status Updated', `${r.name} status changed to ${nextStatus}.`);
+                            }}
+                            className="text-xs text-blue-600 font-bold hover:underline"
+                          >
+                            {r.employmentStatus === 'active' ? 'Deactivate' : 'Activate'}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}

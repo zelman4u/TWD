@@ -130,10 +130,11 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
         return;
       }
 
-      // Consumer Access Granted
+      // Access Granted: Consumer or Field Meter Reader
+      const roleLabel = matchedUser.role === 'meter_reader' ? 'Field Meter Reader Portal' : 'Consumer Water Dashboard';
       showLoading(
         `Access Granted: ${matchedUser.name}`,
-        `Loading Consumer Water Dashboard...`
+        `Loading ${roleLabel}...`
       );
 
       setTimeout(() => {
@@ -143,7 +144,7 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
           matchedUser.name,
           matchedUser.role,
           'User Login',
-          `Consumer portal session initialized for ${matchedUser.name}.`
+          `${matchedUser.role === 'meter_reader' ? 'Field Meter Reader' : 'Consumer'} portal session initialized for ${matchedUser.name}.`
         );
 
         hideLoading();
