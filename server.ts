@@ -16,9 +16,389 @@ const PORT = 3000;
 // Set up WebSocket server
 const wss = new WebSocketServer({ server: httpServer });
 
+// Express JSON and URL-encoded body parsing for Mobile App API
+app.use(express.json({ limit: "15mb" }));
+app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+
+// Enable CORS for Mobile App and External API clients
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+// In-Memory Mobile Staff & Sync Store
+interface MobileReader {
+  id: string;
+  username: string;
+  name: string;
+  pin?: string;
+  role: string;
+  zone: string;
+  contactNumber: string;
+  employmentStatus: "active" | "pending" | "inactive";
+  registeredAt: string;
+  approvedAt?: string;
+  assignedRoutes: string[];
+}
+
+let registeredStaff: MobileReader[] = [];
+
+// Consumers registry for mobile offline/online tag auto-matching
+interface MobileConsumerSync {
+  accountNumber: string;
+  name: string;
+  address: string;
+  barangay: string;
+  sitioZone: string;
+  meterNumber: string; // The Tag Number scanned by the mobile camera / NFC
+  previousReading: number;
+  lastReadingDate: string;
+  meterSize: string;
+  consumerType: string;
+  status: "active" | "disconnected" | "maintenance";
+}
+
+let syncedConsumers: MobileConsumerSync[] = [];
+
+// In-Memory Pending Meter Reading Submissions from Mobile
+interface MobileReadingSubmission {
+  id: string;
+  accountNumber: string;
+  consumerName: string;
+  meterNumber: string;
+  billingPeriod: string;
+  readingDate: string;
+  previousReading: number;
+  currentReading: number;
+  consumption: number;
+  readerId: string;
+  readerName: string;
+  route: string;
+  status: "pending_approval" | "approved" | "rejected";
+  photoUrl?: string;
+  coordinates?: { latitude: number; longitude: number };
+  notes?: string;
+  submittedAt: string;
+}
+
+let pendingMobileReadings: MobileReadingSubmission[] = [];
+
 // Keep pool of connected sockets
 const clients = new Set<WebSocket>();
 
+function broadcast(type: string, payload: unknown) {
+  const msg = JSON.stringify({ type, payload });
+  for (const client of clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(msg);
+    }
+  }
+}
+
+// ==========================================
+// REST API ENDPOINTS FOR MOBILE APP & WEB
+// ==========================================
+
+// 1. Mobile Meter Reader Registration (POST /api/auth/register or /api/readers/register)
+app.post(["/api/auth/register", "/api/readers/register"], (req, res) => {
+  const { id, username, name, pin, role, zone, contactNumber, registeredAt } = req.body;
+
+  if (!name || !username) {
+    return res.status(400).json({
+      success: false,
+      message: "Reader name and username are required for registration."
+    });
+  }
+
+  const readerId = id || `WDT-MR${Math.floor(10 + Math.random() * 90)}`;
+  const cleanZone = zone ? zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim() : "Poblacion";
+
+  const newReader: MobileReader = {
+    id: readerId,
+    username: username.trim(),
+    name: name.trim(),
+    pin: pin || "1234",
+    role: role || "Meter Reader I",
+    zone: cleanZone,
+    contactNumber: contactNumber || "",
+    employmentStatus: "pending", // Starts as pending until Admin approves
+    registeredAt: registeredAt || new Date().toISOString(),
+    assignedRoutes: [cleanZone]
+  };
+
+  // Check if reader already exists
+  const existingIdx = registeredStaff.findIndex(s => s.username === newReader.username || s.id === newReader.id);
+  if (existingIdx >= 0) {
+    registeredStaff[existingIdx] = { ...registeredStaff[existingIdx], ...newReader };
+  } else {
+    registeredStaff.push(newReader);
+  }
+
+  // Broadcast new registration event to Admin Web Portal via WebSocket
+  broadcast("READER_REGISTERED_PENDING", {
+    reader: newReader,
+    message: `New Meter Reader ${newReader.name} (${newReader.id}) registered from mobile terminal and is awaiting approval.`
+  });
+  broadcast("staff:registered", {
+    reader: newReader,
+    message: `New Meter Reader ${newReader.name} (${newReader.id}) registered from mobile app and is awaiting approval.`
+  });
+
+  console.log(`[Mobile API] Meter Reader Registered: ${newReader.name} (${newReader.id}) - Status: Pending Approval`);
+
+  res.status(201).json({
+    success: true,
+    message: "Registration received successfully. Account is pending Admin approval.",
+    reader: {
+      id: newReader.id,
+      username: newReader.username,
+      name: newReader.name,
+      role: newReader.role,
+      zone: newReader.zone,
+      employmentStatus: newReader.employmentStatus,
+      assignedRoutes: newReader.assignedRoutes
+    }
+  });
+});
+
+// 2. Fetch All Staff / Meter Readers (GET /api/staff or /api/readers)
+app.get(["/api/staff", "/api/readers"], (req, res) => {
+  res.json({
+    success: true,
+    count: registeredStaff.length,
+    staff: registeredStaff,
+    readers: registeredStaff
+  });
+});
+
+// 2.1 Check Single Reader Status (GET /api/readers/check-status/:id)
+app.get("/api/readers/check-status/:id", (req, res) => {
+  const { id } = req.params;
+  const reader = registeredStaff.find(s => s.id === id || s.username === id);
+  if (!reader) {
+    return res.status(404).json({ success: false, message: "Meter reader not found." });
+  }
+
+  res.json({
+    success: true,
+    readerId: reader.id,
+    username: reader.username,
+    name: reader.name,
+    status: reader.employmentStatus,
+    employmentStatus: reader.employmentStatus,
+    assignedRoutes: reader.assignedRoutes,
+    approvedAt: reader.approvedAt
+  });
+});
+
+// 3. Admin Approves / Activates Meter Reader (PATCH /api/staff/:id, /api/staff/:id/status, or POST /api/readers/:id/approve)
+app.all(["/api/staff/:id/status", "/api/staff/:id", "/api/readers/:id/approve"], (req, res) => {
+  if (req.method !== "PATCH" && req.method !== "POST" && req.method !== "PUT") {
+    return res.status(405).json({ success: false, message: "Method Not Allowed" });
+  }
+
+  const { id } = req.params;
+  const { status, assignedRoutes } = req.body;
+
+  const reader = registeredStaff.find(s => s.id === id || s.username === id);
+  if (!reader) {
+    return res.status(404).json({ success: false, message: "Meter reader not found." });
+  }
+
+  const targetStatus = status || "active";
+  reader.employmentStatus = targetStatus;
+  if (targetStatus === "active") {
+    reader.approvedAt = new Date().toISOString();
+  }
+
+  if (assignedRoutes && Array.isArray(assignedRoutes)) {
+    reader.assignedRoutes = assignedRoutes;
+  }
+
+  // Broadcast approval to mobile terminal via WebSocket
+  broadcast("READER_APPROVED_ACTIVE", {
+    readerId: reader.id,
+    username: reader.username,
+    status: reader.employmentStatus,
+    assignedRoutes: reader.assignedRoutes,
+    message: `Reader ${reader.name} has been approved and activated.`
+  });
+  broadcast("staff:status_updated", {
+    readerId: reader.id,
+    status: reader.employmentStatus,
+    assignedRoutes: reader.assignedRoutes,
+    message: `Reader ${reader.name} is now ${reader.employmentStatus.toUpperCase()}`
+  });
+
+  res.json({
+    success: true,
+    message: `Meter reader ${reader.name} status updated to ${reader.employmentStatus}.`,
+    reader
+  });
+});
+
+// 4. Mobile Sync Pull: Download Consumers & Meter Tags for Offline Recognition (GET /api/sync/pull)
+app.get("/api/sync/pull", (req, res) => {
+  const { zone, readerId } = req.query;
+
+  let consumers = [...syncedConsumers];
+
+  if (zone && typeof zone === "string" && zone.trim() !== "") {
+    const cleanZone = zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim().toLowerCase();
+    consumers = consumers.filter(c => c.barangay.toLowerCase().includes(cleanZone) || c.address.toLowerCase().includes(cleanZone));
+  }
+
+  res.json({
+    success: true,
+    timestamp: new Date().toISOString(),
+    zone: zone || "all",
+    count: consumers.length,
+    consumers: consumers.map(c => ({
+      accountNumber: c.accountNumber,
+      name: c.name,
+      address: c.address,
+      barangay: c.barangay,
+      sitioZone: c.sitioZone,
+      meterNumber: c.meterNumber, // Tag Number for scanning & auto-matching
+      meterSerial: c.meterNumber,
+      previousReading: c.previousReading,
+      lastReadingDate: c.lastReadingDate,
+      meterSize: c.meterSize,
+      consumerType: c.consumerType,
+      status: c.status
+    }))
+  });
+});
+
+// 5. Mobile Reading Push: Submit Scanned Meter Reading to Approval Queue (POST /api/sync/push or POST /api/readings/submit)
+app.post(["/api/sync/push", "/api/readings/submit"], (req, res) => {
+  const {
+    accountNumber,
+    meterNumber,
+    currentReading,
+    previousReading,
+    readerId,
+    readerName,
+    route,
+    billingPeriod,
+    photoUrl,
+    coordinates,
+    notes
+  } = req.body;
+
+  if (!accountNumber || currentReading === undefined) {
+    return res.status(400).json({
+      success: false,
+      message: "Account number and current reading are mandatory."
+    });
+  }
+
+  // Find matching consumer
+  const matchedConsumer = syncedConsumers.find(
+    c => c.accountNumber === accountNumber || c.meterNumber === meterNumber
+  );
+
+  const prev = previousReading !== undefined ? Number(previousReading) : (matchedConsumer ? matchedConsumer.previousReading : 0);
+  const curr = Number(currentReading);
+  const consumption = Math.max(0, curr - prev);
+
+  const submission: MobileReadingSubmission = {
+    id: `READ-${Math.floor(10000 + Math.random() * 90000)}`,
+    accountNumber: matchedConsumer ? matchedConsumer.accountNumber : accountNumber,
+    consumerName: matchedConsumer ? matchedConsumer.name : (req.body.consumerName || "Consumer Account"),
+    meterNumber: meterNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG"),
+    billingPeriod: billingPeriod || "August 2026",
+    readingDate: new Date().toISOString().split("T")[0],
+    previousReading: prev,
+    currentReading: curr,
+    consumption,
+    readerId: readerId || "WDT-FIELD",
+    readerName: readerName || "Field Meter Officer",
+    route: route || (matchedConsumer ? matchedConsumer.barangay : "Poblacion"),
+    status: "pending_approval",
+    photoUrl: photoUrl || "",
+    coordinates: coordinates || { latitude: 8.5372, longitude: 124.7523 },
+    notes: notes || "Scanned and submitted via Tagoloan Mobile Field App",
+    submittedAt: new Date().toISOString()
+  };
+
+  pendingMobileReadings.unshift(submission);
+
+  // Broadcast new reading to Admin Approval Queue on Web via WebSocket
+  broadcast("READING_SUBMITTED_FOR_APPROVAL", {
+    reading: submission,
+    message: `New reading submitted for Account #${submission.accountNumber} (${submission.consumption} m³). Awaiting supervisor review.`
+  });
+  broadcast("reading:submitted", {
+    reading: submission,
+    message: `New reading submitted for Account #${submission.accountNumber} (${submission.consumption} m³). Awaiting Admin verification.`
+  });
+
+  console.log(`[Mobile API] Reading Submitted for ${submission.accountNumber} - ${submission.consumption} m³ by ${submission.readerName}`);
+
+  res.status(201).json({
+    success: true,
+    message: "Reading submitted successfully and routed to Admin Verification Queue.",
+    submissionId: submission.id,
+    consumption: submission.consumption,
+    status: "pending_approval"
+  });
+});
+
+// 6. Admin Approval Queue Listing (GET /api/readings/pending)
+app.get("/api/readings/pending", (req, res) => {
+  res.json({
+    success: true,
+    count: pendingMobileReadings.length,
+    readings: pendingMobileReadings
+  });
+});
+
+// 7. Admin Approves Reading -> Issues Bill to Consumer (POST /api/readings/:id/approve)
+app.post("/api/readings/:id/approve", (req, res) => {
+  const { id } = req.params;
+  const item = pendingMobileReadings.find(r => r.id === id);
+
+  if (!item) {
+    return res.status(404).json({ success: false, message: "Reading submission not found." });
+  }
+
+  item.status = "approved";
+
+  // Update consumer previous reading
+  const targetConsumer = syncedConsumers.find(c => c.accountNumber === item.accountNumber);
+  if (targetConsumer) {
+    targetConsumer.previousReading = item.currentReading;
+    targetConsumer.lastReadingDate = item.readingDate;
+  }
+
+  // Broadcast bill issuance to Consumer Portal
+  broadcast("READING_APPROVED_BILL_ISSUED", {
+    accountNumber: item.accountNumber,
+    billingPeriod: item.billingPeriod,
+    consumption: item.consumption,
+    message: `Official bill for ${item.billingPeriod} has been approved and published to Consumer Portal.`
+  });
+  broadcast("bill:issued", {
+    accountNumber: item.accountNumber,
+    billingPeriod: item.billingPeriod,
+    consumption: item.consumption,
+    message: `Official bill for ${item.billingPeriod} has been approved and published to Consumer Portal.`
+  });
+
+  res.json({
+    success: true,
+    message: `Reading #${id} approved. Statement issued to Consumer Portal for Account #${item.accountNumber}.`,
+    reading: item
+  });
+});
+
+// WebSocket Connection Management
 wss.on("connection", (ws) => {
   clients.add(ws);
   console.log("WebSocket client connected. Active connections:", clients.size);
@@ -26,7 +406,7 @@ wss.on("connection", (ws) => {
   // Send initial welcome event
   ws.send(JSON.stringify({ 
     type: "system:connected", 
-    message: "Connected to Tagoloan District Secure Payment Broker" 
+    message: "Connected to Tagoloan District Utility Broker" 
   }));
 
   ws.on("message", (rawMessage) => {
@@ -37,8 +417,6 @@ wss.on("connection", (ws) => {
       if (data.type === "payment:start") {
         const { readingId, accountNumber, amount, paymentMethod, billingPeriod } = data.payload;
 
-        // Simulate multi-tier payment verification over WS lines
-        // 1. Initial Processing
         setTimeout(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
@@ -53,7 +431,6 @@ wss.on("connection", (ws) => {
           }
         }, 800);
 
-        // 2. Gateway Authorization
         setTimeout(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
@@ -68,7 +445,6 @@ wss.on("connection", (ws) => {
           }
         }, 1800);
 
-        // 3. Database Sync & Ledger Settle
         setTimeout(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
@@ -83,7 +459,6 @@ wss.on("connection", (ws) => {
           }
         }, 2800);
 
-        // 4. Success Completion
         setTimeout(() => {
           if (ws.readyState === WebSocket.OPEN) {
             const transactionId = `TXN-${Math.floor(10000000 + Math.random() * 90000000)}`;
@@ -111,7 +486,6 @@ wss.on("connection", (ws) => {
               payload: successPayload
             }));
 
-            // Broadcast payment announcement to other connected clients
             const broadcastMsg = JSON.stringify({
               type: "payment:broadcast",
               payload: {
@@ -149,7 +523,6 @@ app.get("/api/health", (req, res) => {
 // Setup Vite Dev server or production static assets handler
 async function setupVite() {
   if (process.env.DISABLE_HMR === undefined) {
-    // Ensure we follow platform parameters
     process.env.DISABLE_HMR = "true";
   }
 
@@ -170,8 +543,8 @@ async function setupVite() {
   }
 
   httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server launched on http://0.0.0.5:${PORT}`);
-    console.log(`WebSocket Server active on ws://0.0.0.5:${PORT}`);
+    console.log(`Server launched on http://0.0.0.0:${PORT}`);
+    console.log(`WebSocket Server active on ws://0.0.0.0:${PORT}`);
   });
 }
 

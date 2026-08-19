@@ -7,9 +7,10 @@ export interface User {
   id: string;
   email: string;
   name: string;
-  role: 'admin' | 'consumer';
+  role: 'admin' | 'consumer' | 'staff' | 'cashier';
   linkedAccountNumber?: string; // For consumers
   status: 'active' | 'inactive';
+  password?: string;
 }
 
 export interface Barangay {
@@ -138,7 +139,7 @@ export interface AuditLog {
   timestamp: string;
   userId: string;
   userName: string;
-  userRole: 'admin' | 'consumer' | 'system';
+  userRole: 'admin' | 'consumer' | 'system' | 'staff' | 'cashier';
   action: string;
   details: string;
   ipAddress: string;

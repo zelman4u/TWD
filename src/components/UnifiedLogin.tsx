@@ -4,10 +4,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Mail, Lock, LogIn, AlertCircle, RefreshCw, Key, ArrowLeft, Waves, Sparkles, Building2 } from 'lucide-react';
+import { Mail, Lock, LogIn, AlertCircle, RefreshCw, ArrowLeft } from 'lucide-react';
 import { User } from '../types';
 import { mockDb } from '../mockDb';
 import { useLoading } from '../context/LoadingContext';
+import { useToast } from '../context/ToastContext';
 
 interface UnifiedLoginProps {
   onLoginSuccess: (user: User) => void;
@@ -21,6 +22,7 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const { showLoading, hideLoading } = useLoading();
+  const toast = useToast();
 
   // 3D Mouse Parallax & Float Interaction
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -38,8 +40,8 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const { innerWidth, innerHeight } = window;
-    const x = ((e.clientX / innerWidth) - 0.5) * 2; // -1 to 1
-    const y = ((e.clientY / innerHeight) - 0.5) * 2; // -1 to 1
+    const x = ((e.clientX / innerWidth) - 0.5) * 2;
+    const y = ((e.clientY / innerHeight) - 0.5) * 2;
     setMousePos({ x, y });
   };
 
@@ -53,37 +55,85 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
     setError(null);
     showLoading('Authenticating Credentials...', 'Verifying digital security certificate with Tagoloan Water District');
 
-    // Simulated network delay with step-by-step feedback
     setTimeout(() => {
+      const inputEmail = email.trim().toLowerCase();
+      const inputPassword = password.trim();
+
+      // 1. Official Admin Authentication Check
+      if (inputEmail === 'admin@tagoloanwater.gov.ph') {
+        if (inputPassword === 'AdminWater2025!') {
+          const adminUser: User = {
+            id: 'admin-1',
+            email: 'admin@tagoloanwater.gov.ph',
+            name: 'Admin',
+            role: 'admin',
+            status: 'active',
+            password: 'AdminWater2025!',
+          };
+
+          // Guarantee admin user is registered and remembered in persistence
+          const users = mockDb.getUsers();
+          const existingIdx = users.findIndex(u => u.email.toLowerCase() === adminUser.email.toLowerCase());
+          if (existingIdx >= 0) {
+            users[existingIdx] = { ...users[existingIdx], ...adminUser };
+          } else {
+            users.push(adminUser);
+          }
+          mockDb.saveUsers(users);
+
+          showLoading(
+            `Access Granted: ${adminUser.name}`,
+            `Loading District Management Console...`
+          );
+
+          setTimeout(() => {
+            mockDb.setCurrentUser(adminUser);
+            mockDb.addAuditLog(
+              adminUser.id,
+              adminUser.name,
+              'admin',
+              'Administrator Authentication',
+              'Official administrator session authenticated and remembered.'
+            );
+
+            hideLoading();
+            setIsLoading(false);
+            onLoginSuccess(adminUser);
+          }, 500);
+          return;
+        } else {
+          hideLoading();
+          setError("Invalid administrator password. Please check your credentials.");
+          toast.error("Authentication Failed", "Invalid administrator password. Please check your credentials.");
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      // 2. Real Registered Consumer Authentication Check
       const users = mockDb.getUsers();
-      const matchedUser = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
+      const matchedUser = users.find(u => u.email.toLowerCase() === inputEmail);
 
       if (!matchedUser) {
         hideLoading();
-        setError("Account matching coordinates not found. Please review the registered email or sign up below.");
+        setError("Account not found. Please review the registered email address or register a new account below.");
+        toast.error("Account Not Found", "No account registered with this email address.");
         setIsLoading(false);
         return;
       }
 
-      // Validate simple password rules for mock database
-      if (matchedUser.role === 'admin' && password.trim() !== 'admin') {
+      if (matchedUser.password && matchedUser.password !== inputPassword) {
         hideLoading();
-        setError("Invalid credential key entered for TWD Administrator. Tip: use 'admin'.");
+        setError("Incorrect account password. Please try again.");
+        toast.error("Authentication Failed", "Incorrect account password. Please try again.");
         setIsLoading(false);
         return;
       }
 
-      if (matchedUser.role === 'consumer' && password.trim() === '') {
-        hideLoading();
-        setError("Password credentials cannot be blank.");
-        setIsLoading(false);
-        return;
-      }
-
-      // Successful Auth step feedback
+      // Consumer Access Granted
       showLoading(
         `Access Granted: ${matchedUser.name}`,
-        `Loading ${matchedUser.role === 'admin' ? 'District Management Console' : 'Consumer Water Dashboard'}...`
+        `Loading Consumer Water Dashboard...`
       );
 
       setTimeout(() => {
@@ -93,25 +143,14 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
           matchedUser.name,
           matchedUser.role,
           'User Login',
-          `Successful unified portal access granted. Role detected: ${matchedUser.role.toUpperCase()}`
+          `Consumer portal session initialized for ${matchedUser.name}.`
         );
 
         hideLoading();
         setIsLoading(false);
         onLoginSuccess(matchedUser);
       }, 500);
-    }, 800);
-  };
-
-  // Helper chips to fill testing credentials
-  const fillSampleAdmin = () => {
-    setEmail('admin@tagoloanwater.gov.ph');
-    setPassword('admin');
-  };
-
-  const fillSampleConsumer = () => {
-    setEmail('john@example.com');
-    setPassword('consumer');
+    }, 600);
   };
 
   return (
@@ -121,16 +160,11 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
     >
-      {/* ------------------------------------------------------------- */}
-      {/* 3D FLOATING BACKGROUND PICTURE (FITS ENTIRE SCREEN, NO CUTS)  */}
-      {/* ------------------------------------------------------------- */}
+      {/* Dynamic 3D Parallax Background */}
       <div 
         className="fixed inset-0 pointer-events-none overflow-hidden z-0"
-        style={{
-          perspective: '1000px',
-        }}
+        style={{ perspective: '1000px' }}
       >
-        {/* Dynamic 3D Floating Picture Layer covering full viewport + gentle overscan for 3D motion */}
         <div 
           className="absolute -inset-[6%] w-[112%] h-[112%] transition-transform duration-500 ease-out animate-float-bg"
           style={{
@@ -138,14 +172,12 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
             transformStyle: 'preserve-3d',
           }}
         >
-          {/* Full Screen Image Element */}
           <img 
             src={imgSrc}
             alt="Tagoloan Water District Facility"
             referrerPolicy="no-referrer"
             onLoad={() => setImgLoaded(true)}
             onError={() => {
-              // Fallback to Google Drive thumbnail endpoint if primary fails
               setImgSrc('https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w2000');
             }}
             className={`w-full h-full object-cover object-center transition-all duration-1000 ${
@@ -153,19 +185,16 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
             }`}
           />
 
-          {/* Smooth Depth Vignette & Dark Overlays (Ensures high contrast for login text) */}
           <div className="absolute inset-0 bg-slate-950/60"></div>
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/40 to-slate-950/70"></div>
         </div>
       </div>
 
-      {/* Floating Animated Neon Accent Orbs */}
+      {/* Floating Ambient Orbs */}
       <div className="absolute top-12 right-16 h-72 w-72 bg-blue-500/10 rounded-full blur-3xl animate-float-orb pointer-events-none"></div>
       <div className="absolute bottom-12 left-16 h-80 w-80 bg-cyan-500/10 rounded-full blur-3xl animate-float-orb pointer-events-none" style={{ animationDelay: '-4s' }}></div>
 
-      {/* ------------------------------------------------------------- */}
-      {/* SOLID, FIXED FOREGROUND LOGIN FORM (NO SCROLL / STEADY)       */}
-      {/* ------------------------------------------------------------- */}
+      {/* Login Form Container */}
       <div className="w-full max-w-md space-y-3.5 z-10 relative">
         
         {/* Back navigation */}
@@ -177,14 +206,12 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
           <span>Back to district homepage</span>
         </button>
 
-        {/* Login Card Container - Stable, Grounded, Completely Fits Viewport */}
+        {/* Login Card Container */}
         <div className="bg-slate-900/90 backdrop-blur-2xl border-2 border-white/15 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] rounded-3xl p-6 sm:p-7 space-y-4 relative overflow-hidden ring-1 ring-blue-500/20">
           
-          {/* Subtle Top Inner Sheen */}
           <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-blue-400/60 to-transparent"></div>
 
           <div className="text-center space-y-2">
-            {/* Official District Seal / Logo from image */}
             <div className="inline-flex relative group">
               <div className="absolute -inset-1.5 bg-gradient-to-r from-blue-600 via-sky-400 to-indigo-600 rounded-2xl blur-sm opacity-70 group-hover:opacity-100 transition duration-300"></div>
               <div className="relative h-14 w-14 sm:h-16 sm:w-16 rounded-2xl overflow-hidden bg-slate-900 border-2 border-white/30 shadow-xl shadow-blue-600/30 flex items-center justify-center p-0.5">
@@ -218,7 +245,7 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
                 <input 
                   type="email"
                   required
-                  placeholder="name@example.com"
+                  placeholder="name@domain.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 rounded-xl py-2 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:outline-none shadow-inner"
@@ -230,7 +257,6 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
             <div>
               <div className="flex justify-between items-center mb-1">
                 <label className="block text-[9px] font-black text-slate-300 uppercase tracking-widest">Account Password</label>
-                <span className="text-[9px] text-blue-400 font-bold hover:underline cursor-pointer">Inquire admin?</span>
               </div>
               <div className="relative">
                 <span className="absolute left-3 top-2.5 text-slate-400">
@@ -259,7 +285,7 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-sky-600 hover:from-blue-500 hover:to-sky-500 disabled:opacity-70 text-white font-black rounded-xl text-xs uppercase tracking-widest transition-all transform hover:-translate-y-0.5 shadow-lg shadow-blue-600/30 flex items-center justify-center space-x-2 cursor-pointer border border-blue-400/30 mt-1"
+              className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-sky-600 hover:from-blue-500 hover:to-sky-500 disabled:opacity-70 text-white font-black rounded-xl text-xs uppercase tracking-widest transition-all transform hover:-translate-y-0.5 shadow-lg shadow-blue-600/30 flex items-center justify-center space-x-2 cursor-pointer border border-blue-400/30 mt-2"
             >
               {isLoading ? (
                 <>
@@ -275,45 +301,8 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
             </button>
           </form>
 
-          {/* Spacer */}
-          <div className="relative flex py-0.5 items-center">
-            <div className="flex-grow border-t border-slate-700/80"></div>
-            <span className="flex-shrink mx-3 text-[8px] font-black text-slate-400 uppercase tracking-widest">Developer testing aids</span>
-            <div className="flex-grow border-t border-slate-700/80"></div>
-          </div>
-
-          {/* Fast Testing Clickable Chips */}
-          <div className="space-y-1.5">
-            <p className="text-[9px] text-slate-300 font-semibold text-center">Click these buttons to auto-populate credentials:</p>
-            <div className="grid grid-cols-2 gap-2">
-              <button 
-                type="button" 
-                onClick={fillSampleAdmin}
-                className="py-2 px-2.5 bg-slate-950/90 border border-slate-700/80 hover:border-blue-500 text-left rounded-xl transition group shadow-sm hover:shadow-blue-500/10 cursor-pointer"
-              >
-                <div className="flex items-center space-x-1.5 text-blue-400 font-black text-[9px] uppercase tracking-wide">
-                  <Key className="h-3 w-3" />
-                  <span>Systems Admin</span>
-                </div>
-                <p className="text-[8px] text-slate-400 mt-0.5 truncate font-mono">admin@tagoloanwater.gov.ph</p>
-              </button>
-              
-              <button 
-                type="button" 
-                onClick={fillSampleConsumer}
-                className="py-2 px-2.5 bg-slate-950/90 border border-slate-700/80 hover:border-emerald-500 text-left rounded-xl transition group shadow-sm hover:shadow-emerald-500/10 cursor-pointer"
-              >
-                <div className="flex items-center space-x-1.5 text-emerald-400 font-black text-[9px] uppercase tracking-wide">
-                  <Key className="h-3 w-3" />
-                  <span>John Doe (Consumer)</span>
-                </div>
-                <p className="text-[8px] text-slate-400 mt-0.5 truncate font-mono">john@example.com</p>
-              </button>
-            </div>
-          </div>
-
           {/* Registration Navigation */}
-          <div className="text-center pt-1.5 border-t border-slate-700/60">
+          <div className="text-center pt-2 border-t border-slate-700/60">
             <p className="text-[11px] text-slate-300">
               Not yet registered online?{' '}
               <button 

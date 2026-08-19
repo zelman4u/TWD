@@ -4,10 +4,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { UserCheck, AlertCircle, HelpCircle, CheckCircle, ArrowLeft, Waves, Briefcase, X, MapPin } from 'lucide-react';
+import { UserCheck, AlertCircle, CheckCircle, ArrowLeft, Waves, Briefcase, MapPin } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Consumer, Barangay } from '../types';
 import { useLoading } from '../context/LoadingContext';
+import { useToast } from '../context/ToastContext';
 
 interface RegistrationPageProps {
   onBackToHome: () => void;
@@ -16,6 +17,7 @@ interface RegistrationPageProps {
 
 export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: RegistrationPageProps) {
   const { showLoading, hideLoading } = useLoading();
+  const toast = useToast();
   // Form State
   const [accountNumber, setAccountNumber] = useState('');
   const [fullName, setFullName] = useState('');
@@ -58,35 +60,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
     setAvailableBarangays(mockDb.getBarangays());
   }, []);
 
-  // Auto-fill test cases helper
-  const fillUnregistered = (
-    acc: string,
-    name: string,
-    brg: string,
-    sz: string,
-    phone: string,
-    mail: string,
-    type: 'Residential' | 'Commercial',
-    meter: string,
-    hh: string,
-    bName: string,
-    bType: string
-  ) => {
-    setAccountNumber(acc);
-    setFullName(name);
-    setBarangay(brg);
-    setSitioZone(sz);
-    setContactNumber(phone);
-    setEmail(mail);
-    setPassword('consumer123');
-    setConsumerType(type);
-    setMeterSize(meter);
-    setHouseholdInfo(hh);
-    setBusinessName(bName);
-    setBusinessType(bType);
-    setError(null);
-  };
-
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -104,7 +77,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
     setIsValidating(true);
     showLoading('Provisioning Consumer Profile...', 'Validating water service account with Tagoloan municipal registry');
 
-    // Simulated verification delay
     setTimeout(() => {
       // 1. Auto-match or create Barangay in Admin Database
       const matchedBarangay = mockDb.findOrCreateBarangay(barangay);
@@ -120,22 +92,9 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
       // Validate if already registered
       if (targetConsumer && targetConsumer.isRegistered) {
         hideLoading();
-        setError(`Account Number "${accountNumber}" has already been linked to an active web portal user profile. Please proceed to unified login.`);
+        setError(`Account Number "${accountNumber}" has already been linked to an active web portal user profile. Please proceed to login.`);
         setIsValidating(false);
         return;
-      }
-
-      // If pre-existing master record, validate name similarity
-      if (targetConsumer) {
-        const inputNameNorm = fullName.trim().toLowerCase().replace(/\s/g, '');
-        const recordNameNorm = targetConsumer.name.trim().toLowerCase().replace(/\s/g, '');
-        
-        if (!recordNameNorm.includes(inputNameNorm) && !inputNameNorm.includes(recordNameNorm)) {
-          hideLoading();
-          setError(`The client name "${fullName}" does not match the official database record (${targetConsumer.name}) for this account. Please verify spelling.`);
-          setIsValidating(false);
-          return;
-        }
       }
 
       // 3. Create or Link User and Consumer in Database
@@ -150,7 +109,8 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         name: officialName,
         role: 'consumer',
         linkedAccountNumber: officialAccount,
-        status: 'active'
+        status: 'active',
+        password: password.trim() || undefined
       };
 
       let updatedConsumers: Consumer[] = [];
@@ -209,7 +169,12 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
       // Save database elements
       mockDb.saveConsumers(updatedConsumers);
       
-      currentUsers.push(newConsumerUser);
+      const existingUserIdx = currentUsers.findIndex(u => u.email.toLowerCase() === email.trim().toLowerCase());
+      if (existingUserIdx >= 0) {
+        currentUsers[existingUserIdx] = newConsumerUser;
+      } else {
+        currentUsers.push(newConsumerUser);
+      }
       mockDb.saveUsers(currentUsers);
 
       // Sync Barangay Count
@@ -250,78 +215,70 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         barangayName: matchedBarangay.name,
         barangayId: matchedBarangay.id,
         sitioZone: sitioZone.trim(),
-        fullAddress,
-        consumerType,
-        meterSize,
-        householdInfo,
-        businessName,
-        businessType
+        fullAddress: fullAddress,
+        consumerType: consumerType,
+        meterSize: meterSize,
+        householdInfo: consumerType === 'Residential' ? householdInfo : undefined,
+        businessName: consumerType === 'Commercial' ? businessName : undefined,
+        businessType: consumerType === 'Commercial' ? businessType : undefined,
       });
 
       hideLoading();
       setIsValidating(false);
       setIsSuccessModal(true);
-    }, 900);
+      toast.success('Registration Successful', `Account #${officialAccount} registered for ${officialName}!`);
+    }, 800);
   };
 
   return (
-    <div 
-      className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-fade-in" 
-      id="consumer-registration-modal"
-      onClick={onBackToHome}
-    >
-      <div 
-        className={`w-full bg-slate-900 text-slate-100 relative rounded-3xl z-10 my-auto border-2 border-white/15 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] max-h-[92vh] flex flex-col overflow-hidden ring-1 ring-blue-500/20 ${isSuccessModal ? 'max-w-md' : 'max-w-2xl'}`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Subtle Top Inner Sheen */}
-        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-blue-400/60 to-transparent z-20"></div>
+    <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-3 sm:p-4 text-slate-100 relative">
+      {/* Dynamic Background Image */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
+        <img 
+          src="https://lh3.googleusercontent.com/d/1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg"
+          alt="Tagoloan Water District Background"
+          referrerPolicy="no-referrer"
+          onError={(e) => {
+            (e.target as HTMLImageElement).src = 'https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w2000';
+          }}
+          className="w-full h-full object-cover object-center filter brightness-[0.25] contrast-[1.1] scale-105"
+        />
+        <div className="absolute inset-0 bg-slate-950/80"></div>
+      </div>
 
-        {/* Close Button Absolute */}
-        <button 
-          onClick={onBackToHome}
-          className="absolute top-3.5 right-3.5 text-slate-400 hover:text-white transition p-1.5 hover:bg-slate-800/80 rounded-xl focus:outline-none cursor-pointer z-30 border border-slate-700/50"
-          aria-label="Close Registration"
-        >
-          <X className="h-4 w-4" />
-        </button>
+      <div className="w-full max-w-xl space-y-3 z-10 my-4">
+        {/* Top bar back button */}
+        <div className="flex items-center justify-between">
+          <button 
+            onClick={onBackToHome}
+            className="inline-flex items-center space-x-1.5 text-slate-300 hover:text-white text-xs font-bold transition px-3 py-1.5 rounded-xl bg-slate-900/80 backdrop-blur-md border border-slate-800 hover:border-slate-700 cursor-pointer"
+          >
+            <ArrowLeft className="h-3.5 w-3.5 text-blue-400" />
+            <span>Return to Homepage</span>
+          </button>
+          
+          <button 
+            onClick={onNavigateToLogin}
+            className="text-xs text-blue-400 font-bold hover:underline cursor-pointer"
+          >
+            Already have an account? Login
+          </button>
+        </div>
 
-        {/* Normal Registration Interface */}
         {!isSuccessModal ? (
-          <div className="flex flex-col max-h-[92vh]">
-            {/* Header with Official District Logo */}
-            <div className="px-5 sm:px-7 pt-5 pb-3 border-b border-slate-800/80 bg-slate-900/90 shrink-0">
-              <div className="flex items-center space-x-3.5">
-                {/* Official District Seal Logo */}
-                <div className="relative group shrink-0">
-                  <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 via-sky-400 to-indigo-600 rounded-2xl blur-xs opacity-75"></div>
-                  <div className="relative h-12 w-12 sm:h-13 sm:w-13 rounded-2xl overflow-hidden bg-slate-950 border-2 border-white/30 shadow-lg shadow-blue-600/30 flex items-center justify-center p-0.5">
-                    <img 
-                      src="https://lh3.googleusercontent.com/d/1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg"
-                      alt="Tagoloan Water District Logo"
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = 'https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w500';
-                      }}
-                      className="w-full h-full object-cover rounded-xl"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <h2 className="text-base sm:text-lg font-black tracking-tight text-white flex items-center space-x-2">
-                    <span>Consumer Portal Registration</span>
-                  </h2>
-                  <p className="text-[11px] font-semibold text-slate-400">
-                    Tagoloan Water District • Self-Service Digital Connection Setup
-                  </p>
-                </div>
+          <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-800/80 shadow-2xl rounded-3xl overflow-hidden">
+            <div className="bg-gradient-to-r from-blue-900/80 via-slate-900 to-indigo-900/80 p-5 sm:p-6 text-center border-b border-slate-800">
+              <div className="inline-flex p-2.5 bg-blue-500/10 rounded-2xl mb-2 text-blue-400 border border-blue-500/20">
+                <UserCheck className="h-6 w-6" />
               </div>
+              <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">Consumer Account Registration</h1>
+              <p className="text-xs text-slate-300 mt-1 max-w-md mx-auto">
+                Register your Tagoloan water connection to view billing records and manage water district services online.
+              </p>
             </div>
 
-            {/* Scrollable Form Content */}
-            <div className="overflow-y-auto px-5 sm:px-7 py-4 space-y-3.5 scrollbar-thin">
-              <form onSubmit={handleRegister} className="space-y-3">
+            <div className="p-5 sm:p-6 space-y-4">
+              <form onSubmit={handleRegister} className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   
                   {/* Account Number */}
@@ -330,37 +287,36 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                     <input 
                       type="text" 
                       required 
-                      placeholder="e.g. 2001-X"
+                      placeholder="e.g. 1001-A or 2001-X"
                       value={accountNumber}
                       onChange={(e) => setAccountNumber(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none"
+                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
                     />
-                    <p className="text-[8px] text-slate-500">Official statement account ID.</p>
                   </div>
 
-                  {/* Account Full Name */}
+                  {/* Account Holder Name */}
                   <div className="space-y-1 text-left">
-                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Your Full Name <span className="text-red-400">*</span></label>
+                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Full Account Holder Name <span className="text-red-400">*</span></label>
                     <input 
                       type="text" 
                       required 
-                      placeholder="e.g. Ramon Valenzuela"
+                      placeholder="e.g. Juan Dela Cruz"
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none"
+                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
                     />
-                    <p className="text-[8px] text-slate-500">Name as printed on bill card.</p>
                   </div>
 
                   {/* Contact Number */}
                   <div className="space-y-1 text-left">
-                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Contact Number</label>
+                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Mobile Number <span className="text-red-400">*</span></label>
                     <input 
                       type="tel" 
-                      placeholder="e.g. 09203334444"
+                      required
+                      placeholder="e.g. 09171234567"
                       value={contactNumber}
                       onChange={(e) => setContactNumber(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none"
+                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
                     />
                   </div>
 
@@ -370,10 +326,10 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                     <input 
                       type="email" 
                       required 
-                      placeholder="e.g. ramon@example.com"
+                      placeholder="e.g. juan@example.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none"
+                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
                     />
                   </div>
 
@@ -393,7 +349,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                         <option value="" disabled>-- Select Barangay (Required) --</option>
                         {availableBarangays.map((b) => (
                           <option key={b.id} value={b.name} className="bg-slate-900 text-slate-200">
-                            {b.name} ({b.id})
+                            {b.name}
                           </option>
                         ))}
                       </select>
@@ -412,10 +368,10 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                     <input 
                       type="text" 
                       required 
-                      placeholder="e.g. Zone 3 or Sitio Centro"
+                      placeholder="e.g. Zone 1 or Centro"
                       value={sitioZone}
                       onChange={(e) => setSitioZone(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none"
+                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
                     />
                   </div>
 
@@ -428,7 +384,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                       placeholder="Configure password for portal login"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none"
+                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
                     />
                   </div>
 
@@ -453,7 +409,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                         onClick={() => setConsumerType('Commercial')}
                         className={`py-1.5 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 border cursor-pointer ${
                           consumerType === 'Commercial'
-                            ? 'bg-blue-600/20 border-blue-500 text-blue-400 shadow-sm'
+                            ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-sm'
                             : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
                         }`}
                       >
@@ -462,30 +418,25 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-2 pt-2 border-t border-slate-800/60">
-                      {/* Common Meter Size */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
                       <div className="space-y-1">
-                        <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Meter Connection Size</label>
+                        <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Meter Pipe Size <span className="text-red-400">*</span></label>
                         <select
                           value={meterSize}
                           onChange={(e) => setMeterSize(e.target.value)}
                           className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-1.5 px-2.5 text-xs text-slate-200 focus:outline-none"
                         >
-                          <option value="1/2 inch">1/2 inch (Standard)</option>
-                          <option value="3/4 inch">3/4 inch (Medium)</option>
-                          <option value="1 inch">1 inch (Large)</option>
-                          <option value="1 1/2 inch">1 1/2 inch</option>
-                          <option value="2 inch">2 inch (Commercial Main)</option>
+                          <option value="1/2 inch">1/2 inch (Standard Domestic)</option>
+                          <option value="3/4 inch">3/4 inch (High Flow / Commercial)</option>
+                          <option value="1 inch">1 inch (Industrial / Bulk)</option>
                         </select>
                       </div>
 
                       {consumerType === 'Residential' ? (
-                        /* Residential specifics */
                         <div className="space-y-1">
-                          <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Household Info <span className="text-red-400">*</span></label>
+                          <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Household Size</label>
                           <input
                             type="text"
-                            required
                             placeholder="e.g. 4 family members"
                             value={householdInfo}
                             onChange={(e) => setHouseholdInfo(e.target.value)}
@@ -493,14 +444,13 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                           />
                         </div>
                       ) : (
-                        /* Commercial specifics */
                         <>
                           <div className="space-y-1">
                             <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Business Name <span className="text-red-400">*</span></label>
                             <input
                               type="text"
                               required
-                              placeholder="e.g. Tagoloan Bakery"
+                              placeholder="e.g. Tagoloan Enterprise"
                               value={businessName}
                               onChange={(e) => setBusinessName(e.target.value)}
                               className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-1.5 px-2.5 text-xs text-slate-200 focus:outline-none"
@@ -535,85 +485,21 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                 <button
                   type="submit"
                   disabled={isValidating}
-                  className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-sky-600 hover:from-blue-500 hover:to-sky-500 disabled:opacity-60 text-white font-black rounded-xl text-xs uppercase tracking-widest transition shadow-lg shadow-blue-600/30 flex items-center justify-center space-x-2 cursor-pointer border border-blue-400/30"
+                  className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-sky-600 hover:from-blue-500 hover:to-sky-500 disabled:opacity-60 text-white font-black rounded-xl text-xs uppercase tracking-widest transition shadow-lg shadow-blue-600/30 flex items-center justify-center space-x-2 cursor-pointer border border-blue-400/30 mt-2"
                 >
                   {isValidating ? (
-                    <span>Syncing with Barangay Database...</span>
+                    <span>Syncing with District Database...</span>
                   ) : (
-                    <span>Submit Registration & Auto-Sync to Admin</span>
+                    <span>Complete Registration</span>
                   )}
                 </button>
               </form>
-
-              {/* Quick Testing Panel showing unregistered user tags from database */}
-              <div className="relative flex py-1 items-center">
-                <div className="flex-grow border-t border-slate-800"></div>
-                <span className="flex-shrink mx-3 text-[8px] font-black text-slate-500 uppercase tracking-widest">Tester Quick-Fill Aids</span>
-                <div className="flex-grow border-t border-slate-800"></div>
-              </div>
-
-              <div className="space-y-1.5 text-center bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80">
-                <p className="text-[9px] text-slate-400 font-bold">Eligible test accounts with verified barangays:</p>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-left">
-                  <button
-                    type="button"
-                    onClick={() => fillUnregistered('2001-X', 'Ramon Valenzuela', 'Natumolan', 'Zone 3', '09203334444', 'ramon@temp.com', 'Residential', '1/2 inch', '5 members', '', '')}
-                    className="bg-slate-900 border border-slate-800 hover:border-blue-500 text-left p-2 rounded-lg text-xs transition cursor-pointer"
-                  >
-                    <p className="font-black text-[9px] text-blue-400">#2001-X</p>
-                    <p className="text-[9px] text-slate-300 truncate">R. Valenzuela</p>
-                    <p className="text-[8px] text-slate-500 truncate">Natumolan</p>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => fillUnregistered('2002-Y', 'Clara Generosa', 'Sta. Ana', 'Zone 5', '09355556666', 'clara@temp.com', 'Residential', '1/2 inch', '2 members', '', '')}
-                    className="bg-slate-900 border border-slate-800 hover:border-blue-500 text-left p-2 rounded-lg text-xs transition cursor-pointer"
-                  >
-                    <p className="font-black text-[9px] text-blue-400">#2002-Y</p>
-                    <p className="text-[9px] text-slate-300 truncate">C. Generosa</p>
-                    <p className="text-[8px] text-slate-500 truncate">Sta. Ana</p>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => fillUnregistered('2003-Z', 'Wilfredo Macabebe', 'Sta. Cruz', 'Zone 2', '09774441234', 'wilfredo@temp.com', 'Commercial', '3/4 inch', '', 'Wilfredo Auto Shop', 'Automotive Workshop')}
-                    className="bg-slate-900 border border-slate-800 hover:border-purple-500 text-left p-2 rounded-lg text-xs transition cursor-pointer"
-                  >
-                    <p className="font-black text-[9px] text-purple-400">#2003-Z</p>
-                    <p className="text-[9px] text-slate-300 truncate">W. Macabebe</p>
-                    <p className="text-[8px] text-slate-500 truncate">Sta. Cruz</p>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => fillUnregistered('3001-N', 'Teresa Alonzo', 'Poblacion East', 'Zone 2', '09191234567', 'teresa@twd.ph', 'Residential', '1/2 inch', '3 members', '', '')}
-                    className="bg-slate-900 border border-slate-800 hover:border-emerald-500 text-left p-2 rounded-lg text-xs transition cursor-pointer"
-                  >
-                    <p className="font-black text-[9px] text-emerald-400">#3001-N</p>
-                    <p className="text-[9px] text-slate-300 truncate">T. Alonzo</p>
-                    <p className="text-[8px] text-slate-500 truncate">Poblacion</p>
-                  </button>
-                </div>
-              </div>
             </div>
           </div>
         ) : (
           /* Success Panel */
-          <div className="bg-slate-900 p-6 sm:p-8 text-center space-y-4 max-w-lg mx-auto">
-            {/* Logo and Checkmark */}
+          <div className="bg-slate-900 p-6 sm:p-8 text-center space-y-4 max-w-lg mx-auto rounded-3xl border border-slate-800">
             <div className="flex items-center justify-center space-x-3 mb-2">
-              <div className="relative h-14 w-14 rounded-2xl overflow-hidden bg-slate-950 border-2 border-white/30 shadow-lg p-0.5">
-                <img 
-                  src="https://lh3.googleusercontent.com/d/1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg"
-                  alt="Tagoloan Water District Logo"
-                  referrerPolicy="no-referrer"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = 'https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w500';
-                  }}
-                  className="w-full h-full object-cover rounded-xl"
-                />
-              </div>
               <div className="h-14 w-14 bg-emerald-500/15 text-emerald-400 rounded-2xl border border-emerald-500/30 flex items-center justify-center shadow-lg">
                 <CheckCircle className="h-8 w-8 animate-scale-up" />
               </div>
@@ -622,7 +508,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
             <div>
               <h2 className="text-xl font-black text-white">Registration Complete!</h2>
               <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-                Account <strong className="text-blue-400 font-mono font-bold">#{registeredSummary?.accountNumber}</strong> ({registeredSummary?.fullName}) is registered and automatically synchronized to the Admin master database.
+                Account <strong className="text-blue-400 font-mono font-bold">#{registeredSummary?.accountNumber}</strong> ({registeredSummary?.fullName}) is registered and synchronized to the District master database.
               </p>
             </div>
 
@@ -637,7 +523,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Barangay:</span>
-                <span className="font-bold text-orange-400">{registeredSummary?.barangayName} ({registeredSummary?.barangayId})</span>
+                <span className="font-bold text-orange-400">{registeredSummary?.barangayName}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Sitio / Zone:</span>
@@ -651,23 +537,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                 <span className="text-slate-500">Classification:</span>
                 <span className="font-bold text-blue-400">{registeredSummary?.consumerType} ({registeredSummary?.meterSize})</span>
               </div>
-              {registeredSummary?.consumerType === 'Residential' ? (
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Household:</span>
-                  <span className="text-slate-300">{registeredSummary?.householdInfo}</span>
-                </div>
-              ) : (
-                <>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Business:</span>
-                    <span className="text-slate-300">{registeredSummary?.businessName}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Type:</span>
-                    <span className="text-slate-300">{registeredSummary?.businessType}</span>
-                  </div>
-                </>
-              )}
             </div>
 
             <button

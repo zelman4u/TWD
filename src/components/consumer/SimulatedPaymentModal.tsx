@@ -58,13 +58,13 @@ export const SimulatedPaymentModal: React.FC<SimulatedPaymentModalProps> = ({
 
   // Form Fields
   const [gcashPhone, setGcashPhone] = useState(
-    consumerRecord.contactNumber ? consumerRecord.contactNumber.replace(/[^0-9]/g, '').slice(-10) : '9175550145'
+    consumerRecord.contactNumber ? consumerRecord.contactNumber.replace(/[^0-9]/g, '').slice(-10) : ''
   );
-  const [cardName, setCardName] = useState(consumerRecord.name);
-  const [cardNumber, setCardNumber] = useState('4532 •••• •••• 1088');
-  const [cardExpiry, setCardExpiry] = useState('08/29');
-  const [cardCvv, setCardCvv] = useState('188');
-  const [bankAccountNum, setBankAccountNum] = useState('LBP-1992-0044-81');
+  const [cardName, setCardName] = useState(consumerRecord.name || '');
+  const [cardNumber, setCardNumber] = useState('');
+  const [cardExpiry, setCardExpiry] = useState('');
+  const [cardCvv, setCardCvv] = useState('');
+  const [bankAccountNum, setBankAccountNum] = useState('');
 
   // Processing state
   const [isProcessing, setIsProcessing] = useState(false);

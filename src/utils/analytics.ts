@@ -83,8 +83,6 @@ export function computeMonthlyTrends(
   const consumerMap = new Map<string, Consumer>();
   consumers.forEach(c => consumerMap.set(c.accountNumber, c));
 
-  // If no readings, return default periods
-  const defaultPeriods = ['Jan 2026', 'Feb 2026', 'Mar 2026', 'Apr 2026', 'May 2026', 'Jun 2026'];
   const periodMap = new Map<string, {
     totalVolume: number;
     residentialVolume: number;
@@ -129,17 +127,7 @@ export function computeMonthlyTrends(
   const allPeriods = Array.from(periodMap.keys());
   
   if (allPeriods.length === 0) {
-    // Seed with realistic baseline if database has sparse period data
-    return defaultPeriods.map((p, idx) => ({
-      period: p,
-      totalVolume: 1200 + (idx * 140) + Math.round(Math.random() * 80),
-      residentialVolume: 850 + (idx * 90),
-      commercialVolume: 350 + (idx * 50),
-      totalBilledAmount: (1200 + idx * 140) * 24.5,
-      totalCollectedAmount: (1200 + idx * 140) * 22.8,
-      readingCount: 45 + idx * 5,
-      averageVolume: Math.round(((1200 + idx * 140) / (45 + idx * 5)) * 10) / 10
-    }));
+    return [];
   }
 
   allPeriods.forEach(period => {
@@ -268,7 +256,7 @@ export function computeBarangayConsumption(
 
   // Track consumers in barangays
   consumers.forEach(c => {
-    const bgName = c.barangay || 'Poblacion East';
+    const bgName = c.barangay || 'Poblacion';
     let entry = statsMap.get(bgName);
     if (!entry) {
       entry = { volume: 0, billed: 0, paid: 0, consumers: new Set<string>() };
@@ -280,7 +268,7 @@ export function computeBarangayConsumption(
   // Aggregate readings
   readings.forEach(r => {
     const consumer = consumerMap.get(r.accountNumber);
-    const bgName = consumer?.barangay || r.route || 'Poblacion East';
+    const bgName = consumer?.barangay || r.route || 'Poblacion';
     const isCommercial = r.classification === 'Commercial' || consumer?.consumerType === 'Commercial';
     const cost = calculateReadingCost(r.consumption, isCommercial ? 'Commercial' : 'Residential');
     const paid = r.paymentStatus === 'paid' ? cost : (r.paidAmount || 0);
@@ -301,8 +289,8 @@ export function computeBarangayConsumption(
 
   statsMap.forEach((data, name) => {
     const matchedBrg = barangays.find(b => b.name === name);
-    const cCount = Math.max(data.consumers.size, matchedBrg?.consumers || 1);
-    const rate = data.billed > 0 ? Math.round((data.paid / data.billed) * 100) : 100;
+    const cCount = data.consumers.size || (matchedBrg ? matchedBrg.consumers : 0);
+    const rate = data.billed > 0 ? Math.round((data.paid / data.billed) * 100) : 0;
 
     result.push({
       barangayName: name,

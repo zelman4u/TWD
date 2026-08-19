@@ -47,6 +47,7 @@ import { mockDb } from '../mockDb';
 import { User, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog } from '../types';
 import { DashboardSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import AdminAnalyticsSection from './charts/AdminAnalyticsSection';
+import { useToast } from '../context/ToastContext';
 
 interface AdminPortalProps {
   currentUser: User;
@@ -54,6 +55,7 @@ interface AdminPortalProps {
 }
 
 export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps) {
+  const toast = useToast();
   // Navigation Module Selected - All 14 Admin Portal Modules
   const [activeTab, setActiveTab] = useState<
     | 'dashboard'
@@ -102,13 +104,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [showManualReadingForm, setShowManualReadingForm] = useState(false);
   const [manualAccount, setManualAccount] = useState('');
   const [manualCurrentReading, setManualCurrentReading] = useState('');
-  const [manualGps, setManualGps] = useState('8.5024° N, 124.7731° E');
-  const [manualBillingPeriod, setManualBillingPeriod] = useState('June 2026');
+  const [manualGps, setManualGps] = useState('');
+  const [manualBillingPeriod, setManualBillingPeriod] = useState(
+    new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  );
   const [manualNotes, setManualNotes] = useState('');
 
   const [newMeter, setNewMeter] = useState({
     meterNumber: 'MT-' + Math.floor(1000 + Math.random() * 9000),
-    brand: 'NBI WaterTech',
+    brand: '',
     size: '1/2 inch',
     installationDate: new Date().toISOString().split('T')[0],
     status: 'active' as const,
@@ -118,7 +122,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [newReader, setNewReader] = useState({
     name: '',
     contactNumber: '',
-    assignedRoute: 'Poblacion East'
+    assignedRoute: 'Poblacion'
   });
 
   const [newAnnouncement, setNewAnnouncement] = useState({
@@ -189,25 +193,35 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [modalIssueAccountNumber, setModalIssueAccountNumber] = useState('');
   const [modalIssueRfidTag, setModalIssueRfidTag] = useState('');
 
-  const [staffList, setStaffList] = useState([
-    { id: 'ST-001', name: 'Director Maria Santos', email: 'director@tagoloanwater.gov.ph', role: 'Administrator', department: 'Executive', status: 'active' },
-    { id: 'ST-002', name: 'Engr. Juan Dela Cruz', email: 'j.delacruz@tagoloanwater.gov.ph', role: 'Supervisor', department: 'Technical Operations', status: 'active' },
-    { id: 'ST-003', name: 'Elena Ramos', email: 'cashier.elena@tagoloanwater.gov.ph', role: 'Cashier', department: 'Finance & Treasury', status: 'active' },
-    { id: 'ST-004', name: 'Roberto Tan', email: 'billing.roberto@tagoloanwater.gov.ph', role: 'Billing Officer', department: 'Billing & Accounting', status: 'active' },
-  ]);
+  const [staffList, setStaffList] = useState<{ id: string; name: string; email: string; role: string; department: string; status: string }[]>(() => {
+    const users = mockDb.getUsers().filter(u => u.role === 'admin' || u.role === 'staff' || u.role === 'cashier');
+    if (users.length > 0) {
+      return users.map(u => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role === 'admin' ? 'Administrator' : u.role.toUpperCase(),
+        department: u.role === 'admin' ? 'Executive' : 'Finance/Operations',
+        status: u.status
+      }));
+    }
+    return [
+      { id: 'ST-001', name: 'Admin', email: 'admin@tagoloanwater.gov.ph', role: 'Administrator', department: 'Executive', status: 'active' }
+    ];
+  });
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [newStaff, setNewStaff] = useState({ name: '', email: '', role: 'Cashier', department: 'Finance' });
 
   // 11. Barangays Module State
   const [barangayList, setBarangayList] = useState(mockDb.getBarangays());
   const [showAddBarangay, setShowAddBarangay] = useState(false);
-  const [newBarangay, setNewBarangay] = useState({ name: '', code: '', schedule: '', supervisor: 'Engr. Juan Dela Cruz', ratePerM3: 24.50 });
+  const [newBarangay, setNewBarangay] = useState({ name: '', code: '', schedule: '', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 });
 
   // 13. Profile Admin State
   const [adminProfile, setAdminProfile] = useState({
-    name: currentUser.name,
+    name: currentUser.email?.toLowerCase() === 'admin@tagoloanwater.gov.ph' ? 'Admin' : currentUser.name,
     email: currentUser.email || 'admin@tagoloanwater.gov.ph',
-    phone: '+63 917 123 4567',
+    phone: '+63 88 567 1234',
     role: 'Chief Utility Administrator',
     currentPassword: '',
     newPassword: '',
@@ -218,6 +232,61 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [profileSaveSuccess, setProfileSaveSuccess] = useState(false);
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
   const [assignedReaderId, setAssignedReaderId] = useState('');
+
+  // Save Administrator Profile & Password
+  const handleSaveAdminProfile = () => {
+    // 1. Password validation if user attempted password change
+    if (adminProfile.newPassword || adminProfile.confirmPassword) {
+      if (!adminProfile.currentPassword) {
+        toast.error('Current Password Required', 'Please enter your current password to authorize security modifications.');
+        return;
+      }
+      if (adminProfile.newPassword.length < 6) {
+        toast.warning('Weak Password', 'New password must be at least 6 characters long.');
+        return;
+      }
+      if (adminProfile.newPassword !== adminProfile.confirmPassword) {
+        toast.error('Password Mismatch', 'New password and confirmation do not match.');
+        return;
+      }
+    }
+
+    // 2. Persist updated user
+    const allUsers = mockDb.getUsers();
+    const adminIdx = allUsers.findIndex(u => u.id === currentUser.id || u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph');
+    const newAdminName = adminProfile.name.trim() || 'Admin';
+    const newAdminEmail = adminProfile.email.trim() || 'admin@tagoloanwater.gov.ph';
+
+    if (adminIdx !== -1) {
+      allUsers[adminIdx].name = newAdminName;
+      allUsers[adminIdx].email = newAdminEmail;
+      if (adminProfile.newPassword) {
+        allUsers[adminIdx].password = adminProfile.newPassword;
+      }
+      mockDb.saveUsers(allUsers);
+      mockDb.setCurrentUser(allUsers[adminIdx]);
+    }
+
+    mockDb.addAuditLog(
+      currentUser.id,
+      newAdminName,
+      'admin',
+      'Updated Profile',
+      adminProfile.newPassword 
+        ? 'Administrator updated personal profile and changed master credentials.'
+        : 'Administrator updated personal profile preferences.'
+    );
+
+    setProfileSaveSuccess(true);
+    setTimeout(() => setProfileSaveSuccess(false), 3000);
+
+    if (adminProfile.newPassword) {
+      toast.success('Password & Profile Updated', 'Security credentials and profile information updated successfully.');
+      setAdminProfile(prev => ({ ...prev, currentPassword: '', newPassword: '', confirmPassword: '' }));
+    } else {
+      toast.success('Profile Saved', 'Administrator profile details updated successfully.');
+    }
+  };
 
   // Initial Load & State Sync
   const loadAllDataFromStore = (withDelay = false) => {
@@ -467,7 +536,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // reset
     setNewMeter({
       meterNumber: 'MT-' + Math.floor(1000 + Math.random() * 9000),
-      brand: 'NBI WaterTech',
+      brand: '',
       size: '1/2 inch',
       installationDate: new Date().toISOString().split('T')[0],
       status: 'active',
@@ -649,7 +718,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       meterNumber: con.meterNumber || 'MT-GEN',
       accountNumber: manualAccount,
       consumerName: con.name,
-      route: 'Poblacion East',
+      route: con.barangay || 'Poblacion',
       previousReading,
       currentReading: currentVal,
       consumption: resolvedConsumption,
@@ -683,163 +752,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
 
     alert(`Index Entry Recorded Successfully!\n\nCurrent registered whole number: ${currentVal} m³.\nRetrieved Previous Reading: ${previousReading} m³.\nAutomatically calculated consumption: ${resolvedConsumption} m³${isRollover ? ' (Dynamic rollover calculations active!)' : ''}`);
-  };
-
-  // Action: Trigger Preset Testing Scenarios
-  const handleTriggerPresetScenario = (scenario: 'normal' | 'first' | 'rollover') => {
-    let targetAcc = '';
-    let name = '';
-    let prevVal = 0;
-    let currVal = 0;
-    let gps = '';
-    let notes = '';
-    let conType: 'Residential' | 'Commercial' = 'Residential';
-
-    if (scenario === 'normal') {
-      targetAcc = '1025-N';
-      name = 'Juan Dela Cruz';
-      prevVal = 1180;
-      currVal = 1258;
-      gps = '8.5015° N, 124.7712° E';
-      notes = 'Juan Dela Cruz standard residence connection reading.';
-      conType = 'Residential';
-    } else if (scenario === 'first') {
-      targetAcc = '1035-F';
-      name = 'Maria Mercedes';
-      prevVal = 0;
-      currVal = 35;
-      gps = '8.5042° N, 124.7755° E';
-      notes = 'New meter installation zero-point baseline validation scenario.';
-      conType = 'Residential';
-    } else if (scenario === 'rollover') {
-      targetAcc = '2099-C';
-      name = 'Tagoloan Poultry Farms';
-      prevVal = 99998;
-      currVal = 15;
-      gps = '8.5029° N, 124.7791° E';
-      notes = 'Dynamic meter index mechanical rollover verification scenario.';
-      conType = 'Commercial';
-    }
-
-    // Check configuration database for this target consumer
-    const existingCons = mockDb.getConsumers();
-    if (!existingCons.some(c => c.accountNumber === targetAcc)) {
-      const injected: Consumer = {
-        accountNumber: targetAcc,
-        name,
-        address: 'Poblacion East, Tagoloan Misamis Oriental Code-9001',
-        contactNumber: '0917-000-0000',
-        email: `${name.toLowerCase().replace(/\s+/g, '')}@tagoloanwater.gov.ph`,
-        meterNumber: 'WM-10025',
-        status: 'active',
-        isRegistered: true,
-        consumerType: conType,
-        meterSize: '1/2 inch',
-        householdInfo: conType === 'Residential' ? '4 members' : undefined,
-        businessName: conType === 'Commercial' ? 'Tagoloan Poultry Farms' : undefined,
-        businessType: conType === 'Commercial' ? 'Agricultural rate' : undefined,
-      };
-      mockDb.saveConsumers([...existingCons, injected]);
-      setConsumers([...existingCons, injected]);
-    }
-
-    let solvedConsumption = 0;
-    if (currVal >= prevVal) {
-      solvedConsumption = currVal - prevVal;
-    } else {
-      const maxValue = prevVal > 99999 ? 999999 : 99999;
-      solvedConsumption = (maxValue - prevVal) + currVal;
-    }
-
-    const scenarioReading: MeterReading = {
-      id: `field-R-${targetAcc}-${Date.now().toString().slice(-4)}`,
-      meterNumber: 'WM-10025',
-      accountNumber: targetAcc,
-      consumerName: name,
-      route: 'Poblacion Central',
-      previousReading: prevVal,
-      currentReading: currVal,
-      consumption: solvedConsumption,
-      readingDate: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
-      status: 'verified', 
-      meterReaderName: 'Pedro Santos (Field Reader)',
-      imageUrl: 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop',
-      notes,
-      billingPeriod: 'June 2026',
-      classification: conType,
-      gpsLocation: gps,
-      meterImageUrl: 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop'
-    };
-
-    // Append to list
-    const newReadingsList = [scenarioReading, ...readings];
-    mockDb.saveReadings(newReadingsList);
-    setReadings(newReadingsList);
-
-    mockDb.addAuditLog(
-      'system',
-      'Pedro Santos (Handset Upload)',
-      'system',
-      'Simulate Scenario Handset Submission',
-      `Field sync submission: Saved Reading=${currVal}, Previous Reading=${prevVal}. Automatically computed consumption is ${solvedConsumption} m³.`
-    );
-
-    loadAllDataFromStore();
-    alert(`Scenario Sync Upload Successful!\n\nSimulated Field Handset Record Uploaded to Portal Ledger:\n- Account: ${targetAcc} (${name})\n- Consumer Type: ${conType}\n- Whole Face Dial Reading Saved: ${currVal} m³\n- Previous Reading loaded: ${prevVal} m³\n- SYSTEM AUTOMATICALLY REGISTERED CONSUMPTION: ${solvedConsumption} m³\n- Verification result: Verified and Recorded.`);
-  };
-
-  // Action: Simulate Mobile Handset Readings Import (Flutter sync replication)
-  const handleSimulateMobileHandsetSync = () => {
-    const consumersNoReads = consumers.filter(
-      c => !readings.some(r => r.accountNumber === c.accountNumber && r.billingPeriod === 'June 2026')
-    );
-
-    if (consumersNoReads.length === 0) {
-      alert("All active water district accounts already have recorded readings for the current June 2026 cycle!");
-      return;
-    }
-
-    // Select a consumer to simulate a new reading entry import
-    const randomConsumer = consumersNoReads[Math.floor(Math.random() * consumersNoReads.length)];
-    
-    // Calculate simulated usage indices
-    const previous = 220 + Math.floor(Math.random() * 200);
-    // Introduce potential high abnormal reading occasionally to trigger alert styles!
-    const isAbnormal = Math.random() > 0.6;
-    const addedConsumption = isAbnormal ? 75 : 12 + Math.floor(Math.random() * 15);
-    const currentVal = previous + addedConsumption;
-
-    const simulatedReading: MeterReading = {
-      id: `sim-R-${randomConsumer.accountNumber}-${Date.now().toString().slice(-4)}`,
-      meterNumber: randomConsumer.meterNumber || 'MT-' + Math.floor(2000 + Math.random() * 8000),
-      accountNumber: randomConsumer.accountNumber,
-      consumerName: randomConsumer.name,
-      route: 'Poblacion East',
-      previousReading: previous,
-      currentReading: currentVal,
-      consumption: addedConsumption,
-      readingDate: new Date().toISOString().split('T')[0],
-      status: isAbnormal ? 'flagged_abnormal' : 'pending',
-      meterReaderName: 'Danilo Alcantara',
-      imageUrl: 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop',
-      notes: isAbnormal ? 'ALERT: High water consumption recorded index.' : 'Routine mobile sync import.',
-      billingPeriod: 'June 2026'
-    };
-
-    const newReadings = [...readings, simulatedReading];
-    mockDb.saveReadings(newReadings);
-    setReadings(newReadings);
-
-    mockDb.addAuditLog(
-      'system',
-      'Handset Sync Agent',
-      'system',
-      'Mobile Field Sync Synchronization',
-      `Synchronised water connection reading card for consumer account #${randomConsumer.accountNumber} successfully.`
-    );
-
-    loadAllDataFromStore();
-    alert(`Mobile Handset Sync Success!\n\nImported Reading for account #${randomConsumer.accountNumber} (${randomConsumer.name}).\nRecorded Consumption: ${addedConsumption} m³\nStatus: ${isAbnormal ? 'FLAGGED HIGH USAGE ALERT' : 'Pending Verification'}`);
   };
 
   // Filtered lists logic
@@ -889,7 +801,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               AD
             </div>
             <div className="truncate">
-              <h4 className="text-xs font-bold text-white leading-normal truncate">{currentUser.name}</h4>
+              <h4 className="text-xs font-bold text-white leading-normal truncate">{currentUser.email?.toLowerCase() === 'admin@tagoloanwater.gov.ph' ? 'Admin' : currentUser.name}</h4>
               <p className="text-[10px] text-slate-500 uppercase tracking-widest">Office Director</p>
             </div>
           </div>
@@ -1086,7 +998,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {activeTab === 'approvals' && 'Reading Approvals & Auto-Billing Verification Queue'}
               {activeTab === 'bills' && 'Bills & Invoicing Ledger Management'}
               {activeTab === 'payments' && 'Process Payments & Cashier Receipt Counter'}
-              {activeTab === 'readings' && 'Meter Readings Intake & Scenario Testing'}
+              {activeTab === 'readings' && 'Meter Readings Intake & Field Telemetry'}
               {activeTab === 'meters' && 'Water Meters Master Inventory'}
               {activeTab === 'readers' && 'Meter Readers Field Staff Registry'}
               {activeTab === 'staff' && 'Admin User Staff & Permissions'}
@@ -1102,22 +1014,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             <button
               onClick={handleManualRefresh}
               disabled={isRefreshing}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-750 disabled:opacity-50 text-slate-200 border border-slate-700 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 shadow-xs cursor-pointer"
+              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 shadow-xs cursor-pointer"
               title={`Last synchronized at ${lastSyncTime}`}
               id="admin-manual-refresh-btn"
             >
               <RefreshCw className={`h-3.5 w-3.5 text-blue-400 ${isRefreshing ? 'animate-spin' : ''}`} />
               <span>{isRefreshing ? 'Fetching...' : 'Refresh Data'}</span>
-            </button>
-
-            {/* Quick sync replication tool */}
-            <button
-              onClick={handleSimulateMobileHandsetSync}
-              className="px-4 py-2 bg-sky-900 border border-sky-800/50 hover:bg-sky-850 text-sky-100 rounded-lg text-xs font-extrabold transition flex items-center space-x-2 shadow-sm cursor-pointer"
-              id="admin-simulator-sync-btn"
-            >
-              <RefreshCw className="h-4 w-4 animate-spin-slow text-sky-400" />
-              <span>Sync Mobile Handsets</span>
             </button>
 
             <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 font-bold text-[10px] uppercase tracking-wider px-2 py-1 rounded hidden sm:inline-block">
@@ -1187,7 +1089,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   <div>
                     <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-none">Active Reader Staff</h4>
                     <p className="text-2xl font-black text-slate-900 mt-1">{activeTechnicians}</p>
-                    <p className="text-[9px] text-slate-500 mt-0.5">Covering 5 Water routes</p>
+                    <p className="text-[9px] text-slate-500 mt-0.5">Covering {routes.length} Water routes</p>
                   </div>
                 </div>
               </div>
@@ -1414,7 +1316,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           const totalBill = waterAmount + 50 + 20 + 15 + (waterAmount * 0.12);
                           return (
                             <tr key={r.id} className="hover:bg-slate-50 transition">
-                              <td className="px-6 py-3.5 font-bold text-slate-900">{r.billingPeriod || 'March 2026'}</td>
+                              <td className="px-6 py-3.5 font-bold text-slate-900">{r.billingPeriod || 'Current Period'}</td>
                               <td className="px-6 py-3.5 font-mono font-bold text-blue-600">{r.accountNumber}</td>
                               <td className="px-6 py-3.5 font-bold text-slate-900">{r.consumerName}</td>
                               <td className="px-6 py-3.5 font-mono font-bold text-slate-800">{r.consumption} m³</td>
@@ -1632,7 +1534,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             {/* Actions Row */}
                             <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pt-2">
                               <div className="text-[11px] text-slate-500">
-                                Billing Period: <strong className="text-slate-800 font-bold">{reading.billingPeriod || 'June 2026'}</strong>
+                                Billing Period: <strong className="text-slate-800 font-bold">{reading.billingPeriod || 'Current Period'}</strong>
                               </div>
 
                               <div className="flex items-center space-x-2 w-full sm:w-auto">
@@ -1819,7 +1721,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     {r.id}
                                   </td>
                                   <td className="px-3.5 py-3 font-bold text-slate-800 whitespace-nowrap">
-                                    {r.billingPeriod || 'June 2026'}
+                                    {r.billingPeriod || 'Current Period'}
                                   </td>
                                   <td className="px-3.5 py-3 space-y-0.5 min-w-[140px]">
                                     <span className="font-bold text-slate-900 block leading-tight">{r.consumerName}</span>
@@ -1980,7 +1882,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <td className="px-3 py-3 truncate" title={`${barangayDisplay} ${c.sitioZone || ''}`}>
                               <div className="flex items-center space-x-1.5 truncate">
                                 <span className="font-mono text-[9px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.2 rounded shrink-0">
-                                  {c.barangayId || 'BRG-01'}
+                                  {c.barangayId || 'TWD'}
                                 </span>
                                 <span className="font-semibold text-slate-900 truncate">
                                   {barangayDisplay}
@@ -2708,189 +2610,111 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {activeTab === 'readings' && (
             <div className="space-y-6 animate-fade-in" id="readings-tab">
               
-              {/* SCENARIO INSTRUCTIONS & AUTOMATIC TRIGGER PANEL */}
-              <div className="bg-slate-900 border border-slate-800 text-white rounded-3xl p-6 shadow-xl space-y-6">
-                <div>
-                  <h3 className="text-base font-black tracking-tight text-slate-100 uppercase flex items-center">
-                    <Activity className="h-5 w-5 text-blue-400 mr-2 shrink-0" />
-                    WATER DISTRICT FIELD SCENARIO SIMULATOR
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Verify and test how the system automatically retrieves the customer's previous index and calculates net water consumption, including newly installed connections and rollover indices.
-                  </p>
+              {/* Readings Control & Intake Header */}
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-center space-x-3.5">
+                  <div className="p-3 bg-blue-50 text-blue-600 rounded-2xl border border-blue-100">
+                    <Activity className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-extrabold text-slate-900 tracking-tight">Field Meter Readings & Telemetry Desk</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">Real-time inspection of field readings submitted via mobile handset or clerk desk</p>
+                  </div>
                 </div>
 
-                {/* Grid of the three concrete scenarios requested */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  
-                  {/* Scenario 1: Normal Reading */}
-                  <div className="bg-slate-950 border border-slate-800/70 p-4 rounded-2xl flex flex-col justify-between">
-                    <div>
-                      <span className="px-2 py-0.5 bg-blue-500/10 border border-blue-400/20 text-blue-400 text-[9px] font-bold rounded uppercase tracking-wider">Scenario A: Normal</span>
-                      <h4 className="text-sm font-bold text-slate-205 mt-2">Standard Residence Connection</h4>
-                      <p className="text-[11px] text-slate-400 mt-1 leading-normal">
-                        Consumer: <strong>Juan Dela Cruz</strong> (Residential)<br />
-                        Previous Reading: <strong>001180 m³</strong><br />
-                        Current Dial face: <strong>001258 m³</strong>
-                      </p>
-                      <div className="bg-slate-900/50 p-2.5 rounded-lg border border-slate-800/40 text-[10px] text-slate-300 font-mono mt-3">
-                        Consumption Calculation:<br />
-                        <span className="text-emerald-400 font-bold">1258 − 1180 = 78 m³</span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleTriggerPresetScenario('normal')}
-                      className="w-full mt-4 py-2 bg-blue-600 hover:bg-blue-550 text-white font-extrabold text-[11px] rounded-lg uppercase tracking-wider transition shadow-sm"
-                    >
-                      Instant Trigger Sync
-                    </button>
-                  </div>
-
-                  {/* Scenario 2: First Reading */}
-                  <div className="bg-slate-950 border border-slate-800/70 p-4 rounded-2xl flex flex-col justify-between">
-                    <div>
-                      <span className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-400/20 text-emerald-400 text-[9px] font-bold rounded uppercase tracking-wider">Scenario B: First Reading</span>
-                      <h4 className="text-sm font-bold text-slate-250 mt-2">Newly Installed Water Meter</h4>
-                      <p className="text-[11px] text-slate-400 mt-1 leading-normal">
-                        Consumer: <strong>Maria Mercedes</strong> (Residential)<br />
-                        Previous Reading: <strong>000000 m³</strong><br />
-                        Current Dial face: <strong>000035 m³</strong>
-                      </p>
-                      <div className="bg-slate-900/50 p-2.5 rounded-lg border border-slate-800/40 text-[10px] text-slate-303 font-mono mt-3">
-                        Consumption Calculation:<br />
-                        <span className="text-emerald-400 font-bold">35 − 0 = 35 m³</span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleTriggerPresetScenario('first')}
-                      className="w-full mt-4 py-2 bg-blue-600 hover:bg-blue-550 text-white font-extrabold text-[11px] rounded-lg uppercase tracking-wider transition shadow-sm"
-                    >
-                      Instant Trigger Sync
-                    </button>
-                  </div>
-
-                  {/* Scenario 3: Rollover Reading */}
-                  <div className="bg-slate-950 border border-slate-800/70 p-4 rounded-2xl flex flex-col justify-between">
-                    <div>
-                      <span className="px-2 py-0.5 bg-purple-500/10 border border-purple-400/20 text-purple-400 text-[9px] font-bold rounded uppercase tracking-wider">Scenario C: Rollover</span>
-                      <h4 className="text-sm font-bold text-slate-250 mt-2">Meter Dial Cap Rollover</h4>
-                      <p className="text-[11px] text-slate-400 mt-1 leading-normal">
-                        Consumer: <strong>Tagoloan Poultry Farms</strong> (Commercial)<br />
-                        Previous Reading: <strong>0099998 m³</strong><br />
-                        Current Dial face: <strong>0000015 m³</strong>
-                      </p>
-                      <div className="bg-slate-900/50 p-2.5 rounded-lg border border-slate-800/40 text-[10px] text-slate-303 font-mono mt-3">
-                        Rollover Calculation Formula:<br />
-                        <span className="text-emerald-400 font-semibold">(99999 − 99998) + 15 = 16 m³</span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleTriggerPresetScenario('rollover')}
-                      className="w-full mt-4 py-2 bg-purple-605 bg-purple-600 hover:bg-purple-500 text-white font-extrabold text-[11px] rounded-lg uppercase tracking-wider transition shadow-sm"
-                    >
-                      Instant Trigger Sync
-                    </button>
-                  </div>
-
-                </div>
-
-                {/* Collapse handle for manual typing */}
-                <div className="pt-2 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                  <div className="text-xs text-slate-400 font-medium">
-                    Do you want to test typing custom reading whole-numbers for any other municipal connection?
-                  </div>
+                <div className="flex items-center space-x-2.5">
                   <button 
                     onClick={() => setShowManualReadingForm(!showManualReadingForm)}
-                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-bold transition uppercase tracking-wide border border-slate-700 shrink-0"
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center space-x-2 shadow-xs"
                   >
-                    {showManualReadingForm ? 'Hide manual clerk panel' : 'Record Manual Reading (Clerk Intake)'}
+                    <Plus className="h-4 w-4" />
+                    <span>{showManualReadingForm ? 'Hide Intake Form' : 'Record Manual Intake'}</span>
                   </button>
                 </div>
-
-                {/* Collapsible Manual clerk forms */}
-                {showManualReadingForm && (
-                  <form onSubmit={handleCreateManualReading} className="bg-slate-950 border border-slate-800 p-6 rounded-2xl animate-slide-down space-y-4 text-slate-200">
-                    <h4 className="text-xs font-extrabold text-blue-400 uppercase tracking-widest">Manual Clerk Reading Intake Panel</h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                      
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 font-sans">Select connection Account</label>
-                        <select
-                          required
-                          value={manualAccount}
-                          onChange={(e) => setManualAccount(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-lg py-2 px-3 text-xs focus:outline-none focus:border-blue-500"
-                        >
-                          <option value="">-- Choose Account --</option>
-                          {consumers.map(c => (
-                            <option key={c.accountNumber} value={c.accountNumber}>
-                              #{c.accountNumber} - {c.name} ({c.consumerType || 'Residential'})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 focus:outline-none focus:border-blue-550 font-sans">Current Reading (Whole Dial Number)</label>
-                        <input 
-                          type="number"
-                          required
-                          min="0"
-                          placeholder="e.g. 1258"
-                          value={manualCurrentReading}
-                          onChange={(e) => setManualCurrentReading(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-800 text-slate-105 rounded-lg py-1.5 px-3 text-xs text-slate-100"
-                        />
-                        <span className="text-[9px] text-slate-500 mt-1 block">Whole number indices displayed on meter face only (m³)</span>
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 font-sans">Service Billing Period</label>
-                        <input 
-                          type="text"
-                          required
-                          value={manualBillingPeriod}
-                          onChange={(e) => setManualBillingPeriod(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-lg py-2 px-3 text-xs focus:outline-none focus:border-blue-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 font-sans">Geographic GPS Tag</label>
-                        <input 
-                          type="text"
-                          required
-                          value={manualGps}
-                          onChange={(e) => setManualGps(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-lg py-2 px-3 text-xs focus:outline-none focus:border-blue-500"
-                        />
-                      </div>
-
-                      <div className="sm:col-span-2">
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 font-sans">Clerk Inspection notes</label>
-                        <input 
-                          type="text"
-                          placeholder="Audit description details..."
-                          value={manualNotes}
-                          onChange={(e) => setManualNotes(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-lg py-2 px-3 text-xs focus:outline-none focus:border-blue-500"
-                        />
-                      </div>
-
-                    </div>
-
-                    <div className="pt-3 border-t border-slate-800 flex justify-end">
-                      <button 
-                        type="submit"
-                        className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs uppercase tracking-wider transition"
-                      >
-                        Calculate & Record Registry Entry
-                      </button>
-                    </div>
-                  </form>
-                )}
-
               </div>
+
+              {/* Collapsible Manual clerk forms */}
+              {showManualReadingForm && (
+                <form onSubmit={handleCreateManualReading} className="bg-white border border-slate-200 p-6 rounded-3xl shadow-md animate-slide-down space-y-4 text-slate-800">
+                  <h4 className="text-xs font-extrabold text-blue-600 uppercase tracking-widest">Manual Clerk Reading Intake Panel</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">Select connection Account</label>
+                      <select
+                        required
+                        value={manualAccount}
+                        onChange={(e) => setManualAccount(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-blue-500 font-semibold"
+                      >
+                        <option value="">-- Choose Account --</option>
+                        {consumers.map(c => (
+                          <option key={c.accountNumber} value={c.accountNumber}>
+                            #{c.accountNumber} - {c.name} ({c.consumerType || 'Residential'})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">Current Reading (Whole Dial Number)</label>
+                      <input 
+                        type="number"
+                        required
+                        min="0"
+                        placeholder="e.g. 1258"
+                        value={manualCurrentReading}
+                        onChange={(e) => setManualCurrentReading(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-blue-500 font-bold font-mono"
+                      />
+                      <span className="text-[9px] text-slate-400 mt-1 block">Whole number indices displayed on meter face (m³)</span>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">Service Billing Period</label>
+                      <input 
+                        type="text"
+                        required
+                        value={manualBillingPeriod}
+                        onChange={(e) => setManualBillingPeriod(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-blue-500 font-medium"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">Geographic GPS Tag</label>
+                      <input 
+                        type="text"
+                        required
+                        value={manualGps}
+                        onChange={(e) => setManualGps(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-blue-500 font-mono"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">Clerk Inspection notes</label>
+                      <input 
+                        type="text"
+                        placeholder="Audit description details..."
+                        value={manualNotes}
+                        onChange={(e) => setManualNotes(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex justify-end">
+                    <button 
+                      type="submit"
+                      className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition shadow-xs"
+                    >
+                      Calculate & Record Registry Entry
+                    </button>
+                  </div>
+                </form>
+              )}
 
               {/* Readings board layout */}
               <div className="bg-white border border-slate-150 rounded-3xl overflow-hidden shadow-sm">
@@ -2903,7 +2727,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         <th className="px-6 py-4">Reading Period</th>
                         <th className="px-6 py-4">Indices (Prev → Curr)</th>
                         <th className="px-6 py-4">Handset Telemetry (GPS / Dial Photo)</th>
-                        <th className="px-6 py-4">Simulated usage (m³)</th>
+                        <th className="px-6 py-4">Consumption (m³)</th>
                         <th className="px-6 py-3">Verification Review</th>
                         <th className="px-6 py-3 text-right">Review Action</th>
                       </tr>
@@ -3455,7 +3279,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           return (
                             <tr key={bill.id} className="hover:bg-slate-50 transition-colors bg-white">
                               <td className="px-3 py-3 whitespace-nowrap font-black text-slate-900">
-                                {bill.billingPeriod || 'June 2026'}
+                                {bill.billingPeriod || 'Current Period'}
                               </td>
                               <td className="px-3 py-3 whitespace-nowrap">
                                 <span className="font-mono font-bold text-blue-900 bg-blue-100/90 px-2 py-0.5 rounded border border-blue-300 text-xs inline-block">
@@ -3496,7 +3320,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 <div className="flex items-center justify-end gap-1">
                                   <button
                                     onClick={() => {
-                                      alert(`Printing official billing statement for Account #${bill.accountNumber}\nPeriod: ${bill.billingPeriod || 'June 2026'}\nAmount: ₱${totalBill.toFixed(2)}`);
+                                      alert(`Printing official billing statement for Account #${bill.accountNumber}\nPeriod: ${bill.billingPeriod || 'Current Period'}\nAmount: ₱${totalBill.toFixed(2)}`);
                                     }}
                                     className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-md transition inline-flex items-center space-x-1 cursor-pointer shadow-2xs border border-slate-900 shrink-0"
                                     title="Print Statement"
@@ -4275,7 +4099,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           department: newStaff.department || 'General Admin',
                           status: 'active'
                         };
-                        setStaffList([...staffList, created]);
+                        setStaffList(prev => [...prev, created]);
+                        
+                        // Persist staff user to database
+                        const currentUsers = mockDb.getUsers();
+                        currentUsers.push({
+                          id: created.id,
+                          name: created.name,
+                          email: created.email,
+                          role: created.role.toLowerCase() === 'administrator' ? 'admin' : (created.role.toLowerCase() === 'cashier' ? 'cashier' : 'staff'),
+                          status: 'active',
+                          password: 'TwdStaff2025!'
+                        });
+                        mockDb.saveUsers(currentUsers);
+                        
                         setShowAddStaff(false);
                         mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Enrolled Admin Staff', `Created staff account for ${newStaff.name} (${newStaff.role})`);
                         alert(`Staff user ${newStaff.name} successfully enrolled!`);
@@ -4546,14 +4383,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                 <div className="flex justify-end pt-4 border-t border-slate-100">
                   <button
-                    onClick={() => {
-                      setProfileSaveSuccess(true);
-                      setTimeout(() => setProfileSaveSuccess(false), 3000);
-                      mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Updated Profile', 'Administrator updated personal credentials.');
-                    }}
-                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition shadow-md"
+                    onClick={handleSaveAdminProfile}
+                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition shadow-md flex items-center space-x-2"
                   >
-                    Save Profile Changes
+                    <ShieldCheck className="h-4 w-4" />
+                    <span>Save Profile Changes</span>
                   </button>
                 </div>
               </div>

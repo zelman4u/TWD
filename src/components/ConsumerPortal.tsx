@@ -60,6 +60,7 @@ import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotific
 import { ConsumerPortalSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import { OverdueBillBanner } from './consumer/OverdueBillBanner';
 import { SimulatedPaymentModal } from './consumer/SimulatedPaymentModal';
+import { useToast } from '../context/ToastContext';
 
 interface ConsumerPortalProps {
   currentUser: UserType;
@@ -67,6 +68,7 @@ interface ConsumerPortalProps {
 }
 
 export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortalProps) {
+  const toast = useToast();
   // Navigation Modules: Dashboard, My Bills, My Usage, Notifications, My Profile
   const [activeTab, setActiveTab] = useState<'dashboard' | 'bills' | 'usage' | 'notifications' | 'profile'>('dashboard');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -465,13 +467,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     setPaymentMode(presetMode);
     setPartialCustomAmount(netDue.toFixed(2));
     
-    // Auto-populate default mock data based on active consumer details
-    setCardName(consumerRecord?.name || currentUser.name);
-    setCardNumber('4532 5599 3012 1088');
-    setCardExpiry('08/29');
-    setCardCvv('188');
-    setGcashPhone(consumerRecord?.contactNumber ? consumerRecord.contactNumber.replace(/[^0-9]/g, '').slice(-10) : '9175550145');
-    setBankAccountNum('LBP-1992-0044-81');
+    // Clear inputs for user's real-time entry
+    setCardName(consumerRecord?.name || currentUser.name || '');
+    setCardNumber('');
+    setCardExpiry('');
+    setCardCvv('');
+    setGcashPhone(consumerRecord?.contactNumber ? consumerRecord.contactNumber.replace(/[^0-9]/g, '').slice(-10) : '');
+    setBankAccountNum('');
   };
 
   const getMethodLabel = (method: 'card' | 'gcash' | 'maya' | 'bank') => {
@@ -680,6 +682,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     );
 
     setStatusMsg({ type: 'success', msg: 'Profile information updated successfully!' });
+    toast.success('Profile Updated', 'Your personal and contact information has been updated.');
     loadConsumerInfo(true);
     setTimeout(() => setStatusMsg(null), 4000);
   };
@@ -687,10 +690,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Password Change Handler
   const handleUpdatePassword = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!passwordOld || !passwordNew) return;
+    if (!passwordOld || !passwordNew) {
+      toast.warning('Incomplete Form', 'Please enter both current and new passwords.');
+      return;
+    }
 
     if (passwordNew !== passwordConfirm) {
       setStatusMsg({ type: 'err', msg: 'New password and confirmation do not match!' });
+      toast.error('Password Mismatch', 'New password and confirmation do not match.');
       return;
     }
 
@@ -703,6 +710,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     );
 
     setStatusMsg({ type: 'success', msg: 'Security password changed successfully!' });
+    toast.success('Password Updated', 'Your portal security credentials have been updated.');
     setPasswordOld('');
     setPasswordNew('');
     setPasswordConfirm('');
