@@ -160,6 +160,14 @@ function getStored<T>(key: string, initial: T): T {
 
 function setStored<T>(key: string, value: T): void {
   localStorage.setItem(key, JSON.stringify(value));
+  if (typeof window !== 'undefined') {
+    // Notify mounted components in same window immediately
+    window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key, timestamp: Date.now() } }));
+    // Cross-tab synchronization ping
+    try {
+      localStorage.setItem('twd_sync_ping', `${Date.now()}_${key}`);
+    } catch {}
+  }
 }
 
 export const mockDb = {

@@ -288,12 +288,37 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }, silent ? 0 : 350);
   };
 
-  // Initial Load
+  // Initial Load & Real-Time Sync Event Listeners
   useEffect(() => {
     loadConsumerInfo();
+
+    // 1. Instantaneous reactive sync when Admin modifies data in same window
+    const handleDbUpdate = () => {
+      loadConsumerInfo(true);
+    };
+    window.addEventListener('twd_database_updated', handleDbUpdate);
+
+    // 2. Cross-tab synchronization when Admin modifies data in another browser tab
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key?.startsWith('twd_') || e.key === 'twd_sync_ping') {
+        loadConsumerInfo(true);
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    // 3. Fast automated fallback polling every 3 seconds
+    const interval = setInterval(() => {
+      loadConsumerInfo(true);
+    }, 3000);
+
+    return () => {
+      window.removeEventListener('twd_database_updated', handleDbUpdate);
+      window.removeEventListener('storage', handleStorage);
+      clearInterval(interval);
+    };
   }, [currentUser]);
 
-  // Populate profile edit fields when record is loaded
+  // Populate profile edit fields when record is loaded or updated by admin
   useEffect(() => {
     if (consumerRecord) {
       setEditName(consumerRecord.name);
@@ -307,22 +332,18 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
   }, [consumerRecord]);
 
-  // 5-SECOND REAL-TIME AUTO-UPDATE INTERVAL (No Page Reload Required)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadConsumerInfo(true);
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [currentUser, consumerRecord?.accountNumber]);
-
-  // Check Account Setup Pending Status
+  // Check Account Setup Pending Status (Awaiting Admin Account & Meter Issuance)
   const isAccountPending = Boolean(
     consumerRecord && (
+      !consumerRecord.accountNumber ||
+      consumerRecord.accountNumber.trim() === '' ||
+      consumerRecord.status === 'pending_approval' ||
       consumerRecord.status === 'inactive' || 
       consumerRecord.accountNumber.startsWith('PENDING') ||
       consumerRecord.meterNumber.startsWith('PENDING') ||
-      !consumerRecord.isRegistered
+      !consumerRecord.meterNumber ||
+      consumerRecord.meterNumber.trim() === '' ||
+      currentUser.status === 'pending_approval'
     )
   );
 
@@ -1271,7 +1292,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     Account Setup Pending
                   </span>
                   <span className="text-xs font-mono text-amber-900 font-bold">
-                    Temporary Index: #{consumerRecord.accountNumber}
+                    Status: {consumerRecord.accountNumber ? `#${consumerRecord.accountNumber}` : 'Pending Admin Issuance'}
                   </span>
                 </div>
                 <h3 className="text-lg font-black text-slate-900">

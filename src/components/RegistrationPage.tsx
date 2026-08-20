@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { UserCheck, AlertCircle, CheckCircle, ArrowLeft, Waves, Briefcase } from 'lucide-react';
+import { UserCheck, AlertCircle, CheckCircle, ArrowLeft, Waves, Briefcase, Clock } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Consumer, Barangay } from '../types';
 import { useLoading } from '../context/LoadingContext';
@@ -94,15 +94,9 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
 
       const consumers = mockDb.getConsumers();
       
-      // 3. Auto-generate Official District Account Number based on Barangay code & sequence
-      const brgCode = matchedBarangay.code || 'TWD';
-      const seqNumber = Math.floor(1000 + Math.random() * 9000);
-      const generatedAccount = `${brgCode}-${seqNumber}`;
-      const generatedMeter = `MT-${Math.floor(10000 + Math.random() * 90000)}`;
-
-      const officialAccount = generatedAccount;
+      // 3. Consumer registers WITHOUT official account or meter identifiers (issued exclusively by Admin)
       const officialName = fullName.trim();
-      const officialMeter = generatedMeter;
+      const tempId = `PENDING-${Date.now().toString().slice(-6)}`;
 
       const newUserId = `user-${Date.now()}`;
       const newUser: User = {
@@ -110,13 +104,12 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         email: email.trim(),
         name: officialName,
         role: 'consumer',
-        linkedAccountNumber: officialAccount,
-        status: 'active',
+        status: 'pending_approval',
         password: password,
       };
 
       const newConsumer: Consumer = {
-        accountNumber: officialAccount,
+        accountNumber: '',
         name: officialName,
         address: fullAddress,
         barangayId: matchedBarangay.id,
@@ -124,8 +117,8 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         sitioZone: sitioZone.trim(),
         contactNumber: contactNumber.trim(),
         email: email.trim(),
-        meterNumber: officialMeter,
-        status: 'active',
+        meterNumber: '',
+        status: 'pending_approval',
         isRegistered: true,
         registrationDate: new Date().toISOString().split('T')[0],
         linkedUserId: newUserId,
@@ -146,8 +139,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         if (b.id === matchedBarangay.id) {
           return {
             ...b,
-            consumers: (b.consumers || 0) + 1,
-            activeMeters: (b.activeMeters || 0) + 1
+            consumers: (b.consumers || 0) + 1
           };
         }
         return b;
@@ -160,19 +152,19 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         officialName,
         'consumer',
         'Customer Portal Self-Registration',
-        `Self-registered water connection in Barangay ${matchedBarangay.name} (${matchedBarangay.id}), ${sitioZone.trim()}. Issued Account #${officialAccount}, Meter #${officialMeter}. Classification: ${consumerType} (${meterSize}). Location & Barangay ID auto-synced to Admin database.`
+        `Submitted application for water connection in Barangay ${matchedBarangay.name} (${matchedBarangay.id}), ${sitioZone.trim()}. Status: PENDING ADMIN ISSUANCE. Classification: ${consumerType} (${meterSize}). Awaiting administrator account and meter tag assignment.`
       );
 
       // Add Welcome Notification
       mockDb.addNotification({
-        accountNumber: officialAccount,
-        title: `Welcome to Tagoloan Water District!`,
-        message: `Your account #${officialAccount} has been registered for Barangay ${matchedBarangay.name} (${matchedBarangay.id}), ${sitioZone.trim()}. Live billing and consumption records are now accessible.`,
+        accountNumber: '',
+        title: `Registration Application Submitted`,
+        message: `Your registration application for Barangay ${matchedBarangay.name} (${matchedBarangay.id}), ${sitioZone.trim()} has been submitted. The administration office will review and issue your official Account Number and Meter Tag shortly.`,
         type: 'announcement'
       });
 
       setRegisteredSummary({
-        accountNumber: officialAccount,
+        accountNumber: 'Pending Admin Issuance',
         fullName: officialName,
         email: email.trim(),
         barangayName: matchedBarangay.name,
@@ -181,13 +173,13 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         fullAddress: fullAddress,
         consumerType: consumerType,
         meterSize: meterSize,
-        status: 'Active'
+        status: 'Pending Admin Issuance'
       });
 
       hideLoading();
       setIsValidating(false);
       setIsSuccessModal(true);
-      toast.success('Registration Successful', `Account #${officialAccount} issued for ${officialName}!`);
+      toast.success('Registration Submitted', `Application received for ${officialName}! Awaiting Admin account issuance.`);
     }, 800);
   };
 
@@ -441,28 +433,30 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
           /* Success Modal */
           <div className="bg-slate-900 p-6 sm:p-8 text-center space-y-4 max-w-lg mx-auto rounded-3xl border border-slate-800 shadow-2xl">
             <div className="flex items-center justify-center space-x-3 mb-2">
-              <div className="h-14 w-14 rounded-2xl border flex items-center justify-center shadow-lg bg-emerald-500/15 text-emerald-400 border-emerald-500/30">
-                <CheckCircle className="h-8 w-8 animate-scale-up" />
+              <div className="h-14 w-14 rounded-2xl border flex items-center justify-center shadow-lg bg-amber-500/15 text-amber-400 border-amber-500/30">
+                <Clock className="h-8 w-8 animate-pulse" />
               </div>
             </div>
 
             <div>
               <h2 className="text-xl font-black text-white">
-                Registration Complete!
+                Application Submitted!
               </h2>
               <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-                Account <strong className="text-blue-400 font-mono font-bold">#{registeredSummary?.accountNumber}</strong> ({registeredSummary?.fullName}) is registered and synchronized to the District master database.
+                Your profile for <strong className="text-white font-bold">{registeredSummary?.fullName}</strong> has been received by Tagoloan Water District. Your official <span className="text-amber-400 font-bold">Account Number</span> and <span className="text-amber-400 font-bold">Meter Tag</span> will be assigned by the Administrator.
               </p>
             </div>
 
             <div className="bg-slate-950 rounded-xl p-3.5 border border-slate-800 text-left space-y-1.5 text-xs">
               <div className="flex justify-between">
-                <span className="text-slate-500">Full Name:</span>
+                <span className="text-slate-500">Applicant Name:</span>
                 <span className="font-bold text-slate-300">{registeredSummary?.fullName}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Account Number:</span>
-                <span className="font-mono font-bold text-blue-400">{registeredSummary?.accountNumber}</span>
+                <span className="font-mono font-bold text-amber-400 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/40 text-[11px]">
+                  Pending Admin Issuance
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Barangay:</span>
@@ -473,12 +467,12 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                 <span className="font-medium text-slate-300">{registeredSummary?.sitioZone}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">Portal Email:</span>
+                <span className="text-slate-500">Registered Email:</span>
                 <span className="font-mono text-slate-300">{registeredSummary?.email}</span>
               </div>
               <div className="flex justify-between border-t border-slate-800/60 pt-1.5">
-                <span className="text-slate-500">Classification:</span>
-                <span className="font-bold text-blue-400">{registeredSummary?.consumerType} ({registeredSummary?.meterSize})</span>
+                <span className="text-slate-500">Application Status:</span>
+                <span className="font-bold text-amber-400 uppercase text-[10px]">Awaiting Admin Approval</span>
               </div>
             </div>
 

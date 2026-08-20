@@ -89,7 +89,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   // Filtering & Search states
   const [consumerSearch, setConsumerSearch] = useState('');
-  const [consumerStatusFilter, setConsumerStatusFilter] = useState<'all' | 'active' | 'inactive' | 'archived'>('all');
+  const [consumerStatusFilter, setConsumerStatusFilter] = useState<'all' | 'active' | 'inactive' | 'archived' | 'pending_approval'>('all');
   
   // Modals / Add Form States
   const [showAddMeter, setShowAddMeter] = useState(false);
@@ -288,32 +288,98 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     }
   };
 
-  // Initial Load & State Sync
+  // Initial Load & State Sync (Local Store + Backend API Live Sync)
   const loadAllDataFromStore = (withDelay = false) => {
     if (withDelay) {
       setIsRefreshing(true);
     }
     
-    // Simulate realistic async fetch from data store
-    const timer = setTimeout(() => {
-      setConsumers(mockDb.getConsumers());
-      setReaders(mockDb.getReaders());
-      setMeters(mockDb.getMeters());
-      setReadings(mockDb.getReadings());
-      setRoutes(mockDb.getRoutes());
-      setAnnouncements(mockDb.getAnnouncements());
-      setAuditLogs(mockDb.getAuditLogs());
-      setBarangayList(mockDb.getBarangays());
-      setLastSyncTime(new Date().toLocaleTimeString());
-      setIsInitialLoading(false);
-      setIsRefreshing(false);
-    }, withDelay ? 400 : 300);
+    // 1. Load Local State
+    setConsumers(mockDb.getConsumers());
+    setReaders(mockDb.getReaders());
+    setMeters(mockDb.getMeters());
+    setReadings(mockDb.getReadings());
+    setRoutes(mockDb.getRoutes());
+    setAnnouncements(mockDb.getAnnouncements());
+    setAuditLogs(mockDb.getAuditLogs());
+    setBarangayList(mockDb.getBarangays());
+    setLastSyncTime(new Date().toLocaleTimeString());
+    setIsInitialLoading(false);
+    if (withDelay) {
+      setTimeout(() => setIsRefreshing(false), 300);
+    }
 
-    return () => clearTimeout(timer);
+    // 2. Fetch from Backend / Serverless API for any Mobile App Submissions
+    fetch('/api/readers')
+      .then(res => res.json())
+      .then(data => {
+        if (data && (data.readers || data.staff)) {
+          const apiReaders = data.readers || data.staff || [];
+          const currentLocal = mockDb.getReaders();
+          let hasChanges = false;
+
+          apiReaders.forEach((ar: any) => {
+            const exists = currentLocal.find(lr => lr.id === ar.id || (lr.email && lr.email.toLowerCase() === ar.username?.toLowerCase()));
+            if (!exists) {
+              // Add new mobile registrant to local store
+              const newReaderObj: MeterReader = {
+                id: ar.id,
+                name: ar.name,
+                email: ar.username || ar.email || `${ar.id.toLowerCase()}@tagoloanwater.gov.ph`,
+                employeeId: ar.id,
+                contactNumber: ar.contactNumber || 'N/A',
+                assignedRoutes: ar.assignedRoutes || [ar.zone || 'Poblacion'],
+                employmentStatus: (ar.employmentStatus === 'active' || ar.status === 'active') ? 'active' : 'pending_approval',
+                completedReadings: 0,
+                pendingReadings: 0,
+                performanceRating: 5.0
+              };
+              currentLocal.push(newReaderObj);
+              hasChanges = true;
+            } else if (ar.employmentStatus && exists.employmentStatus !== ar.employmentStatus) {
+              exists.employmentStatus = ar.employmentStatus;
+              hasChanges = true;
+            }
+          });
+
+          if (hasChanges) {
+            mockDb.saveReaders([...currentLocal]);
+            setReaders([...currentLocal]);
+          }
+        }
+      })
+      .catch(() => {
+        // Fallback gracefully if running purely client-side
+      });
   };
 
   useEffect(() => {
     loadAllDataFromStore();
+
+    // 1. Instantaneous reactive sync when consumer or other components modify data in same window
+    const handleDbUpdate = () => {
+      loadAllDataFromStore(false);
+    };
+    window.addEventListener('twd_database_updated', handleDbUpdate);
+
+    // 2. Cross-tab synchronization when data changes in another browser tab
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key?.startsWith('twd_') || e.key === 'twd_sync_ping') {
+        loadAllDataFromStore(false);
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    // 3. Active real-time auto-polling every 4 seconds to catch live field mobile submissions
+    const pollTimer = setInterval(() => {
+      loadAllDataFromStore(false);
+    }, 4000);
+
+    return () => {
+      window.removeEventListener('twd_database_updated', handleDbUpdate);
+      window.removeEventListener('storage', handleStorage);
+      clearInterval(pollTimer);
+    };
   }, []);
 
   const handleManualRefresh = () => {
@@ -337,28 +403,37 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     setModalEditMeterSize(c.meterSize || '1/2 inch');
     setModalEditStatus(c.status || 'active');
 
-    // Populate issue IDs fields
-    setModalIssueAccountNumber(c.accountNumber || '');
-    setModalIssueRfidTag(c.rfidTag || (c.accountNumber ? `RFID-${c.accountNumber}` : ''));
+    // Populate issue IDs fields (generate suggested account number and tag if unissued)
+    if (c.accountNumber) {
+      setModalIssueAccountNumber(c.accountNumber);
+      setModalIssueRfidTag(c.rfidTag || `RFID-${c.accountNumber}`);
+    } else {
+      // Suggest sequential/barangay-based account number
+      const brgCode = c.barangayId || 'TWD';
+      const randomSeq = Math.floor(1000 + Math.random() * 9000);
+      const suggestedAcc = `${brgCode}-${randomSeq}`;
+      setModalIssueAccountNumber(suggestedAcc);
+      setModalIssueRfidTag(`RFID-${suggestedAcc}`);
+    }
   };
 
   // Action: Delete Consumer Process with Safety Checks
   const handleDeleteConsumer = (c: Consumer) => {
     const confirmDelete = window.confirm(
-      `Are you sure you want to delete consumer "${c.name}" (Account #${c.accountNumber})?\n\nThis will remove the consumer account from the system registry.`
+      `Are you sure you want to delete consumer "${c.name}" (${c.accountNumber ? `Account #${c.accountNumber}` : 'Pending Application'})?\n\nThis will remove the consumer record from the system registry.`
     );
     if (!confirmDelete) return;
 
     // Safety Check 1: Assigned water meters
     const allMeters = mockDb.getMeters();
-    const assignedMeters = allMeters.filter(m => m.linkedAccountNumber === c.accountNumber || (c.meterNumber && c.meterNumber !== 'UNASSIGNED' && m.meterNumber === c.meterNumber));
+    const assignedMeters = allMeters.filter(m => c.accountNumber && (m.linkedAccountNumber === c.accountNumber || (c.meterNumber && c.meterNumber !== 'UNASSIGNED' && m.meterNumber === c.meterNumber)));
 
     // Safety Check 2: Existing meter readings
     const allReadings = mockDb.getReadings();
-    const matchingReadings = allReadings.filter(r => r.accountNumber === c.accountNumber);
+    const matchingReadings = allReadings.filter(r => c.accountNumber && r.accountNumber === c.accountNumber);
 
     // Safety Check 3: Generated bills (readings with billing status)
-    const matchingBills = allReadings.filter(r => r.accountNumber === c.accountNumber && r.paymentStatus !== undefined);
+    const matchingBills = allReadings.filter(r => c.accountNumber && r.accountNumber === c.accountNumber && r.paymentStatus !== undefined);
 
     if (assignedMeters.length > 0 || matchingReadings.length > 0 || matchingBills.length > 0) {
       alert(
@@ -373,11 +448,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     }
 
     // Permanent removal from database
-    const updatedConsumers = consumers.filter(item => item.accountNumber !== c.accountNumber);
+    const updatedConsumers = consumers.filter(item => {
+      if (c.accountNumber && item.accountNumber === c.accountNumber) return false;
+      if (c.email && item.email.toLowerCase() === c.email.toLowerCase()) return false;
+      if (c.linkedUserId && item.linkedUserId === c.linkedUserId) return false;
+      return true;
+    });
     mockDb.saveConsumers(updatedConsumers);
     setConsumers(updatedConsumers);
 
-    if (selectedConsumerModal?.accountNumber === c.accountNumber) {
+    if (selectedConsumerModal && (
+      (c.accountNumber && selectedConsumerModal.accountNumber === c.accountNumber) ||
+      (c.email && selectedConsumerModal.email === c.email)
+    )) {
       setSelectedConsumerModal(null);
     }
 
@@ -386,10 +469,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       currentUser.name,
       'admin',
       'Delete Consumer Account',
-      `Permanently deleted consumer account #${c.accountNumber} (${c.name}).`
+      `Permanently deleted consumer account ${c.accountNumber ? `#${c.accountNumber}` : 'Pending Profile'} (${c.name}).`
     );
 
-    alert(`Consumer account #${c.accountNumber} (${c.name}) has been deleted successfully.`);
+    alert(`Consumer record for ${c.name} has been removed successfully.`);
   };
 
   // Action: Update Consumer Details (Edit Tab in Modal)
@@ -462,28 +545,101 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       }
     }
 
+    const previousAccountNumber = selectedConsumerModal.accountNumber;
+    const previousEmail = selectedConsumerModal.email;
+    const previousUserId = selectedConsumerModal.linkedUserId;
+
+    // Generate or retain meter number
+    const assignedMeter = selectedConsumerModal.meterNumber || `MT-${Math.floor(10000 + Math.random() * 90000)}`;
+
     const updated: Consumer = {
       ...selectedConsumerModal,
       accountNumber: newAccNum,
+      meterNumber: assignedMeter,
       rfidTag: newTag || `RFID-${newAccNum}`,
       status: 'active',
       isRegistered: true
     };
 
-    const newConsumers = consumers.map(item => item.accountNumber === selectedConsumerModal.accountNumber ? updated : item);
+    // 1. Update consumers list (match by accountNumber or email or linkedUserId)
+    const newConsumers = consumers.map(item => {
+      const isMatch = (previousAccountNumber && item.accountNumber === previousAccountNumber) ||
+                      (previousEmail && item.email.toLowerCase() === previousEmail.toLowerCase()) ||
+                      (previousUserId && item.linkedUserId === previousUserId);
+      return isMatch ? updated : item;
+    });
     mockDb.saveConsumers(newConsumers);
     setConsumers(newConsumers);
     setSelectedConsumerModal(updated);
+
+    // 2. Update linked User record in users database so consumer login connects to the issued account
+    const allUsers = mockDb.getUsers();
+    const updatedUsers = allUsers.map(u => {
+      const isUserMatch = (previousUserId && u.id === previousUserId) ||
+                          (previousEmail && u.email.toLowerCase() === previousEmail.toLowerCase()) ||
+                          (previousAccountNumber && u.linkedAccountNumber === previousAccountNumber);
+      if (isUserMatch) {
+        return {
+          ...u,
+          linkedAccountNumber: newAccNum,
+          status: 'active' as const
+        };
+      }
+      return u;
+    });
+    mockDb.saveUsers(updatedUsers);
+
+    // 3. Register or assign mechanical water meter into meters registry
+    const allMeters = mockDb.getMeters();
+    const meterExists = allMeters.some(m => m.meterNumber === assignedMeter);
+    if (!meterExists) {
+      const newMeterRecord: WaterMeter = {
+        meterNumber: assignedMeter,
+        brand: 'Aichi / Actaris Precision',
+        size: selectedConsumerModal.meterSize || '1/2 inch',
+        installationDate: new Date().toISOString().split('T')[0],
+        status: 'active',
+        linkedAccountNumber: newAccNum
+      };
+      const updatedMeters = [...allMeters, newMeterRecord];
+      mockDb.saveMeters(updatedMeters);
+      setMeters(updatedMeters);
+    } else {
+      const updatedMeters = allMeters.map(m => m.meterNumber === assignedMeter ? { ...m, linkedAccountNumber: newAccNum, status: 'active' as const } : m);
+      mockDb.saveMeters(updatedMeters);
+      setMeters(updatedMeters);
+    }
+
+    // 4. Update barangay active meters count
+    const allBarangays = mockDb.getBarangays();
+    const updatedBarangays = allBarangays.map(b => {
+      if (b.id === selectedConsumerModal.barangayId || b.name === selectedConsumerModal.barangay) {
+        return {
+          ...b,
+          activeMeters: (b.activeMeters || 0) + 1
+        };
+      }
+      return b;
+    });
+    mockDb.saveBarangays(updatedBarangays);
+
+    // 5. Send Activation Announcement Notification to Consumer
+    mockDb.addNotification({
+      accountNumber: newAccNum,
+      title: `Official Account Number & Meter Issued!`,
+      message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${newAccNum} and Meter Serial is #${assignedMeter}. Smart RFID Tag: ${updated.rfidTag}. Your full dashboard and telemetry are now active.`,
+      type: 'announcement'
+    });
 
     mockDb.addAuditLog(
       currentUser.id,
       currentUser.name,
       'admin',
       'Issue Identifiers & Activate',
-      `Issued Account Number #${newAccNum} and RFID Tag "${updated.rfidTag}" to ${updated.name}. Account activated.`
+      `Issued Account Number #${newAccNum}, Meter #${assignedMeter}, and RFID Tag "${updated.rfidTag}" to ${updated.name}. Consumer portal account activated and synchronized.`
     );
 
-    alert(`Official Identifiers (Account #${newAccNum}, RFID Tag: ${updated.rfidTag}) assigned permanently! Consumer account is now fully active.`);
+    alert(`Official Identifiers (Account #${newAccNum}, Meter #${assignedMeter}, RFID Tag: ${updated.rfidTag}) assigned permanently! Consumer account is now fully active.`);
   };
 
   // Action: Update Consumer Status (Activate/Deactivate/Archive)
@@ -756,10 +912,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   // Filtered lists logic
   const filteredConsumers = consumers.filter(c => {
-    const matchesSearch = c.name.toLowerCase().includes(consumerSearch.toLowerCase()) || 
-                          c.accountNumber.toLowerCase().includes(consumerSearch.toLowerCase()) ||
-                          c.address.toLowerCase().includes(consumerSearch.toLowerCase());
-    const matchesStatus = consumerStatusFilter === 'all' || c.status === consumerStatusFilter;
+    const term = consumerSearch.toLowerCase();
+    const matchesSearch = (c.name || '').toLowerCase().includes(term) || 
+                          (c.accountNumber || '').toLowerCase().includes(term) ||
+                          (c.email || '').toLowerCase().includes(term) ||
+                          (c.address || '').toLowerCase().includes(term);
+    const matchesStatus = consumerStatusFilter === 'all' || 
+                          c.status === consumerStatusFilter ||
+                          (consumerStatusFilter === 'pending_approval' && (!c.accountNumber || c.status === 'pending_approval'));
     return matchesSearch && matchesStatus;
   });
 
@@ -1794,6 +1954,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     className="bg-white border border-slate-200 rounded-lg py-2.5 px-3 text-xs font-bold text-slate-700"
                   >
                     <option value="all">All Statuses</option>
+                    <option value="pending_approval">Pending ID Issuance</option>
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
                     <option value="blocked">Blocked</option>
@@ -1863,11 +2024,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         const barangayDisplay = c.barangay || (addrParts.length >= 2 ? addrParts[1] : c.address);
 
                         return (
-                          <tr key={c.accountNumber} className="hover:bg-slate-50/70 transition">
+                          <tr key={c.accountNumber || c.email || c.linkedUserId || c.name} className="hover:bg-slate-50/70 transition">
                             <td className="px-4 py-3 space-y-0.5 truncate">
                               <span className="font-bold text-[13px] text-slate-900 block truncate" title={c.name}>{c.name}</span>
                               <div className="flex items-center space-x-1.5 truncate">
-                                <span className="font-mono text-[10px] text-slate-400 font-bold shrink-0">#{c.accountNumber}</span>
+                                {c.accountNumber ? (
+                                  <span className="font-mono text-[10px] text-slate-400 font-bold shrink-0">#{c.accountNumber}</span>
+                                ) : (
+                                  <span className="font-mono text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded border border-amber-200 shrink-0">
+                                    Pending Issuance
+                                  </span>
+                                )}
                                 <span className={`inline-block text-[9px] font-black uppercase px-1.5 py-0.2 rounded border shrink-0 ${
                                   c.consumerType === 'Commercial'
                                     ? 'bg-purple-100/70 text-purple-700 border-purple-200'
@@ -1897,15 +2064,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <td className="px-3 py-3">
                               <div className="space-y-0.5">
                                 <span className={`inline-block px-2 py-0.5 rounded text-[9px] font-black uppercase ${
-                                  c.status === 'blocked'
-                                    ? 'bg-rose-100 text-rose-800 border border-rose-200 animate-pulse'
+                                  !c.accountNumber || c.status === 'pending_approval'
+                                    ? 'bg-amber-100 text-amber-900 border border-amber-300 animate-pulse'
+                                    : c.status === 'blocked'
+                                    ? 'bg-rose-100 text-rose-800 border border-rose-200'
                                     : c.status === 'active'
                                     ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                                     : c.status === 'inactive'
-                                    ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                    ? 'bg-slate-100 text-slate-700 border border-slate-200'
                                     : 'bg-slate-100 text-slate-700 border border-slate-200'
                                 }`}>
-                                  {c.status.toUpperCase()}
+                                  {!c.accountNumber || c.status === 'pending_approval' ? 'PENDING ID' : c.status.toUpperCase()}
                                 </span>
                                 <span className={`block text-[9px] font-bold truncate ${c.isRegistered ? 'text-emerald-600' : 'text-slate-400'}`}>
                                   {c.isRegistered ? '• Registered' : '• Offline'}
@@ -1914,19 +2083,30 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             </td>
                             <td className="px-4 py-3 text-right">
                               <div className="flex items-center justify-end space-x-1.5">
-                                <button 
-                                  onClick={() => handleOpenConsumerModal(c, 'view')}
-                                  className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer shrink-0"
-                                  title="View Consumer Details"
-                                >
-                                  <Eye className="h-3.5 w-3.5 text-white" />
-                                  <span className="text-white font-bold">View</span>
-                                </button>
+                                {!c.accountNumber ? (
+                                  <button 
+                                    onClick={() => handleOpenConsumerModal(c, 'issue_ids')}
+                                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer shrink-0"
+                                    title="Issue Official Account Number & RFID Tag"
+                                  >
+                                    <ShieldCheck className="h-3.5 w-3.5 text-white" />
+                                    <span className="text-white font-bold">Issue IDs</span>
+                                  </button>
+                                ) : (
+                                  <button 
+                                    onClick={() => handleOpenConsumerModal(c, 'view')}
+                                    className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer shrink-0"
+                                    title="View Consumer Details"
+                                  >
+                                    <Eye className="h-3.5 w-3.5 text-white" />
+                                    <span className="text-white font-bold">View</span>
+                                  </button>
+                                )}
 
                                 <button 
                                   onClick={() => handleDeleteConsumer(c)}
                                   className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer border border-rose-700 shrink-0"
-                                  title={`Delete Consumer Account #${c.accountNumber}`}
+                                  title={`Delete Consumer Record`}
                                 >
                                   <Trash2 className="h-3.5 w-3.5 text-white" />
                                   <span className="text-white font-bold">Delete</span>

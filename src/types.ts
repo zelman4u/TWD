@@ -38,7 +38,7 @@ export interface Consumer {
   contactNumber: string;
   email: string;
   meterNumber: string;
-  status: 'active' | 'inactive' | 'archived' | 'blocked';
+  status: 'active' | 'inactive' | 'archived' | 'blocked' | 'pending_approval';
   isRegistered: boolean;
   registrationDate?: string;
   linkedUserId?: string;
