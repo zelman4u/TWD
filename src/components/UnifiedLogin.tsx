@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { Mail, Lock, LogIn, AlertCircle, RefreshCw, ArrowLeft } from 'lucide-react';
 import { User } from '../types';
 import { mockDb } from '../mockDb';
+import { directFindUserInFirestore } from '../services/firebaseDb';
 import { useLoading } from '../context/LoadingContext';
 import { useToast } from '../context/ToastContext';
 
@@ -49,109 +50,117 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
     setMousePos({ x: 0, y: 0 });
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
     showLoading('Authenticating Credentials...', 'Verifying digital security certificate with Tagoloan Water District');
 
-    setTimeout(() => {
-      const inputEmail = email.trim().toLowerCase();
-      const inputPassword = password.trim();
+    const inputEmail = email.trim().toLowerCase();
+    const inputPassword = password.trim();
 
-      // 1. Official Admin Authentication Check
-      if (inputEmail === 'admin@tagoloanwater.gov.ph') {
-        if (inputPassword === 'AdminWater2025!') {
-          const adminUser: User = {
-            id: 'admin-1',
-            email: 'admin@tagoloanwater.gov.ph',
-            name: 'Admin',
-            role: 'admin',
-            status: 'active',
-            password: 'AdminWater2025!',
-          };
+    // 1. Official Admin Authentication Check
+    if (inputEmail === 'admin@tagoloanwater.gov.ph') {
+      if (inputPassword === 'AdminWater2025!') {
+        const adminUser: User = {
+          id: 'admin-1',
+          email: 'admin@tagoloanwater.gov.ph',
+          name: 'Admin',
+          role: 'admin',
+          status: 'active',
+          password: 'AdminWater2025!',
+        };
 
-          // Guarantee admin user is registered and remembered in persistence
-          const users = mockDb.getUsers();
-          const existingIdx = users.findIndex(u => u.email.toLowerCase() === adminUser.email.toLowerCase());
-          if (existingIdx >= 0) {
-            users[existingIdx] = { ...users[existingIdx], ...adminUser };
-          } else {
-            users.push(adminUser);
-          }
-          mockDb.saveUsers(users);
-
-          showLoading(
-            `Access Granted: ${adminUser.name}`,
-            `Loading District Management Console...`
-          );
-
-          setTimeout(() => {
-            mockDb.setCurrentUser(adminUser);
-            mockDb.addAuditLog(
-              adminUser.id,
-              adminUser.name,
-              'admin',
-              'Administrator Authentication',
-              'Official administrator session authenticated and remembered.'
-            );
-
-            hideLoading();
-            setIsLoading(false);
-            onLoginSuccess(adminUser);
-          }, 500);
-          return;
+        // Guarantee admin user is registered and remembered in persistence
+        const users = mockDb.getUsers();
+        const existingIdx = users.findIndex(u => u.email.toLowerCase() === adminUser.email.toLowerCase());
+        if (existingIdx >= 0) {
+          users[existingIdx] = { ...users[existingIdx], ...adminUser };
         } else {
-          hideLoading();
-          setError("Invalid administrator password. Please check your credentials.");
-          toast.error("Authentication Failed", "Invalid administrator password. Please check your credentials.");
-          setIsLoading(false);
-          return;
+          users.push(adminUser);
         }
-      }
+        mockDb.saveUsers(users);
 
-      // 2. Real Registered Consumer Authentication Check
-      const users = mockDb.getUsers();
-      const matchedUser = users.find(u => u.email.toLowerCase() === inputEmail);
-
-      if (!matchedUser) {
-        hideLoading();
-        setError("Account not found. Please review the registered email address or register a new account below.");
-        toast.error("Account Not Found", "No account registered with this email address.");
-        setIsLoading(false);
-        return;
-      }
-
-      if (matchedUser.password && matchedUser.password !== inputPassword) {
-        hideLoading();
-        setError("Incorrect account password. Please try again.");
-        toast.error("Authentication Failed", "Incorrect account password. Please try again.");
-        setIsLoading(false);
-        return;
-      }
-
-      // Access Granted: Consumer or Field Meter Reader
-      const roleLabel = matchedUser.role === 'meter_reader' ? 'Field Meter Reader Portal' : 'Consumer Water Dashboard';
-      showLoading(
-        `Access Granted: ${matchedUser.name}`,
-        `Loading ${roleLabel}...`
-      );
-
-      setTimeout(() => {
-        mockDb.setCurrentUser(matchedUser);
-        mockDb.addAuditLog(
-          matchedUser.id,
-          matchedUser.name,
-          matchedUser.role,
-          'User Login',
-          `${matchedUser.role === 'meter_reader' ? 'Field Meter Reader' : 'Consumer'} portal session initialized for ${matchedUser.name}.`
+        showLoading(
+          `Access Granted: ${adminUser.name}`,
+          `Loading District Management Console...`
         );
 
+        setTimeout(() => {
+          mockDb.setCurrentUser(adminUser);
+          mockDb.addAuditLog(
+            adminUser.id,
+            adminUser.name,
+            'admin',
+            'Administrator Authentication',
+            'Official administrator session authenticated and remembered.'
+          );
+
+          hideLoading();
+          setIsLoading(false);
+          onLoginSuccess(adminUser);
+        }, 500);
+        return;
+      } else {
         hideLoading();
+        setError("Invalid administrator password. Please check your credentials.");
+        toast.error("Authentication Failed", "Invalid administrator password. Please check your credentials.");
         setIsLoading(false);
-        onLoginSuccess(matchedUser);
-      }, 500);
-    }, 600);
+        return;
+      }
+    }
+
+    // 2. Real Registered Consumer Authentication Check
+    let users = mockDb.getUsers();
+    let matchedUser = users.find(u => u.email.toLowerCase() === inputEmail);
+
+    // If not found in local cache, query live Firestore database directly
+    if (!matchedUser) {
+      const firestoreUser = await directFindUserInFirestore(inputEmail);
+      if (firestoreUser) {
+        matchedUser = firestoreUser;
+        users.push(matchedUser);
+        mockDb.saveUsers(users);
+      }
+    }
+
+    if (!matchedUser) {
+      hideLoading();
+      setError("Account not found. Please review the registered email address or register a new account below.");
+      toast.error("Account Not Found", "No account registered with this email address.");
+      setIsLoading(false);
+      return;
+    }
+
+    if (matchedUser.password && matchedUser.password !== inputPassword) {
+      hideLoading();
+      setError("Incorrect account password. Please try again.");
+      toast.error("Authentication Failed", "Incorrect account password. Please try again.");
+      setIsLoading(false);
+      return;
+    }
+
+    // Access Granted: Consumer or Field Meter Reader
+    const roleLabel = matchedUser.role === 'meter_reader' ? 'Field Meter Reader Portal' : 'Consumer Water Dashboard';
+    showLoading(
+      `Access Granted: ${matchedUser.name}`,
+      `Loading ${roleLabel}...`
+    );
+
+    setTimeout(() => {
+      mockDb.setCurrentUser(matchedUser!);
+      mockDb.addAuditLog(
+        matchedUser!.id,
+        matchedUser!.name,
+        matchedUser!.role,
+        'User Login',
+        `${matchedUser!.role === 'meter_reader' ? 'Field Meter Reader' : 'Consumer'} portal session initialized for ${matchedUser!.name}.`
+      );
+
+      hideLoading();
+      setIsLoading(false);
+      onLoginSuccess(matchedUser!);
+    }, 500);
   };
 
   return (

@@ -1,79 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-\\.]+$');
-    }
-
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-
-    function isAdmin() {
-      return isAuthenticated() && (
-        request.auth.token.role == 'admin' ||
-        request.auth.token.email.matches('.*@tagoloanwater\\.gov\\.ph$')
-      );
-    }
-
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-
-    // Public district announcements
-    match /announcements/{announcementId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    // User profiles
-    match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin();
-      allow write: if isOwner(userId) || isAdmin();
-    }
-
-    // Consumer accounts
-    match /consumers/{accountNumber} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    // Water meters
-    match /meters/{meterId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    // Readings & Billings
-    match /readings/{readingId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated();
-      allow delete: if isAdmin();
-    }
-
-    // Route assignments
-    match /routes/{routeId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    // Audit logs
-    match /audit_logs/{logId} {
-      allow read: if isAdmin();
-      allow create: if isAuthenticated();
-      allow update, delete: if false;
-    }
-
-    // Notifications
-    match /notifications/{notificationId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
-    }
-
-    // Test connection document
-    match /test/{testId} {
+    // Tagoloan Water District Municipal Cloud Collections
+    match /{document=**} {
       allow read, write: if true;
     }
   }
 }
+

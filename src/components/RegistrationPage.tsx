@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { UserCheck, AlertCircle, CheckCircle, ArrowLeft, Waves, Briefcase, Clock } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Consumer, Barangay } from '../types';
+import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
 import { useLoading } from '../context/LoadingContext';
 import { useToast } from '../context/ToastContext';
 
@@ -132,6 +133,11 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
 
       mockDb.saveUsers([...users, newUser]);
       mockDb.saveConsumers([...consumers, newConsumer]);
+
+      // Direct instant write to Firestore collections
+      syncDocToFirestore(COLLECTIONS.USERS, newUserId, newUser);
+      syncDocToFirestore(COLLECTIONS.USERS, `email_${email.trim().toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}`, newUser);
+      syncDocToFirestore(COLLECTIONS.CONSUMERS, newUserId, newConsumer);
 
       // Submit to backend server to ensure instant visibility across all admin devices
       fetch('/api/consumers/register', {

@@ -212,10 +212,28 @@ export const mockDb = {
   saveUsers: (users: User[]): void => {
     setStored(KEYS.USERS, users);
     syncBatchToFirestore(COLLECTIONS.USERS, users, 'id');
+    // Also individually ensure each user is in Firestore
+    users.forEach(u => {
+      if (u.id) {
+        syncDocToFirestore(COLLECTIONS.USERS, u.id, u);
+      }
+      if (u.email) {
+        // Also index by email-based ID for direct lookup
+        const emailDocId = `email_${u.email.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+        syncDocToFirestore(COLLECTIONS.USERS, emailDocId, u);
+      }
+    });
   },
   saveConsumers: (consumers: Consumer[]): void => {
     setStored(KEYS.CONSUMERS, consumers);
     syncBatchToFirestore(COLLECTIONS.CONSUMERS, consumers, 'accountNumber');
+    // Ensure every pending or active consumer is synced to Firestore
+    consumers.forEach(c => {
+      const docId = c.accountNumber || c.linkedUserId || (c.email ? `email_${c.email.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}` : '') || (c as any).id;
+      if (docId) {
+        syncDocToFirestore(COLLECTIONS.CONSUMERS, docId, c);
+      }
+    });
   },
   saveReaders: (readers: MeterReader[]): void => {
     setStored(KEYS.READERS, readers);

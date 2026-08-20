@@ -226,10 +226,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       if (record) {
         setConsumerRecord(record);
         
-        // Filter readings belonging to this customer
-        const filteredReads = allReadings.filter(
-          r => r.accountNumber === record.accountNumber || r.meterNumber === record.meterNumber
-        );
+        // Filter readings belonging strictly to this customer's valid issued identifiers
+        const filteredReads = (record.accountNumber && record.accountNumber.trim() !== '' && !record.accountNumber.startsWith('PENDING')) || (record.meterNumber && record.meterNumber.trim() !== '' && !record.meterNumber.startsWith('PENDING'))
+          ? allReadings.filter(
+              r => (record.accountNumber && r.accountNumber === record.accountNumber) ||
+                   (record.meterNumber && r.meterNumber === record.meterNumber)
+            )
+          : [];
         // Sort newest first
         filteredReads.sort((a, b) => new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime());
         

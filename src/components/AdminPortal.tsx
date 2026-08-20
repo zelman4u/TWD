@@ -56,6 +56,35 @@ interface AdminPortalProps {
 
 export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps) {
   const toast = useToast();
+  // Tariff calculation helper
+  const calculateCostOf = (usage: number, classification?: string) => {
+    const isCommercial = classification === 'Commercial';
+    const minCharge = isCommercial ? 270.00 : 180.00; // first 10 m³
+    if (usage <= 10) return minCharge;
+    
+    let bill = minCharge;
+    let remaining = usage - 10;
+    
+    // Tier 1: 11-20 m³
+    const tier1 = Math.min(remaining, 10);
+    bill += tier1 * (isCommercial ? 30.00 : 20.00);
+    remaining -= tier1;
+    
+    if (remaining > 0) {
+      // Tier 2: 21-30 m³
+      const tier2 = Math.min(remaining, 10);
+      bill += tier2 * (isCommercial ? 35.00 : 25.00);
+      remaining -= tier2;
+    }
+    
+    if (remaining > 0) {
+      // Tier 3: 31+ m³
+      bill += remaining * (isCommercial ? 42.00 : 30.00);
+    }
+    
+    return bill;
+  };
+
   // Navigation Module Selected - All 14 Admin Portal Modules
   const [activeTab, setActiveTab] = useState<
     | 'dashboard'
@@ -2301,7 +2330,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     {/* Modal Body - Scrollable Content Area */}
                     <div className="flex-1 overflow-y-auto min-h-0 p-4 sm:p-6 space-y-4 text-left bg-slate-900 text-slate-100">
                       {/* VIEW TAB */}
-                      {consumerModalTab === 'view' && (
+                      {consumerModalTab === 'view' && (() => {
+                        const allR = mockDb.getReadings();
+                        const isIssued = selectedConsumerModal.accountNumber && selectedConsumerModal.accountNumber.trim() !== '' && !selectedConsumerModal.accountNumber.startsWith('PENDING');
+                        const modalReadings = isIssued
+                          ? allR.filter(r => r.accountNumber === selectedConsumerModal.accountNumber || (selectedConsumerModal.meterNumber && r.meterNumber === selectedConsumerModal.meterNumber))
+                          : [];
+                        const modalUnpaid = modalReadings.filter(r => r.paymentStatus !== 'paid');
+                        const computedOutstanding = isIssued
+                          ? modalUnpaid.reduce((acc, b) => {
+                              const total = calculateCostOf(b.consumption, selectedConsumerModal.consumerType);
+                              const paid = b.paidAmount || 0;
+                              return acc + Math.max(0, total - paid);
+                            }, 0)
+                          : 0;
+
+                        return (
                         <div className="space-y-4">
                           {/* Status Banner */}
                           <div className="bg-slate-800/90 p-4 rounded-xl border border-slate-700 shadow-xs grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
@@ -2334,9 +2378,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <div>
                               <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Outstanding Balance</span>
                               <span className={`font-mono font-black text-base mt-1 block ${
-                                (selectedConsumerModal.outstandingBalance || 0) > 0 ? 'text-amber-400' : 'text-emerald-400'
+                                computedOutstanding > 0 ? 'text-amber-400' : 'text-emerald-400'
                               }`}>
-                                ₱{(selectedConsumerModal.outstandingBalance || 0).toFixed(2)}
+                                ₱{computedOutstanding.toFixed(2)}
                               </span>
                             </div>
                           </div>
@@ -2396,7 +2440,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             </div>
                           )}
                         </div>
-                      )}
+                        );
+                      })()}
 
                       {/* EDIT TAB */}
                       {consumerModalTab === 'edit' && (
