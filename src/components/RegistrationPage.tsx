@@ -20,7 +20,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
   const toast = useToast();
 
   // Consumer Form State
-  const [accountNumber, setAccountNumber] = useState('');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [contactNumber, setContactNumber] = useState('');
@@ -76,32 +75,34 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
     }
 
     setIsValidating(true);
-    showLoading('Provisioning Consumer Profile...', 'Validating water service account with Tagoloan municipal registry');
+    showLoading('Provisioning Consumer Profile...', 'Validating details with Tagoloan municipal water registry');
 
     setTimeout(() => {
-      // 1. Auto-match or create Barangay in Admin Database
+      // 1. Check if email already registered
+      const users = mockDb.getUsers();
+      const existingUser = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
+      if (existingUser) {
+        hideLoading();
+        setError('An account with this email address already exists. Please log in or use a different email.');
+        setIsValidating(false);
+        return;
+      }
+
+      // 2. Auto-match or create Barangay in Admin Database
       const matchedBarangay = mockDb.findOrCreateBarangay(barangay);
       const fullAddress = `${sitioZone.trim()}, ${matchedBarangay.name}, Tagoloan, Misamis Oriental`;
 
       const consumers = mockDb.getConsumers();
       
-      // 2. Search if the Account Number exists in master catalog
-      const targetConsumer = consumers.find(
-        c => c.accountNumber.trim().toUpperCase() === accountNumber.trim().toUpperCase()
-      );
+      // 3. Auto-generate Official District Account Number based on Barangay code & sequence
+      const brgCode = matchedBarangay.code || 'TWD';
+      const seqNumber = Math.floor(1000 + Math.random() * 9000);
+      const generatedAccount = `${brgCode}-${seqNumber}`;
+      const generatedMeter = `MT-${Math.floor(10000 + Math.random() * 90000)}`;
 
-      // Validate if already registered
-      if (targetConsumer && targetConsumer.isRegistered) {
-        hideLoading();
-        setError(`Account Number "${accountNumber}" has already been linked to an active web portal user profile. Please proceed to login.`);
-        setIsValidating(false);
-        return;
-      }
-
-      // 3. Create or Link User and Consumer in Database
-      const officialAccount = targetConsumer ? targetConsumer.accountNumber : accountNumber.trim().toUpperCase();
-      const officialName = targetConsumer ? targetConsumer.name : fullName.trim();
-      const officialMeter = targetConsumer ? targetConsumer.meterNumber : `MT-${Math.floor(1000 + Math.random() * 9000)}`;
+      const officialAccount = generatedAccount;
+      const officialName = fullName.trim();
+      const officialMeter = generatedMeter;
 
       const newUserId = `user-${Date.now()}`;
       const newUser: User = {
@@ -136,17 +137,8 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         outstandingBalance: 0
       };
 
-      const users = mockDb.getUsers();
       mockDb.saveUsers([...users, newUser]);
-
-      if (targetConsumer) {
-        const updatedConsumers = consumers.map(c => 
-          c.accountNumber === targetConsumer.accountNumber ? newConsumer : c
-        );
-        mockDb.saveConsumers(updatedConsumers);
-      } else {
-        mockDb.saveConsumers([...consumers, newConsumer]);
-      }
+      mockDb.saveConsumers([...consumers, newConsumer]);
 
       // 4. Update barangay consumer count
       const allBarangays = mockDb.getBarangays();
@@ -168,7 +160,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         officialName,
         'consumer',
         'Customer Portal Self-Registration',
-        `Self-registered water account #${officialAccount} in Barangay ${matchedBarangay.name} (${matchedBarangay.id}), ${sitioZone.trim()}. Classification: ${consumerType} (${meterSize}). Location & Barangay ID auto-synced to Admin database.`
+        `Self-registered water connection in Barangay ${matchedBarangay.name} (${matchedBarangay.id}), ${sitioZone.trim()}. Issued Account #${officialAccount}, Meter #${officialMeter}. Classification: ${consumerType} (${meterSize}). Location & Barangay ID auto-synced to Admin database.`
       );
 
       // Add Welcome Notification
@@ -195,7 +187,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
       hideLoading();
       setIsValidating(false);
       setIsSuccessModal(true);
-      toast.success('Registration Successful', `Account #${officialAccount} registered for ${officialName}!`);
+      toast.success('Registration Successful', `Account #${officialAccount} issued for ${officialName}!`);
     }, 800);
   };
 
@@ -253,21 +245,8 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                 {/* CONSUMER REGISTRATION FIELDS */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   
-                  {/* Account Number */}
-                  <div className="space-y-1 text-left">
-                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Account Number <span className="text-red-400">*</span></label>
-                    <input 
-                      type="text" 
-                      required 
-                      placeholder="e.g. 1001-A or 2001-X"
-                      value={accountNumber}
-                      onChange={(e) => setAccountNumber(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
-                    />
-                  </div>
-
                   {/* Account Holder Name */}
-                  <div className="space-y-1 text-left">
+                  <div className="space-y-1 text-left sm:col-span-2">
                     <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Full Account Holder Name <span className="text-red-400">*</span></label>
                     <input 
                       type="text" 
@@ -284,7 +263,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                     <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Mobile Number <span className="text-red-400">*</span></label>
                     <input 
                       type="tel" 
-                      required
+                      required 
                       placeholder="e.g. 09171234567"
                       value={contactNumber}
                       onChange={(e) => setContactNumber(e.target.value)}
@@ -297,7 +276,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                     <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Email Address <span className="text-red-400">*</span></label>
                     <input 
                       type="email" 
-                      required
+                      required 
                       placeholder="e.g. juan@example.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
