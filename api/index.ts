@@ -2,9 +2,9 @@ import express from "express";
 
 const app = express();
 
-// Express JSON and URL-encoded body parsing
-app.use(express.json({ limit: "15mb" }));
-app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+// Express JSON and URL-encoded body parsing with high limit
+app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
 // Enable CORS for Mobile App and External API clients
 app.use((req, res, next) => {
@@ -31,9 +31,23 @@ interface MobileReader {
   assignedRoutes: string[];
 }
 
-let registeredStaff: MobileReader[] = [];
+let registeredStaff: MobileReader[] = [
+  {
+    id: "MR-101",
+    username: "reader.poblacion@tagoloanwater.gov.ph",
+    name: "Ramon Valderrama",
+    pin: "1234",
+    role: "Senior Meter Officer",
+    zone: "Poblacion",
+    contactNumber: "0917-555-0191",
+    employmentStatus: "active",
+    registeredAt: "2026-08-01T08:00:00.000Z",
+    assignedRoutes: ["Poblacion", "Natumolan"]
+  }
+];
 
-interface MobileConsumerSync {
+export interface MobileConsumerRecord {
+  id?: string;
   accountNumber: string;
   name: string;
   address: string;
@@ -43,11 +57,112 @@ interface MobileConsumerSync {
   previousReading: number;
   lastReadingDate: string;
   meterSize: string;
-  consumerType: string;
-  status: "active" | "disconnected" | "maintenance";
+  consumerType: "Residential" | "Commercial";
+  status: "active" | "inactive" | "maintenance" | "disconnected";
+  contactNumber?: string;
+  email?: string;
+  rfidTag?: string;
 }
 
-let syncedConsumers: MobileConsumerSync[] = [];
+// Initial Tagoloan Water District Municipal Consumer Registry
+let syncedConsumers: MobileConsumerRecord[] = [
+  {
+    accountNumber: "1001-A",
+    name: "Juan Dela Cruz",
+    address: "Zone 2, Riverside Drive, Poblacion",
+    barangay: "Poblacion",
+    sitioZone: "Zone 2",
+    meterNumber: "MT-1001-TAG",
+    previousReading: 142.5,
+    lastReadingDate: "2026-07-28",
+    meterSize: "1/2 inch",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "0917-123-4567",
+    email: "juan.delacruz@gmail.com",
+    rfidTag: "RFID-1001"
+  },
+  {
+    accountNumber: "1002-B",
+    name: "Maria Santos",
+    address: "Zone 4, Market Road, Poblacion",
+    barangay: "Poblacion",
+    sitioZone: "Zone 4",
+    meterNumber: "MT-1002-TAG",
+    previousReading: 218.0,
+    lastReadingDate: "2026-07-29",
+    meterSize: "1/2 inch",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "0920-987-6543",
+    email: "maria.santos@yahoo.com",
+    rfidTag: "RFID-1002"
+  },
+  {
+    accountNumber: "1003-C",
+    name: "Antonio Luna",
+    address: "Purok 1, Highway, Natumolan",
+    barangay: "Natumolan",
+    sitioZone: "Purok 1",
+    meterNumber: "MT-1003-TAG",
+    previousReading: 305.2,
+    lastReadingDate: "2026-07-30",
+    meterSize: "3/4 inch",
+    consumerType: "Commercial",
+    status: "active",
+    contactNumber: "0939-345-6789",
+    email: "antonio.luna@bakery.ph",
+    rfidTag: "RFID-1003"
+  },
+  {
+    accountNumber: "1004-D",
+    name: "Elena Rodriguez",
+    address: "Zone 1, Coastal Road, Baluarte",
+    barangay: "Baluarte",
+    sitioZone: "Zone 1",
+    meterNumber: "MT-1004-TAG",
+    previousReading: 89.0,
+    lastReadingDate: "2026-07-27",
+    meterSize: "1/2 inch",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "0918-654-3210",
+    email: "elena.rodriguez@gmail.com",
+    rfidTag: "RFID-1004"
+  },
+  {
+    accountNumber: "1005-E",
+    name: "Ricardo Dalisay",
+    address: "Purok 3, Agricultural Area, Sta. Ana",
+    barangay: "Sta. Ana",
+    sitioZone: "Purok 3",
+    meterNumber: "MT-1005-TAG",
+    previousReading: 412.8,
+    lastReadingDate: "2026-07-31",
+    meterSize: "1/2 inch",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "0945-789-0123",
+    email: "ricardo.dalisay@gmail.com",
+    rfidTag: "RFID-1005"
+  },
+  {
+    accountNumber: "1006-F",
+    name: "Tagoloan Commercial Plaza",
+    address: "National Highway Corner, Sta. Cruz",
+    barangay: "Sta. Cruz",
+    sitioZone: "Zone 1",
+    meterNumber: "MT-1006-TAG",
+    previousReading: 1250.0,
+    lastReadingDate: "2026-07-31",
+    meterSize: "2 inch",
+    consumerType: "Commercial",
+    status: "active",
+    contactNumber: "088-567-8901",
+    email: "admin@tagoloanplaza.com",
+    rfidTag: "RFID-1006"
+  }
+];
 
 interface MobileReadingSubmission {
   id: string;
@@ -71,56 +186,199 @@ interface MobileReadingSubmission {
 
 let pendingMobileReadings: MobileReadingSubmission[] = [];
 
-// 1. Mobile Meter Reader Registration
-app.post(["/api/auth/register", "/api/readers/register"], (req, res) => {
-  const { id, username, name, pin, role, zone, contactNumber, registeredAt } = req.body;
+// ==========================================
+// 1. PRIMARY CONSUMER ENDPOINTS (MOBILE SYNC)
+// ==========================================
 
-  if (!name || !username) {
-    return res.status(400).json({
-      success: false,
-      message: "Reader name and username are required for registration."
+// GET /api/consumers - Supports query filters & returns clean JSON
+app.get("/api/consumers", (req, res) => {
+  try {
+    const { zone, barangay, search, status } = req.query;
+    let list = [...syncedConsumers];
+
+    if (barangay && typeof barangay === "string" && barangay.trim() !== "" && barangay !== "All") {
+      const bFilter = barangay.trim().toLowerCase();
+      list = list.filter(c => c.barangay.toLowerCase() === bFilter);
+    } else if (zone && typeof zone === "string" && zone.trim() !== "" && zone !== "All") {
+      const zFilter = zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim().toLowerCase();
+      list = list.filter(c => c.barangay.toLowerCase().includes(zFilter) || c.address.toLowerCase().includes(zFilter));
+    }
+
+    if (search && typeof search === "string" && search.trim() !== "") {
+      const q = search.trim().toLowerCase();
+      list = list.filter(c => 
+        c.name.toLowerCase().includes(q) || 
+        c.accountNumber.toLowerCase().includes(q) || 
+        c.meterNumber.toLowerCase().includes(q)
+      );
+    }
+
+    if (status && typeof status === "string" && status.trim() !== "") {
+      list = list.filter(c => c.status === status);
+    }
+
+    // Return format compatible with both direct arrays and wrapped payload models
+    res.json({
+      success: true,
+      count: list.length,
+      consumers: list,
+      data: list
+    });
+  } catch (err: unknown) {
+    console.error("[API Error] /api/consumers:", err);
+    res.status(200).json({
+      success: true,
+      count: syncedConsumers.length,
+      consumers: syncedConsumers,
+      data: syncedConsumers
     });
   }
-
-  const readerId = id || `WDT-MR${Math.floor(10 + Math.random() * 90)}`;
-  const cleanZone = zone ? zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim() : "Poblacion";
-
-  const newReader: MobileReader = {
-    id: readerId,
-    username: username.trim(),
-    name: name.trim(),
-    pin: pin || "1234",
-    role: role || "Meter Reader I",
-    zone: cleanZone,
-    contactNumber: contactNumber || "",
-    employmentStatus: "pending",
-    registeredAt: registeredAt || new Date().toISOString(),
-    assignedRoutes: [cleanZone]
-  };
-
-  const existingIdx = registeredStaff.findIndex(s => s.username === newReader.username || s.id === newReader.id);
-  if (existingIdx >= 0) {
-    registeredStaff[existingIdx] = { ...registeredStaff[existingIdx], ...newReader };
-  } else {
-    registeredStaff.push(newReader);
-  }
-
-  res.status(201).json({
-    success: true,
-    message: "Registration received successfully. Account is pending Admin approval.",
-    reader: {
-      id: newReader.id,
-      username: newReader.username,
-      name: newReader.name,
-      role: newReader.role,
-      zone: newReader.zone,
-      employmentStatus: newReader.employmentStatus,
-      assignedRoutes: newReader.assignedRoutes
-    }
-  });
 });
 
-// 2. Fetch All Staff / Meter Readers
+// GET /api/consumers/:accountNumber
+app.get("/api/consumers/:accountNumber", (req, res) => {
+  try {
+    const { accountNumber } = req.params;
+    const consumer = syncedConsumers.find(
+      c => c.accountNumber === accountNumber || c.meterNumber === accountNumber
+    );
+
+    if (!consumer) {
+      return res.status(404).json({
+        success: false,
+        message: `Consumer account ${accountNumber} not found.`
+      });
+    }
+
+    res.json({
+      success: true,
+      consumer,
+      data: consumer
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to retrieve consumer record." });
+  }
+});
+
+// POST /api/consumers - Add or Sync Consumer Record
+app.post("/api/consumers", (req, res) => {
+  try {
+    const {
+      accountNumber,
+      name,
+      address,
+      barangay,
+      sitioZone,
+      meterNumber,
+      previousReading,
+      lastReadingDate,
+      meterSize,
+      consumerType,
+      status,
+      contactNumber,
+      email,
+      rfidTag
+    } = req.body;
+
+    if (!accountNumber || !name) {
+      return res.status(400).json({
+        success: false,
+        message: "accountNumber and name are required."
+      });
+    }
+
+    const record: MobileConsumerRecord = {
+      accountNumber: String(accountNumber).trim(),
+      name: String(name).trim(),
+      address: address || "Tagoloan, Misamis Oriental",
+      barangay: barangay || "Poblacion",
+      sitioZone: sitioZone || "Zone 1",
+      meterNumber: meterNumber || `MT-${accountNumber}`,
+      previousReading: Number(previousReading) || 0,
+      lastReadingDate: lastReadingDate || new Date().toISOString().split("T")[0],
+      meterSize: meterSize || "1/2 inch",
+      consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
+      status: status || "active",
+      contactNumber: contactNumber || "",
+      email: email || "",
+      rfidTag: rfidTag || ""
+    };
+
+    const idx = syncedConsumers.findIndex(c => c.accountNumber === record.accountNumber);
+    if (idx >= 0) {
+      syncedConsumers[idx] = { ...syncedConsumers[idx], ...record };
+    } else {
+      syncedConsumers.push(record);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "Consumer saved successfully.",
+      consumer: record
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to save consumer." });
+  }
+});
+
+// ==========================================
+// 2. METER READER AUTH & REGISTRATION
+// ==========================================
+
+// POST /api/readers/register or /api/auth/register
+app.post(["/api/auth/register", "/api/readers/register"], (req, res) => {
+  try {
+    const { id, username, name, pin, role, zone, contactNumber, registeredAt } = req.body;
+
+    if (!name || !username) {
+      return res.status(400).json({
+        success: false,
+        message: "Reader name and username are required for registration."
+      });
+    }
+
+    const readerId = id || `WDT-MR${Math.floor(10 + Math.random() * 90)}`;
+    const cleanZone = zone ? zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim() : "Poblacion";
+
+    const newReader: MobileReader = {
+      id: readerId,
+      username: username.trim(),
+      name: name.trim(),
+      pin: pin || "1234",
+      role: role || "Meter Reader I",
+      zone: cleanZone,
+      contactNumber: contactNumber || "",
+      employmentStatus: "pending",
+      registeredAt: registeredAt || new Date().toISOString(),
+      assignedRoutes: [cleanZone]
+    };
+
+    const existingIdx = registeredStaff.findIndex(s => s.username === newReader.username || s.id === newReader.id);
+    if (existingIdx >= 0) {
+      registeredStaff[existingIdx] = { ...registeredStaff[existingIdx], ...newReader };
+    } else {
+      registeredStaff.push(newReader);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "Registration received successfully. Account is pending Admin approval.",
+      reader: {
+        id: newReader.id,
+        username: newReader.username,
+        name: newReader.name,
+        role: newReader.role,
+        zone: newReader.zone,
+        employmentStatus: newReader.employmentStatus,
+        assignedRoutes: newReader.assignedRoutes
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Registration error." });
+  }
+});
+
+// GET /api/staff or /api/readers
 app.get(["/api/staff", "/api/readers"], (req, res) => {
   res.json({
     success: true,
@@ -130,10 +388,10 @@ app.get(["/api/staff", "/api/readers"], (req, res) => {
   });
 });
 
-// 2.1 Check Single Reader Status
+// GET /api/readers/check-status/:id
 app.get("/api/readers/check-status/:id", (req, res) => {
   const { id } = req.params;
-  const reader = registeredStaff.find(s => s.id === id || s.username === id);
+  const reader = registeredStaff.find(s => s.id === id || s.username?.toLowerCase() === id?.toLowerCase());
   if (!reader) {
     return res.status(404).json({ success: false, message: "Meter reader not found." });
   }
@@ -150,7 +408,7 @@ app.get("/api/readers/check-status/:id", (req, res) => {
   });
 });
 
-// 3. Admin Approves / Activates Meter Reader
+// PATCH/POST /api/staff/:id/status or /api/readers/:id/approve
 app.all(["/api/staff/:id/status", "/api/staff/:id", "/api/readers/:id/approve"], (req, res) => {
   if (req.method !== "PATCH" && req.method !== "POST" && req.method !== "PUT") {
     return res.status(405).json({ success: false, message: "Method Not Allowed" });
@@ -181,138 +439,164 @@ app.all(["/api/staff/:id/status", "/api/staff/:id", "/api/readers/:id/approve"],
   });
 });
 
-// 4. Mobile Sync Pull
+// ==========================================
+// 3. ROUTE & SYNC DATA PULL
+// ==========================================
+
+// GET /api/sync/pull
 app.get("/api/sync/pull", (req, res) => {
-  const { zone } = req.query;
-  let consumers = [...syncedConsumers];
+  try {
+    const { zone } = req.query;
+    let consumers = [...syncedConsumers];
 
-  if (zone && typeof zone === "string" && zone.trim() !== "") {
-    const cleanZone = zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim().toLowerCase();
-    consumers = consumers.filter(c => c.barangay.toLowerCase().includes(cleanZone) || c.address.toLowerCase().includes(cleanZone));
+    if (zone && typeof zone === "string" && zone.trim() !== "" && zone !== "All") {
+      const cleanZone = zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim().toLowerCase();
+      consumers = consumers.filter(c => c.barangay.toLowerCase().includes(cleanZone) || c.address.toLowerCase().includes(cleanZone));
+    }
+
+    res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      zone: zone || "all",
+      count: consumers.length,
+      consumers
+    });
+  } catch (err) {
+    res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      zone: "all",
+      count: syncedConsumers.length,
+      consumers: syncedConsumers
+    });
   }
-
-  res.json({
-    success: true,
-    timestamp: new Date().toISOString(),
-    zone: zone || "all",
-    count: consumers.length,
-    consumers
-  });
 });
 
-// 5. Mobile Reading Push
+// ==========================================
+// 4. FIELD READING SUBMISSION & BATCH SYNC
+// ==========================================
+
+// POST /api/readings/submit or /api/sync/push
 app.post(["/api/sync/push", "/api/readings/submit"], (req, res) => {
-  const {
-    accountNumber,
-    meterNumber,
-    currentReading,
-    previousReading,
-    readerId,
-    readerName,
-    route,
-    billingPeriod,
-    photoUrl,
-    coordinates,
-    notes
-  } = req.body;
+  try {
+    const {
+      accountNumber,
+      meterNumber,
+      currentReading,
+      previousReading,
+      readerId,
+      readerName,
+      route,
+      billingPeriod,
+      photoUrl,
+      coordinates,
+      notes
+    } = req.body;
 
-  if (!accountNumber || currentReading === undefined) {
-    return res.status(400).json({
-      success: false,
-      message: "Account number and current reading are mandatory."
-    });
-  }
+    if (!accountNumber || currentReading === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "Account number and current reading are mandatory."
+      });
+    }
 
-  const matchedConsumer = syncedConsumers.find(
-    c => c.accountNumber === accountNumber || c.meterNumber === meterNumber
-  );
+    const matchedConsumer = syncedConsumers.find(
+      c => c.accountNumber === accountNumber || c.meterNumber === meterNumber
+    );
 
-  const prev = previousReading !== undefined ? Number(previousReading) : (matchedConsumer ? matchedConsumer.previousReading : 0);
-  const curr = Number(currentReading);
-  const consumption = Math.max(0, curr - prev);
-
-  const submission: MobileReadingSubmission = {
-    id: `READ-${Math.floor(10000 + Math.random() * 90000)}`,
-    accountNumber: matchedConsumer ? matchedConsumer.accountNumber : accountNumber,
-    consumerName: matchedConsumer ? matchedConsumer.name : (req.body.consumerName || "Consumer Account"),
-    meterNumber: meterNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG"),
-    billingPeriod: billingPeriod || "August 2026",
-    readingDate: new Date().toISOString().split("T")[0],
-    previousReading: prev,
-    currentReading: curr,
-    consumption,
-    readerId: readerId || "WDT-FIELD",
-    readerName: readerName || "Field Meter Officer",
-    route: route || (matchedConsumer ? matchedConsumer.barangay : "Poblacion"),
-    status: "pending_approval",
-    photoUrl: photoUrl || "",
-    coordinates: coordinates || { latitude: 8.5372, longitude: 124.7523 },
-    notes: notes || "Scanned and submitted via Tagoloan Mobile Field App",
-    submittedAt: new Date().toISOString()
-  };
-
-  pendingMobileReadings.unshift(submission);
-
-  res.status(201).json({
-    success: true,
-    message: "Reading submitted successfully and routed to Admin Verification Queue.",
-    submissionId: submission.id,
-    consumption: submission.consumption,
-    status: "pending_approval"
-  });
-});
-
-// 5.1 Batch Sync Readings
-app.post("/api/readings/batch", (req, res) => {
-  const readingsList = Array.isArray(req.body) ? req.body : (req.body.readings || []);
-
-  if (!readingsList || readingsList.length === 0) {
-    return res.status(400).json({
-      success: false,
-      message: "No readings payload provided in batch upload."
-    });
-  }
-
-  const processed: MobileReadingSubmission[] = [];
-
-  for (const item of readingsList) {
-    const prev = item.previousReading !== undefined ? Number(item.previousReading) : 0;
-    const curr = Number(item.currentReading || 0);
+    const prev = previousReading !== undefined ? Number(previousReading) : (matchedConsumer ? matchedConsumer.previousReading : 0);
+    const curr = Number(currentReading);
     const consumption = Math.max(0, curr - prev);
 
     const submission: MobileReadingSubmission = {
-      id: item.id || `READ-${Math.floor(10000 + Math.random() * 90000)}`,
-      accountNumber: item.accountNumber || "UNKNOWN",
-      consumerName: item.consumerName || "Consumer",
-      meterNumber: item.meterNumber || "MT-TAG",
-      billingPeriod: item.billingPeriod || "August 2026",
-      readingDate: item.readingDate || new Date().toISOString().split("T")[0],
+      id: `READ-${Math.floor(10000 + Math.random() * 90000)}`,
+      accountNumber: matchedConsumer ? matchedConsumer.accountNumber : accountNumber,
+      consumerName: matchedConsumer ? matchedConsumer.name : (req.body.consumerName || "Consumer Account"),
+      meterNumber: meterNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG"),
+      billingPeriod: billingPeriod || "August 2026",
+      readingDate: new Date().toISOString().split("T")[0],
       previousReading: prev,
       currentReading: curr,
       consumption,
-      readerId: item.readerId || "WDT-FIELD",
-      readerName: item.readerName || "Field Meter Officer",
-      route: item.route || item.barangay || "Poblacion",
+      readerId: readerId || "WDT-FIELD",
+      readerName: readerName || "Field Meter Officer",
+      route: route || (matchedConsumer ? matchedConsumer.barangay : "Poblacion"),
       status: "pending_approval",
-      photoUrl: item.photoUrl || item.dialPhotoUrl || "",
-      coordinates: item.coordinates || { latitude: 8.5372, longitude: 124.7523 },
-      notes: item.notes || "Batch synced from Mobile Offline Queue",
+      photoUrl: photoUrl || "",
+      coordinates: coordinates || { latitude: 8.5372, longitude: 124.7523 },
+      notes: notes || "Scanned and submitted via Tagoloan Mobile Field App",
       submittedAt: new Date().toISOString()
     };
 
     pendingMobileReadings.unshift(submission);
-    processed.push(submission);
-  }
 
-  res.status(201).json({
-    success: true,
-    message: `Successfully processed and synced ${processed.length} field readings.`,
-    count: processed.length,
-    syncedIds: processed.map(p => p.id)
-  });
+    res.status(201).json({
+      success: true,
+      message: "Reading submitted successfully and routed to Admin Verification Queue.",
+      submissionId: submission.id,
+      consumption: submission.consumption,
+      status: "pending_approval"
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to submit reading." });
+  }
 });
 
-// 6. Admin Approval Queue Listing
+// POST /api/readings/batch
+app.post("/api/readings/batch", (req, res) => {
+  try {
+    const readingsList = Array.isArray(req.body) ? req.body : (req.body.readings || []);
+
+    if (!readingsList || readingsList.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No readings payload provided in batch upload."
+      });
+    }
+
+    const processed: MobileReadingSubmission[] = [];
+
+    for (const item of readingsList) {
+      const prev = item.previousReading !== undefined ? Number(item.previousReading) : 0;
+      const curr = Number(item.currentReading || 0);
+      const consumption = Math.max(0, curr - prev);
+
+      const submission: MobileReadingSubmission = {
+        id: item.id || `READ-${Math.floor(10000 + Math.random() * 90000)}`,
+        accountNumber: item.accountNumber || "UNKNOWN",
+        consumerName: item.consumerName || "Consumer",
+        meterNumber: item.meterNumber || "MT-TAG",
+        billingPeriod: item.billingPeriod || "August 2026",
+        readingDate: item.readingDate || new Date().toISOString().split("T")[0],
+        previousReading: prev,
+        currentReading: curr,
+        consumption,
+        readerId: item.readerId || "WDT-FIELD",
+        readerName: item.readerName || "Field Meter Officer",
+        route: item.route || item.barangay || "Poblacion",
+        status: "pending_approval",
+        photoUrl: item.photoUrl || item.dialPhotoUrl || "",
+        coordinates: item.coordinates || { latitude: 8.5372, longitude: 124.7523 },
+        notes: item.notes || "Batch synced from Mobile Offline Queue",
+        submittedAt: new Date().toISOString()
+      };
+
+      pendingMobileReadings.unshift(submission);
+      processed.push(submission);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `Successfully processed and synced ${processed.length} field readings.`,
+      count: processed.length,
+      syncedIds: processed.map(p => p.id)
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Batch sync error." });
+  }
+});
+
+// GET /api/readings/pending
 app.get("/api/readings/pending", (req, res) => {
   res.json({
     success: true,
@@ -321,9 +605,32 @@ app.get("/api/readings/pending", (req, res) => {
   });
 });
 
-// 7. Health Check
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+// GET /api/barangays
+app.get("/api/barangays", (req, res) => {
+  const barangays = [
+    { id: "BRG-01", name: "Poblacion", code: "PB-01", ratePerM3: 24.50 },
+    { id: "BRG-02", name: "Natumolan", code: "NT-02", ratePerM3: 24.50 },
+    { id: "BRG-03", name: "Baluarte", code: "BL-03", ratePerM3: 24.50 },
+    { id: "BRG-04", name: "Sta. Ana", code: "SA-04", ratePerM3: 24.50 },
+    { id: "BRG-05", name: "Sta. Cruz", code: "SC-05", ratePerM3: 24.50 },
+    { id: "BRG-06", name: "Mohon", code: "MH-06", ratePerM3: 24.50 },
+    { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 24.50 },
+    { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 24.50 },
+    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 24.50 }
+  ];
+  res.json({ success: true, count: barangays.length, barangays, data: barangays });
+});
+
+// Health check
+app.get(["/api/health", "/api/status"], (req, res) => {
+  res.json({
+    status: "ok",
+    connected: true,
+    service: "Tagoloan Water District Live Gateway",
+    timestamp: new Date().toISOString(),
+    consumersCount: syncedConsumers.length,
+    staffCount: registeredStaff.length
+  });
 });
 
 export default app;

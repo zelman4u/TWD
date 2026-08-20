@@ -61,9 +61,109 @@ interface MobileConsumerSync {
   meterSize: string;
   consumerType: string;
   status: "active" | "disconnected" | "maintenance";
+  contactNumber?: string;
+  email?: string;
+  rfidTag?: string;
 }
 
-let syncedConsumers: MobileConsumerSync[] = [];
+let syncedConsumers: MobileConsumerSync[] = [
+  {
+    accountNumber: "1001-A",
+    name: "Juan Dela Cruz",
+    address: "Zone 2, Riverside Drive, Poblacion",
+    barangay: "Poblacion",
+    sitioZone: "Zone 2",
+    meterNumber: "MT-1001-TAG",
+    previousReading: 142.5,
+    lastReadingDate: "2026-07-28",
+    meterSize: "1/2 inch",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "0917-123-4567",
+    email: "juan.delacruz@gmail.com",
+    rfidTag: "RFID-1001"
+  },
+  {
+    accountNumber: "1002-B",
+    name: "Maria Santos",
+    address: "Zone 4, Market Road, Poblacion",
+    barangay: "Poblacion",
+    sitioZone: "Zone 4",
+    meterNumber: "MT-1002-TAG",
+    previousReading: 218.0,
+    lastReadingDate: "2026-07-29",
+    meterSize: "1/2 inch",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "0920-987-6543",
+    email: "maria.santos@yahoo.com",
+    rfidTag: "RFID-1002"
+  },
+  {
+    accountNumber: "1003-C",
+    name: "Antonio Luna",
+    address: "Purok 1, Highway, Natumolan",
+    barangay: "Natumolan",
+    sitioZone: "Purok 1",
+    meterNumber: "MT-1003-TAG",
+    previousReading: 305.2,
+    lastReadingDate: "2026-07-30",
+    meterSize: "3/4 inch",
+    consumerType: "Commercial",
+    status: "active",
+    contactNumber: "0939-345-6789",
+    email: "antonio.luna@bakery.ph",
+    rfidTag: "RFID-1003"
+  },
+  {
+    accountNumber: "1004-D",
+    name: "Elena Rodriguez",
+    address: "Zone 1, Coastal Road, Baluarte",
+    barangay: "Baluarte",
+    sitioZone: "Zone 1",
+    meterNumber: "MT-1004-TAG",
+    previousReading: 89.0,
+    lastReadingDate: "2026-07-27",
+    meterSize: "1/2 inch",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "0918-654-3210",
+    email: "elena.rodriguez@gmail.com",
+    rfidTag: "RFID-1004"
+  },
+  {
+    accountNumber: "1005-E",
+    name: "Ricardo Dalisay",
+    address: "Purok 3, Agricultural Area, Sta. Ana",
+    barangay: "Sta. Ana",
+    sitioZone: "Purok 3",
+    meterNumber: "MT-1005-TAG",
+    previousReading: 412.8,
+    lastReadingDate: "2026-07-31",
+    meterSize: "1/2 inch",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "0945-789-0123",
+    email: "ricardo.dalisay@gmail.com",
+    rfidTag: "RFID-1005"
+  },
+  {
+    accountNumber: "1006-F",
+    name: "Tagoloan Commercial Plaza",
+    address: "National Highway Corner, Sta. Cruz",
+    barangay: "Sta. Cruz",
+    sitioZone: "Zone 1",
+    meterNumber: "MT-1006-TAG",
+    previousReading: 1250.0,
+    lastReadingDate: "2026-07-31",
+    meterSize: "2 inch",
+    consumerType: "Commercial",
+    status: "active",
+    contactNumber: "088-567-8901",
+    email: "admin@tagoloanplaza.com",
+    rfidTag: "RFID-1006"
+  }
+];
 
 // In-Memory Pending Meter Reading Submissions from Mobile
 interface MobileReadingSubmission {
@@ -240,6 +340,134 @@ app.all(["/api/staff/:id/status", "/api/staff/:id", "/api/readers/:id/approve"],
     message: `Meter reader ${reader.name} status updated to ${reader.employmentStatus}.`,
     reader
   });
+});
+
+// 3.1 Consumer Registry Endpoint for Mobile App & Web (GET /api/consumers, POST /api/consumers)
+app.get("/api/consumers", (req, res) => {
+  try {
+    const { zone, barangay, search, status } = req.query;
+    let list = [...syncedConsumers];
+
+    if (barangay && typeof barangay === "string" && barangay.trim() !== "" && barangay !== "All") {
+      const bFilter = barangay.trim().toLowerCase();
+      list = list.filter(c => c.barangay.toLowerCase() === bFilter);
+    } else if (zone && typeof zone === "string" && zone.trim() !== "" && zone !== "All") {
+      const zFilter = zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim().toLowerCase();
+      list = list.filter(c => c.barangay.toLowerCase().includes(zFilter) || c.address.toLowerCase().includes(zFilter));
+    }
+
+    if (search && typeof search === "string" && search.trim() !== "") {
+      const q = search.trim().toLowerCase();
+      list = list.filter(c => 
+        c.name.toLowerCase().includes(q) || 
+        c.accountNumber.toLowerCase().includes(q) || 
+        c.meterNumber.toLowerCase().includes(q)
+      );
+    }
+
+    if (status && typeof status === "string" && status.trim() !== "") {
+      list = list.filter(c => c.status === status);
+    }
+
+    res.json({
+      success: true,
+      count: list.length,
+      consumers: list,
+      data: list
+    });
+  } catch (err) {
+    console.error("[API Error] GET /api/consumers:", err);
+    res.status(200).json({
+      success: true,
+      count: syncedConsumers.length,
+      consumers: syncedConsumers,
+      data: syncedConsumers
+    });
+  }
+});
+
+app.get("/api/consumers/:accountNumber", (req, res) => {
+  try {
+    const { accountNumber } = req.params;
+    const consumer = syncedConsumers.find(
+      c => c.accountNumber === accountNumber || c.meterNumber === accountNumber
+    );
+
+    if (!consumer) {
+      return res.status(404).json({
+        success: false,
+        message: `Consumer account ${accountNumber} not found.`
+      });
+    }
+
+    res.json({
+      success: true,
+      consumer,
+      data: consumer
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to retrieve consumer record." });
+  }
+});
+
+app.post("/api/consumers", (req, res) => {
+  try {
+    const {
+      accountNumber,
+      name,
+      address,
+      barangay,
+      sitioZone,
+      meterNumber,
+      previousReading,
+      lastReadingDate,
+      meterSize,
+      consumerType,
+      status,
+      contactNumber,
+      email,
+      rfidTag
+    } = req.body;
+
+    if (!accountNumber || !name) {
+      return res.status(400).json({
+        success: false,
+        message: "accountNumber and name are required."
+      });
+    }
+
+    const record: MobileConsumerSync = {
+      accountNumber: String(accountNumber).trim(),
+      name: String(name).trim(),
+      address: address || "Tagoloan, Misamis Oriental",
+      barangay: barangay || "Poblacion",
+      sitioZone: sitioZone || "Zone 1",
+      meterNumber: meterNumber || `MT-${accountNumber}`,
+      previousReading: Number(previousReading) || 0,
+      lastReadingDate: lastReadingDate || new Date().toISOString().split("T")[0],
+      meterSize: meterSize || "1/2 inch",
+      consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
+      status: status || "active",
+      contactNumber: contactNumber || "",
+      email: email || "",
+      rfidTag: rfidTag || ""
+    };
+
+    const idx = syncedConsumers.findIndex(c => c.accountNumber === record.accountNumber);
+    if (idx >= 0) {
+      syncedConsumers[idx] = { ...syncedConsumers[idx], ...record };
+    } else {
+      syncedConsumers.push(record);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "Consumer saved successfully.",
+      consumer: record
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to save consumer." });
+  }
 });
 
 // 4. Mobile Sync Pull: Download Consumers & Meter Tags for Offline Recognition (GET /api/sync/pull)
@@ -571,9 +799,30 @@ wss.on("connection", (ws) => {
   });
 });
 
-// Serve health route
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", activeWebSocketClients: clients.size });
+// Serve barangays and status routes
+app.get("/api/barangays", (req, res) => {
+  const barangays = [
+    { id: "BRG-01", name: "Poblacion", code: "PB-01", ratePerM3: 24.50 },
+    { id: "BRG-02", name: "Natumolan", code: "NT-02", ratePerM3: 24.50 },
+    { id: "BRG-03", name: "Baluarte", code: "BL-03", ratePerM3: 24.50 },
+    { id: "BRG-04", name: "Sta. Ana", code: "SA-04", ratePerM3: 24.50 },
+    { id: "BRG-05", name: "Sta. Cruz", code: "SC-05", ratePerM3: 24.50 },
+    { id: "BRG-06", name: "Mohon", code: "MH-06", ratePerM3: 24.50 },
+    { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 24.50 },
+    { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 24.50 },
+    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 24.50 }
+  ];
+  res.json({ success: true, count: barangays.length, barangays, data: barangays });
+});
+
+app.get(["/api/health", "/api/status"], (req, res) => {
+  res.json({
+    status: "ok",
+    activeWebSocketClients: clients.size,
+    consumersCount: syncedConsumers.length,
+    staffCount: registeredStaff.length,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Setup Vite Dev server or production static assets handler
