@@ -2368,7 +2368,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           Pending Field Reader Registrations ({readers.filter(r => r.employmentStatus === 'pending_approval').length})
                         </h4>
                         <p className="text-xs text-amber-800">
-                          Newly registered mobile meter readers require administrator confirmation before gaining full mobile app access.
+                          Pending meter reader accounts require administrator confirmation before activation.
                         </p>
                       </div>
                     </div>
@@ -2418,6 +2418,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               mockDb.saveReaders(updatedReaders);
                               setReaders(updatedReaders);
 
+                              // Sync to backend Express / Vercel API
+                              try {
+                                fetch(`/api/staff/${encodeURIComponent(pendingReader.id)}/status`, {
+                                  method: 'PATCH',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ status: 'active', assignedRoutes: pendingReader.assignedRoutes })
+                                }).catch(() => {});
+                              } catch {}
+
                               // Update linked User if exists
                               const allUsers = mockDb.getUsers();
                               const updatedUsers = allUsers.map(u => {
@@ -2434,14 +2443,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 currentUser.name,
                                 'admin',
                                 'Approve Meter Reader',
-                                `Approved field meter reader account for ${pendingReader.name} (Badge: ${pendingReader.employeeId || pendingReader.id}). Full mobile app access unlocked.`
+                                `Approved field meter reader account for ${pendingReader.name} (Badge: ${pendingReader.employeeId || pendingReader.id}).`
                               );
 
-                              toast.success('Reader Approved', `${pendingReader.name} has been authorized with full mobile meter reader access.`);
+                              toast.success('Reader Approved', `${pendingReader.name} has been activated.`);
                             }}
                             className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition shadow-sm"
                           >
-                            ✓ Approve & Grant Access
+                            ✓ Approve & Activate
                           </button>
 
                           <button
