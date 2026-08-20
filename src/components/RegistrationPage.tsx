@@ -133,6 +133,30 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
       mockDb.saveUsers([...users, newUser]);
       mockDb.saveConsumers([...consumers, newConsumer]);
 
+      // Submit to backend server to ensure instant visibility across all admin devices
+      fetch('/api/consumers/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: officialName,
+          fullName: officialName,
+          email: email.trim(),
+          contactNumber: contactNumber.trim(),
+          address: fullAddress,
+          barangay: matchedBarangay.name,
+          barangayId: matchedBarangay.id,
+          sitioZone: sitioZone.trim(),
+          consumerType: consumerType,
+          meterSize: meterSize,
+          householdInfo: consumerType === 'Residential' ? householdInfo.trim() : undefined,
+          businessName: consumerType === 'Commercial' ? businessName.trim() : undefined,
+          businessType: consumerType === 'Commercial' ? businessType.trim() : undefined,
+          linkedUserId: newUserId
+        })
+      }).catch(err => {
+        console.warn('[Registration] Backend sync warning:', err);
+      });
+
       // 4. Update barangay consumer count
       const allBarangays = mockDb.getBarangays();
       const updatedBarangays = allBarangays.map(b => {

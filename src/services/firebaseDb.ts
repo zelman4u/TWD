@@ -129,14 +129,26 @@ export async function syncBatchToFirestore<T extends object>(
 ): Promise<void> {
   try {
     const batch = writeBatch(db);
+    let count = 0;
     items.forEach((item) => {
       const rec = item as Record<string, unknown>;
-      const docId = rec[idKey] ?? rec.id ?? rec.meterNumber ?? rec.accountNumber;
-      if (docId) {
-        batch.set(doc(db, collectionName, String(docId)), item, { merge: true });
+      const rawId = rec[idKey];
+      const validRawId = (typeof rawId === 'string' && rawId.trim() !== '') || (typeof rawId === 'number') ? String(rawId) : null;
+      const validId = (typeof rec.id === 'string' && rec.id.trim() !== '') ? rec.id : null;
+      const validLinkedUser = (typeof rec.linkedUserId === 'string' && rec.linkedUserId.trim() !== '') ? rec.linkedUserId : null;
+      const validMeter = (typeof rec.meterNumber === 'string' && rec.meterNumber.trim() !== '') ? rec.meterNumber : null;
+      const validEmail = (typeof rec.email === 'string' && rec.email.trim() !== '') ? rec.email : null;
+      const validAcc = (typeof rec.accountNumber === 'string' && rec.accountNumber.trim() !== '') ? rec.accountNumber : null;
+
+      const docId = validRawId || validId || validAcc || validLinkedUser || validMeter || validEmail;
+      if (docId && docId.trim() !== '') {
+        batch.set(doc(db, collectionName, String(docId).trim()), item, { merge: true });
+        count++;
       }
     });
-    await batch.commit();
+    if (count > 0) {
+      await batch.commit();
+    }
   } catch (error) {
     console.warn(`[Firestore] Batch sync to ${collectionName} cached locally.`);
   }

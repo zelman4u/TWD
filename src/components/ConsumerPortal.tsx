@@ -180,6 +180,39 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     if (!silent) setIsSyncing(true);
 
     setTimeout(() => {
+      // 1. First attempt to fetch latest live record from backend API
+      const searchParam = currentUser.linkedAccountNumber || currentUser.email || currentUser.id;
+      if (searchParam) {
+        fetch(`/api/consumers?search=${encodeURIComponent(searchParam)}`)
+          .then(res => res.json())
+          .then(apiData => {
+            if (apiData && (apiData.consumers || apiData.data)) {
+              const list: any[] = apiData.consumers || apiData.data || [];
+              const matchedApi = list.find((c: any) => 
+                (c.accountNumber && c.accountNumber === currentUser.linkedAccountNumber) ||
+                (c.email && c.email.toLowerCase() === currentUser.email?.toLowerCase()) ||
+                (c.linkedUserId && c.linkedUserId === currentUser.id)
+              );
+              if (matchedApi) {
+                const currentLocal = mockDb.getConsumers();
+                const idx = currentLocal.findIndex(lc => 
+                  (matchedApi.accountNumber && lc.accountNumber === matchedApi.accountNumber) ||
+                  (matchedApi.email && lc.email && lc.email.toLowerCase() === matchedApi.email.toLowerCase()) ||
+                  (matchedApi.linkedUserId && lc.linkedUserId === matchedApi.linkedUserId)
+                );
+                if (idx >= 0) {
+                  currentLocal[idx] = { ...currentLocal[idx], ...matchedApi };
+                } else {
+                  currentLocal.unshift(matchedApi);
+                }
+                mockDb.saveConsumers(currentLocal);
+                setConsumerRecord(matchedApi);
+              }
+            }
+          })
+          .catch(() => {});
+      }
+
       const consumers = mockDb.getConsumers();
       const allReadings = mockDb.getReadings();
       

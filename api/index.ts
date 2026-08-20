@@ -52,16 +52,23 @@ export interface MobileConsumerRecord {
   name: string;
   address: string;
   barangay: string;
+  barangayId?: string;
   sitioZone: string;
   meterNumber: string;
   previousReading: number;
   lastReadingDate: string;
   meterSize: string;
   consumerType: "Residential" | "Commercial";
-  status: "active" | "inactive" | "maintenance" | "disconnected";
+  status: "active" | "inactive" | "maintenance" | "disconnected" | "pending_approval" | "pending";
   contactNumber?: string;
   email?: string;
   rfidTag?: string;
+  registrationDate?: string;
+  linkedUserId?: string;
+  householdInfo?: string;
+  businessName?: string;
+  businessType?: string;
+  isRegistered?: boolean;
 }
 
 // Initial Tagoloan Water District Municipal Consumer Registry
@@ -260,6 +267,84 @@ app.get("/api/consumers/:accountNumber", (req, res) => {
   }
 });
 
+// POST /api/consumers/register - Self-Registration endpoint for Consumers from any device
+app.post("/api/consumers/register", (req, res) => {
+  try {
+    const {
+      name,
+      fullName,
+      email,
+      contactNumber,
+      address,
+      barangay,
+      barangayId,
+      sitioZone,
+      consumerType,
+      meterSize,
+      householdInfo,
+      businessName,
+      businessType,
+      linkedUserId
+    } = req.body;
+
+    const consumerName = (name || fullName || "").trim();
+    if (!consumerName) {
+      return res.status(400).json({
+        success: false,
+        message: "Consumer full name is required for registration."
+      });
+    }
+
+    const cleanEmail = (email || "").trim().toLowerCase();
+    const userId = linkedUserId || `user-${Date.now()}`;
+
+    // Check if consumer already registered by email
+    const existingIdx = syncedConsumers.findIndex(
+      c => (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) ||
+           (c.linkedUserId && c.linkedUserId === userId)
+    );
+
+    const record: MobileConsumerRecord = {
+      accountNumber: "", // Empty until issued by Administrator
+      name: consumerName,
+      address: address || `${sitioZone || "Zone 1"}, ${barangay || "Poblacion"}, Tagoloan, Misamis Oriental`,
+      barangay: barangay || "Poblacion",
+      barangayId: barangayId || "BRG-01",
+      sitioZone: sitioZone || "Zone 1",
+      meterNumber: "", // Empty until issued by Administrator
+      previousReading: 0,
+      lastReadingDate: new Date().toISOString().split("T")[0],
+      meterSize: meterSize || "1/2 inch",
+      consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
+      status: "pending_approval",
+      contactNumber: contactNumber || "",
+      email: cleanEmail,
+      rfidTag: "",
+      registrationDate: new Date().toISOString().split("T")[0],
+      linkedUserId: userId,
+      householdInfo: householdInfo || undefined,
+      businessName: businessName || undefined,
+      businessType: businessType || undefined,
+      isRegistered: true
+    };
+
+    if (existingIdx >= 0) {
+      syncedConsumers[existingIdx] = { ...syncedConsumers[existingIdx], ...record };
+    } else {
+      syncedConsumers.unshift(record); // Add to beginning so Admin sees it immediately
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "Registration application received. Waiting for admin approval.",
+      consumer: record
+    });
+  } catch (err) {
+    console.error("[API Error] POST /api/consumers/register:", err);
+    res.status(500).json({ success: false, message: "Failed to submit registration application." });
+  }
+});
+
 // POST /api/consumers - Add or Sync Consumer Record
 app.post("/api/consumers", (req, res) => {
   try {
@@ -268,6 +353,7 @@ app.post("/api/consumers", (req, res) => {
       name,
       address,
       barangay,
+      barangayId,
       sitioZone,
       meterNumber,
       previousReading,
@@ -277,38 +363,60 @@ app.post("/api/consumers", (req, res) => {
       status,
       contactNumber,
       email,
-      rfidTag
+      rfidTag,
+      registrationDate,
+      linkedUserId,
+      householdInfo,
+      businessName,
+      businessType,
+      isRegistered
     } = req.body;
 
-    if (!accountNumber || !name) {
+    if (!name) {
       return res.status(400).json({
         success: false,
-        message: "accountNumber and name are required."
+        message: "name is required."
       });
     }
 
+    const cleanAcc = (accountNumber || "").trim();
+    const cleanEmail = (email || "").trim().toLowerCase();
+
     const record: MobileConsumerRecord = {
-      accountNumber: String(accountNumber).trim(),
+      accountNumber: cleanAcc,
       name: String(name).trim(),
       address: address || "Tagoloan, Misamis Oriental",
       barangay: barangay || "Poblacion",
+      barangayId: barangayId,
       sitioZone: sitioZone || "Zone 1",
-      meterNumber: meterNumber || `MT-${accountNumber}`,
+      meterNumber: meterNumber || (cleanAcc ? `MT-${cleanAcc}` : ""),
       previousReading: Number(previousReading) || 0,
       lastReadingDate: lastReadingDate || new Date().toISOString().split("T")[0],
       meterSize: meterSize || "1/2 inch",
       consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
-      status: status || "active",
+      status: status || (cleanAcc ? "active" : "pending_approval"),
       contactNumber: contactNumber || "",
-      email: email || "",
-      rfidTag: rfidTag || ""
+      email: cleanEmail,
+      rfidTag: rfidTag || "",
+      registrationDate: registrationDate || new Date().toISOString().split("T")[0],
+      linkedUserId: linkedUserId,
+      householdInfo: householdInfo,
+      businessName: businessName,
+      businessType: businessType,
+      isRegistered: isRegistered !== undefined ? isRegistered : true
     };
 
-    const idx = syncedConsumers.findIndex(c => c.accountNumber === record.accountNumber);
+    // Find existing by AccountNumber OR Email OR linkedUserId
+    const idx = syncedConsumers.findIndex(c => 
+      (cleanAcc && c.accountNumber === cleanAcc) ||
+      (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) ||
+      (linkedUserId && c.linkedUserId === linkedUserId)
+    );
+
     if (idx >= 0) {
       syncedConsumers[idx] = { ...syncedConsumers[idx], ...record };
     } else {
-      syncedConsumers.push(record);
+      syncedConsumers.unshift(record);
     }
 
     res.status(201).json({
@@ -318,6 +426,61 @@ app.post("/api/consumers", (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to save consumer." });
+  }
+});
+
+// PATCH /api/consumers/:identifier - Update / Issue IDs for Consumer
+app.patch("/api/consumers/:identifier", (req, res) => {
+  try {
+    const { identifier } = req.params;
+    const updates = req.body;
+
+    const idx = syncedConsumers.findIndex(c => 
+      c.accountNumber === identifier || 
+      (c.email && c.email.toLowerCase() === identifier.toLowerCase()) ||
+      c.linkedUserId === identifier
+    );
+
+    if (idx < 0) {
+      return res.status(404).json({
+        success: false,
+        message: `Consumer ${identifier} not found in registry.`
+      });
+    }
+
+    syncedConsumers[idx] = {
+      ...syncedConsumers[idx],
+      ...updates
+    };
+
+    res.json({
+      success: true,
+      message: `Consumer ${identifier} updated successfully.`,
+      consumer: syncedConsumers[idx]
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to update consumer." });
+  }
+});
+
+// DELETE /api/consumers/:identifier
+app.delete("/api/consumers/:identifier", (req, res) => {
+  try {
+    const { identifier } = req.params;
+    const initialLen = syncedConsumers.length;
+    syncedConsumers = syncedConsumers.filter(c => 
+      c.accountNumber !== identifier && 
+      (!c.email || c.email.toLowerCase() !== identifier.toLowerCase()) &&
+      c.linkedUserId !== identifier
+    );
+
+    res.json({
+      success: true,
+      message: `Consumer ${identifier} removed.`,
+      removed: syncedConsumers.length < initialLen
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to delete consumer." });
   }
 });
 

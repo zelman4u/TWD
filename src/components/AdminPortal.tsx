@@ -351,6 +351,74 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       .catch(() => {
         // Fallback gracefully if running purely client-side
       });
+
+    // 3. Fetch from Backend / Serverless API for any Consumer Registrations from Mobile or Other Devices
+    fetch('/api/consumers')
+      .then(res => res.json())
+      .then(data => {
+        if (data && (data.consumers || data.data)) {
+          const apiConsumers: any[] = data.consumers || data.data || [];
+          const currentLocal = mockDb.getConsumers();
+          let hasChanges = false;
+
+          apiConsumers.forEach(ac => {
+            const existsIdx = currentLocal.findIndex(lc => 
+              (ac.accountNumber && lc.accountNumber === ac.accountNumber) ||
+              (ac.email && lc.email && lc.email.toLowerCase() === ac.email.toLowerCase()) ||
+              (ac.linkedUserId && lc.linkedUserId === ac.linkedUserId)
+            );
+
+            if (existsIdx < 0) {
+              // Add new consumer registration to local store
+              const newConsumerObj: Consumer = {
+                accountNumber: ac.accountNumber || '',
+                name: ac.name,
+                address: ac.address || 'Tagoloan, Misamis Oriental',
+                barangayId: ac.barangayId || 'BRG-01',
+                barangay: ac.barangay || 'Poblacion',
+                sitioZone: ac.sitioZone || 'Zone 1',
+                meterNumber: ac.meterNumber || '',
+                status: ac.status || (ac.accountNumber ? 'active' : 'pending_approval'),
+                contactNumber: ac.contactNumber || '',
+                email: ac.email || '',
+                consumerType: ac.consumerType === 'Commercial' ? 'Commercial' : 'Residential',
+                meterSize: ac.meterSize || '1/2 inch',
+                householdInfo: ac.householdInfo,
+                businessName: ac.businessName,
+                businessType: ac.businessType,
+                registrationDate: ac.registrationDate || new Date().toISOString().split('T')[0],
+                linkedUserId: ac.linkedUserId || `user-${Date.now()}`,
+                isRegistered: true,
+                rfidTag: ac.rfidTag || '',
+                outstandingBalance: 0
+              };
+              currentLocal.unshift(newConsumerObj);
+              hasChanges = true;
+            } else {
+              // Sync status or account number if issued on server
+              const existing = currentLocal[existsIdx];
+              if (ac.accountNumber && !existing.accountNumber) {
+                existing.accountNumber = ac.accountNumber;
+                existing.meterNumber = ac.meterNumber || `MT-${ac.accountNumber}`;
+                existing.status = ac.status || 'active';
+                existing.rfidTag = ac.rfidTag || `RFID-${ac.accountNumber}`;
+                hasChanges = true;
+              } else if (ac.status && ac.status !== existing.status) {
+                existing.status = ac.status;
+                hasChanges = true;
+              }
+            }
+          });
+
+          if (hasChanges) {
+            mockDb.saveConsumers([...currentLocal]);
+            setConsumers([...currentLocal]);
+          }
+        }
+      })
+      .catch(() => {
+        // Fallback gracefully if running purely client-side
+      });
   };
 
   useEffect(() => {
@@ -457,6 +525,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveConsumers(updatedConsumers);
     setConsumers(updatedConsumers);
 
+    // Sync deletion with backend API
+    const deleteId = c.accountNumber || c.email || c.linkedUserId || '';
+    if (deleteId) {
+      fetch(`/api/consumers/${encodeURIComponent(deleteId)}`, {
+        method: 'DELETE'
+      }).catch(() => {});
+    }
+
     if (selectedConsumerModal && (
       (c.accountNumber && selectedConsumerModal.accountNumber === c.accountNumber) ||
       (c.email && selectedConsumerModal.email === c.email)
@@ -498,6 +574,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveConsumers(newConsumers);
     setConsumers(newConsumers);
     setSelectedConsumerModal(updated);
+
+    // Sync update to backend server
+    fetch('/api/consumers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated)
+    }).catch(() => {});
 
     mockDb.addAuditLog(
       currentUser.id,
@@ -631,6 +714,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       type: 'announcement'
     });
 
+    // 6. Sync issued consumer identifiers to backend API
+    fetch('/api/consumers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated)
+    }).catch(() => {});
+
     mockDb.addAuditLog(
       currentUser.id,
       currentUser.name,
@@ -644,14 +734,24 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   // Action: Update Consumer Status (Activate/Deactivate/Archive)
   const handleChangeConsumerStatus = (accountNum: string, nextStatus: 'active' | 'inactive' | 'archived') => {
+    let targetConsumer: Consumer | undefined;
     const updated = consumers.map(c => {
       if (c.accountNumber === accountNum) {
-        return { ...c, status: nextStatus };
+        targetConsumer = { ...c, status: nextStatus };
+        return targetConsumer;
       }
       return c;
     });
     mockDb.saveConsumers(updated);
     setConsumers(updated);
+
+    if (targetConsumer) {
+      fetch('/api/consumers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(targetConsumer)
+      }).catch(() => {});
+    }
 
     mockDb.addAuditLog(
       currentUser.id,
