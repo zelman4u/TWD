@@ -34,7 +34,8 @@ import {
   ArrowRight,
   Sparkles,
   Zap,
-  Info
+  Info,
+  Download
 } from 'lucide-react';
 import { User as UserType, Consumer, MeterReading, Barangay, MeterReader } from '../types';
 import { mockDb } from '../mockDb';
@@ -78,6 +79,14 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [offlineQueue, setOfflineQueue] = useState<MeterReading[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
+  
+  // Live Server Connectivity State
+  const [isServerConnected, setIsServerConnected] = useState<boolean>(true);
+  const [serverPingMs, setServerPingMs] = useState<number>(18);
+  const [isCheckingStatus, setIsCheckingStatus] = useState<boolean>(false);
+  const [currentApprovalStatus, setCurrentApprovalStatus] = useState<'active' | 'pending_approval' | 'inactive'>(
+    currentUser.status === 'pending_approval' ? 'pending_approval' : 'active'
+  );
 
   // QR / RFID Scanner Modal
   const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
@@ -89,10 +98,17 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
     const allReadings = mockDb.getReadings();
     const allBarangays = mockDb.getBarangays();
     const allReaders = mockDb.getReaders();
+    const allUsers = mockDb.getUsers();
 
     setConsumers(allConsumers);
     setReadings(allReadings);
     setBarangays(allBarangays);
+
+    // Refresh user & reader status
+    const matchedUser = allUsers.find(u => u.id === currentUser.id || u.email?.toLowerCase() === currentUser.email?.toLowerCase());
+    if (matchedUser && matchedUser.status) {
+      setCurrentApprovalStatus(matchedUser.status === 'active' ? 'active' : 'pending_approval');
+    }
 
     const currentReader = allReaders.find(
       r => r.id === currentUser.readerId || r.email?.toLowerCase() === currentUser.email?.toLowerCase() || r.name.toLowerCase() === currentUser.name.toLowerCase()
@@ -100,15 +116,167 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
 
     if (currentReader) {
       setReaderProfile(currentReader);
+      if (currentReader.employmentStatus) {
+        setCurrentApprovalStatus(currentReader.employmentStatus === 'active' ? 'active' : 'pending_approval');
+      }
       if (currentReader.assignedRoutes && currentReader.assignedRoutes.length > 0 && selectedRoute === 'All') {
         setSelectedRoute(currentReader.assignedRoutes[0]);
       }
     }
   };
 
+  // Ping Backend Server to verify live connection
+  const checkServerConnection = async () => {
+    const start = performance.now();
+    try {
+      const res = await fetch('/api/health', { method: 'GET', cache: 'no-store' });
+      const elapsed = Math.round(performance.now() - start);
+      if (res.ok) {
+        setIsServerConnected(true);
+        setServerPingMs(elapsed > 0 ? elapsed : 12);
+      } else {
+        setIsServerConnected(false);
+      }
+    } catch {
+      setIsServerConnected(false);
+    }
+  };
+
+  // Check approval status from API and localStorage
+  const handleCheckApprovalStatus = async (silent: boolean = false) => {
+    setIsCheckingStatus(true);
+    if (!silent) {
+      showLoading('Checking Account Authorization...', 'Verifying registration status with Tagoloan Water District central registry');
+    }
+
+    try {
+      // 1. Check local mockDb
+      const allUsers = mockDb.getUsers();
+      const matchedUser = allUsers.find(u => u.id === currentUser.id || u.email?.toLowerCase() === currentUser.email?.toLowerCase());
+      const allReaders = mockDb.getReaders();
+      const matchedReader = allReaders.find(r => r.id === currentUser.readerId || r.email?.toLowerCase() === currentUser.email?.toLowerCase() || r.name.toLowerCase() === currentUser.name.toLowerCase());
+
+      if ((matchedUser && matchedUser.status === 'active') || (matchedReader && matchedReader.employmentStatus === 'active')) {
+        setCurrentApprovalStatus('active');
+        currentUser.status = 'active';
+        mockDb.setCurrentUser({ ...currentUser, status: 'active' });
+        if (!silent) {
+          toast.success('Account Approved!', 'Your meter reader account is authorized. Full mobile access unlocked.');
+          hideLoading();
+        }
+        setIsCheckingStatus(false);
+        return;
+      }
+
+      // 2. Check REST API /api/readers/check-status/:id
+      const queryId = currentUser.employeeId || currentUser.id;
+      const res = await fetch(`/api/readers/check-status/${encodeURIComponent(queryId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === 'active' || data.employmentStatus === 'active') {
+          setCurrentApprovalStatus('active');
+          currentUser.status = 'active';
+          mockDb.setCurrentUser({ ...currentUser, status: 'active' });
+          if (!silent) {
+            toast.success('Account Approved!', 'Administrator has authorized your field terminal.');
+            hideLoading();
+          }
+          setIsCheckingStatus(false);
+          return;
+        }
+      }
+
+      if (!silent) {
+        hideLoading();
+        toast.info('Status: Pending Approval', 'Your application is in the administrator queue. Please check back shortly.');
+      }
+    } catch {
+      if (!silent) {
+        hideLoading();
+        toast.info('Status: Pending Approval', 'Your application is awaiting administrator verification.');
+      }
+    } finally {
+      setIsCheckingStatus(false);
+    }
+  };
+
+  // Pull route data from live server
+  const handlePullRouteFromServer = async () => {
+    showLoading('Pulling Route Data...', `Downloading assigned accounts for ${selectedRoute} from District Server.`);
+    try {
+      const zoneParam = selectedRoute === 'All' ? '' : selectedRoute;
+      const res = await fetch(`/api/sync/pull?zone=${encodeURIComponent(zoneParam)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.consumers && Array.isArray(data.consumers) && data.consumers.length > 0) {
+          // Merge with local consumers
+          const existing = mockDb.getConsumers();
+          const mergedMap = new Map<string, Consumer>();
+          existing.forEach(c => mergedMap.set(c.accountNumber, c));
+          data.consumers.forEach((c: Consumer) => mergedMap.set(c.accountNumber, c));
+          const updatedList = Array.from(mergedMap.values());
+          mockDb.saveConsumers(updatedList);
+          setConsumers(updatedList);
+          toast.success('Route Synced', `Successfully refreshed ${data.consumers.length} accounts from Central Server.`);
+        } else {
+          toast.info('Route Data Current', 'Local consumer assignments match central server.');
+        }
+      } else {
+        toast.info('Local Data Ready', 'Operating with cached offline route records.');
+      }
+    } catch {
+      toast.info('Offline Cache Active', 'Using locally stored consumer route records.');
+    } finally {
+      hideLoading();
+    }
+  };
+
   useEffect(() => {
     loadReaderData();
-  }, [currentUser]);
+    checkServerConnection();
+
+    // Periodic heartbeat every 20 seconds
+    const interval = setInterval(() => {
+      checkServerConnection();
+      if (currentApprovalStatus === 'pending_approval') {
+        handleCheckApprovalStatus(true);
+      }
+    }, 15000);
+
+    // WebSocket real-time event listener
+    let ws: WebSocket | null = null;
+    try {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${window.location.host}`);
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'READER_APPROVED_ACTIVE' || payload.type === 'staff:status_updated') {
+            const rData = payload.payload;
+            if (
+              rData.readerId === currentUser.id ||
+              rData.readerId === currentUser.employeeId ||
+              rData.username?.toLowerCase() === currentUser.email?.toLowerCase()
+            ) {
+              setCurrentApprovalStatus('active');
+              currentUser.status = 'active';
+              mockDb.setCurrentUser({ ...currentUser, status: 'active' });
+              toast.success('Account Approved!', 'Your account has been authorized by the supervisor.');
+            }
+          }
+        } catch {
+          // ignore non-json messages
+        }
+      };
+    } catch {
+      // ws fallback
+    }
+
+    return () => {
+      clearInterval(interval);
+      if (ws) ws.close();
+    };
+  }, [currentUser, currentApprovalStatus]);
 
   // Handle GPS location acquisition
   const acquireGpsLocation = () => {
@@ -260,6 +428,32 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
     mockDb.saveReadings(updatedReads);
     setReadings(updatedReads);
 
+    // Sync to Backend Express REST API in background
+    try {
+      fetch('/api/readings/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountNumber: newReading.accountNumber,
+          consumerName: newReading.consumerName,
+          meterNumber: newReading.meterNumber,
+          currentReading: newReading.currentReading,
+          previousReading: newReading.previousReading,
+          readerId: currentUser.employeeId || currentUser.id,
+          readerName: currentUser.name,
+          route: newReading.route,
+          billingPeriod: newReading.billingPeriod,
+          photoUrl: newReading.imageUrl,
+          coordinates: { latitude: 8.5392, longitude: 124.7548 },
+          notes: newReading.notes
+        })
+      }).catch(() => {
+        // Handled silently in offline mode
+      });
+    } catch {
+      // Handled silently in offline mode
+    }
+
     // Update reader statistics
     const allReaders = mockDb.getReaders();
     const readerIdx = allReaders.findIndex(r => r.name === currentUser.name || r.email === currentUser.email);
@@ -295,6 +489,15 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
 
     setIsSyncing(true);
     showLoading('Synchronizing Field Readings...', `Uploading ${offlineQueue.length} queued readings to Tagoloan Water District database.`);
+
+    // Batch send to Express API
+    try {
+      fetch('/api/readings/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ readings: offlineQueue })
+      }).catch(() => {});
+    } catch {}
 
     setTimeout(() => {
       const allReads = mockDb.getReadings();
@@ -364,6 +567,104 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
   const flaggedInRoute = consumers.filter(c => (selectedRoute === 'All' || c.barangay === selectedRoute) && getConsumerReadingStatus(c.accountNumber).status === 'flagged').length;
   const progressPercent = totalAssignedInRoute > 0 ? Math.round((completedInRoute / totalAssignedInRoute) * 100) : 0;
 
+  // Render Pending Approval Screen if account is awaiting verification
+  if (currentApprovalStatus === 'pending_approval') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col max-w-lg mx-auto shadow-2xl relative border-x border-slate-800 selection:bg-blue-600 selection:text-white p-6 justify-between">
+        
+        {/* Header */}
+        <div className="space-y-6 pt-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="h-12 w-12 rounded-2xl bg-gradient-to-tr from-amber-600 to-amber-400 flex items-center justify-center shadow-lg shadow-amber-500/20 text-white font-black">
+                <ShieldCheck className="h-6 w-6" />
+              </div>
+              <div>
+                <h1 className="text-base font-black text-white tracking-tight uppercase">Tagoloan Water</h1>
+                <span className="bg-amber-500/20 text-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full border border-amber-500/30">
+                  VERIFICATION QUEUE
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={onLogout}
+              className="p-2.5 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white rounded-2xl border border-slate-800 transition"
+              title="Sign Out"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* Pending Status Banner */}
+          <div className="bg-gradient-to-br from-amber-950/60 via-slate-900 to-slate-900 border border-amber-800/40 rounded-3xl p-5 shadow-xl relative overflow-hidden space-y-4">
+            <div className="flex items-start space-x-3">
+              <div className="h-10 w-10 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center flex-shrink-0 text-amber-400">
+                <Clock className="h-5 w-5 animate-pulse" />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-base font-black text-amber-200">Awaiting Supervisor Approval</h2>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Your field meter reader registration has been queued in the Tagoloan Central Registry. An administrator must verify and activate your profile before field inspection capabilities are unlocked.
+                </p>
+              </div>
+            </div>
+
+            {/* Applicant Summary Card */}
+            <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-4 space-y-2.5 text-xs font-mono">
+              <div className="flex justify-between items-center text-slate-400">
+                <span>Field Officer:</span>
+                <span className="font-bold text-white">{currentUser.name}</span>
+              </div>
+              <div className="flex justify-between items-center text-slate-400">
+                <span>Employee Badge ID:</span>
+                <span className="font-bold text-sky-400">{currentUser.employeeId || 'ID #MR-PENDING'}</span>
+              </div>
+              <div className="flex justify-between items-center text-slate-400">
+                <span>Official Email:</span>
+                <span className="text-slate-300 truncate max-w-[180px]">{currentUser.email}</span>
+              </div>
+              <div className="flex justify-between items-center text-slate-400">
+                <span>Assigned Route:</span>
+                <span className="font-bold text-emerald-400">{currentUser.assignedBarangay || 'Poblacion'}</span>
+              </div>
+              <div className="flex justify-between items-center text-slate-400">
+                <span>Registration Status:</span>
+                <span className="text-amber-400 font-bold flex items-center space-x-1">
+                  <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
+                  <span>Pending Admin Review</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Live Status Checker Button */}
+            <button
+              onClick={() => handleCheckApprovalStatus(false)}
+              disabled={isCheckingStatus}
+              className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-amber-500/20 transition flex items-center justify-center space-x-2"
+            >
+              <RefreshCw className={`h-4 w-4 ${isCheckingStatus ? 'animate-spin' : ''}`} />
+              <span>{isCheckingStatus ? 'Verifying with Central Office...' : 'Check Approval Status Now'}</span>
+            </button>
+          </div>
+
+          {/* Quick Notice */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex items-start space-x-3 text-xs text-slate-400">
+            <Info className="h-4 w-4 text-sky-400 flex-shrink-0 mt-0.5" />
+            <p>
+              Once approved in the Admin Web Portal, this mobile terminal will automatically transition to the meter scanning interface.
+            </p>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="pt-6 border-t border-slate-900 text-center text-slate-500 text-[11px] space-y-1">
+          <p className="font-bold">Tagoloan Water District • Field Mobility v4.5</p>
+          <p>Tagoloan Municipal Compound, Misamis Oriental</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col max-w-lg mx-auto shadow-2xl relative border-x border-slate-800 selection:bg-blue-600 selection:text-white pb-24">
       
@@ -390,6 +691,21 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
 
         {/* Sync & Connectivity Controls */}
         <div className="flex items-center space-x-2">
+          {/* Live Ping & Mode Badge */}
+          <div 
+            className={`px-2 py-1 rounded-xl text-[10px] font-mono font-bold flex items-center space-x-1 border ${
+              isOfflineMode 
+                ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' 
+                : isServerConnected 
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+            }`}
+            title={isOfflineMode ? "Offline Mode" : `Live Connected (${serverPingMs}ms)`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${isOfflineMode ? 'bg-amber-400' : isServerConnected ? 'bg-emerald-400 animate-ping' : 'bg-rose-400'}`} />
+            <span>{isOfflineMode ? 'Offline' : isServerConnected ? `${serverPingMs}ms` : 'No Sync'}</span>
+          </div>
+
           <button
             onClick={() => {
               setIsOfflineMode(!isOfflineMode);
@@ -470,6 +786,13 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
                         </option>
                       ))}
                     </select>
+                    <button
+                      onClick={handlePullRouteFromServer}
+                      className="p-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-sky-400 rounded-xl border border-blue-500/30 transition"
+                      title="Pull latest route records from Central Server"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
 

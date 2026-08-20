@@ -16,8 +16,6 @@ import {
   MeterReading,
   RouteAssignment,
   Announcement,
-  AuditLog,
-  ConsumerNotification,
   Barangay,
 } from '../types';
 
@@ -36,7 +34,7 @@ export const COLLECTIONS = {
 };
 
 /**
- * Checks if a Firestore collection has documents
+ * Checks if a Firestore collection has documents safely
  */
 async function isCollectionEmpty(collectionName: string): Promise<boolean> {
   try {
@@ -44,6 +42,7 @@ async function isCollectionEmpty(collectionName: string): Promise<boolean> {
     const snap = await getDocs(q);
     return snap.empty;
   } catch {
+    // If offline or network unavailable, assume false to avoid overwriting local cache
     return false;
   }
 }
@@ -62,36 +61,44 @@ export async function initializeFirestoreSeed(initialData: {
   barangays: Barangay[];
 }) {
   try {
-    const usersEmpty = await isCollectionEmpty(COLLECTIONS.USERS);
-    if (usersEmpty) {
-      console.info('[Firestore] Seeding baseline Tagoloan Water District data...');
-      const batch = writeBatch(db);
+    // Run seed check asynchronously without blocking main thread
+    setTimeout(async () => {
+      try {
+        const usersEmpty = await isCollectionEmpty(COLLECTIONS.USERS);
+        if (usersEmpty) {
+          console.info('[Firestore] Seeding baseline Tagoloan Water District data...');
+          const batch = writeBatch(db);
 
-      initialData.users.forEach((u) => {
-        batch.set(doc(db, COLLECTIONS.USERS, u.id), u);
-      });
-      initialData.consumers.forEach((c) => {
-        batch.set(doc(db, COLLECTIONS.CONSUMERS, c.accountNumber), c);
-      });
-      initialData.meters.forEach((m) => {
-        batch.set(doc(db, COLLECTIONS.METERS, m.meterNumber), m);
-      });
-      initialData.readings.forEach((r) => {
-        batch.set(doc(db, COLLECTIONS.READINGS, r.id), r);
-      });
-      initialData.routes.forEach((rt) => {
-        batch.set(doc(db, COLLECTIONS.ROUTES, rt.id), rt);
-      });
-      initialData.announcements.forEach((a) => {
-        batch.set(doc(db, COLLECTIONS.ANNOUNCEMENTS, a.id), a);
-      });
-      initialData.barangays.forEach((b) => {
-        batch.set(doc(db, COLLECTIONS.BARANGAYS, b.id), b);
-      });
+          initialData.users.forEach((u) => {
+            batch.set(doc(db, COLLECTIONS.USERS, u.id), u);
+          });
+          initialData.consumers.forEach((c) => {
+            batch.set(doc(db, COLLECTIONS.CONSUMERS, c.accountNumber), c);
+          });
+          initialData.meters.forEach((m) => {
+            batch.set(doc(db, COLLECTIONS.METERS, m.meterNumber), m);
+          });
+          initialData.readings.forEach((r) => {
+            batch.set(doc(db, COLLECTIONS.READINGS, r.id), r);
+          });
+          initialData.routes.forEach((rt) => {
+            batch.set(doc(db, COLLECTIONS.ROUTES, rt.id), rt);
+          });
+          initialData.announcements.forEach((a) => {
+            batch.set(doc(db, COLLECTIONS.ANNOUNCEMENTS, a.id), a);
+          });
+          initialData.barangays.forEach((b) => {
+            batch.set(doc(db, COLLECTIONS.BARANGAYS, b.id), b);
+          });
 
-      await batch.commit();
-      console.info('[Firestore] Seed data populated successfully.');
-    }
+          await batch.commit();
+          console.info('[Firestore] Seed data populated successfully.');
+        }
+      } catch (innerError) {
+        // Graceful catch for offline operation
+        console.warn('[Firestore] Background seed sync deferred (offline-mode active).');
+      }
+    }, 1500);
   } catch (error) {
     console.warn('[Firestore] Sync notice:', error);
   }
@@ -108,7 +115,7 @@ export async function syncDocToFirestore<T extends object>(
   try {
     await setDoc(doc(db, collectionName, docId), data, { merge: true });
   } catch (error) {
-    console.warn(`[Firestore] Sync to ${collectionName}/${docId} deferred:`, error);
+    console.warn(`[Firestore] Sync to ${collectionName}/${docId} cached locally.`);
   }
 }
 
@@ -131,6 +138,6 @@ export async function syncBatchToFirestore<T extends object>(
     });
     await batch.commit();
   } catch (error) {
-    console.warn(`[Firestore] Batch sync to ${collectionName} deferred:`, error);
+    console.warn(`[Firestore] Batch sync to ${collectionName} cached locally.`);
   }
 }

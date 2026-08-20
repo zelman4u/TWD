@@ -146,6 +146,26 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
           `Field Meter Reader self-registration submitted by ${fullName.trim()} (Badge: ${generatedEmpId}, Route: ${assignedRoute}). Awaiting Admin verification.`
         );
 
+        // 4. Sync with Backend Express Server
+        try {
+          fetch('/api/readers/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: generatedEmpId,
+              username: email.trim(),
+              name: fullName.trim(),
+              zone: assignedRoute || 'Poblacion',
+              contactNumber: contactNumber.trim(),
+              registeredAt: new Date().toISOString()
+            })
+          }).catch(() => {
+            // Silently handled in local offline/cloud mode
+          });
+        } catch {
+          // Ignore network errors in isolated mode
+        }
+
         setRegisteredSummary({
           accountType: 'meter_reader',
           employeeId: generatedEmpId,
