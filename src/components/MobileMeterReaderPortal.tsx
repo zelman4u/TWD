@@ -111,7 +111,9 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
     }
 
     const currentReader = allReaders.find(
-      r => r.id === currentUser.readerId || r.email?.toLowerCase() === currentUser.email?.toLowerCase() || r.name.toLowerCase() === currentUser.name.toLowerCase()
+      r => r.id === currentUser.readerId || 
+           (r.email && currentUser.email && r.email.toLowerCase() === currentUser.email.toLowerCase()) || 
+           (r.name && currentUser.name && r.name.toLowerCase() === currentUser.name.toLowerCase())
     );
 
     if (currentReader) {
@@ -154,7 +156,11 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
       const allUsers = mockDb.getUsers();
       const matchedUser = allUsers.find(u => u.id === currentUser.id || u.email?.toLowerCase() === currentUser.email?.toLowerCase());
       const allReaders = mockDb.getReaders();
-      const matchedReader = allReaders.find(r => r.id === currentUser.readerId || r.email?.toLowerCase() === currentUser.email?.toLowerCase() || r.name.toLowerCase() === currentUser.name.toLowerCase());
+      const matchedReader = allReaders.find(
+        r => r.id === currentUser.readerId || 
+             (r.email && currentUser.email && r.email.toLowerCase() === currentUser.email.toLowerCase()) || 
+             (r.name && currentUser.name && r.name.toLowerCase() === currentUser.name.toLowerCase())
+      );
 
       if ((matchedUser && matchedUser.status === 'active') || (matchedReader && matchedReader.employmentStatus === 'active')) {
         setCurrentApprovalStatus('active');
@@ -545,11 +551,12 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
   // Filtered Consumers based on selected route and search query
   const filteredConsumers = consumers.filter(c => {
     const matchesRoute = selectedRoute === 'All' || c.barangay === selectedRoute;
+    const q = (searchQuery || '').toLowerCase();
     const matchesSearch = 
-      c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.accountNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.meterNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (c.address && c.address.toLowerCase().includes(searchQuery.toLowerCase()));
+      (c.name || '').toLowerCase().includes(q) ||
+      (c.accountNumber || '').toLowerCase().includes(q) ||
+      (c.meterNumber || '').toLowerCase().includes(q) ||
+      (c.address && c.address.toLowerCase().includes(q));
 
     if (!matchesRoute || !matchesSearch) return false;
 

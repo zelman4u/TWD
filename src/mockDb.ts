@@ -116,10 +116,10 @@ function getStored<T>(key: string, initial: T): T {
         }
       });
       const hasMockUsers = users.some(u => u.email === 'john@example.com' || u.email === 'maria@example.com');
-      const adminExists = users.some(u => u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph');
+      const adminExists = users.some(u => u.email && u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph');
       if (hasMockUsers || !adminExists || modified) {
         const cleanedUsers = users.filter(u => u.email !== 'john@example.com' && u.email !== 'maria@example.com');
-        if (!cleanedUsers.some(u => u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph')) {
+        if (!cleanedUsers.some(u => u.email && u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph')) {
           cleanedUsers.unshift(INITIAL_USERS[0]);
         }
         localStorage.setItem(key, JSON.stringify(cleanedUsers));
@@ -267,7 +267,7 @@ export const mockDb = {
   findOrCreateBarangay: (barangayName: string): Barangay => {
     const list = mockDb.getBarangays();
     const cleanName = barangayName.trim();
-    const existing = list.find(b => b.name.toLowerCase() === cleanName.toLowerCase());
+    const existing = list.find(b => (b.name || '').toLowerCase() === cleanName.toLowerCase());
     if (existing) {
       return existing;
     }

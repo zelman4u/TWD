@@ -282,7 +282,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     // 2. Persist updated user
     const allUsers = mockDb.getUsers();
-    const adminIdx = allUsers.findIndex(u => u.id === currentUser.id || u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph');
+    const adminIdx = allUsers.findIndex(u => u.id === currentUser.id || (u.email && u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph'));
     const newAdminName = adminProfile.name.trim() || 'Admin';
     const newAdminEmail = adminProfile.email.trim() || 'admin@tagoloanwater.gov.ph';
 
@@ -547,7 +547,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // Permanent removal from database
     const updatedConsumers = consumers.filter(item => {
       if (c.accountNumber && item.accountNumber === c.accountNumber) return false;
-      if (c.email && item.email.toLowerCase() === c.email.toLowerCase()) return false;
+      if (c.email && item.email && item.email.toLowerCase() === c.email.toLowerCase()) return false;
       if (c.linkedUserId && item.linkedUserId === c.linkedUserId) return false;
       return true;
     });
@@ -676,7 +676,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // 1. Update consumers list (match by accountNumber or email or linkedUserId)
     const newConsumers = consumers.map(item => {
       const isMatch = (previousAccountNumber && item.accountNumber === previousAccountNumber) ||
-                      (previousEmail && item.email.toLowerCase() === previousEmail.toLowerCase()) ||
+                      (previousEmail && item.email && item.email.toLowerCase() === previousEmail.toLowerCase()) ||
                       (previousUserId && item.linkedUserId === previousUserId);
       return isMatch ? updated : item;
     });
@@ -688,7 +688,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const allUsers = mockDb.getUsers();
     const updatedUsers = allUsers.map(u => {
       const isUserMatch = (previousUserId && u.id === previousUserId) ||
-                          (previousEmail && u.email.toLowerCase() === previousEmail.toLowerCase()) ||
+                          (previousEmail && u.email && u.email.toLowerCase() === previousEmail.toLowerCase()) ||
                           (previousAccountNumber && u.linkedAccountNumber === previousAccountNumber);
       if (isUserMatch) {
         return {
@@ -1976,13 +1976,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-700">
                           {(() => {
+                            const q = (approvalHistorySearch || '').toLowerCase();
                             const filteredHistory = readings
                               .filter(r => r.status !== 'pending')
                               .filter(r => 
-                                r.accountNumber.toLowerCase().includes(approvalHistorySearch.toLowerCase()) ||
-                                r.consumerName.toLowerCase().includes(approvalHistorySearch.toLowerCase()) ||
-                                r.meterNumber.toLowerCase().includes(approvalHistorySearch.toLowerCase()) ||
-                                (r.notes && r.notes.toLowerCase().includes(approvalHistorySearch.toLowerCase()))
+                                (r.accountNumber || '').toLowerCase().includes(q) ||
+                                (r.consumerName || '').toLowerCase().includes(q) ||
+                                (r.meterNumber || '').toLowerCase().includes(q) ||
+                                (r.notes && r.notes.toLowerCase().includes(q))
                               );
 
                             if (filteredHistory.length === 0) {
@@ -2755,7 +2756,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               // Update linked User if exists
                               const allUsers = mockDb.getUsers();
                               const updatedUsers = allUsers.map(u => {
-                                if (u.id === pendingReader.linkedUserId || (pendingReader.email && u.email.toLowerCase() === pendingReader.email.toLowerCase())) {
+                                if (u.id === pendingReader.linkedUserId || (pendingReader.email && u.email && u.email.toLowerCase() === pendingReader.email.toLowerCase())) {
                                   return { ...u, status: 'active' as const };
                                 }
                                 return u;
@@ -2919,7 +2920,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                               const allUsers = mockDb.getUsers();
                               const updatedUsers = allUsers.map(u => {
-                                if (u.id === r.linkedUserId || (r.email && u.email.toLowerCase() === r.email.toLowerCase())) {
+                                if (u.id === r.linkedUserId || (r.email && u.email && u.email.toLowerCase() === r.email.toLowerCase())) {
                                   return { ...u, status: 'active' as const };
                                 }
                                 return u;
@@ -2949,7 +2950,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               // Sync user status
                               const allUsers = mockDb.getUsers();
                               const updatedUsers = allUsers.map(u => {
-                                if (u.id === r.linkedUserId || (r.email && u.email.toLowerCase() === r.email.toLowerCase())) {
+                                if (u.id === r.linkedUserId || (r.email && u.email && u.email.toLowerCase() === r.email.toLowerCase())) {
                                   return { ...u, status: nextStatus };
                                 }
                                 return u;
@@ -3745,8 +3746,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           })
                           .filter(r => {
                             if (!billSearch) return true;
-                            const q = billSearch.toLowerCase();
-                            return r.accountNumber.toLowerCase().includes(q) || r.consumerName.toLowerCase().includes(q) || (r.billingPeriod && r.billingPeriod.toLowerCase().includes(q));
+                            const q = (billSearch || '').toLowerCase();
+                            return (r.accountNumber || '').toLowerCase().includes(q) || 
+                                   (r.consumerName || '').toLowerCase().includes(q) || 
+                                   (r.billingPeriod && r.billingPeriod.toLowerCase().includes(q));
                           });
 
                         if (filteredBills.length === 0) {
@@ -3914,12 +3917,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     {consumers
                       .filter(c => {
                         if (!paymentSearch) return true;
-                        const q = paymentSearch.toLowerCase();
+                        const q = (paymentSearch || '').toLowerCase();
                         return (
-                          c.accountNumber.toLowerCase().includes(q) ||
-                          c.name.toLowerCase().includes(q) ||
-                          c.contactNumber?.includes(q) ||
-                          c.rfidTag?.toLowerCase().includes(q)
+                          (c.accountNumber || '').toLowerCase().includes(q) ||
+                          (c.name || '').toLowerCase().includes(q) ||
+                          (c.contactNumber && c.contactNumber.includes(q)) ||
+                          (c.rfidTag && c.rfidTag.toLowerCase().includes(q))
                         );
                       })
                       .sort((a, b) => {
@@ -4596,11 +4599,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         
                         // Persist staff user to database
                         const currentUsers = mockDb.getUsers();
+                        const roleStr = (created.role || '').toLowerCase();
                         currentUsers.push({
                           id: created.id,
                           name: created.name,
                           email: created.email,
-                          role: created.role.toLowerCase() === 'administrator' ? 'admin' : (created.role.toLowerCase() === 'cashier' ? 'cashier' : 'staff'),
+                          role: roleStr === 'administrator' ? 'admin' : (roleStr === 'cashier' ? 'cashier' : 'staff'),
                           status: 'active',
                           password: 'TwdStaff2025!'
                         });
@@ -4762,10 +4766,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {/* Barangay Cards Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {barangayList.map((bg) => {
+                  const bgName = (bg.name || '').toLowerCase();
                   const liveCount = consumers.filter(c => 
                     c.barangayId === bg.id || 
-                    (c.barangay && c.barangay.toLowerCase() === bg.name.toLowerCase()) || 
-                    (c.address && c.address.toLowerCase().includes(bg.name.toLowerCase()))
+                    (c.barangay && c.barangay.toLowerCase() === bgName) || 
+                    (c.address && c.address.toLowerCase().includes(bgName))
                   ).length;
                   const displayCount = Math.max(bg.consumers || 0, liveCount);
 

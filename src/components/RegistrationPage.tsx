@@ -81,7 +81,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
     setTimeout(() => {
       // 1. Check if email already registered
       const users = mockDb.getUsers();
-      const existingUser = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
+      const existingUser = users.find(u => (u.email || '').toLowerCase() === email.trim().toLowerCase());
       if (existingUser) {
         hideLoading();
         setError('An account with this email address already exists. Please log in or use a different email.');

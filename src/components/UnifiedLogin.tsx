@@ -73,7 +73,7 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
 
         // Guarantee admin user is registered and remembered in persistence
         const users = mockDb.getUsers();
-        const existingIdx = users.findIndex(u => u.email.toLowerCase() === adminUser.email.toLowerCase());
+        const existingIdx = users.findIndex(u => (u.email || '').toLowerCase() === adminUser.email.toLowerCase());
         if (existingIdx >= 0) {
           users[existingIdx] = { ...users[existingIdx], ...adminUser };
         } else {
@@ -112,7 +112,7 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
 
     // 2. Real Registered Consumer Authentication Check
     let users = mockDb.getUsers();
-    let matchedUser = users.find(u => u.email.toLowerCase() === inputEmail);
+    let matchedUser = users.find(u => (u.email || '').toLowerCase() === inputEmail);
 
     // If not found in local cache, query live Firestore database directly
     if (!matchedUser) {

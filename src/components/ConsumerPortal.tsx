@@ -218,9 +218,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       
       // Match linked account number or email
       const record = consumers.find(
-        c => c.accountNumber === currentUser.linkedAccountNumber || 
-             c.email.toLowerCase() === currentUser.email.toLowerCase() ||
-             c.linkedUserId === currentUser.id
+        c => (currentUser.linkedAccountNumber && c.accountNumber === currentUser.linkedAccountNumber) || 
+             (currentUser.email && c.email && c.email.toLowerCase() === currentUser.email.toLowerCase()) ||
+             (currentUser.id && c.linkedUserId === currentUser.id)
       );
 
       if (record) {
@@ -290,7 +290,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 const existingNotifs = mockDb.getNotifications(record.accountNumber);
                 const hasAlert = existingNotifs.some(
                   n => (n.readingId === r.id || n.billingPeriod === r.billingPeriod) &&
-                       (n.title.toLowerCase().includes('overdue') || n.title.toLowerCase().includes('urgent'))
+                       ((n.title || '').toLowerCase().includes('overdue') || (n.title || '').toLowerCase().includes('urgent'))
                 );
 
                 if (!hasAlert) {
@@ -452,13 +452,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       matchedReading = readings.find(r => r.id === notif.readingId);
     }
     if (!matchedReading && notif.billingPeriod) {
-      matchedReading = readings.find(r => r.billingPeriod.toLowerCase() === notif.billingPeriod?.toLowerCase());
+      matchedReading = readings.find(r => (r.billingPeriod || '').toLowerCase() === (notif.billingPeriod || '').toLowerCase());
     }
     if (!matchedReading) {
-      matchedReading = readings.find(r => 
-        notif.title.toLowerCase().includes(r.billingPeriod.toLowerCase()) || 
-        notif.message.toLowerCase().includes(r.billingPeriod.toLowerCase())
-      );
+      const nTitle = (notif.title || '').toLowerCase();
+      const nMsg = (notif.message || '').toLowerCase();
+      matchedReading = readings.find(r => {
+        const bp = (r.billingPeriod || '').toLowerCase();
+        return bp ? (nTitle.includes(bp) || nMsg.includes(bp)) : false;
+      });
     }
     if (!matchedReading && readings.length > 0) {
       matchedReading = readings[0];
@@ -1174,13 +1176,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         No notifications yet.
                       </div>
                     ) : (
-                      notifications.slice(0, 6).map((n) => {
+                      notifications.slice(0, 6).map((n, idx) => {
                         const isBilling = n.type === 'billing' || n.type === 'balance';
-                        const isPartialAlert = n.title.toLowerCase().includes('partial') || n.message.toLowerCase().includes('remaining');
+                        const isPartialAlert = (n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining');
 
                         return (
                           <div
-                            key={n.id}
+                            key={`dropdown-notif-${n.id || idx}`}
                             onClick={() => handleNotificationClick(n, 'dashboard')}
                             className={`p-3.5 hover:bg-slate-50 transition cursor-pointer flex items-start space-x-3 ${
                               !n.read ? 'bg-blue-50/40' : ''
@@ -1805,7 +1807,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       const isAbnormal = r.status === 'flagged_abnormal' || r.consumption > 40;
 
                       return (
-                        <div key={idx} className="flex flex-col items-center space-y-2 w-14 group">
+                        <div key={`chart-cons-${r.id || r.billingPeriod || idx}`} className="flex flex-col items-center space-y-2 w-14 group">
                           <span className="text-[10px] font-mono font-black text-slate-700 opacity-80 group-hover:opacity-100 transition">
                             {r.consumption} m³
                           </span>
@@ -1860,7 +1862,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       const isPaid = r.paymentStatus === 'paid';
 
                       return (
-                        <div key={idx} className="flex flex-col items-center space-y-2 w-14 group">
+                        <div key={`chart-cost-${r.id || r.billingPeriod || idx}`} className="flex flex-col items-center space-y-2 w-14 group">
                           <span className="text-[10px] font-mono font-black text-slate-700 opacity-80 group-hover:opacity-100 transition">
                             ₱{cost > 999 ? `${(cost/1000).toFixed(1)}k` : cost.toFixed(0)}
                           </span>
@@ -1916,7 +1918,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <p className="text-[11px] text-slate-400">Readings verified by the water district will appear here automatically.</p>
                     </div>
                   ) : (
-                    readings.slice(0, 3).map((r) => {
+                    readings.slice(0, 3).map((r, idx) => {
                       const cost = calculateCostOf(r.consumption, consumerRecord.consumerType);
                       const isPaid = r.paymentStatus === 'paid';
                       const isPartial = r.paymentStatus === 'partial';
@@ -1927,7 +1929,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                       return (
                         <div 
-                          key={r.id} 
+                          key={`dash-bill-${r.id || idx}`} 
                           className={`py-3.5 px-3 rounded-2xl transition flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 ${
                             isHighlight ? 'bg-sky-100/90 border-l-4 border-l-blue-700 ring-1 ring-blue-300 shadow-xs' : 'hover:bg-slate-50'
                           }`}
@@ -2052,8 +2054,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <p className="text-[11px] text-slate-400">Field meter recordings will appear here in chronological order.</p>
                     </div>
                   ) : (
-                    readings.slice(0, 3).map((r) => (
-                      <div key={r.id} className="py-3.5 space-y-1">
+                    readings.slice(0, 3).map((r, idx) => (
+                      <div key={`dash-read-${r.id || idx}`} className="py-3.5 space-y-1">
                         <div className="flex justify-between items-center">
                           <span className="text-xs font-bold text-slate-800">{r.readingDate}</span>
                           <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${
@@ -2571,7 +2573,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         if (billFilter === 'partial') return r.paymentStatus === 'partial';
                         return true;
                       })
-                      .map((r) => {
+                      .map((r, idx) => {
                         const totalAmount = calculateCostOf(r.consumption, consumerRecord.consumerType);
                         const isPaid = r.paymentStatus === 'paid';
                         const isPartial = r.paymentStatus === 'partial';
@@ -2581,7 +2583,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                         return (
                           <tr 
-                            key={r.id} 
+                            key={`tbl-bill-${r.id || idx}`} 
                             className={`transition-colors duration-150 ${
                               isHighlight 
                                 ? 'bg-blue-950/80 border-l-4 border-l-blue-500 ring-1 ring-blue-500/40 text-white' 
@@ -2723,7 +2725,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     if (billFilter === 'partial') return r.paymentStatus === 'partial';
                     return true;
                   })
-                  .map((r) => {
+                  .map((r, idx) => {
                     const totalAmount = calculateCostOf(r.consumption, consumerRecord.consumerType);
                     const isPaid = r.paymentStatus === 'paid';
                     const isPartial = r.paymentStatus === 'partial';
@@ -2733,7 +2735,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                     return (
                       <div 
-                        key={`mob-${r.id}`}
+                        key={`mob-bill-${r.id || idx}`}
                         className={`p-4 space-y-3 transition-colors ${
                           isHighlight ? 'bg-blue-950/60 border-l-4 border-l-blue-500' : 'hover:bg-slate-850'
                         }`}
@@ -2890,8 +2892,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                    {readings.map((r) => (
-                      <tr key={r.id} className="hover:bg-slate-50/80 transition">
+                    {readings.map((r, idx) => (
+                      <tr key={`usage-tbl-${r.id || idx}`} className="hover:bg-slate-50/80 transition">
                         <td className="px-6 py-4 font-bold text-slate-900">
                           {r.readingDate}
                           <span className="text-[10px] text-slate-400 font-mono block mt-0.5">{r.billingPeriod}</span>
@@ -3008,13 +3010,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   if (notifFilter === 'payment') return n.type === 'payment';
                   return notifFilter === n.type;
                 })
-                .map((n) => {
+                .map((n, idx) => {
                   const isBilling = n.type === 'billing' || n.type === 'balance';
-                  const isPartialAlert = n.title.toLowerCase().includes('partial') || n.message.toLowerCase().includes('remaining');
+                  const isPartialAlert = (n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining');
 
                   return (
                     <div 
-                      key={n.id} 
+                      key={`notif-tab-${n.id || idx}`} 
                       className={`bg-white border rounded-2xl p-5 shadow-xs flex flex-col sm:flex-row items-start justify-between gap-4 transition ${
                         !n.read ? 'border-blue-300 bg-blue-50/20' : 'border-slate-200/80'
                       }`}
@@ -3108,8 +3110,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 })}
 
               {/* District Announcements */}
-              {(notifFilter === 'all' || notifFilter === 'announcement') && announcements.map((ann) => (
-                <div key={ann.id} className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs flex items-start justify-between gap-4">
+              {(notifFilter === 'all' || notifFilter === 'announcement') && announcements.map((ann, idx) => (
+                <div key={`ann-${ann.id || idx}`} className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs flex items-start justify-between gap-4">
                   <div className="flex items-start space-x-3.5">
                     <div className="p-2.5 bg-blue-50 text-blue-700 rounded-xl shrink-0 mt-0.5">
                       <Bell className="h-5 w-5" />
