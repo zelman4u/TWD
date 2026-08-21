@@ -73,7 +73,7 @@ export interface MeterReader {
 export interface WaterMeter {
   meterNumber: string;
   brand: string;
-  size: string; // e.g., "1/2 inch", "3/4 inch"
+  size?: string;
   installationDate: string;
   status: 'active' | 'damaged' | 'maintenance' | 'unassigned';
   linkedAccountNumber: string;

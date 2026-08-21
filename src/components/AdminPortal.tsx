@@ -48,6 +48,7 @@ import { User, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment,
 import { DashboardSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import AdminAnalyticsSection from './charts/AdminAnalyticsSection';
 import { useToast } from '../context/ToastContext';
+import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
 
 interface AdminPortalProps {
   currentUser: User;
@@ -142,7 +143,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [newMeter, setNewMeter] = useState({
     meterNumber: 'MT-' + Math.floor(1000 + Math.random() * 9000),
     brand: '',
-    size: '1/2 inch',
     installationDate: new Date().toISOString().split('T')[0],
     status: 'active' as const,
     linkedAccountNumber: ''
@@ -215,11 +215,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [modalEditBusinessName, setModalEditBusinessName] = useState('');
   const [modalEditBusinessType, setModalEditBusinessType] = useState('');
   const [modalEditHouseholdInfo, setModalEditHouseholdInfo] = useState('');
-  const [modalEditMeterSize, setModalEditMeterSize] = useState('1/2 inch');
   const [modalEditStatus, setModalEditStatus] = useState<'active' | 'inactive' | 'blocked' | 'archived'>('active');
 
   // Issue IDs Form State
   const [modalIssueAccountNumber, setModalIssueAccountNumber] = useState('');
+  const [modalIssueMeterNumber, setModalIssueMeterNumber] = useState('');
   const [modalIssueRfidTag, setModalIssueRfidTag] = useState('');
 
   const [staffList, setStaffList] = useState<{ id: string; name: string; email: string; role: string; department: string; status: string }[]>(() => {
@@ -411,7 +411,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 contactNumber: ac.contactNumber || '',
                 email: ac.email || '',
                 consumerType: ac.consumerType === 'Commercial' ? 'Commercial' : 'Residential',
-                meterSize: ac.meterSize || '1/2 inch',
                 householdInfo: ac.householdInfo,
                 businessName: ac.businessName,
                 businessType: ac.businessType,
@@ -497,20 +496,30 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     setModalEditBusinessName(c.businessName || '');
     setModalEditBusinessType(c.businessType || '');
     setModalEditHouseholdInfo(c.householdInfo || '');
-    setModalEditMeterSize(c.meterSize || '1/2 inch');
     setModalEditStatus(c.status || 'active');
 
-    // Populate issue IDs fields (generate suggested account number and tag if unissued)
-    if (c.accountNumber) {
+    // Populate issue IDs fields (generate suggested account number, meter number, and tag if unissued)
+    const isAlreadyOfficiallyIssued = Boolean(
+      c.accountNumber &&
+      c.accountNumber.trim() !== '' &&
+      !c.accountNumber.toUpperCase().startsWith('PENDING') &&
+      c.accountNumber.toUpperCase() !== 'PENDING ADMIN ISSUANCE' &&
+      c.status !== 'pending_approval'
+    );
+
+    if (isAlreadyOfficiallyIssued) {
       setModalIssueAccountNumber(c.accountNumber);
+      setModalIssueMeterNumber(c.meterNumber || '');
       setModalIssueRfidTag(c.rfidTag || `RFID-${c.accountNumber}`);
     } else {
       // Suggest sequential/barangay-based account number
       const brgCode = c.barangayId || 'TWD';
       const randomSeq = Math.floor(1000 + Math.random() * 9000);
       const suggestedAcc = `${brgCode}-${randomSeq}`;
+      const randomMeter = Math.floor(10000 + Math.random() * 90000);
       setModalIssueAccountNumber(suggestedAcc);
-      setModalIssueRfidTag(`RFID-${suggestedAcc}`);
+      setModalIssueMeterNumber(c.meterNumber && !c.meterNumber.toUpperCase().startsWith('PENDING') ? c.meterNumber : `MT-${randomMeter}`);
+      setModalIssueRfidTag(c.rfidTag && !c.rfidTag.toUpperCase().startsWith('PENDING') ? c.rfidTag : `RFID-${suggestedAcc}`);
     }
   };
 
@@ -595,7 +604,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       businessName: modalEditConsumerType === 'Commercial' ? modalEditBusinessName : undefined,
       businessType: modalEditConsumerType === 'Commercial' ? modalEditBusinessType : undefined,
       householdInfo: modalEditConsumerType === 'Residential' ? modalEditHouseholdInfo : undefined,
-      meterSize: modalEditMeterSize,
       status: modalEditStatus
     };
 
@@ -628,21 +636,38 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     if (!selectedConsumerModal) return;
 
     // Safety check: Prevent re-issuing or altering already issued IDs
-    if (selectedConsumerModal.accountNumber && selectedConsumerModal.rfidTag) {
+    const isAlreadyOfficiallyIssued = Boolean(
+      selectedConsumerModal.accountNumber &&
+      selectedConsumerModal.accountNumber.trim() !== '' &&
+      !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') &&
+      selectedConsumerModal.accountNumber.toUpperCase() !== 'PENDING ADMIN ISSUANCE' &&
+      selectedConsumerModal.status !== 'pending_approval' &&
+      selectedConsumerModal.rfidTag &&
+      !selectedConsumerModal.rfidTag.toUpperCase().startsWith('PENDING')
+    );
+
+    if (isAlreadyOfficiallyIssued) {
       alert(`Official Account Number (#${selectedConsumerModal.accountNumber}) and RFID Tag (${selectedConsumerModal.rfidTag}) have already been issued for this consumer and are permanently locked.`);
       return;
     }
 
     const newAccNum = modalIssueAccountNumber.trim().toUpperCase();
-    const newTag = modalIssueRfidTag.trim().toUpperCase();
+    const newMeterNum = (modalIssueMeterNumber.trim() || selectedConsumerModal.meterNumber || `MT-${Math.floor(10000 + Math.random() * 90000)}`).toUpperCase();
+    const newTag = (modalIssueRfidTag.trim() || `RFID-${newAccNum}`).toUpperCase();
 
     if (!newAccNum) {
       alert('Account Number is required.');
       return;
     }
 
-    // Verify Account Number uniqueness
-    const duplicateAcc = consumers.find(c => c.accountNumber === newAccNum && c.accountNumber !== selectedConsumerModal.accountNumber);
+    // Verify Account Number uniqueness against other consumers
+    const duplicateAcc = consumers.find(c => 
+      c.accountNumber && 
+      c.accountNumber.toUpperCase() === newAccNum && 
+      c.accountNumber !== selectedConsumerModal.accountNumber &&
+      c.linkedUserId !== selectedConsumerModal.linkedUserId &&
+      c.email?.toLowerCase() !== selectedConsumerModal.email?.toLowerCase()
+    );
     if (duplicateAcc) {
       alert(`Account Number #${newAccNum} is already assigned to consumer "${duplicateAcc.name}". Please enter a unique Account Number.`);
       return;
@@ -650,7 +675,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     // Verify Tag Number uniqueness
     if (newTag) {
-      const duplicateTag = consumers.find(c => c.rfidTag === newTag && c.accountNumber !== selectedConsumerModal.accountNumber);
+      const duplicateTag = consumers.find(c => 
+        c.rfidTag && 
+        c.rfidTag.toUpperCase() === newTag && 
+        c.accountNumber !== selectedConsumerModal.accountNumber &&
+        c.linkedUserId !== selectedConsumerModal.linkedUserId &&
+        c.email?.toLowerCase() !== selectedConsumerModal.email?.toLowerCase()
+      );
       if (duplicateTag) {
         alert(`RFID / Tag Number "${newTag}" is already assigned to consumer "${duplicateTag.name}". Please enter a unique RFID Tag.`);
         return;
@@ -658,38 +689,61 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     }
 
     const previousAccountNumber = selectedConsumerModal.accountNumber;
-    const previousEmail = selectedConsumerModal.email;
+    const previousEmail = selectedConsumerModal.email?.trim().toLowerCase();
     const previousUserId = selectedConsumerModal.linkedUserId;
-
-    // Generate or retain meter number
-    const assignedMeter = selectedConsumerModal.meterNumber || `MT-${Math.floor(10000 + Math.random() * 90000)}`;
+    const previousName = selectedConsumerModal.name?.trim().toLowerCase();
 
     const updated: Consumer = {
       ...selectedConsumerModal,
       accountNumber: newAccNum,
-      meterNumber: assignedMeter,
-      rfidTag: newTag || `RFID-${newAccNum}`,
+      meterNumber: newMeterNum,
+      rfidTag: newTag,
       status: 'active',
       isRegistered: true
     };
 
-    // 1. Update consumers list (match by accountNumber or email or linkedUserId)
+    // 1. Update consumers list (match by previousAccountNumber, previousEmail, previousUserId, or previousName)
+    let matchedAny = false;
     const newConsumers = consumers.map(item => {
       const isMatch = (previousAccountNumber && item.accountNumber === previousAccountNumber) ||
-                      (previousEmail && item.email && item.email.toLowerCase() === previousEmail.toLowerCase()) ||
-                      (previousUserId && item.linkedUserId === previousUserId);
-      return isMatch ? updated : item;
+                      (previousEmail && item.email && item.email.trim().toLowerCase() === previousEmail) ||
+                      (previousUserId && item.linkedUserId === previousUserId) ||
+                      (previousName && item.name && item.name.trim().toLowerCase() === previousName && (item.barangay === selectedConsumerModal.barangay || !item.accountNumber || item.accountNumber.toUpperCase().startsWith('PENDING')));
+      if (isMatch) {
+        matchedAny = true;
+        return updated;
+      }
+      return item;
     });
-    mockDb.saveConsumers(newConsumers);
-    setConsumers(newConsumers);
+
+    if (!matchedAny) {
+      newConsumers.unshift(updated);
+    }
+
+    // Deduplicate any older pending twins
+    const deduplicatedConsumers = newConsumers.filter((c, idx, arr) => {
+      if ((!c.accountNumber || c.accountNumber.toUpperCase().startsWith('PENDING') || c.status === 'pending_approval') && 
+          arr.some(o => o !== c && (
+            (c.email && o.email && o.email.toLowerCase() === c.email.toLowerCase() && o.status === 'active') ||
+            (c.linkedUserId && o.linkedUserId && o.linkedUserId === c.linkedUserId && o.status === 'active') ||
+            (c.name && o.name && o.name.toLowerCase() === c.name.toLowerCase() && o.status === 'active')
+          ))) {
+        return false;
+      }
+      return true;
+    });
+
+    mockDb.saveConsumers(deduplicatedConsumers);
+    setConsumers(deduplicatedConsumers);
     setSelectedConsumerModal(updated);
 
     // 2. Update linked User record in users database so consumer login connects to the issued account
     const allUsers = mockDb.getUsers();
     const updatedUsers = allUsers.map(u => {
       const isUserMatch = (previousUserId && u.id === previousUserId) ||
-                          (previousEmail && u.email && u.email.toLowerCase() === previousEmail.toLowerCase()) ||
-                          (previousAccountNumber && u.linkedAccountNumber === previousAccountNumber);
+                          (previousEmail && u.email && u.email.trim().toLowerCase() === previousEmail) ||
+                          (previousAccountNumber && u.linkedAccountNumber === previousAccountNumber) ||
+                          (previousName && u.name && u.name.trim().toLowerCase() === previousName);
       if (isUserMatch) {
         return {
           ...u,
@@ -701,14 +755,29 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     });
     mockDb.saveUsers(updatedUsers);
 
+    // 2b. If current session user is this consumer, update current user in mockDb immediately
+    const activeSessionUser = mockDb.getCurrentUser();
+    if (activeSessionUser) {
+      const isSessionUserMatch = (previousUserId && activeSessionUser.id === previousUserId) ||
+                                 (previousEmail && activeSessionUser.email && activeSessionUser.email.trim().toLowerCase() === previousEmail) ||
+                                 (previousAccountNumber && activeSessionUser.linkedAccountNumber === previousAccountNumber) ||
+                                 (previousName && activeSessionUser.name && activeSessionUser.name.trim().toLowerCase() === previousName);
+      if (isSessionUserMatch) {
+        mockDb.setCurrentUser({
+          ...activeSessionUser,
+          linkedAccountNumber: newAccNum,
+          status: 'active'
+        });
+      }
+    }
+
     // 3. Register or assign mechanical water meter into meters registry
     const allMeters = mockDb.getMeters();
-    const meterExists = allMeters.some(m => m.meterNumber === assignedMeter);
+    const meterExists = allMeters.some(m => m.meterNumber === newMeterNum);
     if (!meterExists) {
       const newMeterRecord: WaterMeter = {
-        meterNumber: assignedMeter,
+        meterNumber: newMeterNum,
         brand: 'Aichi / Actaris Precision',
-        size: selectedConsumerModal.meterSize || '1/2 inch',
         installationDate: new Date().toISOString().split('T')[0],
         status: 'active',
         linkedAccountNumber: newAccNum
@@ -717,7 +786,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       mockDb.saveMeters(updatedMeters);
       setMeters(updatedMeters);
     } else {
-      const updatedMeters = allMeters.map(m => m.meterNumber === assignedMeter ? { ...m, linkedAccountNumber: newAccNum, status: 'active' as const } : m);
+      const updatedMeters = allMeters.map(m => m.meterNumber === newMeterNum ? { ...m, linkedAccountNumber: newAccNum, status: 'active' as const } : m);
       mockDb.saveMeters(updatedMeters);
       setMeters(updatedMeters);
     }
@@ -739,11 +808,36 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.addNotification({
       accountNumber: newAccNum,
       title: `Official Account Number & Meter Issued!`,
-      message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${newAccNum} and Meter Serial is #${assignedMeter}. Smart RFID Tag: ${updated.rfidTag}. Your full dashboard and telemetry are now active.`,
+      message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${newAccNum} and Meter Serial is #${newMeterNum}. Smart RFID Tag: ${updated.rfidTag}. Your full dashboard and telemetry are now active.`,
       type: 'announcement'
     });
 
-    // 6. Sync issued consumer identifiers to backend API
+    // 6. Direct Firestore sync to all possible doc IDs to overwrite stale pending docs
+    if (selectedConsumerModal.linkedUserId) {
+      syncDocToFirestore(COLLECTIONS.CONSUMERS, selectedConsumerModal.linkedUserId, updated);
+      syncDocToFirestore(COLLECTIONS.USERS, selectedConsumerModal.linkedUserId, {
+        id: selectedConsumerModal.linkedUserId,
+        email: selectedConsumerModal.email,
+        name: selectedConsumerModal.name,
+        role: 'consumer',
+        status: 'active',
+        linkedAccountNumber: newAccNum
+      });
+    }
+    if (selectedConsumerModal.email) {
+      const emailDocId = `email_${selectedConsumerModal.email.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+      syncDocToFirestore(COLLECTIONS.CONSUMERS, emailDocId, updated);
+      syncDocToFirestore(COLLECTIONS.USERS, emailDocId, {
+        email: selectedConsumerModal.email,
+        name: selectedConsumerModal.name,
+        role: 'consumer',
+        status: 'active',
+        linkedAccountNumber: newAccNum
+      });
+    }
+    syncDocToFirestore(COLLECTIONS.CONSUMERS, newAccNum, updated);
+
+    // 7. Sync issued consumer identifiers to backend API
     fetch('/api/consumers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -755,10 +849,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       currentUser.name,
       'admin',
       'Issue Identifiers & Activate',
-      `Issued Account Number #${newAccNum}, Meter #${assignedMeter}, and RFID Tag "${updated.rfidTag}" to ${updated.name}. Consumer portal account activated and synchronized.`
+      `Issued Account Number #${newAccNum}, Meter #${newMeterNum}, and RFID Tag "${updated.rfidTag}" to ${updated.name}. Consumer portal account activated and synchronized.`
     );
 
-    alert(`Official Identifiers (Account #${newAccNum}, Meter #${assignedMeter}, RFID Tag: ${updated.rfidTag}) assigned permanently! Consumer account is now fully active.`);
+    // Dispatch instant events
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: 'twd_live_v4_consumers', timestamp: Date.now() } }));
+      window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: 'twd_live_v4_users', timestamp: Date.now() } }));
+    }
+
+    alert(`Official Identifiers (Account #${newAccNum}, Meter #${newMeterNum}, RFID Tag: ${updated.rfidTag}) assigned permanently! Consumer account is now fully active.`);
   };
 
   // Action: Update Consumer Status (Activate/Deactivate/Archive)
@@ -800,7 +900,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const created: WaterMeter = {
       meterNumber: newMeter.meterNumber.trim().toUpperCase(),
       brand: newMeter.brand,
-      size: newMeter.size,
       installationDate: newMeter.installationDate,
       status: newMeter.status,
       linkedAccountNumber: newMeter.linkedAccountNumber
@@ -822,7 +921,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     setNewMeter({
       meterNumber: 'MT-' + Math.floor(1000 + Math.random() * 9000),
       brand: '',
-      size: '1/2 inch',
       installationDate: new Date().toISOString().split('T')[0],
       status: 'active',
       linkedAccountNumber: ''
@@ -1519,7 +1617,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       <thead className="bg-slate-50 text-slate-700 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200">
                         <tr>
                           <th className="px-6 py-3.5">Meter ID</th>
-                          <th className="px-6 py-3.5">Brand & Size</th>
+                          <th className="px-6 py-3.5">Brand / Model</th>
                           <th className="px-6 py-3.5">Installation Date</th>
                           <th className="px-6 py-3.5">Assigned Account</th>
                           <th className="px-6 py-3.5">Meter Status</th>
@@ -1529,7 +1627,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         {meters.map((m) => (
                           <tr key={m.meterNumber} className="hover:bg-slate-50 transition">
                             <td className="px-6 py-3.5 font-mono font-bold text-slate-900">{m.meterNumber}</td>
-                            <td className="px-6 py-3.5 font-bold text-slate-800">{m.brand} ({m.size})</td>
+                            <td className="px-6 py-3.5 font-bold text-slate-800">{m.brand}</td>
                             <td className="px-6 py-3.5 text-slate-600 font-mono">{m.installationDate}</td>
                             <td className="px-6 py-3.5 font-mono font-bold text-blue-600">{m.linkedAccountNumber || 'Unassigned'}</td>
                             <td className="px-6 py-3.5">
@@ -2152,13 +2250,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       {filteredConsumers.map((c) => {
                         const addrParts = c.address.split(',').map(p => p.trim());
                         const barangayDisplay = c.barangay || (addrParts.length >= 2 ? addrParts[1] : c.address);
+                        const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || c.status === 'pending_approval';
 
                         return (
                           <tr key={c.accountNumber || c.email || c.linkedUserId || c.name} className="hover:bg-slate-50/70 transition">
                             <td className="px-4 py-3 space-y-0.5 truncate">
                               <span className="font-bold text-[13px] text-slate-900 block truncate" title={c.name}>{c.name}</span>
                               <div className="flex items-center space-x-1.5 truncate">
-                                {c.accountNumber ? (
+                                {!isPending ? (
                                   <span className="font-mono text-[10px] text-slate-400 font-bold shrink-0">#{c.accountNumber}</span>
                                 ) : (
                                   <span className="font-mono text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded border border-amber-200 shrink-0">
@@ -2177,14 +2276,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <td className="px-3 py-3 font-mono text-[11px] text-slate-600 truncate" title={c.email}>{c.email}</td>
                             <td className="px-3 py-3 font-mono text-[11px] text-slate-700 font-bold truncate">{c.contactNumber}</td>
                             <td className="px-3 py-3 truncate" title={`${barangayDisplay} ${c.sitioZone || ''}`}>
-                              <div className="flex items-center space-x-1.5 truncate">
-                                <span className="font-mono text-[9px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.2 rounded shrink-0">
-                                  {c.barangayId || 'TWD'}
-                                </span>
-                                <span className="font-semibold text-slate-900 truncate">
-                                  {barangayDisplay}
-                                </span>
-                              </div>
+                              <span className="font-semibold text-slate-900 truncate block">
+                                {barangayDisplay}
+                              </span>
                               {c.sitioZone && (
                                 <span className="text-[10px] text-slate-500 block truncate mt-0.5 font-medium">
                                   {c.sitioZone}
@@ -2194,7 +2288,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <td className="px-3 py-3">
                               <div className="space-y-0.5">
                                 <span className={`inline-block px-2 py-0.5 rounded text-[9px] font-black uppercase ${
-                                  !c.accountNumber || c.status === 'pending_approval'
+                                  isPending
                                     ? 'bg-amber-100 text-amber-900 border border-amber-300 animate-pulse'
                                     : c.status === 'blocked'
                                     ? 'bg-rose-100 text-rose-800 border border-rose-200'
@@ -2204,7 +2298,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     ? 'bg-slate-100 text-slate-700 border border-slate-200'
                                     : 'bg-slate-100 text-slate-700 border border-slate-200'
                                 }`}>
-                                  {!c.accountNumber || c.status === 'pending_approval' ? 'PENDING ID' : c.status.toUpperCase()}
+                                  {isPending ? 'PENDING ID' : c.status.toUpperCase()}
                                 </span>
                                 <span className={`block text-[9px] font-bold truncate ${c.isRegistered ? 'text-emerald-600' : 'text-slate-400'}`}>
                                   {c.isRegistered ? '• Registered' : '• Offline'}
@@ -2213,11 +2307,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             </td>
                             <td className="px-4 py-3 text-right">
                               <div className="flex items-center justify-end space-x-1.5">
-                                {!c.accountNumber ? (
+                                {isPending ? (
                                   <button 
                                     onClick={() => handleOpenConsumerModal(c, 'issue_ids')}
                                     className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer shrink-0"
-                                    title="Issue Official Account Number & RFID Tag"
+                                    title="Issue Official Account Number, Meter & RFID Tag"
                                   >
                                     <ShieldCheck className="h-3.5 w-3.5 text-white" />
                                     <span className="text-white font-bold">Issue IDs</span>
@@ -2415,7 +2509,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                             <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
                               <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Assigned Meter</span>
-                              <span className="font-mono font-black text-blue-300 text-xs truncate block">{selectedConsumerModal.meterNumber || 'UNASSIGNED'} ({selectedConsumerModal.meterSize || '1/2 inch'})</span>
+                              <span className="font-mono font-black text-blue-300 text-xs truncate block">{selectedConsumerModal.meterNumber || 'UNASSIGNED'}</span>
                             </div>
 
                             <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
@@ -2556,47 +2650,60 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       {/* ISSUE IDS TAB */}
                       {consumerModalTab === 'issue_ids' && (
                         <form onSubmit={handleIssueIdentifiers} className="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4 text-xs">
-                          {selectedConsumerModal.accountNumber && selectedConsumerModal.rfidTag ? (
+                          {selectedConsumerModal.accountNumber && 
+                           !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') &&
+                           selectedConsumerModal.accountNumber.toUpperCase() !== 'PENDING ADMIN ISSUANCE' &&
+                           selectedConsumerModal.status !== 'pending_approval' &&
+                           selectedConsumerModal.rfidTag &&
+                           !selectedConsumerModal.rfidTag.toUpperCase().startsWith('PENDING') ? (
                             <div className="bg-amber-950/60 p-4 rounded-xl border border-amber-600/60 space-y-1.5 shadow-2xs">
                               <h5 className="font-black text-amber-200 flex items-center space-x-1.5 text-xs">
                                 <Lock className="h-4 w-4 text-amber-400 mr-1 inline shrink-0" />
                                 <span>Official Identifiers Issued & Read-Only</span>
                               </h5>
                               <p className="text-amber-100 font-medium text-[11px] leading-relaxed">
-                                Consumer <strong>{selectedConsumerModal.name}</strong> has already been issued an Official Account Number (<strong>#{selectedConsumerModal.accountNumber}</strong>) and Smart RFID Tag (<strong>{selectedConsumerModal.rfidTag}</strong>). Issued identifiers are permanently assigned and cannot be edited.
+                                Consumer <strong>{selectedConsumerModal.name}</strong> has already been issued an Official Account Number (<strong>#{selectedConsumerModal.accountNumber}</strong>), Meter Serial (<strong>#{selectedConsumerModal.meterNumber}</strong>), and Smart RFID Tag (<strong>{selectedConsumerModal.rfidTag}</strong>). Issued identifiers are permanently assigned and cannot be edited.
                               </p>
                             </div>
                           ) : (
                             <div className="bg-blue-950/60 p-4 rounded-xl border border-blue-600/60 space-y-1">
                               <h5 className="font-black text-blue-200 flex items-center space-x-1.5 text-xs">
                                 <ShieldCheck className="h-4 w-4 text-blue-400 mr-1 inline shrink-0" />
-                                <span>Issue Official Identifiers & Smart RFID Tag</span>
+                                <span>Issue Official Identifiers & Activate Consumer Account</span>
                               </h5>
                               <p className="text-blue-100 font-medium text-[11px]">
-                                Assign or verify official 7-digit Account Number and RFID Smart Tag for <strong>{selectedConsumerModal.name}</strong>.
+                                Assign official Account Number, physical Meter Tag / Serial Number, and Smart RFID Tag for <strong>{selectedConsumerModal.name}</strong> ({selectedConsumerModal.barangay || 'Tagoloan'}).
                               </p>
                             </div>
                           )}
 
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div>
                               <div className="flex items-center justify-between mb-1.5">
-                                <label className="block text-slate-200 font-extrabold text-xs">Official Account Number *</label>
-                                {selectedConsumerModal.accountNumber && (
+                                <label className="block text-slate-200 font-extrabold text-xs">Account Number *</label>
+                                {selectedConsumerModal.accountNumber && 
+                                 !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') &&
+                                 selectedConsumerModal.status !== 'pending_approval' && (
                                   <span className="text-[10px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/60 flex items-center space-x-0.5">
-                                    <Lock className="h-3 w-3 mr-0.5 inline shrink-0" /> Read-Only
+                                    <Lock className="h-3 w-3 mr-0.5 inline shrink-0" /> Issued
                                   </span>
                                 )}
                               </div>
                               <input
                                 type="text"
                                 required
-                                placeholder="e.g. 1002026"
+                                placeholder="e.g. NT-2026-001"
                                 value={modalIssueAccountNumber}
                                 onChange={(e) => setModalIssueAccountNumber(e.target.value)}
-                                readOnly={Boolean(selectedConsumerModal.accountNumber)}
+                                readOnly={Boolean(
+                                  selectedConsumerModal.accountNumber && 
+                                  !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') && 
+                                  selectedConsumerModal.status !== 'pending_approval'
+                                )}
                                 className={`w-full border rounded-lg p-2.5 font-mono font-black text-xs shadow-2xs ${
-                                  selectedConsumerModal.accountNumber
+                                  selectedConsumerModal.accountNumber && 
+                                  !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') && 
+                                  selectedConsumerModal.status !== 'pending_approval'
                                     ? 'bg-slate-950/80 text-slate-400 border-slate-700 cursor-not-allowed select-none'
                                     : 'bg-slate-950 text-white border-slate-700 focus:outline-none focus:border-blue-500'
                                 }`}
@@ -2605,10 +2712,44 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                             <div>
                               <div className="flex items-center justify-between mb-1.5">
-                                <label className="block text-slate-200 font-extrabold text-xs">RFID Smart Tag Number *</label>
-                                {selectedConsumerModal.rfidTag && (
+                                <label className="block text-slate-200 font-extrabold text-xs">Meter Tag / Serial *</label>
+                                {selectedConsumerModal.meterNumber && 
+                                 !selectedConsumerModal.meterNumber.toUpperCase().startsWith('PENDING') &&
+                                 selectedConsumerModal.status !== 'pending_approval' && (
                                   <span className="text-[10px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/60 flex items-center space-x-0.5">
-                                    <Lock className="h-3 w-3 mr-0.5 inline shrink-0" /> Read-Only
+                                    <Lock className="h-3 w-3 mr-0.5 inline shrink-0" /> Issued
+                                  </span>
+                                )}
+                              </div>
+                              <input
+                                type="text"
+                                required
+                                placeholder="e.g. MT-88204"
+                                value={modalIssueMeterNumber}
+                                onChange={(e) => setModalIssueMeterNumber(e.target.value)}
+                                readOnly={Boolean(
+                                  selectedConsumerModal.meterNumber && 
+                                  !selectedConsumerModal.meterNumber.toUpperCase().startsWith('PENDING') && 
+                                  selectedConsumerModal.status !== 'pending_approval'
+                                )}
+                                className={`w-full border rounded-lg p-2.5 font-mono font-black text-xs shadow-2xs ${
+                                  selectedConsumerModal.meterNumber && 
+                                  !selectedConsumerModal.meterNumber.toUpperCase().startsWith('PENDING') && 
+                                  selectedConsumerModal.status !== 'pending_approval'
+                                    ? 'bg-slate-950/80 text-slate-400 border-slate-700 cursor-not-allowed select-none'
+                                    : 'bg-slate-950 text-white border-slate-700 focus:outline-none focus:border-blue-500'
+                                }`}
+                              />
+                            </div>
+
+                            <div>
+                              <div className="flex items-center justify-between mb-1.5">
+                                <label className="block text-slate-200 font-extrabold text-xs">Smart RFID Tag *</label>
+                                {selectedConsumerModal.rfidTag && 
+                                 !selectedConsumerModal.rfidTag.toUpperCase().startsWith('PENDING') &&
+                                 selectedConsumerModal.status !== 'pending_approval' && (
+                                  <span className="text-[10px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/60 flex items-center space-x-0.5">
+                                    <Lock className="h-3 w-3 mr-0.5 inline shrink-0" /> Issued
                                   </span>
                                 )}
                               </div>
@@ -2618,9 +2759,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 placeholder="e.g. RFID-88204"
                                 value={modalIssueRfidTag}
                                 onChange={(e) => setModalIssueRfidTag(e.target.value)}
-                                readOnly={Boolean(selectedConsumerModal.rfidTag)}
+                                readOnly={Boolean(
+                                  selectedConsumerModal.rfidTag && 
+                                  !selectedConsumerModal.rfidTag.toUpperCase().startsWith('PENDING') && 
+                                  selectedConsumerModal.status !== 'pending_approval'
+                                )}
                                 className={`w-full border rounded-lg p-2.5 font-mono font-black text-xs shadow-2xs ${
-                                  selectedConsumerModal.rfidTag
+                                  selectedConsumerModal.rfidTag && 
+                                  !selectedConsumerModal.rfidTag.toUpperCase().startsWith('PENDING') && 
+                                  selectedConsumerModal.status !== 'pending_approval'
                                     ? 'bg-slate-950/80 text-slate-400 border-slate-700 cursor-not-allowed select-none'
                                     : 'bg-slate-950 text-white border-slate-700 focus:outline-none focus:border-blue-500'
                                 }`}
@@ -2629,7 +2776,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           </div>
 
                           <div className="pt-2 flex justify-end">
-                            {selectedConsumerModal.accountNumber && selectedConsumerModal.rfidTag ? (
+                            {selectedConsumerModal.accountNumber && 
+                             !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') &&
+                             selectedConsumerModal.accountNumber.toUpperCase() !== 'PENDING ADMIN ISSUANCE' &&
+                             selectedConsumerModal.status !== 'pending_approval' &&
+                             selectedConsumerModal.rfidTag &&
+                             !selectedConsumerModal.rfidTag.toUpperCase().startsWith('PENDING') ? (
                               <div className="px-4 py-2 bg-slate-950 border border-slate-700 text-slate-400 font-black rounded-xl text-xs flex items-center space-x-1.5 select-none">
                                 <Lock className="h-3.5 w-3.5 text-slate-500" />
                                 <span>Identifiers Already Issued & Locked</span>
@@ -2637,9 +2789,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             ) : (
                               <button
                                 type="submit"
-                                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs transition shadow-md uppercase tracking-wider cursor-pointer"
+                                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs transition shadow-md uppercase tracking-wider cursor-pointer flex items-center space-x-1.5"
                               >
-                                Issue Identifiers & Activate
+                                <ShieldCheck className="h-4 w-4" />
+                                <span>Issue Identifiers & Activate Account</span>
                               </button>
                             )}
                           </div>
@@ -2992,7 +3145,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {showAddMeter && (
                 <form onSubmit={handleCreateMeter} className="bg-white border border-slate-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-2xl">
                   <h4 className="text-sm font-bold uppercase text-slate-850">Water Meter Mechanical Parameters</h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Meter Serial Number</label>
                       <input 
@@ -3014,18 +3167,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         onChange={(e) => setNewMeter({ ...newMeter, brand: e.target.value })}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs focus:outline-none"
                       />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Port Size</label>
-                      <select 
-                        value={newMeter.size}
-                        onChange={(e) => setNewMeter({ ...newMeter, size: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs text-slate-700 font-bold"
-                      >
-                        <option value="1/2 inch">1/2 inch Standard</option>
-                        <option value="3/4 inch">3/4 inch Heavy duty</option>
-                        <option value="1 inch">1 inch Commercial</option>
-                      </select>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Linked Account Number</label>
@@ -3064,7 +3205,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       <tr>
                         <th className="px-6 py-4">Meter serial</th>
                         <th className="px-6 py-4">Brand / Manufacturer</th>
-                        <th className="px-6 py-4">Mechanical Port Size</th>
                         <th className="px-6 py-4">Installation Date</th>
                         <th className="px-6 py-4 font-mono">Linked Consumer Link</th>
                         <th className="px-6 py-3 text-right">Operational Status</th>
@@ -3075,7 +3215,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         <tr key={m.meterNumber} className="hover:bg-slate-50/70">
                           <td className="px-6 py-4 font-mono text-slate-900 font-black">{m.meterNumber}</td>
                           <td className="px-6 py-4 font-bold">{m.brand}</td>
-                          <td className="px-6 py-4">{m.size}</td>
                           <td className="px-6 py-4 font-sans text-slate-500">{m.installationDate}</td>
                           <td className="px-6 py-4 font-mono font-bold text-blue-600">
                             {m.linkedAccountNumber ? `#${m.linkedAccountNumber}` : 'UNASSIGNED'}
@@ -4778,15 +4917,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     <div key={bg.id} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
                       <div className="flex justify-between items-start">
                         <div>
-                          <div className="flex items-center space-x-1.5">
-                            <span className="bg-blue-100 text-blue-800 font-mono font-bold text-[10px] px-2.5 py-0.5 rounded-md">
-                              {bg.code}
-                            </span>
-                            <span className="bg-slate-100 text-slate-700 font-mono font-bold text-[10px] px-2 py-0.5 rounded-md border border-slate-200">
-                              {bg.id}
-                            </span>
-                          </div>
-                          <h4 className="text-base font-black text-slate-900 mt-2">{bg.name}</h4>
+                          <h4 className="text-base font-black text-slate-900">{bg.name}</h4>
+                          <span className="text-[11px] text-slate-500 font-medium">Barangay Service Area</span>
                         </div>
                         <MapPin className="h-6 w-6 text-orange-500 shrink-0" />
                       </div>

@@ -141,6 +141,34 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
     }
 
     // Access Granted: Consumer or Field Meter Reader
+    // Auto-link newly issued account number from consumers database if available
+    const allConsumers = mockDb.getConsumers();
+    const matchedConsumer = allConsumers.find(
+      c => (c.linkedUserId && c.linkedUserId === matchedUser!.id) ||
+           (c.email && c.email.toLowerCase() === matchedUser!.email?.toLowerCase()) ||
+           (c.name && c.name.toLowerCase() === matchedUser!.name.toLowerCase())
+    );
+
+    if (matchedConsumer && matchedConsumer.accountNumber && !matchedConsumer.accountNumber.toUpperCase().startsWith('PENDING')) {
+      const userStatus: 'active' | 'inactive' | 'pending_approval' = 
+        (matchedConsumer.status === 'active' || matchedConsumer.status === 'inactive' || matchedConsumer.status === 'pending_approval')
+          ? matchedConsumer.status
+          : 'active';
+
+      matchedUser = {
+        ...matchedUser,
+        linkedAccountNumber: matchedConsumer.accountNumber,
+        status: userStatus
+      };
+      // Update in stored users
+      const currentUsers = mockDb.getUsers();
+      const uIdx = currentUsers.findIndex(u => u.id === matchedUser!.id);
+      if (uIdx >= 0) {
+        currentUsers[uIdx] = matchedUser;
+        mockDb.saveUsers(currentUsers);
+      }
+    }
+
     const roleLabel = matchedUser.role === 'meter_reader' ? 'Field Meter Reader Portal' : 'Consumer Water Dashboard';
     showLoading(
       `Access Granted: ${matchedUser.name}`,

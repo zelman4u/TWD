@@ -68,6 +68,28 @@ function AppContent() {
 
     // Load master list of announcements
     setAnnouncements(mockDb.getAnnouncements());
+
+    // Listen for database updates (e.g. admin issuing IDs or updating status)
+    const handleDbSync = () => {
+      const liveCurrent = mockDb.getCurrentUser();
+      if (liveCurrent) {
+        setCurrentUser(prev => {
+          if (!prev) return liveCurrent;
+          if (prev.id === liveCurrent.id && (prev.linkedAccountNumber !== liveCurrent.linkedAccountNumber || prev.status !== liveCurrent.status)) {
+            return { ...prev, ...liveCurrent };
+          }
+          return prev;
+        });
+      }
+    };
+
+    window.addEventListener('twd_database_updated', handleDbSync);
+    window.addEventListener('storage', handleDbSync);
+
+    return () => {
+      window.removeEventListener('twd_database_updated', handleDbSync);
+      window.removeEventListener('storage', handleDbSync);
+    };
   }, []);
 
   // Update states on login

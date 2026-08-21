@@ -126,21 +126,35 @@ export function startRealtimeFirestoreListeners() {
 
         const localRaw = localStorage.getItem(KEYS.CONSUMERS);
         const localConsumers: Consumer[] = localRaw ? JSON.parse(localRaw) : [];
-        const mergedMap = new Map<string, Consumer>();
+        
+        // Merge cloud and local, deduplicating and preferring active/issued records
+        const allList = [...cloudConsumers, ...localConsumers];
+        const mergedList: Consumer[] = [];
 
-        cloudConsumers.forEach((c) => {
-          const key = c.accountNumber || c.linkedUserId || c.email?.toLowerCase() || (c as any).id || `c-${Math.random()}`;
-          mergedMap.set(key, c);
-        });
-        localConsumers.forEach((c) => {
-          const key = c.accountNumber || c.linkedUserId || c.email?.toLowerCase() || (c as any).id;
-          if (key && !mergedMap.has(key)) {
-            mergedMap.set(key, c);
+        for (const c of allList) {
+          const existingIdx = mergedList.findIndex(m => 
+            (c.accountNumber && m.accountNumber && c.accountNumber === m.accountNumber) ||
+            (c.linkedUserId && m.linkedUserId && c.linkedUserId === m.linkedUserId) ||
+            (c.email && m.email && c.email.toLowerCase() === m.email.toLowerCase()) ||
+            (c.name && m.name && c.name.toLowerCase() === m.name.toLowerCase() && c.barangay === m.barangay)
+          );
+
+          if (existingIdx === -1) {
+            mergedList.push(c);
+          } else {
+            const existing = mergedList[existingIdx];
+            const isCMoreActive = (c.accountNumber && !c.accountNumber.startsWith('PENDING') && c.status === 'active') &&
+                                  (!existing.accountNumber || existing.accountNumber.startsWith('PENDING') || existing.status === 'pending_approval');
+            if (isCMoreActive) {
+              mergedList[existingIdx] = c;
+            } else if (!((existing.accountNumber && !existing.accountNumber.startsWith('PENDING') && existing.status === 'active') &&
+                         (!c.accountNumber || c.accountNumber.startsWith('PENDING') || c.status === 'pending_approval'))) {
+              mergedList[existingIdx] = { ...existing, ...c };
+            }
           }
-        });
+        }
 
-        const finalConsumers = Array.from(mergedMap.values());
-        localStorage.setItem(KEYS.CONSUMERS, JSON.stringify(finalConsumers));
+        localStorage.setItem(KEYS.CONSUMERS, JSON.stringify(mergedList));
         triggerLocalUpdateEvent(KEYS.CONSUMERS);
       }
     }, (err) => console.warn('[Firestore Live] Consumers listener standby:', err.message));

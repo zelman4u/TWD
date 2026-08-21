@@ -59,7 +59,7 @@ interface MobileConsumerSync {
   meterNumber: string; // The Tag Number scanned by the mobile camera / NFC
   previousReading: number;
   lastReadingDate: string;
-  meterSize: string;
+  meterSize?: string;
   consumerType: string;
   status: "active" | "disconnected" | "maintenance" | "pending_approval" | "pending" | "inactive";
   contactNumber?: string;
@@ -333,7 +333,6 @@ app.post("/api/consumers/register", (req, res) => {
       barangayId,
       sitioZone,
       consumerType,
-      meterSize,
       householdInfo,
       businessName,
       businessType,
@@ -367,7 +366,6 @@ app.post("/api/consumers/register", (req, res) => {
       meterNumber: "", // Empty until issued by Administrator
       previousReading: 0,
       lastReadingDate: new Date().toISOString().split("T")[0],
-      meterSize: meterSize || "1/2 inch",
       consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
       status: "pending_approval",
       contactNumber: contactNumber || "",
@@ -421,7 +419,6 @@ app.post("/api/consumers", (req, res) => {
       meterNumber,
       previousReading,
       lastReadingDate,
-      meterSize,
       consumerType,
       status,
       contactNumber,
@@ -455,7 +452,6 @@ app.post("/api/consumers", (req, res) => {
       meterNumber: meterNumber || (cleanAcc ? `MT-${cleanAcc}` : ""),
       previousReading: Number(previousReading) || 0,
       lastReadingDate: lastReadingDate || new Date().toISOString().split("T")[0],
-      meterSize: meterSize || "1/2 inch",
       consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
       status: status || (cleanAcc ? "active" : "pending_approval"),
       contactNumber: contactNumber || "",

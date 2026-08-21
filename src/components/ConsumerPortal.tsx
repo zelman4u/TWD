@@ -60,6 +60,7 @@ import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotific
 import { ConsumerPortalSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import { OverdueBillBanner } from './consumer/OverdueBillBanner';
 import { SimulatedPaymentModal } from './consumer/SimulatedPaymentModal';
+import { BillDetails } from './consumer/BillDetails';
 import { useToast } from '../context/ToastContext';
 
 interface ConsumerPortalProps {
@@ -135,6 +136,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
   // Digital Receipt Modal
   const [receiptDetailModal, setReceiptDetailModal] = useState<MeterReading | null>(null);
+
+  // Bill Details Modal States
+  const [billDetailsReading, setBillDetailsReading] = useState<MeterReading | null>(null);
+  const [isBillDetailsOpen, setIsBillDetailsOpen] = useState(false);
 
   // Checkout Form Fields
   const [cardName, setCardName] = useState('');
@@ -215,13 +220,34 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
       const consumers = mockDb.getConsumers();
       const allReadings = mockDb.getReadings();
+      const allUsers = mockDb.getUsers();
       
-      // Match linked account number or email
-      const record = consumers.find(
-        c => (currentUser.linkedAccountNumber && c.accountNumber === currentUser.linkedAccountNumber) || 
-             (currentUser.email && c.email && c.email.toLowerCase() === currentUser.email.toLowerCase()) ||
-             (currentUser.id && c.linkedUserId === currentUser.id)
+      // Find latest live user data in case admin updated it in background
+      const liveUser = allUsers.find(
+        u => (currentUser.id && u.id === currentUser.id) ||
+             (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase()) ||
+             (currentUser.linkedAccountNumber && u.linkedAccountNumber === currentUser.linkedAccountNumber) ||
+             (currentUser.name && u.name && u.name.toLowerCase() === currentUser.name.toLowerCase())
       );
+
+      // Match linked account number, user id, email, or name
+      const matching = consumers.filter(
+        c => (currentUser.linkedAccountNumber && c.accountNumber === currentUser.linkedAccountNumber) || 
+             (liveUser?.linkedAccountNumber && c.accountNumber === liveUser.linkedAccountNumber) ||
+             (currentUser.email && c.email && c.email.toLowerCase() === currentUser.email.toLowerCase()) ||
+             (currentUser.id && c.linkedUserId === currentUser.id) ||
+             (liveUser?.id && c.linkedUserId === liveUser.id) ||
+             (currentUser.name && c.name && c.name.trim().toLowerCase() === currentUser.name.trim().toLowerCase())
+      );
+
+      // Sort matching so active issued record always takes top precedence over stale pending records
+      matching.sort((a, b) => {
+        const aActive = a.accountNumber && !a.accountNumber.toUpperCase().startsWith('PENDING') && a.status === 'active' ? 1 : 0;
+        const bActive = b.accountNumber && !b.accountNumber.toUpperCase().startsWith('PENDING') && b.status === 'active' ? 1 : 0;
+        return bActive - aActive;
+      });
+
+      const record = matching.length > 0 ? matching[0] : null;
 
       if (record) {
         setConsumerRecord(record);
@@ -370,17 +396,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
   // Check Account Setup Pending Status (Awaiting Admin Account & Meter Issuance)
   const isAccountPending = Boolean(
-    consumerRecord && (
-      !consumerRecord.accountNumber ||
-      consumerRecord.accountNumber.trim() === '' ||
-      consumerRecord.status === 'pending_approval' ||
-      consumerRecord.status === 'inactive' || 
-      consumerRecord.accountNumber.startsWith('PENDING') ||
-      consumerRecord.meterNumber.startsWith('PENDING') ||
-      !consumerRecord.meterNumber ||
-      consumerRecord.meterNumber.trim() === '' ||
-      currentUser.status === 'pending_approval'
-    )
+    !consumerRecord ||
+    !consumerRecord.accountNumber ||
+    consumerRecord.accountNumber.trim() === '' ||
+    consumerRecord.accountNumber.toUpperCase().startsWith('PENDING') ||
+    consumerRecord.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' ||
+    consumerRecord.accountNumber.toUpperCase() === 'UNASSIGNED' ||
+    consumerRecord.accountNumber.toUpperCase() === 'UNISSUED' ||
+    consumerRecord.status === 'pending_approval' ||
+    (consumerRecord.meterNumber && consumerRecord.meterNumber.toUpperCase().startsWith('PENDING'))
   );
 
   // Compute Account Metrics & Arrears
@@ -1383,9 +1407,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     <MapPin className="h-3.5 w-3.5 text-sky-300 shrink-0" />
                     <span>{consumerRecord.address}</span>
                   </span>
-                  <span className="flex items-center space-x-1 font-mono font-bold text-amber-200">
-                    <Tag className="h-3.5 w-3.5 shrink-0" />
-                    <span>Barangay: {consumerRecord.barangay || 'Poblacion'} ({consumerRecord.barangayId || 'BRG-01'})</span>
+                  <span className="flex items-center space-x-1 font-bold text-amber-200">
+                    <MapPin className="h-3.5 w-3.5 shrink-0" />
+                    <span>Barangay: {consumerRecord.barangay || 'Poblacion'}</span>
                   </span>
                 </div>
               </div>
@@ -1405,8 +1429,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   </span>
                 </div>
                 <div className="flex justify-between items-center text-xs">
-                  <span className="text-blue-200 font-medium">Meter Size:</span>
-                  <span className="font-bold text-blue-100">{consumerRecord.meterSize || '1/2 inch'}</span>
+                  <span className="text-blue-200 font-medium">Classification:</span>
+                  <span className="font-bold text-blue-100">{consumerRecord.consumerType || 'Residential'}</span>
                 </div>
               </div>
             </div>
@@ -1462,11 +1486,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     <span>Pay Remaining ₱{outstandingSum.toFixed(2)}</span>
                   </button>
                   <button
-                    onClick={() => setActiveTab('bills')}
-                    className="px-4 py-3 bg-black/20 hover:bg-black/30 border border-white/20 text-white font-bold text-xs uppercase tracking-wider rounded-2xl transition flex items-center justify-center space-x-1 cursor-pointer"
+                    onClick={() => {
+                      setBillDetailsReading(latestRead || (readings.length > 0 ? readings[0] : null));
+                      setIsBillDetailsOpen(true);
+                    }}
+                    className="px-4 py-3 bg-black/20 hover:bg-black/30 border border-white/20 text-white font-bold text-xs uppercase tracking-wider rounded-2xl transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                    id="smart-banner-breakdown-btn"
                   >
-                    <span>View Breakdown</span>
-                    <ArrowRight className="h-3.5 w-3.5 ml-1" />
+                    <Calculator className="h-3.5 w-3.5" />
+                    <span>View Bill Breakdown</span>
+                    <ArrowRight className="h-3.5 w-3.5 ml-0.5" />
                   </button>
                 </div>
               </div>
@@ -1594,6 +1623,18 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      onClick={() => {
+                        setBillDetailsReading(spotlightReading);
+                        setIsBillDetailsOpen(true);
+                      }}
+                      className="px-4 py-2.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-800 font-black text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center space-x-1.5 cursor-pointer shadow-xs"
+                      id="spotlight-bill-breakdown-btn"
+                      title="View itemized fixed, volumetric, and tax breakdown"
+                    >
+                      <Calculator className="h-4 w-4 text-blue-600" />
+                      <span>Bill Details</span>
+                    </button>
                     {spotlightReading.paymentStatus !== 'paid' ? (
                       <>
                         <button
@@ -1709,12 +1750,26 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
 
               {/* Card 3: Current Bill Amount */}
-              <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-xs space-y-3">
+              <div 
+                onClick={() => {
+                  setBillDetailsReading(latestRead || (readings.length > 0 ? readings[0] : null));
+                  setIsBillDetailsOpen(true);
+                }}
+                className="bg-white border border-slate-200/80 hover:border-indigo-300 hover:shadow-md transition-all rounded-3xl p-5 shadow-xs space-y-3 cursor-pointer group relative overflow-hidden"
+                id="card-current-bill-amount"
+                title="Click to view full itemized bill breakdown"
+              >
                 <div className="flex justify-between items-start">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-                    Current Bill Amount
-                  </span>
-                  <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                  <div>
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                      Current Bill Amount
+                    </span>
+                    <span className="text-[10px] font-bold text-indigo-600 group-hover:text-indigo-800 flex items-center mt-0.5">
+                      <span>View 3-Pillar Breakdown</span>
+                      <ArrowRight className="h-3 w-3 ml-1 group-hover:translate-x-0.5 transition-transform" />
+                    </span>
+                  </div>
+                  <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl group-hover:bg-indigo-600 group-hover:text-white transition-colors">
                     <Calculator className="h-5 w-5" />
                   </div>
                 </div>
@@ -1724,9 +1779,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       ₱{currentBillAmount.toFixed(2)}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-1 font-medium">
-                    Cycle: {latestRead ? latestRead.billingPeriod : 'No Billing Cycle Yet'}
-                  </p>
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1 font-medium">
+                    <span>
+                      Cycle: {latestRead ? latestRead.billingPeriod : 'No Billing Cycle Yet'}
+                    </span>
+                    <span className="text-[10px] font-bold text-indigo-600 uppercase bg-indigo-50 px-1.5 py-0.5 rounded">
+                      Fixed + Vol + Tax
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -1776,6 +1836,57 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
 
             </div>
+
+            {/* EMBEDDED DASHBOARD BILL DETAILS BREAKDOWN COMPONENT */}
+            {consumerRecord && (
+              <div className="bg-white border border-slate-200/90 rounded-3xl p-6 shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2.5 bg-indigo-50 text-indigo-700 rounded-2xl">
+                      <Calculator className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <h3 className="text-base font-black text-slate-900">
+                          Current Water Bill Details & Tariff Itemization
+                        </h3>
+                        <span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 font-black text-[9px] uppercase tracking-wider rounded-md">
+                          Fixed + Volumetric + Taxes
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        Itemized accounting breakdown of your assessed water charges for <strong className="text-slate-800 font-bold">{latestRead ? latestRead.billingPeriod : 'Current Period'}</strong> ({consumerRecord.consumerType} classification)
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => {
+                        setBillDetailsReading(latestRead || (readings.length > 0 ? readings[0] : null));
+                        setIsBillDetailsOpen(true);
+                      }}
+                      className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-black uppercase tracking-wider rounded-xl transition flex items-center space-x-1.5 cursor-pointer shadow-2xs"
+                      title="Open full interactive breakdown modal"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      <span>Expand Modal View</span>
+                    </button>
+                  </div>
+                </div>
+
+                <BillDetails
+                  reading={latestRead || (readings.length > 0 ? readings[0] : null)}
+                  consumer={consumerRecord}
+                  calculateCostOf={calculateCostOf}
+                  isModal={false}
+                  onPayBill={(r) => {
+                    setActiveTab('bills');
+                    handleStartPayment(r, 'full');
+                  }}
+                />
+              </div>
+            )}
 
             {/* TWO ANALYTICAL VISUAL CHARTS: CONSUMPTION CHART & BILLING CHART */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2670,44 +2781,58 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                             {/* Action Buttons */}
                             <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                              {isPaid ? (
+                              <div className="inline-flex items-center space-x-1.5">
                                 <button
-                                  onClick={() => setReceiptDetailModal(r)}
-                                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer border border-emerald-500"
-                                  id={`table-receipt-btn-${r.id}`}
-                                  title="View Official Electronic Payment Receipt"
+                                  onClick={() => {
+                                    setBillDetailsReading(r);
+                                    setIsBillDetailsOpen(true);
+                                  }}
+                                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs rounded-xl transition inline-flex items-center space-x-1 cursor-pointer border border-slate-700"
+                                  id={`table-breakdown-btn-${r.id}`}
+                                  title="View Itemized 3-Pillar Bill Breakdown"
                                 >
-                                  <ReceiptText className="h-3.5 w-3.5" />
-                                  <span>Receipt</span>
+                                  <Calculator className="h-3.5 w-3.5 text-indigo-400" />
+                                  <span className="hidden lg:inline">Breakdown</span>
                                 </button>
-                              ) : isPartial ? (
-                                <div className="inline-flex items-center space-x-1.5">
+                                {isPaid ? (
                                   <button
                                     onClick={() => setReceiptDetailModal(r)}
-                                    className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
-                                    title="View Partial Receipt"
+                                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer border border-emerald-500"
+                                    id={`table-receipt-btn-${r.id}`}
+                                    title="View Official Electronic Payment Receipt"
                                   >
                                     <ReceiptText className="h-3.5 w-3.5" />
+                                    <span>Receipt</span>
                                   </button>
+                                ) : isPartial ? (
+                                  <>
+                                    <button
+                                      onClick={() => setReceiptDetailModal(r)}
+                                      className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
+                                      title="View Partial Receipt"
+                                    >
+                                      <ReceiptText className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleStartPayment(r, 'full')}
+                                      className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                      id={`table-pay-partial-${r.id}`}
+                                    >
+                                      <CreditCard className="h-3.5 w-3.5" />
+                                      <span>Pay ₱{remainingDue.toFixed(2)}</span>
+                                    </button>
+                                  </>
+                                ) : (
                                   <button
                                     onClick={() => handleStartPayment(r, 'full')}
-                                    className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
-                                    id={`table-pay-partial-${r.id}`}
+                                    className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                    id={`table-pay-btn-${r.id}`}
                                   >
                                     <CreditCard className="h-3.5 w-3.5" />
-                                    <span>Pay ₱{remainingDue.toFixed(2)}</span>
+                                    <span>Pay Bill</span>
                                   </button>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={() => handleStartPayment(r, 'full')}
-                                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
-                                  id={`table-pay-btn-${r.id}`}
-                                >
-                                  <CreditCard className="h-3.5 w-3.5" />
-                                  <span>Pay Bill</span>
-                                </button>
-                              )}
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -2784,20 +2909,33 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           </div>
                         </div>
 
-                        <div className="flex justify-end pt-1">
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            onClick={() => {
+                              setBillDetailsReading(r);
+                              setIsBillDetailsOpen(true);
+                            }}
+                            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs rounded-xl transition flex items-center justify-center space-x-1 cursor-pointer border border-slate-700"
+                            id={`mob-breakdown-btn-${r.id}`}
+                            title="View itemized breakdown"
+                          >
+                            <Calculator className="h-3.5 w-3.5 text-indigo-400" />
+                            <span>Breakdown</span>
+                          </button>
                           {isPaid ? (
                             <button
                               onClick={() => setReceiptDetailModal(r)}
-                              className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                              className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
                             >
                               <ReceiptText className="h-3.5 w-3.5" />
                               <span>View Receipt</span>
                             </button>
                           ) : isPartial ? (
-                            <div className="flex items-center space-x-2 w-full">
+                            <div className="flex items-center space-x-1.5 flex-1">
                               <button
                                 onClick={() => setReceiptDetailModal(r)}
-                                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
+                                className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
+                                title="Receipt"
                               >
                                 <ReceiptText className="h-3.5 w-3.5" />
                               </button>
@@ -2812,7 +2950,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           ) : (
                             <button
                               onClick={() => handleStartPayment(r, 'full')}
-                              className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                              className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
                             >
                               <CreditCard className="h-3.5 w-3.5" />
                               <span>Pay Bill Now</span>
@@ -3303,10 +3441,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <span className="font-bold text-slate-800">{consumerRecord.consumerType || 'Residential'}</span>
                     </div>
                     <div className="py-2.5 flex justify-between">
-                      <span className="text-slate-500">Meter Pipe Diameter:</span>
-                      <span className="font-bold text-slate-800">{consumerRecord.meterSize || '1/2 inch'}</span>
-                    </div>
-                    <div className="py-2.5 flex justify-between">
                       <span className="text-slate-500">Connection Status:</span>
                       <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-black text-[9px] uppercase rounded">
                         {consumerRecord.status}
@@ -3523,6 +3657,26 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             loadConsumerInfo(true);
           }}
           calculateCostOf={calculateCostOf}
+        />
+      )}
+
+      {/* BILL DETAILS ITEMIZED BREAKDOWN MODAL */}
+      {consumerRecord && isBillDetailsOpen && (
+        <BillDetails
+          reading={billDetailsReading || latestRead || (readings.length > 0 ? readings[0] : null)}
+          consumer={consumerRecord}
+          calculateCostOf={calculateCostOf}
+          isModal={true}
+          isOpen={isBillDetailsOpen}
+          onClose={() => {
+            setIsBillDetailsOpen(false);
+            setBillDetailsReading(null);
+          }}
+          onPayBill={(r) => {
+            setIsBillDetailsOpen(false);
+            setActiveTab('bills');
+            handleStartPayment(r, 'full');
+          }}
         />
       )}
 

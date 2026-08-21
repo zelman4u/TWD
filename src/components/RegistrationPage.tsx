@@ -33,7 +33,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
   
   // Consumer Classification State
   const [consumerType, setConsumerType] = useState<'Residential' | 'Commercial'>('Residential');
-  const [meterSize, setMeterSize] = useState('1/2 inch');
   const [householdInfo, setHouseholdInfo] = useState('');
   const [businessName, setBusinessName] = useState('');
   const [businessType, setBusinessType] = useState('');
@@ -51,7 +50,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
     sitioZone?: string;
     fullAddress?: string;
     consumerType?: string;
-    meterSize?: string;
     status: string;
   } | null>(null);
 
@@ -124,7 +122,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         registrationDate: new Date().toISOString().split('T')[0],
         linkedUserId: newUserId,
         consumerType: consumerType,
-        meterSize: meterSize,
         householdInfo: consumerType === 'Residential' ? householdInfo.trim() : undefined,
         businessName: consumerType === 'Commercial' ? businessName.trim() : undefined,
         businessType: consumerType === 'Commercial' ? businessType.trim() : undefined,
@@ -153,7 +150,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
           barangayId: matchedBarangay.id,
           sitioZone: sitioZone.trim(),
           consumerType: consumerType,
-          meterSize: meterSize,
           householdInfo: consumerType === 'Residential' ? householdInfo.trim() : undefined,
           businessName: consumerType === 'Commercial' ? businessName.trim() : undefined,
           businessType: consumerType === 'Commercial' ? businessType.trim() : undefined,
@@ -182,14 +178,14 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         officialName,
         'consumer',
         'Customer Portal Self-Registration',
-        `Submitted application for water connection in Barangay ${matchedBarangay.name} (${matchedBarangay.id}), ${sitioZone.trim()}. Status: PENDING ADMIN ISSUANCE. Classification: ${consumerType} (${meterSize}). Awaiting administrator account and meter tag assignment.`
+        `Submitted application for water connection in Barangay ${matchedBarangay.name}, ${sitioZone.trim()}. Status: PENDING ADMIN ISSUANCE. Classification: ${consumerType}. Awaiting administrator account and meter tag assignment.`
       );
 
       // Add Welcome Notification
       mockDb.addNotification({
         accountNumber: '',
         title: `Registration Application Submitted`,
-        message: `Your registration application for Barangay ${matchedBarangay.name} (${matchedBarangay.id}), ${sitioZone.trim()} has been submitted. The administration office will review and issue your official Account Number and Meter Tag shortly.`,
+        message: `Your registration application for Barangay ${matchedBarangay.name}, ${sitioZone.trim()} has been submitted. The administration office will review and issue your official Account Number and Meter Tag shortly.`,
         type: 'announcement'
       });
 
@@ -202,7 +198,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         sitioZone: sitioZone.trim(),
         fullAddress: fullAddress,
         consumerType: consumerType,
-        meterSize: meterSize,
         status: 'Pending Admin Issuance'
       });
 
@@ -318,7 +313,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                       <option value="">-- Select Registered Barangay --</option>
                       {availableBarangays.map((b) => (
                         <option key={b.id} value={b.name}>
-                          {b.name} ({b.code})
+                          {b.name}
                         </option>
                       ))}
                     </select>
@@ -381,20 +376,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
-                      <div className="space-y-1">
-                        <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Meter Pipe Size <span className="text-red-400">*</span></label>
-                        <select
-                          value={meterSize}
-                          onChange={(e) => setMeterSize(e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-1.5 px-2.5 text-xs text-slate-200 focus:outline-none"
-                        >
-                          <option value="1/2 inch">1/2 inch (Standard Domestic)</option>
-                          <option value="3/4 inch">3/4 inch (High Flow / Commercial)</option>
-                          <option value="1 inch">1 inch (Industrial / Bulk)</option>
-                        </select>
-                      </div>
-
+                    <div className="pt-2">
                       {consumerType === 'Residential' ? (
                         <div className="space-y-1">
                           <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Household Size</label>
@@ -407,7 +389,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                           />
                         </div>
                       ) : (
-                        <>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <div className="space-y-1">
                             <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Business Name <span className="text-red-400">*</span></label>
                             <input
@@ -419,7 +401,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                               className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-1.5 px-2.5 text-xs text-slate-200 focus:outline-none"
                             />
                           </div>
-                          <div className="space-y-1 sm:col-span-2">
+                          <div className="space-y-1">
                             <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Business Type <span className="text-red-400">*</span></label>
                             <input
                               type="text"
@@ -430,7 +412,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                               className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-1.5 px-2.5 text-xs text-slate-200 focus:outline-none"
                             />
                           </div>
-                        </>
+                        </div>
                       )}
                     </div>
                   </div>

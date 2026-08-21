@@ -225,11 +225,27 @@ export const mockDb = {
     });
   },
   saveConsumers: (consumers: Consumer[]): void => {
-    setStored(KEYS.CONSUMERS, consumers);
-    syncBatchToFirestore(COLLECTIONS.CONSUMERS, consumers, 'accountNumber');
+    // Deduplicate consumers: if an active record with issued accountNumber exists, drop stale pending placeholders for same user/email/name
+    const deduplicated = consumers.filter((c, idx, arr) => {
+      const isPending = !c.accountNumber || c.accountNumber.toUpperCase().startsWith('PENDING') || c.status === 'pending_approval';
+      if (isPending) {
+        const hasActiveTwin = arr.some(o => o !== c && (
+          (c.linkedUserId && o.linkedUserId && o.linkedUserId === c.linkedUserId && o.status === 'active') ||
+          (c.email && o.email && o.email.toLowerCase() === c.email.toLowerCase() && o.status === 'active') ||
+          (c.name && o.name && o.name.toLowerCase() === c.name.toLowerCase() && c.barangay === o.barangay && o.status === 'active')
+        ));
+        if (hasActiveTwin) return false;
+      }
+      return true;
+    });
+
+    setStored(KEYS.CONSUMERS, deduplicated);
+    syncBatchToFirestore(COLLECTIONS.CONSUMERS, deduplicated, 'accountNumber');
     // Ensure every pending or active consumer is synced to Firestore
-    consumers.forEach(c => {
-      const docId = c.accountNumber || c.linkedUserId || (c.email ? `email_${c.email.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}` : '') || (c as any).id;
+    deduplicated.forEach(c => {
+      const docId = (c.accountNumber && !c.accountNumber.startsWith('PENDING')) 
+        ? c.accountNumber 
+        : (c.linkedUserId || (c.email ? `email_${c.email.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}` : '') || (c as any).id);
       if (docId) {
         syncDocToFirestore(COLLECTIONS.CONSUMERS, docId, c);
       }
