@@ -384,9 +384,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   );
 
   // Compute Account Metrics & Arrears
-  const latestRead = readings[0] || null;
+  const latestRead = (readings && readings.length > 0) ? readings[0] : null;
   const currentConsumptionVal = latestRead ? latestRead.consumption : 0;
-  const currentBillAmount = consumerRecord ? calculateCostOf(currentConsumptionVal, consumerRecord.consumerType) : 0;
+  // If there are no issued readings for this account yet or account is pending issuance, current bill is 0.00
+  const currentBillAmount = (consumerRecord && latestRead && !isAccountPending)
+    ? (latestRead.paymentStatus === 'paid' ? 0 : Math.max(0, calculateCostOf(currentConsumptionVal, consumerRecord.consumerType) - (latestRead.paidAmount || 0)))
+    : 0;
   
   // Unpaid and Partial bills
   const unpaidBills = readings.filter(r => r.paymentStatus !== 'paid');
@@ -1660,20 +1663,22 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     <span className="text-xs font-bold text-slate-500 uppercase">m³ (cubic meters)</span>
                   </div>
                   <div className="flex items-center space-x-1 text-[11px] mt-1">
-                    {consumptionDiff > 0 ? (
+                    {previousMonthRead && consumptionDiff > 0 ? (
                       <span className="text-rose-600 font-bold flex items-center">
                         <TrendingUp className="h-3.5 w-3.5 mr-0.5" />
                         +{consumptionDiff} m³ ({consumptionPercentChange}%)
                       </span>
-                    ) : consumptionDiff < 0 ? (
+                    ) : previousMonthRead && consumptionDiff < 0 ? (
                       <span className="text-emerald-600 font-bold flex items-center">
                         <TrendingDown className="h-3.5 w-3.5 mr-0.5" />
                         {consumptionDiff} m³ ({consumptionPercentChange}%)
                       </span>
-                    ) : (
+                    ) : previousMonthRead ? (
                       <span className="text-slate-500 font-medium">Constant vs last month</span>
+                    ) : (
+                      <span className="text-slate-500 font-medium">{latestRead ? 'Initial baseline reading' : 'No recorded cycles yet'}</span>
                     )}
-                    <span className="text-slate-400">vs prev</span>
+                    {previousMonthRead && <span className="text-slate-400">vs prev</span>}
                   </div>
                 </div>
               </div>
@@ -1718,7 +1723,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-500 mt-1 font-medium">
-                    Cycle: {latestRead ? latestRead.billingPeriod : 'Current Month'}
+                    Cycle: {latestRead ? latestRead.billingPeriod : 'No Billing Cycle Yet'}
                   </p>
                 </div>
               </div>
