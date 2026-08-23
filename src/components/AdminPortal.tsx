@@ -3080,6 +3080,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               });
                               mockDb.saveUsers(updatedUsers);
 
+                              // Sync to backend Express API
+                              try {
+                                fetch(`/api/staff/${encodeURIComponent(r.id)}/status`, {
+                                  method: 'PATCH',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ status: 'active', name: r.name, username: r.username, assignedRoutes: r.assignedRoutes })
+                                }).catch(() => {});
+                              } catch {}
+
                               mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Approve Meter Reader', `Approved meter reader: ${r.name}`);
                               toast.success('Approved', `${r.name} authorized for mobile access.`);
                             }}

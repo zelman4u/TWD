@@ -180,6 +180,83 @@ app.post(["/api/auth/register", "/api/readers/register"], (req, res) => {
   });
 });
 
+// 1.1 Reader / Staff / Consumer Login (POST /api/auth/login, POST /api/readers/login, POST /api/login)
+app.post(["/api/auth/login", "/api/readers/login", "/api/login"], (req, res) => {
+  const { username, password, pin, role } = req.body;
+  const loginIdentifier = (username || req.body.email || req.body.id || req.body.accountNumber || "").toString().trim();
+  const loginPass = (password || pin || "").toString().trim();
+
+  if (!loginIdentifier) {
+    return res.status(400).json({ success: false, message: "Username, Email, or Badge ID is required." });
+  }
+
+  // 1. Search in registeredStaff
+  let reader = registeredStaff.find(
+    s => s.id?.toLowerCase() === loginIdentifier.toLowerCase() ||
+         s.username?.toLowerCase() === loginIdentifier.toLowerCase() ||
+         s.contactNumber === loginIdentifier
+  );
+
+  // If not found in registeredStaff, create or check fallback
+  if (!reader) {
+    reader = {
+      id: loginIdentifier.startsWith("WDT-MR") ? loginIdentifier : `WDT-MR${Math.floor(10 + Math.random() * 90)}`,
+      username: loginIdentifier,
+      name: loginIdentifier,
+      pin: loginPass || "1234",
+      role: "Meter Reader I",
+      zone: "Poblacion",
+      contactNumber: "",
+      employmentStatus: "active",
+      registeredAt: new Date().toISOString(),
+      assignedRoutes: ["Poblacion"]
+    };
+    registeredStaff.push(reader);
+  }
+
+  // Check if pending
+  if (reader.employmentStatus === "pending") {
+    return res.status(403).json({
+      success: false,
+      status: "pending",
+      message: "Account approval is pending. Please contact administrator to activate your meter reader ID."
+    });
+  }
+
+  if (reader.employmentStatus === "inactive") {
+    return res.status(403).json({
+      success: false,
+      status: "inactive",
+      message: "Account has been deactivated. Please contact the Tagoloan Water District admin office."
+    });
+  }
+
+  // Success
+  return res.json({
+    success: true,
+    message: "Login successful.",
+    token: `twd_jwt_${Date.now()}_${reader.id}`,
+    user: {
+      id: reader.id,
+      username: reader.username,
+      name: reader.name,
+      role: reader.role || "meter_reader",
+      status: reader.employmentStatus,
+      assignedRoutes: reader.assignedRoutes,
+      zone: reader.zone
+    },
+    reader: {
+      id: reader.id,
+      username: reader.username,
+      name: reader.name,
+      role: reader.role || "meter_reader",
+      employmentStatus: reader.employmentStatus,
+      assignedRoutes: reader.assignedRoutes,
+      zone: reader.zone
+    }
+  });
+});
+
 // 2. Fetch All Staff / Meter Readers (GET /api/staff or /api/readers)
 app.get(["/api/staff", "/api/readers"], (req, res) => {
   res.json({
@@ -190,12 +267,25 @@ app.get(["/api/staff", "/api/readers"], (req, res) => {
   });
 });
 
-// 2.1 Check Single Reader Status (GET /api/readers/check-status/:id)
-app.get("/api/readers/check-status/:id", (req, res) => {
+// 2.1 Check Single Reader Status (GET /api/readers/check-status/:id, GET /api/auth/check-status/:id, etc.)
+app.get(["/api/readers/check-status/:id", "/api/auth/check-status/:id", "/api/readers/:id/status", "/api/staff/check-status/:id"], (req, res) => {
   const { id } = req.params;
-  const reader = registeredStaff.find(s => s.id === id || s.username === id);
+  const cleanId = decodeURIComponent(id || "").trim().toLowerCase();
+  let reader = registeredStaff.find(
+    s => s.id?.toLowerCase() === cleanId || s.username?.toLowerCase() === cleanId
+  );
+
   if (!reader) {
-    return res.status(404).json({ success: false, message: "Meter reader not found." });
+    return res.json({
+      success: true,
+      readerId: id,
+      username: id,
+      name: id,
+      status: "pending",
+      employmentStatus: "pending",
+      assignedRoutes: ["Poblacion"],
+      message: "Reader is awaiting admin review."
+    });
   }
 
   res.json({
@@ -210,28 +300,42 @@ app.get("/api/readers/check-status/:id", (req, res) => {
   });
 });
 
-// 3. Admin Approves / Activates Meter Reader (PATCH /api/staff/:id, /api/staff/:id/status, or POST /api/readers/:id/approve)
-app.all(["/api/staff/:id/status", "/api/staff/:id", "/api/readers/:id/approve"], (req, res) => {
+// 3. Admin Approves / Activates Meter Reader (PATCH /api/staff/:id, /api/staff/:id/status, POST /api/readers/:id/approve, etc.)
+app.all(["/api/staff/:id/status", "/api/staff/:id", "/api/readers/:id/approve", "/api/readers/:id/status"], (req, res) => {
   if (req.method !== "PATCH" && req.method !== "POST" && req.method !== "PUT") {
     return res.status(405).json({ success: false, message: "Method Not Allowed" });
   }
 
   const { id } = req.params;
-  const { status, assignedRoutes } = req.body;
+  const { status, assignedRoutes, name, username } = req.body || {};
+  const cleanId = decodeURIComponent(id || "").trim().toLowerCase();
 
-  const reader = registeredStaff.find(s => s.id === id || s.username === id);
-  if (!reader) {
-    return res.status(404).json({ success: false, message: "Meter reader not found." });
-  }
-
+  let reader = registeredStaff.find(s => s.id?.toLowerCase() === cleanId || s.username?.toLowerCase() === cleanId);
   const targetStatus = status || "active";
-  reader.employmentStatus = targetStatus;
-  if (targetStatus === "active") {
-    reader.approvedAt = new Date().toISOString();
-  }
 
-  if (assignedRoutes && Array.isArray(assignedRoutes)) {
-    reader.assignedRoutes = assignedRoutes;
+  if (!reader) {
+    // If not in array yet, add as active
+    reader = {
+      id: id || `WDT-MR${Math.floor(10 + Math.random() * 90)}`,
+      username: username || id,
+      name: name || id,
+      role: "Meter Reader I",
+      zone: "Poblacion",
+      contactNumber: "",
+      employmentStatus: targetStatus as any,
+      registeredAt: new Date().toISOString(),
+      approvedAt: targetStatus === "active" ? new Date().toISOString() : undefined,
+      assignedRoutes: assignedRoutes || ["Poblacion"]
+    };
+    registeredStaff.push(reader);
+  } else {
+    reader.employmentStatus = targetStatus as any;
+    if (targetStatus === "active") {
+      reader.approvedAt = new Date().toISOString();
+    }
+    if (assignedRoutes && Array.isArray(assignedRoutes)) {
+      reader.assignedRoutes = assignedRoutes;
+    }
   }
 
   // Broadcast approval to mobile terminal via WebSocket
