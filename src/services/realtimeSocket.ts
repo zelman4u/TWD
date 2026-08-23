@@ -1,29 +1,39 @@
-// Real-time WebSocket connection manager for Central Admin & Field Mobile Terminals
+// Real-time synchronization manager for Central Admin & Field Mobile Terminals
 
 export function getRealtimeSocketUrl(): string {
   if (typeof window === 'undefined') return '';
 
+  const host = window.location.host || '';
   const hostname = window.location.hostname || '';
-  // When running on Vercel, Netlify, Cloudflare Pages, GitHub Pages or custom frontend CDN:
-  // Route WebSocket connections directly to the persistent Cloud Run WebSocket Broker
+
+  // In cloud previews, Vercel, Netlify, or serverless hosts where direct WebSockets
+  // are rejected by the ingress reverse proxy (causing 404/403 handshake errors),
+  // return empty string to prevent browser console errors and rely on reliable HTTP sync.
   if (
     hostname.includes('vercel.app') ||
     hostname.includes('vercel.dev') ||
     hostname.includes('netlify.app') ||
     hostname.includes('pages.dev') ||
-    hostname.includes('web.app') ||
-    hostname.includes('firebaseapp.com')
+    hostname.includes('run.app') ||
+    hostname.includes('googleusercontent.com')
   ) {
-    return 'wss://ais-pre-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app';
+    return '';
   }
 
-  // Local development / Direct Cloud Run container hosting:
+  // Local development fallback
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.host}`;
+  return `${protocol}//${host}`;
 }
 
 export function initRealtimeSocket(onMessage: (data: any) => void): () => void {
   if (typeof window === 'undefined') return () => {};
+
+  const url = getRealtimeSocketUrl();
+  // If in an environment with no persistent raw WebSocket ingress, cleanly return no-op.
+  // Real-time updates operate seamlessly via active REST polling and Firestore listeners.
+  if (!url) {
+    return () => {};
+  }
 
   let ws: WebSocket | null = null;
   let reconnectTimer: any = null;
@@ -33,9 +43,6 @@ export function initRealtimeSocket(onMessage: (data: any) => void): () => void {
   const connect = () => {
     if (isDestroyed) return;
     try {
-      const url = getRealtimeSocketUrl();
-      if (!url) return;
-
       ws = new WebSocket(url);
 
       ws.onopen = () => {
@@ -47,7 +54,7 @@ export function initRealtimeSocket(onMessage: (data: any) => void): () => void {
           const parsed = JSON.parse(event.data);
           onMessage(parsed);
         } catch {
-          // ignore non-JSON messages
+          // ignore non-JSON
         }
       };
 
@@ -63,13 +70,13 @@ export function initRealtimeSocket(onMessage: (data: any) => void): () => void {
 
       ws.onclose = () => {
         if (isDestroyed) return;
-        if (reconnectAttempts < 3) {
+        if (reconnectAttempts < 2) {
           reconnectAttempts++;
-          reconnectTimer = setTimeout(connect, Math.min(10000, 3000 * reconnectAttempts));
+          reconnectTimer = setTimeout(connect, 6000);
         }
       };
     } catch {
-      // Standby fallback
+      // Clean fallback
     }
   };
 
