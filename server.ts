@@ -27,10 +27,11 @@ app.use((req, res, next) => {
     req.url = req.url.replace(/^\/api\/api\//, "/api/");
   }
   res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-client-version, x-app-id, Cache-Control, Pragma");
+  res.header("Access-Control-Max-Age", "86400");
   if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
+    return res.status(200).end();
   }
   next();
 });
@@ -118,35 +119,51 @@ function broadcast(type: string, payload: unknown) {
 // REST API ENDPOINTS FOR MOBILE APP & WEB
 // ==========================================
 
-// 1. Mobile Meter Reader Registration (POST /api/auth/register or /api/readers/register)
-app.post(["/api/auth/register", "/api/readers/register"], (req, res) => {
-  const { id, username, name, pin, role, zone, contactNumber, registeredAt } = req.body;
+// 1. Mobile Meter Reader Registration (POST /api/auth/register, /api/readers/register, /api/readers, /api/staff/register)
+app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/auth/register-reader", "/api/staff/register", "/api/staff"], (req, res) => {
+  const name = (req.body.name || req.body.fullName || req.body.displayName || "").toString().trim();
+  const username = (req.body.username || req.body.email || req.body.badgeId || name || "").toString().trim();
+  const pin = (req.body.pin || req.body.password || "1234").toString().trim();
+  const contactNumber = (req.body.contactNumber || req.body.phoneNumber || req.body.phone || "").toString().trim();
+  const rawZone = req.body.zone || (Array.isArray(req.body.assignedBarangays) ? req.body.assignedBarangays[0] : "") || (Array.isArray(req.body.assignedZones) ? req.body.assignedZones[0] : "") || "Poblacion";
+  const cleanZone = rawZone ? rawZone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim() : "Poblacion";
+  const assignedRoutes = Array.isArray(req.body.assignedRoutes) && req.body.assignedRoutes.length > 0
+    ? req.body.assignedRoutes
+    : (Array.isArray(req.body.assignedBarangays) && req.body.assignedBarangays.length > 0
+      ? req.body.assignedBarangays
+      : (Array.isArray(req.body.assignedZones) && req.body.assignedZones.length > 0
+        ? req.body.assignedZones
+        : [cleanZone]));
 
-  if (!name || !username) {
+  if (!name && !username) {
     return res.status(400).json({
       success: false,
-      message: "Reader name and username are required for registration."
+      message: "Reader name or username is required for registration."
     });
   }
 
-  const readerId = id || `WDT-MR${Math.floor(10 + Math.random() * 90)}`;
-  const cleanZone = zone ? zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim() : "Poblacion";
+  const effectiveName = name || username;
+  const effectiveUsername = username || name;
+  const readerId = req.body.id || req.body.employeeId || `WDT-MR${Math.floor(10 + Math.random() * 90)}`;
 
   const newReader: MobileReader = {
     id: readerId,
-    username: username.trim(),
-    name: name.trim(),
+    username: effectiveUsername,
+    name: effectiveName,
     pin: pin || "1234",
-    role: role || "Meter Reader I",
+    role: req.body.role || "Meter Reader I",
     zone: cleanZone,
-    contactNumber: contactNumber || "",
+    contactNumber: contactNumber,
     employmentStatus: "pending", // Starts as pending until Admin approves
-    registeredAt: registeredAt || new Date().toISOString(),
-    assignedRoutes: [cleanZone]
+    registeredAt: req.body.registeredAt || req.body.submittedAt || new Date().toISOString(),
+    assignedRoutes: assignedRoutes
   };
 
   // Check if reader already exists
-  const existingIdx = registeredStaff.findIndex(s => s.username === newReader.username || s.id === newReader.id);
+  const existingIdx = registeredStaff.findIndex(
+    s => s.username?.toLowerCase() === newReader.username.toLowerCase() ||
+         s.id?.toLowerCase() === newReader.id.toLowerCase()
+  );
   if (existingIdx >= 0) {
     registeredStaff[existingIdx] = { ...registeredStaff[existingIdx], ...newReader };
   } else {
