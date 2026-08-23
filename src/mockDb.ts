@@ -254,6 +254,14 @@ export const mockDb = {
   saveReaders: (readers: MeterReader[]): void => {
     setStored(KEYS.READERS, readers);
     syncBatchToFirestore(COLLECTIONS.READERS, readers, 'id');
+    readers.forEach(r => {
+      if (r.id) {
+        syncDocToFirestore(COLLECTIONS.READERS, r.id, r);
+      }
+      if (r.employeeId && r.employeeId !== r.id) {
+        syncDocToFirestore(COLLECTIONS.READERS, r.employeeId, r);
+      }
+    });
   },
   saveMeters: (meters: WaterMeter[]): void => {
     setStored(KEYS.METERS, meters);

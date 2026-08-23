@@ -4,9 +4,9 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { UserCheck, AlertCircle, CheckCircle, ArrowLeft, Waves, Briefcase, Clock } from 'lucide-react';
+import { UserCheck, AlertCircle, CheckCircle, ArrowLeft, Waves, Briefcase, Clock, Gauge, ShieldCheck } from 'lucide-react';
 import { mockDb } from '../mockDb';
-import { User, Consumer, Barangay } from '../types';
+import { User, Consumer, Barangay, MeterReader } from '../types';
 import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
 import { useLoading } from '../context/LoadingContext';
 import { useToast } from '../context/ToastContext';
@@ -20,6 +20,9 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
   const { showLoading, hideLoading } = useLoading();
   const toast = useToast();
 
+  // Registration Account Type Tab
+  const [accountType, setAccountType] = useState<'consumer' | 'meter_reader'>('consumer');
+
   // Consumer Form State
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -27,6 +30,10 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
   const [barangay, setBarangay] = useState('');
   const [sitioZone, setSitioZone] = useState('');
   const [password, setPassword] = useState('');
+  
+  // Meter Reader Form State
+  const [readerEmployeeId, setReaderEmployeeId] = useState('');
+  const [readerZone, setReaderZone] = useState('Poblacion');
   
   // Available Barangays loaded from DB
   const [availableBarangays, setAvailableBarangays] = useState<Barangay[]>([]);
@@ -42,6 +49,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
   const [isValidating, setIsValidating] = useState(false);
   const [isSuccessModal, setIsSuccessModal] = useState(false);
   const [registeredSummary, setRegisteredSummary] = useState<{
+    accountType?: 'consumer' | 'meter_reader';
     accountNumber: string;
     fullName: string;
     email: string;
@@ -51,6 +59,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
     fullAddress?: string;
     consumerType?: string;
     status: string;
+    employeeId?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -61,6 +70,132 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    // METER READER REGISTRATION FLOW
+    if (accountType === 'meter_reader') {
+      if (!fullName.trim() || !contactNumber.trim() || !password.trim()) {
+        setError('Please complete all required fields for Field Meter Reader enrollment.');
+        return;
+      }
+
+      setIsValidating(true);
+      showLoading('Registering Field Officer...', 'Broadcasting meter reader credentials to Tagoloan District Admin Portal');
+
+      setTimeout(() => {
+        const users = mockDb.getUsers();
+        const existingUser = users.find(
+          u => (u.email || '').toLowerCase() === email.trim().toLowerCase() ||
+               (readerEmployeeId && u.employeeId && u.employeeId.toLowerCase() === readerEmployeeId.trim().toLowerCase())
+        );
+
+        if (email.trim() && existingUser) {
+          hideLoading();
+          setError('An account with this email address or Employee ID already exists.');
+          setIsValidating(false);
+          return;
+        }
+
+        const generatedBadge = readerEmployeeId.trim().toUpperCase() || `MR-${Date.now().toString().slice(-4)}`;
+        const readerId = `reader-${Date.now()}`;
+        const newUserId = `user-${Date.now()}`;
+        const officialName = fullName.trim();
+        const readerEmail = email.trim() || `${generatedBadge.toLowerCase()}@tagoloanwater.gov.ph`;
+
+        // 1. User Record
+        const newUser: User = {
+          id: newUserId,
+          email: readerEmail,
+          name: officialName,
+          role: 'meter_reader',
+          status: 'pending_approval',
+          employeeId: generatedBadge,
+          readerId: generatedBadge,
+          assignedBarangay: readerZone,
+          password: password,
+          registrationDate: new Date().toISOString()
+        };
+
+        // 2. Meter Reader Record
+        const newMeterReader: MeterReader = {
+          id: generatedBadge,
+          name: officialName,
+          email: readerEmail,
+          contactNumber: contactNumber.trim(),
+          employeeId: generatedBadge,
+          employmentStatus: 'pending_approval',
+          assignedRoutes: [readerZone],
+          completedReadings: 0,
+          pendingReadings: 0,
+          performanceRating: 5.0,
+          registrationDate: new Date().toISOString(),
+          linkedUserId: newUserId
+        };
+
+        // 3. Save to mockDb (Local Storage)
+        const readers = mockDb.getReaders();
+        const existingReaderIdx = readers.findIndex(r => r.id === generatedBadge || r.employeeId === generatedBadge);
+        let updatedReaders = [...readers];
+        if (existingReaderIdx >= 0) {
+          updatedReaders[existingReaderIdx] = newMeterReader;
+        } else {
+          updatedReaders.push(newMeterReader);
+        }
+        mockDb.saveReaders(updatedReaders);
+        mockDb.saveUsers([...users.filter(u => u.id !== newUserId), newUser]);
+
+        // 4. Sync immediately to Firestore collections for multi-device sync
+        syncDocToFirestore(COLLECTIONS.USERS, newUserId, newUser);
+        syncDocToFirestore(COLLECTIONS.USERS, `email_${readerEmail.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}`, newUser);
+        syncDocToFirestore(COLLECTIONS.READERS, generatedBadge, newMeterReader);
+        syncDocToFirestore(COLLECTIONS.READERS, readerId, newMeterReader);
+
+        // 5. Send POST to backend Express API (/api/readers/register)
+        fetch('/api/readers/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: generatedBadge,
+            badgeNumber: generatedBadge,
+            fullName: officialName,
+            username: readerEmail,
+            email: readerEmail,
+            contactNumber: contactNumber.trim(),
+            password: password,
+            pin: password,
+            zone: readerZone,
+            assignedRoutes: [readerZone],
+            employmentStatus: 'pending_approval'
+          })
+        }).catch(err => {
+          console.warn('[Reader Registration] Backend API sync warning:', err);
+        });
+
+        // 6. Audit Log
+        mockDb.addAuditLog(
+          newUserId,
+          officialName,
+          'meter_reader',
+          'Field Officer Self-Registration',
+          `Registered Field Meter Reader account for ${officialName} (Badge: ${generatedBadge}, Zone: ${readerZone}). Status: PENDING ADMIN APPROVAL.`
+        );
+
+        setRegisteredSummary({
+          accountType: 'meter_reader',
+          accountNumber: generatedBadge,
+          fullName: officialName,
+          email: readerEmail,
+          barangayName: readerZone,
+          status: 'Pending Admin Approval',
+          employeeId: generatedBadge
+        });
+
+        hideLoading();
+        setIsValidating(false);
+        setIsSuccessModal(true);
+        toast.success('Registration Received', `Officer application for ${officialName} (${generatedBadge}) submitted! Pending admin verification.`);
+      }, 800);
+      return;
+    }
 
     // CONSUMER REGISTRATION FLOW
     if (!barangay || barangay.trim() === '') {
@@ -190,6 +325,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
       });
 
       setRegisteredSummary({
+        accountType: 'consumer',
         accountNumber: 'Pending Admin Issuance',
         fullName: officialName,
         email: email.trim(),
@@ -247,155 +383,279 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
           <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-800/80 shadow-2xl rounded-3xl overflow-hidden">
             <div className="bg-gradient-to-r from-blue-900/80 via-slate-900 to-indigo-900/80 p-5 sm:p-6 text-center border-b border-slate-800">
               <div className="inline-flex p-2.5 bg-blue-500/10 rounded-2xl mb-2 text-blue-400 border border-blue-500/20">
-                <UserCheck className="h-6 w-6" />
+                {accountType === 'consumer' ? <UserCheck className="h-6 w-6" /> : <Gauge className="h-6 w-6" />}
               </div>
               <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-                Consumer Account Registration
+                {accountType === 'consumer' ? 'Consumer Account Registration' : 'Field Meter Reader Enrollment'}
               </h1>
               <p className="text-xs text-slate-300 mt-1 max-w-md mx-auto">
-                Register your Tagoloan water connection to view billing records, consumption history, and manage water district services online.
+                {accountType === 'consumer' 
+                  ? 'Register your Tagoloan water connection to view billing records, consumption history, and manage water district services online.'
+                  : 'Enroll as a certified Tagoloan Water District field meter reader. Account automatically syncs to Admin Portal for verification.'}
               </p>
+
+              {/* Account Type Toggle Switch */}
+              <div className="flex bg-slate-950/80 p-1 rounded-xl border border-slate-800 max-w-xs mx-auto mt-4">
+                <button
+                  type="button"
+                  onClick={() => { setAccountType('consumer'); setError(null); }}
+                  className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1.5 cursor-pointer ${
+                    accountType === 'consumer' 
+                      ? 'bg-blue-600 text-white shadow-md' 
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <UserCheck className="h-3.5 w-3.5" />
+                  <span>Consumer</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setAccountType('meter_reader'); setError(null); }}
+                  className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1.5 cursor-pointer ${
+                    accountType === 'meter_reader' 
+                      ? 'bg-amber-600 text-white shadow-md' 
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Gauge className="h-3.5 w-3.5" />
+                  <span>Meter Reader</span>
+                </button>
+              </div>
             </div>
 
             <div className="p-5 sm:p-6 space-y-4">
               <form onSubmit={handleRegister} className="space-y-4">
-                {/* CONSUMER REGISTRATION FIELDS */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  
-                  {/* Account Holder Name */}
-                  <div className="space-y-1 text-left sm:col-span-2">
-                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Full Account Holder Name <span className="text-red-400">*</span></label>
-                    <input 
-                      type="text" 
-                      required 
-                      placeholder="e.g. Juan Dela Cruz"
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
-                    />
-                  </div>
-
-                  {/* Contact Number */}
-                  <div className="space-y-1 text-left">
-                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Mobile Number <span className="text-red-400">*</span></label>
-                    <input 
-                      type="tel" 
-                      required 
-                      placeholder="e.g. 09171234567"
-                      value={contactNumber}
-                      onChange={(e) => setContactNumber(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
-                    />
-                  </div>
-
-                  {/* Email */}
-                  <div className="space-y-1 text-left">
-                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Email Address <span className="text-red-400">*</span></label>
-                    <input 
-                      type="email" 
-                      required 
-                      placeholder="e.g. juan@example.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
-                    />
-                  </div>
-
-                  {/* Barangay Select Dropdown */}
-                  <div className="space-y-1 text-left">
-                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Barangay (Tagoloan) <span className="text-red-400">*</span></label>
-                    <select
-                      required
-                      value={barangay}
-                      onChange={(e) => setBarangay(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none"
-                    >
-                      <option value="">-- Select Registered Barangay --</option>
-                      {availableBarangays.map((b) => (
-                        <option key={b.id} value={b.name}>
-                          {b.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Sitio / Zone */}
-                  <div className="space-y-1 text-left">
-                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Sitio / Zone <span className="text-red-400">*</span></label>
-                    <input 
-                      type="text" 
-                      required
-                      placeholder="e.g. Zone 2 or Sitio Centro"
-                      value={sitioZone}
-                      onChange={(e) => setSitioZone(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
-                    />
-                  </div>
-
-                  {/* Password */}
-                  <div className="space-y-1 text-left sm:col-span-2">
-                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Portal Access Password <span className="text-red-400">*</span></label>
-                    <input 
-                      type="password" 
-                      required
-                      placeholder="Create strong account password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
-                    />
-                  </div>
-
-                  {/* Consumer Classification Box */}
-                  <div className="sm:col-span-2 bg-slate-950/60 p-3 rounded-2xl border border-slate-800 space-y-2 text-left">
-                    <span className="block text-[9px] font-black text-blue-400 uppercase tracking-wider">Water Service Classification</span>
-                    
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setConsumerType('Residential')}
-                        className={`py-1.5 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 border cursor-pointer ${
-                          consumerType === 'Residential'
-                            ? 'bg-blue-600/20 border-blue-500 text-blue-400 shadow-sm'
-                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        <Waves className="h-3.5 w-3.5 shrink-0" />
-                        <span>Residential</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConsumerType('Commercial')}
-                        className={`py-1.5 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 border cursor-pointer ${
-                          consumerType === 'Commercial'
-                            ? 'bg-purple-600/20 border-purple-500 text-purple-400 shadow-sm'
-                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        <Briefcase className="h-3.5 w-3.5 shrink-0" />
-                        <span>Commercial</span>
-                      </button>
+                {/* 1. METER READER REGISTRATION FORM */}
+                {accountType === 'meter_reader' ? (
+                  <div className="space-y-3">
+                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 text-left flex items-start space-x-2.5">
+                      <ShieldCheck className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="text-[11px] text-amber-200">
+                        <strong className="font-bold text-amber-300">Field Staff Auto-Sync:</strong> Once registered, your profile will immediately appear under the <span className="underline font-bold">Meter Readers</span> module in the Administrator Portal for review and route authorization.
+                      </div>
                     </div>
 
-                    <div className="pt-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Officer Name */}
+                      <div className="space-y-1 text-left sm:col-span-2">
+                        <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Full Official Name <span className="text-red-400">*</span></label>
+                        <input 
+                          type="text" 
+                          required 
+                          placeholder="e.g. Juan Perez"
+                          value={fullName}
+                          onChange={(e) => setFullName(e.target.value)}
+                          className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Employee / Badge ID */}
+                      <div className="space-y-1 text-left">
+                        <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Badge / Employee ID (Optional)</label>
+                        <input 
+                          type="text" 
+                          placeholder="e.g. WDT-MR05 or leave blank for auto-ID"
+                          value={readerEmployeeId}
+                          onChange={(e) => setReaderEmployeeId(e.target.value)}
+                          className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none font-mono"
+                        />
+                      </div>
+
+                      {/* Contact Number */}
+                      <div className="space-y-1 text-left">
+                        <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Mobile Contact Number <span className="text-red-400">*</span></label>
+                        <input 
+                          type="tel" 
+                          required 
+                          placeholder="e.g. 0917-123-4567"
+                          value={contactNumber}
+                          onChange={(e) => setContactNumber(e.target.value)}
+                          className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Assigned Zone */}
+                      <div className="space-y-1 text-left">
+                        <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Primary Patrol Barangay / Zone <span className="text-red-400">*</span></label>
+                        <select
+                          value={readerZone}
+                          onChange={(e) => setReaderZone(e.target.value)}
+                          className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none"
+                        >
+                          <option value="Poblacion">Poblacion</option>
+                          <option value="Natumolan">Natumolan</option>
+                          <option value="Baluarte">Baluarte</option>
+                          <option value="Sta. Ana">Sta. Ana</option>
+                          <option value="Sta. Cruz">Sta. Cruz</option>
+                          <option value="Casinglot">Casinglot</option>
+                          <option value="Gracia">Gracia</option>
+                          <option value="Mohon">Mohon</option>
+                          <option value="Rosario">Rosario</option>
+                          <option value="Sugbongcogon">Sugbongcogon</option>
+                        </select>
+                      </div>
+
+                      {/* Email (Optional for Readers) */}
+                      <div className="space-y-1 text-left">
+                        <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Email Address (Optional)</label>
+                        <input 
+                          type="email" 
+                          placeholder="e.g. reader@tagoloanwater.gov.ph"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Security PIN / Password */}
+                      <div className="space-y-1 text-left sm:col-span-2">
+                        <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Mobile App Security PIN / Password <span className="text-red-400">*</span></label>
+                        <input 
+                          type="password" 
+                          required 
+                          placeholder="Enter PIN or Password for field mobile login"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* 2. CONSUMER REGISTRATION FIELDS */
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* Account Holder Name */}
+                    <div className="space-y-1 text-left sm:col-span-2">
+                      <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Full Account Holder Name <span className="text-red-400">*</span></label>
+                      <input 
+                        type="text" 
+                        required 
+                        placeholder="e.g. Juan Dela Cruz"
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                        className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Contact Number */}
+                    <div className="space-y-1 text-left">
+                      <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Mobile Number <span className="text-red-400">*</span></label>
+                      <input 
+                        type="tel" 
+                        required 
+                        placeholder="e.g. 0917-123-4567"
+                        value={contactNumber}
+                        onChange={(e) => setContactNumber(e.target.value)}
+                        className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Email */}
+                    <div className="space-y-1 text-left">
+                      <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Email Address <span className="text-red-400">*</span></label>
+                      <input 
+                        type="email" 
+                        required 
+                        placeholder="e.g. juan@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Barangay Select */}
+                    <div className="space-y-1 text-left">
+                      <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Barangay <span className="text-red-400">*</span></label>
+                      <select
+                        required
+                        value={barangay}
+                        onChange={(e) => setBarangay(e.target.value)}
+                        className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none"
+                      >
+                        <option value="">-- Select Registered Barangay --</option>
+                        {availableBarangays.map((b) => (
+                          <option key={b.id} value={b.name}>
+                            {b.name} ({b.code})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Sitio / Zone */}
+                    <div className="space-y-1 text-left">
+                      <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Sitio / Zone / Street <span className="text-red-400">*</span></label>
+                      <input 
+                        type="text" 
+                        required 
+                        placeholder="e.g. Zone 4, Sitio Riverside"
+                        value={sitioZone}
+                        onChange={(e) => setSitioZone(e.target.value)}
+                        className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Password */}
+                    <div className="space-y-1 text-left sm:col-span-2">
+                      <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Portal Password <span className="text-red-400">*</span></label>
+                      <input 
+                        type="password" 
+                        required 
+                        placeholder="Choose a strong password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Classification Info */}
+                    <div className="sm:col-span-2 space-y-2 pt-2 border-t border-slate-800">
+                      <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider text-left">Connection Classification</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setConsumerType('Residential')}
+                          className={`py-2 px-3 rounded-xl border text-xs font-bold transition flex items-center justify-center space-x-2 cursor-pointer ${
+                            consumerType === 'Residential'
+                              ? 'bg-blue-600/20 border-blue-500 text-blue-300'
+                              : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <Waves className="h-3.5 w-3.5" />
+                          <span>Residential</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConsumerType('Commercial')}
+                          className={`py-2 px-3 rounded-xl border text-xs font-bold transition flex items-center justify-center space-x-2 cursor-pointer ${
+                            consumerType === 'Commercial'
+                              ? 'bg-purple-600/20 border-purple-500 text-purple-300'
+                              : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <Briefcase className="h-3.5 w-3.5" />
+                          <span>Commercial</span>
+                        </button>
+                      </div>
+
                       {consumerType === 'Residential' ? (
-                        <div className="space-y-1">
-                          <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Household Size</label>
+                        <div className="space-y-1 text-left pt-1">
+                          <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Household / Property Info (Optional)</label>
                           <input
                             type="text"
-                            placeholder="e.g. 4 family members"
+                            placeholder="e.g. 2-Storey House, 4 Occupants"
                             value={householdInfo}
                             onChange={(e) => setHouseholdInfo(e.target.value)}
                             className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-1.5 px-2.5 text-xs text-slate-200 focus:outline-none"
                           />
                         </div>
                       ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-left">
                           <div className="space-y-1">
-                            <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Business Name <span className="text-red-400">*</span></label>
+                            <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Business Trade Name <span className="text-red-400">*</span></label>
                             <input
                               type="text"
                               required
-                              placeholder="e.g. Tagoloan Enterprise"
+                              placeholder="e.g. Tagoloan Bakeshop"
                               value={businessName}
                               onChange={(e) => setBusinessName(e.target.value)}
                               className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-1.5 px-2.5 text-xs text-slate-200 focus:outline-none"
@@ -416,7 +676,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                       )}
                     </div>
                   </div>
-                </div>
+                )}
 
                 {/* Error Alert Box */}
                 {error && (
@@ -430,12 +690,16 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                 <button
                   type="submit"
                   disabled={isValidating}
-                  className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-sky-600 hover:from-blue-500 hover:to-sky-500 disabled:opacity-60 text-white font-black rounded-xl text-xs uppercase tracking-widest transition shadow-lg shadow-blue-600/30 flex items-center justify-center space-x-2 cursor-pointer border border-blue-400/30 mt-2"
+                  className={`w-full py-2.5 text-white font-black rounded-xl text-xs uppercase tracking-widest transition shadow-lg flex items-center justify-center space-x-2 cursor-pointer mt-2 ${
+                    accountType === 'meter_reader'
+                      ? 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 shadow-amber-600/30 border border-amber-400/30'
+                      : 'bg-gradient-to-r from-blue-600 to-sky-600 hover:from-blue-500 hover:to-sky-500 shadow-blue-600/30 border border-blue-400/30'
+                  }`}
                 >
                   {isValidating ? (
                     <span>Syncing with District Database...</span>
                   ) : (
-                    <span>Complete Registration</span>
+                    <span>{accountType === 'meter_reader' ? 'Submit Field Officer Enrollment' : 'Complete Registration'}</span>
                   )}
                 </button>
               </form>
@@ -455,7 +719,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                 Application Submitted!
               </h2>
               <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-                Your profile for <strong className="text-white font-bold">{registeredSummary?.fullName}</strong> has been received by Tagoloan Water District. Your official <span className="text-amber-400 font-bold">Account Number</span> and <span className="text-amber-400 font-bold">Meter Tag</span> will be assigned by the Administrator.
+                Your profile for <strong className="text-white font-bold">{registeredSummary?.fullName}</strong> has been received by Tagoloan Water District and synced into the Administrator Portal.
               </p>
             </div>
 
@@ -465,19 +729,21 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                 <span className="font-bold text-slate-300">{registeredSummary?.fullName}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">Account Number:</span>
+                <span className="text-slate-500">{registeredSummary?.accountType === 'meter_reader' ? 'Assigned Officer Badge:' : 'Account Number:'}</span>
                 <span className="font-mono font-bold text-amber-400 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/40 text-[11px]">
-                  Pending Admin Issuance
+                  {registeredSummary?.accountNumber}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">Barangay:</span>
+                <span className="text-slate-500">Barangay / Zone:</span>
                 <span className="font-bold text-orange-400">{registeredSummary?.barangayName}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Sitio / Zone:</span>
-                <span className="font-medium text-slate-300">{registeredSummary?.sitioZone}</span>
-              </div>
+              {registeredSummary?.sitioZone && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Sitio / Zone:</span>
+                  <span className="font-medium text-slate-300">{registeredSummary?.sitioZone}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-slate-500">Registered Email:</span>
                 <span className="font-mono text-slate-300">{registeredSummary?.email}</span>
