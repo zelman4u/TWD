@@ -22,6 +22,10 @@ app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 
 // Enable CORS for Mobile App and External API clients
 app.use((req, res, next) => {
+  // Normalize accidental double /api prefixes from client base URL joins (e.g. /api/api/consumers)
+  if (req.url.startsWith("/api/api/")) {
+    req.url = req.url.replace(/^\/api\/api\//, "/api/");
+  }
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
@@ -592,8 +596,8 @@ app.get("/api/sync/pull", (req, res) => {
   });
 });
 
-// 5. Mobile Reading Push: Submit Scanned Meter Reading to Approval Queue (POST /api/sync/push or POST /api/readings/submit)
-app.post(["/api/sync/push", "/api/readings/submit"], (req, res) => {
+// 5. Mobile Reading Push: Submit Scanned Meter Reading to Approval Queue (POST /api/readings, POST /api/sync/push or POST /api/readings/submit)
+app.post(["/api/readings", "/api/sync/push", "/api/readings/submit"], (req, res) => {
   const {
     accountNumber,
     meterNumber,
@@ -723,12 +727,13 @@ app.post("/api/readings/batch", (req, res) => {
   });
 });
 
-// 6. Admin Approval Queue Listing (GET /api/readings/pending)
-app.get("/api/readings/pending", (req, res) => {
+// 6. Admin Approval Queue Listing & Readings Feed (GET /api/readings, GET /api/readings/pending, GET /api/sync/readings)
+app.get(["/api/readings", "/api/readings/pending", "/api/sync/readings"], (req, res) => {
   res.json({
     success: true,
     count: pendingMobileReadings.length,
-    readings: pendingMobileReadings
+    readings: pendingMobileReadings,
+    data: pendingMobileReadings
   });
 });
 
@@ -904,7 +909,7 @@ app.get("/api/barangays", (req, res) => {
   res.json({ success: true, count: barangays.length, barangays, data: barangays });
 });
 
-app.get(["/api/health", "/api/status"], (req, res) => {
+app.get(["/api/health", "/api/status", "/api/ping"], (req, res) => {
   res.json({
     status: "ok",
     activeWebSocketClients: clients.size,
