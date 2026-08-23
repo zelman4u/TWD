@@ -348,7 +348,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           let hasChanges = false;
 
           apiReaders.forEach((ar: any) => {
-            const exists = currentLocal.find(lr => lr.id === ar.id || (lr.email && lr.email.toLowerCase() === ar.username?.toLowerCase()));
+            const exists = currentLocal.find(lr => lr.id === ar.id || lr.employeeId === ar.id || (lr.email && lr.email.toLowerCase() === ar.username?.toLowerCase()));
+            const normalizedStatus = (ar.employmentStatus === 'active' || ar.status === 'active') ? 'active' : 'pending_approval';
+
             if (!exists) {
               // Add new mobile registrant to local store
               const newReaderObj: MeterReader = {
@@ -358,15 +360,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 employeeId: ar.id,
                 contactNumber: ar.contactNumber || 'N/A',
                 assignedRoutes: ar.assignedRoutes || [ar.zone || 'Poblacion'],
-                employmentStatus: (ar.employmentStatus === 'active' || ar.status === 'active') ? 'active' : 'pending_approval',
+                employmentStatus: normalizedStatus,
                 completedReadings: 0,
                 pendingReadings: 0,
                 performanceRating: 5.0
               };
               currentLocal.push(newReaderObj);
               hasChanges = true;
-            } else if (ar.employmentStatus && exists.employmentStatus !== ar.employmentStatus) {
-              exists.employmentStatus = ar.employmentStatus;
+            } else if (exists.employmentStatus !== normalizedStatus) {
+              exists.employmentStatus = normalizedStatus;
               hasChanges = true;
             }
           });
