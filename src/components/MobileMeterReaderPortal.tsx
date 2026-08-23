@@ -41,6 +41,7 @@ import { User as UserType, Consumer, MeterReading, Barangay, MeterReader } from 
 import { mockDb } from '../mockDb';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
+import { initRealtimeSocket } from '../services/realtimeSocket';
 
 interface MobileMeterReaderPortalProps {
   currentUser: UserType;
@@ -251,62 +252,34 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
     }, pollIntervalMs);
 
     // WebSocket real-time event listener
-    let ws: WebSocket | null = null;
-    let reconnectTimer: any = null;
+    const cleanupWs = initRealtimeSocket((payload) => {
+      if (payload.type === 'READER_APPROVED_ACTIVE' || payload.type === 'staff:status_updated') {
+        const rData = payload.payload || {};
+        const myId = (currentUser.id || '').toLowerCase();
+        const myEmployeeId = (currentUser.employeeId || '').toLowerCase();
+        const myEmail = (currentUser.email || '').toLowerCase();
+        const myName = (currentUser.name || '').toLowerCase();
 
-    const connectWs = () => {
-      try {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(`${protocol}//${window.location.host}`);
-        ws.onmessage = (event) => {
-          try {
-            const payload = JSON.parse(event.data);
-            if (payload.type === 'READER_APPROVED_ACTIVE' || payload.type === 'staff:status_updated') {
-              const rData = payload.payload || {};
-              const myId = (currentUser.id || '').toLowerCase();
-              const myEmployeeId = (currentUser.employeeId || '').toLowerCase();
-              const myEmail = (currentUser.email || '').toLowerCase();
-              const myName = (currentUser.name || '').toLowerCase();
+        const matches = 
+          (rData.readerId && [myId, myEmployeeId, myEmail, myName].includes(rData.readerId.toLowerCase())) ||
+          (rData.id && [myId, myEmployeeId, myEmail, myName].includes(rData.id.toLowerCase())) ||
+          (rData.employeeId && [myId, myEmployeeId, myEmail, myName].includes(rData.employeeId.toLowerCase())) ||
+          (rData.username && [myId, myEmployeeId, myEmail, myName].includes(rData.username.toLowerCase())) ||
+          (rData.name && [myId, myEmployeeId, myEmail, myName].includes(rData.name.toLowerCase()));
 
-              const matches = 
-                (rData.readerId && [myId, myEmployeeId, myEmail, myName].includes(rData.readerId.toLowerCase())) ||
-                (rData.id && [myId, myEmployeeId, myEmail, myName].includes(rData.id.toLowerCase())) ||
-                (rData.employeeId && [myId, myEmployeeId, myEmail, myName].includes(rData.employeeId.toLowerCase())) ||
-                (rData.username && [myId, myEmployeeId, myEmail, myName].includes(rData.username.toLowerCase())) ||
-                (rData.name && [myId, myEmployeeId, myEmail, myName].includes(rData.name.toLowerCase()));
-
-              if (matches && (rData.status === 'active' || rData.employmentStatus === 'active')) {
-                setCurrentApprovalStatus('active');
-                currentUser.status = 'active';
-                mockDb.setCurrentUser({ ...currentUser, status: 'active' });
-                loadReaderData();
-                toast.success('🎉 Account Approved!', 'Your account has been authorized by District Admin. Unlocking Mobile Terminal...');
-              }
-            }
-          } catch {
-            // ignore non-json messages
-          }
-        };
-        ws.onclose = () => {
-          reconnectTimer = setTimeout(connectWs, 4000);
-        };
-        ws.onerror = () => {
-          if (ws) ws.close();
-        };
-      } catch {
-        // ws fallback
+        if (matches && (rData.status === 'active' || rData.employmentStatus === 'active')) {
+          setCurrentApprovalStatus('active');
+          currentUser.status = 'active';
+          mockDb.setCurrentUser({ ...currentUser, status: 'active' });
+          loadReaderData();
+          toast.success('🎉 Account Approved!', 'Your account has been authorized by District Admin. Unlocking Mobile Terminal...');
+        }
       }
-    };
-
-    connectWs();
+    });
 
     return () => {
       clearInterval(interval);
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (ws) {
-        ws.onclose = null;
-        ws.close();
-      }
+      cleanupWs();
     };
   }, [currentUser, currentApprovalStatus]);
 
