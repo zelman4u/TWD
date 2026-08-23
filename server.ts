@@ -173,10 +173,24 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
   // Broadcast new registration event to Admin Web Portal via WebSocket
   broadcast("READER_REGISTERED_PENDING", {
     reader: newReader,
+    id: newReader.id,
+    employeeId: newReader.id,
+    username: newReader.username,
+    name: newReader.name,
+    status: newReader.employmentStatus,
+    employmentStatus: newReader.employmentStatus,
+    assignedRoutes: newReader.assignedRoutes,
     message: `New Meter Reader ${newReader.name} (${newReader.id}) registered from mobile terminal and is awaiting approval.`
   });
   broadcast("staff:registered", {
     reader: newReader,
+    id: newReader.id,
+    employeeId: newReader.id,
+    username: newReader.username,
+    name: newReader.name,
+    status: newReader.employmentStatus,
+    employmentStatus: newReader.employmentStatus,
+    assignedRoutes: newReader.assignedRoutes,
     message: `New Meter Reader ${newReader.name} (${newReader.id}) registered from mobile app and is awaiting approval.`
   });
 
@@ -358,14 +372,23 @@ app.all(["/api/staff/:id/status", "/api/staff/:id", "/api/readers/:id/approve", 
   // Broadcast approval to mobile terminal via WebSocket
   broadcast("READER_APPROVED_ACTIVE", {
     readerId: reader.id,
+    id: reader.id,
+    employeeId: reader.id,
     username: reader.username,
+    name: reader.name,
     status: reader.employmentStatus,
+    employmentStatus: reader.employmentStatus,
     assignedRoutes: reader.assignedRoutes,
     message: `Reader ${reader.name} has been approved and activated.`
   });
   broadcast("staff:status_updated", {
     readerId: reader.id,
+    id: reader.id,
+    employeeId: reader.id,
+    username: reader.username,
+    name: reader.name,
     status: reader.employmentStatus,
+    employmentStatus: reader.employmentStatus,
     assignedRoutes: reader.assignedRoutes,
     message: `Reader ${reader.name} is now ${reader.employmentStatus.toUpperCase()}`
   });

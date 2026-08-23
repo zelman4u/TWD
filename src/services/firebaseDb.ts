@@ -165,7 +165,30 @@ export function startRealtimeFirestoreListeners() {
       if (!snapshot.empty) {
         const cloudReaders: MeterReader[] = [];
         snapshot.forEach((d) => cloudReaders.push(d.data() as MeterReader));
-        localStorage.setItem(KEYS.READERS, JSON.stringify(cloudReaders));
+        
+        const localRaw = localStorage.getItem(KEYS.READERS);
+        const localReaders: MeterReader[] = localRaw ? JSON.parse(localRaw) : [];
+        const mergedMap = new Map<string, MeterReader>();
+
+        cloudReaders.forEach(r => {
+          const k = (r.employeeId || r.id || r.email || r.name).toLowerCase();
+          mergedMap.set(k, r);
+        });
+
+        localReaders.forEach(r => {
+          const k = (r.employeeId || r.id || r.email || r.name).toLowerCase();
+          if (!mergedMap.has(k)) {
+            mergedMap.set(k, r);
+          } else {
+            const existing = mergedMap.get(k)!;
+            if (r.employmentStatus === 'active' && existing.employmentStatus !== 'active') {
+              mergedMap.set(k, { ...existing, employmentStatus: 'active' });
+            }
+          }
+        });
+
+        const finalReaders = Array.from(mergedMap.values());
+        localStorage.setItem(KEYS.READERS, JSON.stringify(finalReaders));
         triggerLocalUpdateEvent(KEYS.READERS);
       }
     }, (err) => console.warn('[Firestore Live] Readers listener standby:', err.message));

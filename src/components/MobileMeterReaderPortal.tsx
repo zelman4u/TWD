@@ -241,46 +241,72 @@ export default function MobileMeterReaderPortal({ currentUser, onLogout }: Mobil
     loadReaderData();
     checkServerConnection();
 
-    // Periodic heartbeat every 20 seconds
+    // Fast polling every 2.5s when awaiting approval, otherwise heartbeat every 15s
+    const pollIntervalMs = currentApprovalStatus === 'pending_approval' ? 2500 : 15000;
     const interval = setInterval(() => {
       checkServerConnection();
       if (currentApprovalStatus === 'pending_approval') {
         handleCheckApprovalStatus(true);
       }
-    }, 15000);
+    }, pollIntervalMs);
 
     // WebSocket real-time event listener
     let ws: WebSocket | null = null;
-    try {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${protocol}//${window.location.host}`);
-      ws.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-          if (payload.type === 'READER_APPROVED_ACTIVE' || payload.type === 'staff:status_updated') {
-            const rData = payload.payload;
-            if (
-              rData.readerId === currentUser.id ||
-              rData.readerId === currentUser.employeeId ||
-              rData.username?.toLowerCase() === currentUser.email?.toLowerCase()
-            ) {
-              setCurrentApprovalStatus('active');
-              currentUser.status = 'active';
-              mockDb.setCurrentUser({ ...currentUser, status: 'active' });
-              toast.success('Account Approved!', 'Your account has been authorized by the supervisor.');
+    let reconnectTimer: any = null;
+
+    const connectWs = () => {
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${window.location.host}`);
+        ws.onmessage = (event) => {
+          try {
+            const payload = JSON.parse(event.data);
+            if (payload.type === 'READER_APPROVED_ACTIVE' || payload.type === 'staff:status_updated') {
+              const rData = payload.payload || {};
+              const myId = (currentUser.id || '').toLowerCase();
+              const myEmployeeId = (currentUser.employeeId || '').toLowerCase();
+              const myEmail = (currentUser.email || '').toLowerCase();
+              const myName = (currentUser.name || '').toLowerCase();
+
+              const matches = 
+                (rData.readerId && [myId, myEmployeeId, myEmail, myName].includes(rData.readerId.toLowerCase())) ||
+                (rData.id && [myId, myEmployeeId, myEmail, myName].includes(rData.id.toLowerCase())) ||
+                (rData.employeeId && [myId, myEmployeeId, myEmail, myName].includes(rData.employeeId.toLowerCase())) ||
+                (rData.username && [myId, myEmployeeId, myEmail, myName].includes(rData.username.toLowerCase())) ||
+                (rData.name && [myId, myEmployeeId, myEmail, myName].includes(rData.name.toLowerCase()));
+
+              if (matches && (rData.status === 'active' || rData.employmentStatus === 'active')) {
+                setCurrentApprovalStatus('active');
+                currentUser.status = 'active';
+                mockDb.setCurrentUser({ ...currentUser, status: 'active' });
+                loadReaderData();
+                toast.success('🎉 Account Approved!', 'Your account has been authorized by District Admin. Unlocking Mobile Terminal...');
+              }
             }
+          } catch {
+            // ignore non-json messages
           }
-        } catch {
-          // ignore non-json messages
-        }
-      };
-    } catch {
-      // ws fallback
-    }
+        };
+        ws.onclose = () => {
+          reconnectTimer = setTimeout(connectWs, 4000);
+        };
+        ws.onerror = () => {
+          if (ws) ws.close();
+        };
+      } catch {
+        // ws fallback
+      }
+    };
+
+    connectWs();
 
     return () => {
       clearInterval(interval);
-      if (ws) ws.close();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
     };
   }, [currentUser, currentApprovalStatus]);
 

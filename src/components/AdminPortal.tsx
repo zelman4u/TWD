@@ -468,15 +468,60 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     };
     window.addEventListener('storage', handleStorage);
 
-    // 3. Active real-time auto-polling every 4 seconds to catch live field mobile submissions
+    // 3. Active real-time auto-polling every 2.5 seconds to catch live field mobile submissions
     const pollTimer = setInterval(() => {
       loadAllDataFromStore(false);
-    }, 4000);
+    }, 2500);
+
+    // 4. Dedicated Live WebSocket Stream for instant push events
+    let ws: WebSocket | null = null;
+    let reconnectTimeout: any = null;
+
+    const connectWs = () => {
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${window.location.host}`);
+        ws.onopen = () => {
+          console.log('[Admin Live Stream] Connected to District central real-time broker');
+        };
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'READER_REGISTERED_PENDING' || data.type === 'staff:registered') {
+              toast.info('New Meter Reader Registered', data.payload?.message || 'New field staff awaiting approval in Meter Readers tab.');
+              loadAllDataFromStore(false);
+            } else if (data.type === 'NEW_READING_SUBMITTED' || data.type === 'readings:new') {
+              toast.info('New Field Reading Received', data.payload?.message || 'Incoming meter reading queued for approval.');
+              loadAllDataFromStore(false);
+            } else if (data.type === 'CONSUMER_REGISTERED' || data.type === 'READER_APPROVED_ACTIVE' || data.type === 'staff:status_updated') {
+              loadAllDataFromStore(false);
+            }
+          } catch {
+            loadAllDataFromStore(false);
+          }
+        };
+        ws.onclose = () => {
+          reconnectTimeout = setTimeout(connectWs, 5000);
+        };
+        ws.onerror = () => {
+          if (ws) ws.close();
+        };
+      } catch {
+        // Fallback to polling
+      }
+    };
+
+    connectWs();
 
     return () => {
       window.removeEventListener('twd_database_updated', handleDbUpdate);
       window.removeEventListener('storage', handleStorage);
       clearInterval(pollTimer);
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
     };
   }, []);
 
