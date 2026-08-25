@@ -121,8 +121,8 @@ export default function AdminAnalyticsSection({
               id="analytics-period-filter"
             >
               <option value="all">All Billing Cycles</option>
-              {uniquePeriods.map(p => (
-                <option key={p} value={p}>{p}</option>
+              {uniquePeriods.map((p, pIdx) => (
+                <option key={`analytics-p-${p || ''}-${pIdx}`} value={p}>{p}</option>
               ))}
             </select>
           </div>
@@ -152,8 +152,8 @@ export default function AdminAnalyticsSection({
               id="analytics-barangay-filter"
             >
               <option value="all">All 10 Barangays</option>
-              {barangayList.map(b => (
-                <option key={b.id} value={b.name}>{b.name}</option>
+              {barangayList.map((b, bIdx) => (
+                <option key={`analytics-b-${b.id || ''}-${b.name || ''}-${bIdx}`} value={b.name}>{b.name}</option>
               ))}
             </select>
           </div>
@@ -237,8 +237,8 @@ export default function AdminAnalyticsSection({
                 Live Authorization Feed
               </span>
               <div className="space-y-2.5 max-h-48 overflow-y-auto pr-1">
-                {auditLogs.slice(0, 3).map(log => (
-                  <div key={log.id} className="text-[11px] flex items-start space-x-2 border-b border-slate-100 pb-2 last:border-0">
+                {auditLogs.slice(0, 3).map((log, lIdx) => (
+                  <div key={`live-audit-${log.id || ''}-${lIdx}`} className="text-[11px] flex items-start space-x-2 border-b border-slate-100 pb-2 last:border-0">
                     <span className="h-1.5 w-1.5 rounded-full bg-blue-600 shrink-0 mt-1.5"></span>
                     <div className="w-full">
                       <p className="font-bold text-slate-800">{log.action}</p>

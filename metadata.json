@@ -1,6 +1,6 @@
 {
   "name": "Tagoloan Water District Portal",
-  "description": "Unified administrative and consumer portals for Tagoloan Water District, with water meter monitoring, route assignments, reading history, and detailed analytics.",
+  "description": "Unified administrative and consumer portals for Tagoloan Water District, featuring billing alerts, 3-month disconnection cutting notices, strict 50% minimum partial payments, and office receipt photo validation.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

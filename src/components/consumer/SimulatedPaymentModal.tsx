@@ -51,10 +51,14 @@ export const SimulatedPaymentModal: React.FC<SimulatedPaymentModalProps> = ({
     ? (reading.penaltyAmount !== undefined ? reading.penaltyAmount : Math.round(netDue * 0.10 * 100) / 100)
     : 0;
 
+  const minPartialAmount = Math.round((netDue * 0.50) * 100) / 100;
+
   const [paymentMode, setPaymentMode] = useState<'full' | 'partial'>(initialMode);
   const [includeLateFee, setIncludeLateFee] = useState(isOverdue);
-  const [customAmount, setCustomAmount] = useState(netDue.toFixed(2));
+  const [customAmount, setCustomAmount] = useState(initialMode === 'partial' ? minPartialAmount.toFixed(2) : netDue.toFixed(2));
   const [paymentMethod, setPaymentMethod] = useState<'gcash' | 'maya' | 'card' | 'bank'>('gcash');
+
+  const isLessThan50Percent = paymentMode === 'partial' && (parseFloat(customAmount) || 0) < minPartialAmount;
 
   // Form Fields
   const [gcashPhone, setGcashPhone] = useState(
@@ -81,7 +85,8 @@ export const SimulatedPaymentModal: React.FC<SimulatedPaymentModalProps> = ({
   // Reset states on bill change
   useEffect(() => {
     setPaymentMode(initialMode);
-    setCustomAmount(netDue.toFixed(2));
+    const minPart = Math.round((netDue * 0.50) * 100) / 100;
+    setCustomAmount(initialMode === 'partial' ? minPart.toFixed(2) : netDue.toFixed(2));
     setIncludeLateFee(isOverdue);
     setIsProcessing(false);
     setProcessingStage(null);
@@ -91,7 +96,7 @@ export const SimulatedPaymentModal: React.FC<SimulatedPaymentModalProps> = ({
   // Compute final payable
   const payableBase = paymentMode === 'full'
     ? netDue
-    : Math.min(netDue, Math.max(1, parseFloat(customAmount) || 0));
+    : Math.min(netDue, Math.max(minPartialAmount, parseFloat(customAmount) || minPartialAmount));
   
   const totalAmountToPay = payableBase + (includeLateFee ? latePenalty : 0);
 
@@ -106,6 +111,10 @@ export const SimulatedPaymentModal: React.FC<SimulatedPaymentModalProps> = ({
 
   const handleStartSimulatedPayment = (e: React.FormEvent) => {
     e.preventDefault();
+    if (paymentMode === 'partial' && (parseFloat(customAmount) || 0) < minPartialAmount) {
+      alert(`Tagoloan Water District Strict Policy: Partial payments must be at least 50% (₱${minPartialAmount.toFixed(2)}) of the outstanding balance.`);
+      return;
+    }
     if (totalAmountToPay <= 0) {
       alert('Please enter a valid payment amount greater than ₱0.00');
       return;
@@ -484,40 +493,85 @@ export const SimulatedPaymentModal: React.FC<SimulatedPaymentModalProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => setPaymentMode('partial')}
+                  onClick={() => {
+                    setPaymentMode('partial');
+                    setCustomAmount(minPartialAmount.toFixed(2));
+                  }}
                   className={`p-3 rounded-2xl border text-left transition cursor-pointer ${
                     paymentMode === 'partial'
                       ? 'border-amber-600 bg-amber-50/80 ring-2 ring-amber-500/20'
                       : 'border-slate-200 hover:bg-slate-50'
                   }`}
                 >
-                  <span className="text-[10px] font-black text-amber-700 uppercase block">Partial Payment</span>
+                  <span className="text-[10px] font-black text-amber-700 uppercase block">Partial Payment (≥ 50%)</span>
                   <span className="text-sm font-black font-mono text-slate-900 block mt-0.5">
-                    Custom Amount
+                    Min: ₱{minPartialAmount.toFixed(2)}
                   </span>
-                  <span className="text-[10px] text-slate-500">Pay what you can today</span>
+                  <span className="text-[10px] text-slate-500">Strictly 50% or more</span>
                 </button>
               </div>
 
               {/* Partial Amount Input */}
               {paymentMode === 'partial' && (
-                <div className="mt-3 p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2">
-                  <label className="block text-[11px] font-bold text-amber-900 uppercase">
-                    Enter Amount to Settle (₱)
-                  </label>
+                <div className="mt-3 p-3.5 bg-amber-50/80 border border-amber-200 rounded-2xl space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[11px] font-bold text-amber-900 uppercase">
+                      Enter Amount to Settle (₱)
+                    </label>
+                    <span className="text-[10px] font-bold text-amber-800 bg-amber-100/70 px-2 py-0.5 rounded-md">
+                      Minimum 50%: <strong>₱{minPartialAmount.toFixed(2)}</strong>
+                    </span>
+                  </div>
+
                   <div className="relative">
                     <span className="absolute left-3.5 top-2.5 text-slate-400 font-mono font-bold text-xs">₱</span>
                     <input
                       type="number"
                       step="0.01"
-                      min="1"
+                      min={minPartialAmount}
                       max={netDue}
                       value={customAmount}
                       onChange={(e) => setCustomAmount(e.target.value)}
-                      className="w-full bg-white border border-amber-300 pl-8 pr-3 py-2 text-xs rounded-xl focus:border-amber-600 font-mono font-black text-slate-900"
+                      className={`w-full bg-white border ${
+                        isLessThan50Percent ? 'border-rose-500 ring-2 ring-rose-200' : 'border-amber-300'
+                      } pl-8 pr-3 py-2 text-xs rounded-xl focus:border-amber-600 font-mono font-black text-slate-900`}
                     />
                   </div>
-                  <div className="flex justify-between text-[11px] text-amber-800">
+
+                  {isLessThan50Percent && (
+                    <p className="text-[11px] text-rose-600 font-bold flex items-center space-x-1">
+                      <AlertTriangle className="h-3.5 w-3.5 text-rose-600 shrink-0" />
+                      <span>Tagoloan Water District Policy: Partials must be at least 50% (₱{minPartialAmount.toFixed(2)}).</span>
+                    </p>
+                  )}
+
+                  {/* Quick percentage buttons */}
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="text-[10px] text-slate-500 font-bold uppercase">Quick:</span>
+                    <button
+                      type="button"
+                      onClick={() => setCustomAmount(minPartialAmount.toFixed(2))}
+                      className="px-2 py-0.5 bg-white hover:bg-amber-100 border border-amber-300 rounded text-[10px] font-bold text-amber-900 transition"
+                    >
+                      50% (₱{minPartialAmount.toFixed(2)})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCustomAmount((Math.round((netDue * 0.75) * 100) / 100).toFixed(2))}
+                      className="px-2 py-0.5 bg-white hover:bg-amber-100 border border-amber-300 rounded text-[10px] font-bold text-amber-900 transition"
+                    >
+                      75% (₱{(Math.round((netDue * 0.75) * 100) / 100).toFixed(2)})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCustomAmount(netDue.toFixed(2))}
+                      className="px-2 py-0.5 bg-white hover:bg-amber-100 border border-amber-300 rounded text-[10px] font-bold text-amber-900 transition"
+                    >
+                      100% Full (₱{netDue.toFixed(2)})
+                    </button>
+                  </div>
+
+                  <div className="flex justify-between text-[11px] text-amber-800 pt-1 border-t border-amber-200/60">
                     <span>Remaining balance after payment:</span>
                     <strong className="font-mono text-rose-700">
                       ₱{Math.max(0, netDue - (parseFloat(customAmount) || 0)).toFixed(2)}
@@ -689,7 +743,12 @@ export const SimulatedPaymentModal: React.FC<SimulatedPaymentModalProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 sm:flex-none px-6 py-3 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                  disabled={isLessThan50Percent || totalAmountToPay <= 0}
+                  className={`flex-1 sm:flex-none px-6 py-3 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 cursor-pointer ${
+                    isLessThan50Percent || totalAmountToPay <= 0
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                      : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white'
+                  }`}
                   id="confirm-simulated-payment-btn"
                 >
                   <CreditCard className="h-4 w-4" />

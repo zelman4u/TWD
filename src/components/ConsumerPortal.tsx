@@ -53,15 +53,24 @@ import {
   ArrowRight,
   LayoutDashboard,
   ExternalLink,
-  Check
+  Check,
+  Upload,
+  Camera,
+  ZoomIn,
+  Download,
+  AlertOctagon,
+  Image as ImageIcon
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotification } from '../types';
 import { ConsumerPortalSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import { OverdueBillBanner } from './consumer/OverdueBillBanner';
+import { DynamicDueAlert } from './consumer/DynamicDueAlert';
 import { SimulatedPaymentModal } from './consumer/SimulatedPaymentModal';
+import { UploadReceiptModal } from './consumer/UploadReceiptModal';
 import { BillDetails } from './consumer/BillDetails';
 import { useToast } from '../context/ToastContext';
+import { calculateWaterTariff } from '../utils/tariffCalculator';
 
 interface ConsumerPortalProps {
   currentUser: UserType;
@@ -81,6 +90,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Core Data States
   const [consumerRecord, setConsumerRecord] = useState<Consumer | null>(null);
   const [readings, setReadings] = useState<MeterReading[]>([]);
+  const [allHistoryReadings, setAllHistoryReadings] = useState<MeterReading[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [notifications, setNotifications] = useState<ConsumerNotification[]>([]);
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
@@ -134,6 +144,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const [simulatedModalReading, setSimulatedModalReading] = useState<MeterReading | null>(null);
   const [simulatedModalMode, setSimulatedModalMode] = useState<'full' | 'partial'>('full');
 
+  // Official Office Receipt Upload & Validation Modal States
+  const [isUploadReceiptOpen, setIsUploadReceiptOpen] = useState(false);
+  const [uploadReceiptReading, setUploadReceiptReading] = useState<MeterReading | null>(null);
+  const [viewingReceiptReading, setViewingReceiptReading] = useState<MeterReading | null>(null);
+
   // Digital Receipt Modal
   const [receiptDetailModal, setReceiptDetailModal] = useState<MeterReading | null>(null);
 
@@ -151,40 +166,28 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
   // Track previous readings to detect admin payment modifications
   const prevReadingsRef = useRef<MeterReading[]>([]);
+  const consumerRecordRef = useRef<Consumer | null>(null);
+  const readingsRef = useRef<MeterReading[]>([]);
+  const notifsRef = useRef<any[]>([]);
+  const announcementsRef = useRef<any[]>([]);
+  const syncTimeoutRef = useRef<any>(null);
+  const debounceDbUpdateRef = useRef<any>(null);
+  const alertedOverdueRef = useRef<Set<string>>(new Set());
 
   // Tariff calculation helper
   const calculateCostOf = (usage: number, classification: 'Residential' | 'Commercial' = 'Residential') => {
-    const isCommercial = classification === 'Commercial';
-    const minCharge = isCommercial ? 270.00 : 180.00; // first 10 m³
-    if (usage <= 10) return minCharge;
-    
-    let bill = minCharge;
-    let remaining = usage - 10;
-    
-    // Tier 1: 11-20 m³
-    const tier1 = Math.min(remaining, 10);
-    bill += tier1 * (isCommercial ? 30.00 : 20.00);
-    remaining -= tier1;
-    
-    if (remaining > 0) {
-      // Tier 2: 21-30 m³
-      const tier2 = Math.min(remaining, 10);
-      bill += tier2 * (isCommercial ? 36.00 : 24.00);
-      remaining -= tier2;
-    }
-    
-    if (remaining > 0) {
-      // Tier 3: 31+ m³
-      bill += remaining * (isCommercial ? 45.00 : 30.00);
-    }
-    return bill;
+    return calculateWaterTariff(usage, classification);
   };
 
   // Real-Time Data Loader
   const loadConsumerInfo = (silent = false) => {
     if (!silent) setIsSyncing(true);
 
-    setTimeout(() => {
+    if (syncTimeoutRef.current) {
+      clearTimeout(syncTimeoutRef.current);
+    }
+
+    syncTimeoutRef.current = setTimeout(() => {
       // 1. First attempt to fetch latest live record from backend API
       const searchParam = currentUser.linkedAccountNumber || currentUser.email || currentUser.id;
       if (searchParam) {
@@ -205,13 +208,23 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   (matchedApi.email && lc.email && lc.email.toLowerCase() === matchedApi.email.toLowerCase()) ||
                   (matchedApi.linkedUserId && lc.linkedUserId === matchedApi.linkedUserId)
                 );
+                let changed = false;
                 if (idx >= 0) {
-                  currentLocal[idx] = { ...currentLocal[idx], ...matchedApi };
+                  if (JSON.stringify(currentLocal[idx]) !== JSON.stringify({ ...currentLocal[idx], ...matchedApi })) {
+                    currentLocal[idx] = { ...currentLocal[idx], ...matchedApi };
+                    changed = true;
+                  }
                 } else {
                   currentLocal.unshift(matchedApi);
+                  changed = true;
                 }
-                mockDb.saveConsumers(currentLocal);
-                setConsumerRecord(matchedApi);
+                if (changed) {
+                  mockDb.saveConsumers(currentLocal);
+                }
+                if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(matchedApi)) {
+                  consumerRecordRef.current = matchedApi;
+                  setConsumerRecord(matchedApi);
+                }
               }
             }
           })
@@ -250,21 +263,29 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       const record = matching.length > 0 ? matching[0] : null;
 
       if (record) {
-        setConsumerRecord(record);
+        if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(record)) {
+          consumerRecordRef.current = record;
+          setConsumerRecord(record);
+        }
         
         // Filter readings belonging strictly to this customer's valid issued identifiers
-        const filteredReads = (record.accountNumber && record.accountNumber.trim() !== '' && !record.accountNumber.startsWith('PENDING')) || (record.meterNumber && record.meterNumber.trim() !== '' && !record.meterNumber.startsWith('PENDING'))
+        const allCustomerReads = (record.accountNumber && record.accountNumber.trim() !== '' && !record.accountNumber.startsWith('PENDING')) || (record.meterNumber && record.meterNumber.trim() !== '' && !record.meterNumber.startsWith('PENDING'))
           ? allReadings.filter(
               r => (record.accountNumber && r.accountNumber === record.accountNumber) ||
                    (record.meterNumber && r.meterNumber === record.meterNumber)
             )
           : [];
         // Sort newest first
-        filteredReads.sort((a, b) => new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime());
+        allCustomerReads.sort((a, b) => new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime());
+        
+        // CRITICAL GHOST-PROCESS PREVENTION:
+        // Only APPROVED / VERIFIED readings trigger billing operations, payable ledgers, and overdue calculations!
+        // Unapproved readings sitting in the Approvals queue ('pending' or 'flagged_abnormal') DO NOT trigger billing operations until officially approved.
+        const verifiedReads = allCustomerReads.filter(r => r.status === 'verified');
         
         // Check if any bill was recently marked as PAID or PARTIAL by an Admin / Cashier in background
         if (prevReadingsRef.current.length > 0) {
-          filteredReads.forEach(newR => {
+          verifiedReads.forEach(newR => {
             const oldR = prevReadingsRef.current.find(o => o.id === newR.id);
             if (oldR) {
               if (oldR.paymentStatus !== 'paid' && newR.paymentStatus === 'paid') {
@@ -293,8 +314,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             }
           });
         }
-        // Check and generate automated overdue alert notifications if any bill is past due
-        filteredReads.forEach(r => {
+        
+        // Check and generate automated overdue alert notifications & 3-month disconnection notices ONLY for legitimate past verified bills that the consumer didn't pay!
+        const unpaidList = verifiedReads.filter(r => r.paymentStatus !== 'paid');
+        
+        // 1. Per-bill overdue alert (only for past approved unpaid bills)
+        verifiedReads.forEach(r => {
           if (r.paymentStatus !== 'paid') {
             let dueDateObj: Date;
             if (r.dueDate) {
@@ -307,7 +332,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             }
 
             const isPastDue = new Date() > dueDateObj;
-            if (isPastDue) {
+            if (isPastDue && !alertedOverdueRef.current.has(r.id)) {
               const gross = calculateCostOf(r.consumption, record.consumerType);
               const paid = r.paidAmount || 0;
               const net = Math.max(0, gross - paid);
@@ -320,10 +345,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 );
 
                 if (!hasAlert) {
+                  alertedOverdueRef.current.add(r.id);
                   mockDb.addNotification({
                     accountNumber: record.accountNumber,
                     title: `URGENT: Water Tariff Overdue — ${r.billingPeriod}`,
-                    message: `Your water tariff bill of ₱${net.toFixed(2)} for ${r.billingPeriod} (${r.consumption} m³) is past its due date. Standard 10% late surcharge applies. Settle online now to avoid disconnection notice.`,
+                    message: `Your water tariff bill of ₱${net.toFixed(2)} for ${r.billingPeriod} (${r.consumption} m³) is past its due date. Standard 10% late surcharge applies. Settle online or upload your office payment receipt to prevent service disruption.`,
                     type: 'billing',
                     readingId: r.id,
                     billingPeriod: r.billingPeriod,
@@ -335,50 +361,108 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           }
         });
 
-        prevReadingsRef.current = filteredReads;
-        setReadings(filteredReads);
+        // 2. Official 3-Month Disconnection & Cutting Notice Check (3+ cycles or 90+ days of past unpaid approved bills)
+        const has3MonthsOverdue = unpaidList.length >= 3 || unpaidList.some(r => {
+          let d = r.dueDate ? new Date(r.dueDate) : (r.readingDate ? new Date(r.readingDate) : new Date());
+          const diff = (new Date().getTime() - d.getTime()) / (1000 * 60 * 60 * 24);
+          return diff >= 90 || r.isDisconnectionNoticeIssued;
+        });
+
+        if (has3MonthsOverdue && unpaidList.length > 0) {
+          const existingNotifs = mockDb.getNotifications(record.accountNumber);
+          const hasDisconnectionAlert = existingNotifs.some(
+            n => n.type === 'disconnection' || (n.title || '').toLowerCase().includes('disconnection') || (n.title || '').toLowerCase().includes('cutting')
+          );
+          if (!hasDisconnectionAlert) {
+            const primaryOverdue = unpaidList[0];
+            const gross = calculateCostOf(primaryOverdue.consumption, record.consumerType);
+            const net = Math.max(0, gross - (primaryOverdue.paidAmount || 0));
+            mockDb.addNotification({
+              accountNumber: record.accountNumber,
+              title: `CRITICAL: 3-Month Disconnection & Cutting Order Notice`,
+              message: `Your water account #${record.accountNumber} has unpaid statements exceeding 3 consecutive months. In accordance with Tagoloan Water District policy, a physical curb-stop disconnection order is pending. Pay at least 50% partial or upload your office receipt immediately to stop cutting.`,
+              type: 'disconnection',
+              readingId: primaryOverdue.id,
+              billingPeriod: primaryOverdue.billingPeriod,
+              remainingBalance: net
+            });
+          }
+        }
+
+        // If zero balance, reset alerts
+        if (unpaidList.length === 0) {
+          alertedOverdueRef.current.clear();
+        }
+
+        prevReadingsRef.current = verifiedReads;
+        if (JSON.stringify(readingsRef.current) !== JSON.stringify(verifiedReads)) {
+          readingsRef.current = verifiedReads;
+          setReadings(verifiedReads);
+        }
+        setAllHistoryReadings(allCustomerReads);
 
         // Load consumer notifications
         const notifs = mockDb.getNotifications(record.accountNumber);
-        setNotifications(notifs);
+        if (JSON.stringify(notifsRef.current) !== JSON.stringify(notifs)) {
+          notifsRef.current = notifs;
+          setNotifications(notifs);
+        }
+      } else {
+        if (consumerRecordRef.current !== null) {
+          consumerRecordRef.current = null;
+          setConsumerRecord(null);
+        }
       }
 
-      setAnnouncements(mockDb.getAnnouncements());
+      const allAnnouncements = mockDb.getAnnouncements();
+      if (JSON.stringify(announcementsRef.current) !== JSON.stringify(allAnnouncements)) {
+        announcementsRef.current = allAnnouncements;
+        setAnnouncements(allAnnouncements);
+      }
+
       setLastSyncTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       setIsInitialLoading(false);
       setIsSyncing(false);
-    }, silent ? 0 : 350);
+    }, silent ? 50 : 250);
   };
 
   // Initial Load & Real-Time Sync Event Listeners
   useEffect(() => {
     loadConsumerInfo();
 
-    // 1. Instantaneous reactive sync when Admin modifies data in same window
+    // 1. Instantaneous reactive sync with debounce to prevent state loops
     const handleDbUpdate = () => {
-      loadConsumerInfo(true);
+      if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
+      debounceDbUpdateRef.current = setTimeout(() => {
+        loadConsumerInfo(true);
+      }, 300);
     };
     window.addEventListener('twd_database_updated', handleDbUpdate);
 
     // 2. Cross-tab synchronization when Admin modifies data in another browser tab
     const handleStorage = (e: StorageEvent) => {
       if (e.key?.startsWith('twd_') || e.key === 'twd_sync_ping') {
-        loadConsumerInfo(true);
+        if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
+        debounceDbUpdateRef.current = setTimeout(() => {
+          loadConsumerInfo(true);
+        }, 300);
       }
     };
     window.addEventListener('storage', handleStorage);
 
-    // 3. Fast automated fallback polling every 3 seconds
+    // 3. Fallback automated polling every 5 seconds
     const interval = setInterval(() => {
       loadConsumerInfo(true);
-    }, 3000);
+    }, 5000);
 
     return () => {
       window.removeEventListener('twd_database_updated', handleDbUpdate);
       window.removeEventListener('storage', handleStorage);
       clearInterval(interval);
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+      if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
     };
-  }, [currentUser]);
+  }, [currentUser?.id, currentUser?.email, currentUser?.linkedAccountNumber]);
 
   // Populate profile edit fields when record is loaded or updated by admin
   useEffect(() => {
@@ -1340,6 +1424,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               setHighlightedReadingId(reading.id);
               setSpotlightReading(reading);
             }}
+            onUploadReceipt={(reading) => {
+              setUploadReceiptReading(reading);
+              setIsUploadReceiptOpen(true);
+            }}
             calculateCostOf={calculateCostOf}
           />
         )}
@@ -1443,82 +1531,24 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         {activeTab === 'dashboard' && (
           <div className="space-y-8 animate-fade-in" id="consumer-tab-dashboard">
             
-            {/* SMART NOTIFICATION & DUE ACTION CENTER BANNER */}
-            {outstandingSum > 0 ? (
-              <div className="bg-gradient-to-r from-amber-500 via-rose-650 to-rose-700 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-5">
-                <div className="space-y-2 max-w-2xl">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="bg-white/20 text-white font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-lg flex items-center space-x-1">
-                      <AlertTriangle className="h-3 w-3 mr-1 text-amber-200" />
-                      <span>Smart Billing Advisory</span>
-                    </span>
-                    {partialBills.length > 0 && (
-                      <span className="bg-amber-300 text-amber-950 font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-lg">
-                        Partial Payment Active
-                      </span>
-                    )}
-                    <span className="bg-rose-950/40 text-rose-100 font-bold text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-lg">
-                      {unpaidBills.length} Statement(s) Due
-                    </span>
-                  </div>
-                  <h3 className="text-xl font-black tracking-tight">
-                    {partialBills.length > 0
-                      ? `Remaining Balance of ₱${outstandingSum.toFixed(2)} Pending`
-                      : `Water Bill Arrived — ₱${outstandingSum.toFixed(2)} Total Outstanding`}
-                  </h3>
-                  <p className="text-xs text-rose-100/90 leading-relaxed">
-                    {partialBills.length > 0
-                      ? `You have credited partial payments towards your water bills. A remaining unsettled balance of ₱${outstandingSum.toFixed(2)} is due on or before ${latestRead?.dueDate || 'the 20th of the month'}.`
-                      : `Your water bill statement has arrived. Please settle the remaining balance of ₱${outstandingSum.toFixed(2)} to maintain uninterrupted water service.`}
-                  </p>
-                </div>
-
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0 w-full md:w-auto">
-                  <button
-                    onClick={() => {
-                      setActiveTab('bills');
-                      if (unpaidBills.length > 0) handleStartPayment(unpaidBills[0], 'full');
-                    }}
-                    className="px-6 py-3.5 bg-white hover:bg-slate-50 text-slate-900 font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg hover:shadow-xl transition flex items-center justify-center space-x-2 cursor-pointer"
-                    id="smart-banner-pay-btn"
-                  >
-                    <CreditCard className="h-4 w-4 text-blue-600" />
-                    <span>Pay Remaining ₱{outstandingSum.toFixed(2)}</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setBillDetailsReading(latestRead || (readings.length > 0 ? readings[0] : null));
-                      setIsBillDetailsOpen(true);
-                    }}
-                    className="px-4 py-3 bg-black/20 hover:bg-black/30 border border-white/20 text-white font-bold text-xs uppercase tracking-wider rounded-2xl transition flex items-center justify-center space-x-1.5 cursor-pointer"
-                    id="smart-banner-breakdown-btn"
-                  >
-                    <Calculator className="h-3.5 w-3.5" />
-                    <span>View Bill Breakdown</span>
-                    <ArrowRight className="h-3.5 w-3.5 ml-0.5" />
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-3xl p-5 text-white shadow-md flex items-center justify-between gap-4">
-                <div className="flex items-center space-x-3.5">
-                  <div className="p-2.5 bg-white/20 rounded-2xl">
-                    <CheckCircle2 className="h-6 w-6 text-emerald-200" />
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-200 block">Account Status</span>
-                    <h4 className="text-base font-black">All Water Bills Settled in Full — ₱0.00 Balance</h4>
-                    <p className="text-xs text-emerald-100">Your account is in good standing. Next reading cycle will reflect automatically.</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setActiveTab('bills')}
-                  className="hidden sm:flex px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-xs font-bold transition items-center space-x-1 cursor-pointer"
-                >
-                  <span>View Receipts</span>
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
+            {/* DYNAMIC DUE ALERT & OVERDUE FLAGGING COMPONENT */}
+            {consumerRecord && (
+              <DynamicDueAlert
+                consumerRecord={consumerRecord}
+                readings={readings}
+                overdueBills={overdueBills}
+                unpaidBills={unpaidBills}
+                onPayNow={(reading, mode) => handleOpenSimulatedPayment(reading, mode || 'full')}
+                onViewBillDetails={(reading) => {
+                  setBillDetailsReading(reading);
+                  setIsBillDetailsOpen(true);
+                }}
+                onUploadReceipt={(reading) => {
+                  setUploadReceiptReading(reading);
+                  setIsUploadReceiptOpen(true);
+                }}
+                calculateCostOf={calculateCostOf}
+              />
             )}
             
             {/* SPOTLIGHT: METER READING & BILL ISSUED NOTIFICATION FOCUS CARD */}
@@ -1645,7 +1675,18 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           className="flex-1 sm:flex-initial px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md transition flex items-center justify-center space-x-1.5 cursor-pointer"
                         >
                           <CreditCard className="h-4 w-4" />
-                          <span>Pay Bill (₱{calculateCostOf(spotlightReading.consumption, consumerRecord?.consumerType).toFixed(2)})</span>
+                          <span>Pay Online (₱{calculateCostOf(spotlightReading.consumption, consumerRecord?.consumerType).toFixed(2)})</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            setUploadReceiptReading(spotlightReading);
+                            setIsUploadReceiptOpen(true);
+                          }}
+                          className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-xs transition flex items-center space-x-1 cursor-pointer"
+                          title="Upload physical cashier receipt"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          <span>Upload Receipt</span>
                         </button>
                         <button
                           onClick={() => {
@@ -1667,6 +1708,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           <ReceiptText className="h-4 w-4" />
                           <span>View Official Receipt</span>
                         </button>
+                        {spotlightReading.paymentReceiptUrl && (
+                          <button
+                            onClick={() => setViewingReceiptReading(spotlightReading)}
+                            className="px-4 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-1 cursor-pointer"
+                            title="View uploaded cashier slip photo"
+                          >
+                            <ImageIcon className="h-3.5 w-3.5" />
+                            <span>Uploaded Slip</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             setActiveTab('bills');
@@ -2795,23 +2846,46 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   <span className="hidden lg:inline">Breakdown</span>
                                 </button>
                                 {isPaid ? (
-                                  <button
-                                    onClick={() => setReceiptDetailModal(r)}
-                                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer border border-emerald-500"
-                                    id={`table-receipt-btn-${r.id}`}
-                                    title="View Official Electronic Payment Receipt"
-                                  >
-                                    <ReceiptText className="h-3.5 w-3.5" />
-                                    <span>Receipt</span>
-                                  </button>
+                                  <div className="inline-flex items-center space-x-1.5">
+                                    <button
+                                      onClick={() => setReceiptDetailModal(r)}
+                                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer border border-emerald-500"
+                                      id={`table-receipt-btn-${r.id}`}
+                                      title="View Official Electronic Payment Receipt"
+                                    >
+                                      <ReceiptText className="h-3.5 w-3.5" />
+                                      <span>Receipt</span>
+                                    </button>
+                                    {r.paymentReceiptUrl && (
+                                      <button
+                                        onClick={() => setViewingReceiptReading(r)}
+                                        className="px-2.5 py-1.5 bg-blue-900/60 hover:bg-blue-800 text-blue-300 font-bold text-xs rounded-xl transition inline-flex items-center space-x-1 cursor-pointer border border-blue-700"
+                                        title="View Uploaded Cashier Slip"
+                                      >
+                                        <ImageIcon className="h-3.5 w-3.5" />
+                                        <span className="hidden xl:inline">Slip</span>
+                                      </button>
+                                    )}
+                                  </div>
                                 ) : isPartial ? (
-                                  <>
+                                  <div className="inline-flex items-center space-x-1.5">
                                     <button
                                       onClick={() => setReceiptDetailModal(r)}
                                       className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
                                       title="View Partial Receipt"
                                     >
                                       <ReceiptText className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setUploadReceiptReading(r);
+                                        setIsUploadReceiptOpen(true);
+                                      }}
+                                      className="px-2.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-black text-xs rounded-xl transition inline-flex items-center space-x-1 cursor-pointer"
+                                      title="Upload physical cashier receipt"
+                                    >
+                                      <Upload className="h-3.5 w-3.5" />
+                                      <span className="hidden lg:inline">Upload OR</span>
                                     </button>
                                     <button
                                       onClick={() => handleStartPayment(r, 'full')}
@@ -2821,16 +2895,29 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                       <CreditCard className="h-3.5 w-3.5" />
                                       <span>Pay ₱{remainingDue.toFixed(2)}</span>
                                     </button>
-                                  </>
+                                  </div>
                                 ) : (
-                                  <button
-                                    onClick={() => handleStartPayment(r, 'full')}
-                                    className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
-                                    id={`table-pay-btn-${r.id}`}
-                                  >
-                                    <CreditCard className="h-3.5 w-3.5" />
-                                    <span>Pay Bill</span>
-                                  </button>
+                                  <div className="inline-flex items-center space-x-1.5">
+                                    <button
+                                      onClick={() => {
+                                        setUploadReceiptReading(r);
+                                        setIsUploadReceiptOpen(true);
+                                      }}
+                                      className="px-2.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-black text-xs rounded-xl transition inline-flex items-center space-x-1 cursor-pointer"
+                                      title="Upload physical Official Receipt (OR) from municipal cashier"
+                                    >
+                                      <Upload className="h-3.5 w-3.5" />
+                                      <span className="hidden lg:inline">Upload OR</span>
+                                    </button>
+                                    <button
+                                      onClick={() => handleStartPayment(r, 'full')}
+                                      className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                      id={`table-pay-btn-${r.id}`}
+                                    >
+                                      <CreditCard className="h-3.5 w-3.5" />
+                                      <span>Pay Online</span>
+                                    </button>
+                                  </div>
                                 )}
                               </div>
                             </td>
@@ -2923,13 +3010,24 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             <span>Breakdown</span>
                           </button>
                           {isPaid ? (
-                            <button
-                              onClick={() => setReceiptDetailModal(r)}
-                              className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
-                            >
-                              <ReceiptText className="h-3.5 w-3.5" />
-                              <span>View Receipt</span>
-                            </button>
+                            <div className="flex items-center gap-1.5 flex-1">
+                              <button
+                                onClick={() => setReceiptDetailModal(r)}
+                                className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                              >
+                                <ReceiptText className="h-3.5 w-3.5" />
+                                <span>Receipt</span>
+                              </button>
+                              {r.paymentReceiptUrl && (
+                                <button
+                                  onClick={() => setViewingReceiptReading(r)}
+                                  className="px-3 py-2 bg-blue-900/60 hover:bg-blue-800 text-blue-300 font-bold text-xs rounded-xl border border-blue-700 cursor-pointer"
+                                  title="View Uploaded Slip"
+                                >
+                                  <ImageIcon className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </div>
                           ) : isPartial ? (
                             <div className="flex items-center space-x-1.5 flex-1">
                               <button
@@ -2940,6 +3038,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                 <ReceiptText className="h-3.5 w-3.5" />
                               </button>
                               <button
+                                onClick={() => {
+                                  setUploadReceiptReading(r);
+                                  setIsUploadReceiptOpen(true);
+                                }}
+                                className="px-2.5 py-2 bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold text-xs rounded-xl transition cursor-pointer"
+                                title="Upload Cashier OR"
+                              >
+                                <Upload className="h-3.5 w-3.5" />
+                              </button>
+                              <button
                                 onClick={() => handleStartPayment(r, 'full')}
                                 className="flex-1 py-2 bg-amber-600 hover:bg-amber-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
                               >
@@ -2948,13 +3056,25 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               </button>
                             </div>
                           ) : (
-                            <button
-                              onClick={() => handleStartPayment(r, 'full')}
-                              className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
-                            >
-                              <CreditCard className="h-3.5 w-3.5" />
-                              <span>Pay Bill Now</span>
-                            </button>
+                            <div className="flex items-center gap-1.5 flex-1">
+                              <button
+                                onClick={() => {
+                                  setUploadReceiptReading(r);
+                                  setIsUploadReceiptOpen(true);
+                                }}
+                                className="px-2.5 py-2 bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold text-xs rounded-xl transition cursor-pointer"
+                                title="Upload Cashier OR"
+                              >
+                                <Upload className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleStartPayment(r, 'full')}
+                                className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                              >
+                                <CreditCard className="h-3.5 w-3.5" />
+                                <span>Pay Online</span>
+                              </button>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -2988,27 +3108,27 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150">
                   <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Volume Consumed</span>
                   <span className="text-2xl font-black font-mono text-blue-700 mt-1 block">
-                    {readings.reduce((acc, r) => acc + r.consumption, 0)} m³
+                    {allHistoryReadings.reduce((acc, r) => acc + (r.consumption || 0), 0)} m³
                   </span>
                 </div>
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150">
                   <span className="text-[10px] text-slate-400 font-bold uppercase block">Average Monthly Usage</span>
                   <span className="text-2xl font-black font-mono text-slate-800 mt-1 block">
-                    {readings.length > 0 
-                      ? (readings.reduce((acc, r) => acc + r.consumption, 0) / readings.length).toFixed(1)
+                    {allHistoryReadings.length > 0 
+                      ? (allHistoryReadings.reduce((acc, r) => acc + (r.consumption || 0), 0) / allHistoryReadings.length).toFixed(1)
                       : 0} m³
                   </span>
                 </div>
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150">
                   <span className="text-[10px] text-slate-400 font-bold uppercase block">Peak Month Consumption</span>
                   <span className="text-2xl font-black font-mono text-rose-600 mt-1 block">
-                    {readings.length > 0 ? Math.max(...readings.map(r => r.consumption)) : 0} m³
+                    {allHistoryReadings.length > 0 ? Math.max(...allHistoryReadings.map(r => r.consumption || 0)) : 0} m³
                   </span>
                 </div>
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150">
                   <span className="text-[10px] text-slate-400 font-bold uppercase block">Audited Reading Cycles</span>
                   <span className="text-2xl font-black font-mono text-emerald-700 mt-1 block">
-                    {readings.length} Cycles
+                    {readings.length} Approved ({allHistoryReadings.length} Logged)
                   </span>
                 </div>
               </div>
@@ -3030,7 +3150,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                    {readings.map((r, idx) => (
+                    {allHistoryReadings.map((r, idx) => (
                       <tr key={`usage-tbl-${r.id || idx}`} className="hover:bg-slate-50/80 transition">
                         <td className="px-6 py-4 font-bold text-slate-900">
                           {r.readingDate}
@@ -3053,14 +3173,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               ? 'bg-amber-100 text-amber-800 border border-amber-300'
                               : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                           }`}>
-                            {r.status === 'flagged_abnormal' ? 'Flagged Abnormal' : r.status === 'pending' ? 'Pending Review' : 'Verified'}
+                            {r.status === 'flagged_abnormal' ? 'Flagged Abnormal' : r.status === 'pending' ? 'Pending Approval' : 'Verified'}
                           </span>
                         </td>
                         <td className="px-6 py-4 text-slate-600 font-mono text-[11px]">
                           TWD Field Unit
                         </td>
                         <td className="px-6 py-4 text-slate-500 italic max-w-xs truncate">
-                          {r.notes || 'Normal residential baseline reading'}
+                          {r.notes || (r.status === 'pending' ? 'Awaiting verification in Approvals module' : 'Normal residential baseline reading')}
                         </td>
                       </tr>
                     ))}
@@ -3678,6 +3798,99 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             handleStartPayment(r, 'full');
           }}
         />
+      )}
+
+      {/* OFFICIAL CASHIER RECEIPT UPLOAD & VALIDATION MODAL */}
+      {consumerRecord && (
+        <UploadReceiptModal
+          isOpen={isUploadReceiptOpen}
+          reading={uploadReceiptReading || unpaidBills[0] || (readings.length > 0 ? readings[0] : null)}
+          allReadings={readings}
+          consumerRecord={consumerRecord}
+          onClose={() => {
+            setIsUploadReceiptOpen(false);
+            setUploadReceiptReading(null);
+          }}
+          onReceiptValidated={(receipt) => {
+            setPaymentConfirmationToast({
+              period: receipt.billingPeriod,
+              amount: receipt.amountPaid,
+              remaining: receipt.remainingBalance,
+              isPartial: receipt.isPartial,
+              reference: receipt.orNumber,
+              date: receipt.paymentDate
+            });
+            loadConsumerInfo(true);
+          }}
+          calculateCostOf={calculateCostOf}
+        />
+      )}
+
+      {/* UPLOADED PHYSICAL RECEIPT VIEWER MODAL */}
+      {viewingReceiptReading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 max-w-xl w-full text-white shadow-2xl space-y-4">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-800">
+              <div className="flex items-center space-x-2">
+                <span className="p-2 bg-emerald-500/20 text-emerald-400 rounded-xl border border-emerald-500/30">
+                  <ShieldCheck className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="text-base font-black uppercase tracking-wider">Validated Cashier Slip</h3>
+                  <p className="text-xs text-slate-400">Official Physical Receipt Verification</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setViewingReceiptReading(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex justify-between items-center text-xs bg-slate-950 p-3 rounded-2xl border border-slate-800 font-mono">
+                <div>
+                  <span className="text-slate-500 text-[10px] block">OR Number</span>
+                  <strong className="text-amber-400 text-sm">{viewingReceiptReading.orNumber || 'OR-PENDING'}</strong>
+                </div>
+                <div className="text-right">
+                  <span className="text-slate-500 text-[10px] block">Amount Credited</span>
+                  <strong className="text-emerald-400 text-sm">₱{(viewingReceiptReading.paidAmount || 0).toFixed(2)}</strong>
+                </div>
+              </div>
+
+              {viewingReceiptReading.paymentReceiptUrl ? (
+                <div className="rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 max-h-96 flex items-center justify-center">
+                  <img
+                    src={viewingReceiptReading.paymentReceiptUrl}
+                    alt="Physical Cashier Receipt"
+                    className="max-h-80 w-auto object-contain rounded-xl shadow"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              ) : (
+                <div className="py-12 text-center text-xs text-slate-400 bg-slate-950 rounded-2xl border border-slate-800">
+                  No image photo attached for this statement.
+                </div>
+              )}
+
+              <div className="flex items-center justify-between text-xs text-slate-400 pt-1">
+                <span>Billing Period: <strong className="text-slate-200">{viewingReceiptReading.billingPeriod}</strong></span>
+                <span>Date: <strong className="text-slate-200">{viewingReceiptReading.paymentDate || 'Verified'}</strong></span>
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setViewingReceiptReading(null)}
+                className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl cursor-pointer transition"
+              >
+                Close Viewer
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Footer */}

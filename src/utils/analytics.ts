@@ -4,6 +4,7 @@
  */
 
 import { MeterReading, Consumer, Barangay } from '../types';
+import { calculateWaterTariff } from './tariffCalculator';
 
 export interface MonthlyConsumptionTrend {
   period: string;
@@ -48,31 +49,7 @@ export function calculateReadingCost(
   usage: number, 
   classification: 'Residential' | 'Commercial' = 'Residential'
 ): number {
-  const isCommercial = classification === 'Commercial';
-  const minCharge = isCommercial ? 270.00 : 180.00; // first 10 m³
-  if (usage <= 10) return minCharge;
-  
-  let bill = minCharge;
-  let remaining = usage - 10;
-  
-  // Tier 1: 11-20 m³
-  const tier1 = Math.min(remaining, 10);
-  bill += tier1 * (isCommercial ? 30.00 : 20.00);
-  remaining -= tier1;
-  
-  if (remaining > 0) {
-    // Tier 2: 21-30 m³
-    const tier2 = Math.min(remaining, 10);
-    bill += tier2 * (isCommercial ? 36.00 : 24.00);
-    remaining -= tier2;
-  }
-  
-  if (remaining > 0) {
-    // Tier 3: 31+ m³
-    bill += remaining * (isCommercial ? 42.00 : 28.00);
-  }
-  
-  return Math.round(bill * 100) / 100;
+  return calculateWaterTariff(usage, classification);
 }
 
 // Compute monthly water consumption trend

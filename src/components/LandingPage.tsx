@@ -24,6 +24,7 @@ import {
   Waves
 } from 'lucide-react';
 import { Announcement } from '../types';
+import { calculateWaterTariff } from '../utils/tariffCalculator';
 
 interface LandingPageProps {
   announcements: Announcement[];
@@ -35,7 +36,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   
   // Local Bill Calculator State
-  const [calcType, setCalcType] = useState<'residential' | 'commercial'>('residential');
+  const [calcType, setCalcType] = useState<'Residential' | 'Commercial'>('Residential');
   const [calcUsage, setCalcUsage] = useState<number>(15);
   const [calculatedBill, setCalculatedBill] = useState<number | null>(null);
 
@@ -45,60 +46,8 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
   const [contactMsg, setContactMsg] = useState('');
   const [contactSent, setContactSent] = useState(false);
 
-  const calculateWaterBill = (usage: number, type: 'residential' | 'commercial') => {
-    let bill = 0;
-    if (type === 'residential') {
-      const minCharge = 180.00; // first 10m3
-      if (usage <= 10) {
-        bill = minCharge;
-      } else {
-        let remaining = usage - 10;
-        bill += minCharge;
-        
-        // 11-20 m³
-        const tier1 = Math.min(remaining, 10);
-        bill += tier1 * 20.00;
-        remaining -= tier1;
-        
-        if (remaining > 0) {
-          // 21-30 m³
-          const tier2 = Math.min(remaining, 10);
-          bill += tier2 * 24.00;
-          remaining -= tier2;
-        }
-        
-        if (remaining > 0) {
-          // 31+ m³
-          bill += remaining * 30.00;
-        }
-      }
-    } else {
-      const minCharge = 360.00; // first 10m3
-      if (usage <= 10) {
-        bill = minCharge;
-      } else {
-        let remaining = usage - 10;
-        bill += minCharge;
-        
-        // 11-20 m³
-        const tier1 = Math.min(remaining, 10);
-        bill += tier1 * 40.00;
-        remaining -= tier1;
-        
-        if (remaining > 0) {
-          // 21-30 m³
-          const tier2 = Math.min(remaining, 10);
-          bill += tier2 * 48.00;
-          remaining -= tier2;
-        }
-        
-        if (remaining > 0) {
-          // 31+ m³
-          bill += remaining * 60.00;
-        }
-      }
-    }
-    return bill;
+  const calculateWaterBill = (usage: number, type: 'Residential' | 'Commercial') => {
+    return calculateWaterTariff(usage, type);
   };
 
   const handleCalculate = (e: React.FormEvent) => {
@@ -123,11 +72,11 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
   const faqs = [
     {
       q: "How do I register my account online?",
-      a: "First-time users can click the 'Register Account' button. You must provide your official 5-digit account number (e.g., '2001-X') and matching client name exactly as it appears on your physical paper bill. Once verified, you will set up password credentials for logging in."
+      a: "Consumers can click the 'Register Account' button. You must provide your official account number and matching consumer name exactly as it appears on your physical paper bill. Once verified, you will set up password credentials for logging in."
     },
     {
       q: "When is the Tagoloan Water District meter reading period?",
-      a: "Meter readings are typically gathered by authorized field personnel between the 1st and 5th day of each calendar month. The newly synchronised readings will reflect immediately in both your personal consumer account history and the district database."
+      a: "Meter readings are gathered by authorized field personnel between the 1st and 5th day of each calendar month. The newly synchronised readings will reflect immediately in both your personal consumer account history and the district database."
     },
     {
       q: "What should I do if my water connection pressure drops or there is a leak?",
@@ -135,7 +84,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
     },
     {
       q: "How are the water tariff calculations calculated?",
-      a: "Tagoloan Water District utilizes a progressive bracket tariff. Residential accounts start with a basic flat charge of ₱180.00 for the first 10 cubic meters. Additional cubic meters are billed at cascading rates: ₱20/m³ (11-20m³), ₱24/m³ (21-30m³), and ₱30/m³ for usage exceeding 30m³. This progressive structure rewards water conservation."
+      a: "0 m³ consumption (initial baseline reading) costs ₱0.00. The first 10 m³ has a fixed price of ₱10.00. For consumption exceeding 10 m³, ₱2.00 is added for every 10 m³ overlap: 11–20 m³ is ₱12.00/m³, 21–30 m³ is ₱14.00/m³, 31–40 m³ is ₱16.00/m³, and so forth."
     }
   ];
 
@@ -360,17 +309,21 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                 Transparent Tariff Schedules
               </h3>
               <p className="text-slate-600 leading-relaxed text-sm">
-                Tagoloan Water District utilizes a graded water tariff layout approved by the Local Water Utilities Administration (LWUA). This setup ensures small households enjoy low foundational rates while large commercial entities contribute proportionally to the support infrastructure.
+                Tagoloan Water District utilizes a fair progressive water tariff schedule. Initial base readings (0 m³) incur ₱0.00 charge. The first 10 cubic meters are billed at a fixed foundational rate, with tiered increments applied for each 10 m³ overlap block.
               </p>
 
               <div className="bg-white border border-slate-150 p-5 rounded-2xl shadow-sm space-y-3">
                 <div className="flex items-start space-x-3 text-xs text-slate-600">
                   <CheckCircle className="h-5 w-5 text-emerald-500 shrink-0" />
-                  <span><strong>Minimum Charge</strong> is calculated on water consumption values zero up to ten (10) cubic meters.</span>
+                  <span><strong>Baseline Reading:</strong> 0 m³ net consumption = ₱0.00 assessed billing.</span>
                 </div>
                 <div className="flex items-start space-x-3 text-xs text-slate-600">
                   <CheckCircle className="h-5 w-5 text-emerald-500 shrink-0" />
-                  <span><strong>Service connection requests</strong> are processed at TWD administrative desk within 3-5 office business days.</span>
+                  <span><strong>First 10 m³:</strong> Fixed foundational price of ₱10.00 for residential (₱20.00 commercial).</span>
+                </div>
+                <div className="flex items-start space-x-3 text-xs text-slate-600">
+                  <CheckCircle className="h-5 w-5 text-emerald-500 shrink-0" />
+                  <span><strong>Progressive Overlap:</strong> +₱2.00 rate increase per 10 m³ consumption bracket.</span>
                 </div>
               </div>
             </div>
@@ -382,30 +335,36 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                   <thead className="bg-slate-50 text-slate-500 text-xs font-bold uppercase border-b border-slate-100">
                     <tr>
                       <th className="px-4 py-3">Classification</th>
-                      <th className="px-4 py-3">10 m³ Min</th>
+                      <th className="px-4 py-3">0 m³ (Base)</th>
+                      <th className="px-4 py-3">1-10 m³ (Fixed)</th>
                       <th className="px-4 py-3">11-20 m³</th>
                       <th className="px-4 py-3">21-30 m³</th>
-                      <th className="px-4 py-3">31+ m³</th>
+                      <th className="px-4 py-3">31-40 m³</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700 text-xs font-medium">
                     <tr>
                       <td className="px-4 py-4 font-bold text-slate-900">Residential</td>
-                      <td className="px-4 py-4">₱180.00</td>
-                      <td className="px-4 py-4">₱20.00 / m³</td>
-                      <td className="px-4 py-4">₱24.00 / m³</td>
-                      <td className="px-4 py-4">₱30.00 / m³</td>
+                      <td className="px-4 py-4 text-emerald-600 font-bold">₱0.00</td>
+                      <td className="px-4 py-4">₱10.00 fixed</td>
+                      <td className="px-4 py-4">₱12.00 / m³</td>
+                      <td className="px-4 py-4">₱14.00 / m³</td>
+                      <td className="px-4 py-4">₱16.00 / m³</td>
                     </tr>
                     <tr>
                       <td className="px-4 py-4 font-bold text-slate-900">Commercial</td>
-                      <td className="px-4 py-4">₱360.00</td>
-                      <td className="px-4 py-4">₱40.00 / m³</td>
-                      <td className="px-4 py-4">₱48.00 / m³</td>
-                      <td className="px-4 py-4">₱60.00 / m³</td>
+                      <td className="px-4 py-4 text-emerald-600 font-bold">₱0.00</td>
+                      <td className="px-4 py-4">₱20.00 fixed</td>
+                      <td className="px-4 py-4">₱24.00 / m³</td>
+                      <td className="px-4 py-4">₱28.00 / m³</td>
+                      <td className="px-4 py-4">₱32.00 / m³</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
+              <p className="text-[11px] text-slate-500 italic">
+                * Beyond 40 m³, rate continues to increase by +₱2.00 (or +₱4.00 for commercial) for every additional 10 m³ block.
+              </p>
             </div>
           </div>
         </div>
@@ -438,9 +397,9 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                     <div className="grid grid-cols-2 gap-2">
                       <button 
                         type="button"
-                        onClick={() => setCalcType('residential')}
+                        onClick={() => setCalcType('Residential')}
                         className={`py-2 rounded-lg text-xs font-bold transition border ${
-                          calcType === 'residential' 
+                          calcType === 'Residential' 
                             ? 'bg-blue-600 text-white border-blue-500' 
                             : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
                         }`}
@@ -449,9 +408,9 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                       </button>
                       <button 
                         type="button"
-                        onClick={() => setCalcType('commercial')}
+                        onClick={() => setCalcType('Commercial')}
                         className={`py-2 rounded-lg text-xs font-bold transition border ${
-                          calcType === 'commercial' 
+                          calcType === 'Commercial' 
                             ? 'bg-blue-600 text-white border-blue-500' 
                             : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
                         }`}
@@ -489,7 +448,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                   <div className="pt-4 border-t border-white/10 text-center animate-fade-in">
                     <p className="text-xs text-slate-300">Estimated Monthly Water Bill</p>
                     <p className="text-3xl font-black text-amber-400 mt-1">₱{calculatedBill.toFixed(2)}</p>
-                    <p className="text-[10px] text-slate-400 mt-1">Includes basic structural 10 m³ minimum meter lease.</p>
+                    <p className="text-[10px] text-slate-400 mt-1">Computed with progressive 10 m³ block overlap tariff rates.</p>
                   </div>
                 )}
               </div>
@@ -512,7 +471,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {announcements.map((ann) => {
+            {announcements.map((ann, aIdx) => {
               const categoryColors = {
                 disruption: 'bg-red-50 text-red-700 border-red-100 ring-red-500/10',
                 maintenance: 'bg-amber-50 text-amber-700 border-amber-100 ring-amber-500/10',
@@ -528,7 +487,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
               };
 
               return (
-                <div key={ann.id} className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm hover:shadow-md transition flex flex-col justify-between">
+                <div key={`landing-ann-${ann.id || ''}-${aIdx}`} className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm hover:shadow-md transition flex flex-col justify-between">
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${categoryColors[ann.category]}`}>

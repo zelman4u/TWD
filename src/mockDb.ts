@@ -61,10 +61,213 @@ const INITIAL_USERS: User[] = [
   }
 ];
 
-const INITIAL_CONSUMERS: Consumer[] = [];
-const INITIAL_READERS: MeterReader[] = [];
-const INITIAL_METERS: WaterMeter[] = [];
-const INITIAL_READINGS: MeterReading[] = [];
+const INITIAL_CONSUMERS: Consumer[] = [
+  {
+    accountNumber: '011-102-056',
+    name: 'FIGUEROA, GINA O.',
+    address: 'SIHAYON-LEFT (ZONE-11A)',
+    barangay: 'Poblacion',
+    sitioZone: 'ZONE-11A',
+    contactNumber: '+63 917 123 4567',
+    email: 'gina.figueroa@gmail.com',
+    meterNumber: '150307143',
+    meterBrand: 'EVER',
+    status: 'active',
+    isRegistered: true,
+    registrationDate: '2024-01-15',
+    consumerType: 'Residential',
+    meterSize: '1/2"',
+    householdInfo: '4 members',
+    outstandingBalance: 205.03,
+    rfidTag: 'RFID-150307143',
+    sequenceNo: 135,
+  },
+  {
+    accountNumber: '011-302-053',
+    name: 'ELLO, CARMEN',
+    address: 'SIHAYON-LEFT',
+    barangay: 'Poblacion',
+    sitioZone: 'Sihayon-Left',
+    contactNumber: '+63 918 234 5678',
+    email: 'carmen.ello@gmail.com',
+    meterNumber: 'E180103545',
+    meterBrand: 'EVER',
+    status: 'active',
+    isRegistered: true,
+    registrationDate: '2024-02-10',
+    consumerType: 'Commercial',
+    businessName: 'Ello Enterprise / Store',
+    businessType: 'Retail & Commercial',
+    meterSize: '3/4"',
+    outstandingBalance: 0.00,
+    rfidTag: 'RFID-E180103545',
+    sequenceNo: 136,
+  },
+  {
+    accountNumber: '011-102-042',
+    name: 'OKLAND AIDALIN 1 / LLERA',
+    address: 'SIHAYON-LEFT',
+    barangay: 'Poblacion',
+    sitioZone: 'Sihayon-Left',
+    contactNumber: '+63 919 345 6789',
+    email: 'aidalin.llera@gmail.com',
+    meterNumber: '121111102',
+    meterBrand: 'EVJET',
+    status: 'active',
+    isRegistered: true,
+    registrationDate: '2024-03-05',
+    consumerType: 'Residential',
+    meterSize: '1/2"',
+    householdInfo: '3 members',
+    outstandingBalance: 0.00,
+    rfidTag: 'RFID-121111102',
+    sequenceNo: 137,
+  }
+];
+
+const INITIAL_READERS: MeterReader[] = [
+  {
+    id: 'reader-1',
+    employeeId: 'TWD-MR-01',
+    name: 'Marco Polo',
+    email: 'reader@tagoloanwater.gov.ph',
+    contactNumber: '+63 917 555 0199',
+    employmentStatus: 'active',
+    assignedRoutes: ['Zone 1 - Sihayon Left', 'Poblacion'],
+    completedReadings: 142,
+    pendingReadings: 3,
+    performanceRating: 4.9
+  }
+];
+
+const INITIAL_METERS: WaterMeter[] = [
+  {
+    meterNumber: '150307143',
+    rfidTag: 'RFID-150307143',
+    brand: 'EVER',
+    type: 'mechanical',
+    size: '1/2"',
+    installationDate: '2024-01-15',
+    lastReadingDate: '2024-10-15',
+    lastReadingValue: 4393,
+    status: 'active',
+    linkedAccountNumber: '011-102-056'
+  },
+  {
+    meterNumber: 'E180103545',
+    rfidTag: 'RFID-E180103545',
+    brand: 'EVER',
+    type: 'mechanical',
+    size: '3/4"',
+    installationDate: '2024-02-10',
+    lastReadingDate: '2024-10-15',
+    lastReadingValue: 2204,
+    status: 'active',
+    linkedAccountNumber: '011-302-053'
+  },
+  {
+    meterNumber: '121111102',
+    rfidTag: 'RFID-121111102',
+    brand: 'EVJET',
+    type: 'mechanical',
+    size: '1/2"',
+    installationDate: '2024-03-05',
+    lastReadingDate: '2024-10-15',
+    lastReadingValue: 2100,
+    status: 'active',
+    linkedAccountNumber: '011-102-042'
+  }
+];
+
+const INITIAL_READINGS: MeterReading[] = [
+  {
+    id: 'R-011-102-056-202410',
+    accountNumber: '011-102-056',
+    consumerName: 'FIGUEROA, GINA O.',
+    meterNumber: '150307143',
+    meterBrand: 'EVER',
+    sequenceNo: 135,
+    address: 'SIHAYON-LEFT (ZONE-11A)',
+    addressZone: 'ZONE-11A',
+    route: 'Sihayon-Left Route',
+    previousReading: 4377,
+    currentReading: 4393,
+    consumption: 16,
+    readingDate: '2024-10-15',
+    meterReaderDate: '2024-10-15',
+    status: 'verified',
+    meterReaderName: 'MARCO POLO',
+    imageUrl: 'https://images.unsplash.com/photo-1584467735815-f778f274e296?w=600&auto=format&fit=crop&q=80',
+    billingPeriod: 'October 2024',
+    dueDate: 'December 12, 2024',
+    classification: 'Residential',
+    billAmount: 124.50,
+    franchiseTax: 2.54,
+    arrears: 205.03,
+    totalAmount: 332.07,
+    penaltyAmount: 12.45,
+    amountAfterDueDate: 344.52,
+    paymentStatus: 'unpaid',
+  },
+  {
+    id: 'R-011-302-053-202410',
+    accountNumber: '011-302-053',
+    consumerName: 'ELLO, CARMEN',
+    meterNumber: 'E180103545',
+    meterBrand: 'EVER',
+    sequenceNo: 136,
+    address: 'SIHAYON-LEFT',
+    addressZone: 'Sihayon-Left',
+    route: 'Sihayon-Left Route',
+    previousReading: 2139,
+    currentReading: 2204,
+    consumption: 65,
+    readingDate: '2024-10-15',
+    meterReaderDate: '2024-10-15',
+    status: 'verified',
+    meterReaderName: 'MARCO POLO',
+    imageUrl: 'https://images.unsplash.com/photo-1584467735815-f778f274e296?w=600&auto=format&fit=crop&q=80',
+    billingPeriod: 'October 2024',
+    dueDate: 'December 12, 2024',
+    classification: 'Commercial',
+    billAmount: 1387.50,
+    franchiseTax: 28.32,
+    arrears: 0.00,
+    totalAmount: 1415.82,
+    penaltyAmount: 138.75,
+    amountAfterDueDate: 1554.57,
+    paymentStatus: 'unpaid',
+  },
+  {
+    id: 'R-011-102-042-202410',
+    accountNumber: '011-102-042',
+    consumerName: 'OKLAND AIDALIN 1 / LLERA',
+    meterNumber: '121111102',
+    meterBrand: 'EVJET',
+    sequenceNo: 137,
+    address: 'SIHAYON-LEFT',
+    addressZone: 'Sihayon-Left',
+    route: 'Sihayon-Left Route',
+    previousReading: 2083,
+    currentReading: 2100,
+    consumption: 17,
+    readingDate: '2024-10-15',
+    meterReaderDate: '2024-10-15',
+    status: 'verified',
+    meterReaderName: 'MARCO POLO',
+    imageUrl: 'https://images.unsplash.com/photo-1584467735815-f778f274e296?w=600&auto=format&fit=crop&q=80',
+    billingPeriod: 'October 2024',
+    dueDate: 'December 12, 2024',
+    classification: 'Residential',
+    billAmount: 132.75,
+    franchiseTax: 2.71,
+    arrears: 0.00,
+    totalAmount: 135.46,
+    penaltyAmount: 13.30,
+    amountAfterDueDate: 148.76,
+    paymentStatus: 'unpaid',
+  }
+];
 const INITIAL_ROUTES: RouteAssignment[] = [];
 const INITIAL_ANNOUNCEMENTS: Announcement[] = [
   {
@@ -100,10 +303,41 @@ function getStored<T>(key: string, initial: T): T {
   try {
     const parsed = JSON.parse(data);
     // Automatic cleanup of legacy mock test accounts & name normalization
+    if (key === KEYS.READERS) {
+      const readers = parsed as MeterReader[];
+      const seenIds = new Set<string>();
+      const deduplicatedReaders: MeterReader[] = [];
+      readers.forEach(r => {
+        const idKey = (r.id || r.employeeId || r.email || '').trim().toLowerCase();
+        if (idKey && !seenIds.has(idKey)) {
+          seenIds.add(idKey);
+          if (r.employeeId) seenIds.add(r.employeeId.trim().toLowerCase());
+          if (r.id) seenIds.add(r.id.trim().toLowerCase());
+          deduplicatedReaders.push(r);
+        }
+      });
+      if (deduplicatedReaders.length !== readers.length) {
+        localStorage.setItem(key, JSON.stringify(deduplicatedReaders));
+        return deduplicatedReaders as unknown as T;
+      }
+    }
     if (key === KEYS.USERS) {
       const users = parsed as User[];
       let modified = false;
+      const seenUsers = new Set<string>();
+      const deduplicatedUsers: User[] = [];
       users.forEach(u => {
+        const userKey = (u.id || u.email || '').trim().toLowerCase();
+        if (userKey && !seenUsers.has(userKey)) {
+          seenUsers.add(userKey);
+          if (u.email) seenUsers.add(u.email.trim().toLowerCase());
+          deduplicatedUsers.push(u);
+        }
+      });
+      if (deduplicatedUsers.length !== users.length) {
+        modified = true;
+      }
+      deduplicatedUsers.forEach(u => {
         if (u.email && u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph') {
           if (u.name !== 'Admin') {
             u.name = 'Admin';
@@ -115,10 +349,10 @@ function getStored<T>(key: string, initial: T): T {
           }
         }
       });
-      const hasMockUsers = users.some(u => u.email === 'john@example.com' || u.email === 'maria@example.com');
-      const adminExists = users.some(u => u.email && u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph');
+      const hasMockUsers = deduplicatedUsers.some(u => u.email === 'john@example.com' || u.email === 'maria@example.com');
+      const adminExists = deduplicatedUsers.some(u => u.email && u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph');
       if (hasMockUsers || !adminExists || modified) {
-        const cleanedUsers = users.filter(u => u.email !== 'john@example.com' && u.email !== 'maria@example.com');
+        const cleanedUsers = deduplicatedUsers.filter(u => u.email !== 'john@example.com' && u.email !== 'maria@example.com');
         if (!cleanedUsers.some(u => u.email && u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph')) {
           cleanedUsers.unshift(INITIAL_USERS[0]);
         }
@@ -135,21 +369,54 @@ function getStored<T>(key: string, initial: T): T {
       }
     }
     if (key === KEYS.CONSUMERS) {
-      const cons = parsed as Consumer[];
+      let cons = parsed as Consumer[];
       const hasMockConsumers = cons.some(c => c.accountNumber === '1001-A' && c.name === 'John Doe');
       if (hasMockConsumers) {
-        const cleanedCons = cons.filter(c => c.accountNumber !== '1001-A' && c.accountNumber !== '1002-B' && c.accountNumber !== '1003-C');
-        localStorage.setItem(key, JSON.stringify(cleanedCons));
-        return cleanedCons as unknown as T;
+        cons = cons.filter(c => c.accountNumber !== '1001-A' && c.accountNumber !== '1002-B' && c.accountNumber !== '1003-C');
+      }
+      // Ensure authentic example consumers exist
+      let changed = hasMockConsumers;
+      INITIAL_CONSUMERS.forEach(ic => {
+        if (!cons.some(c => c.accountNumber === ic.accountNumber)) {
+          cons.push(ic);
+          changed = true;
+        }
+      });
+      if (changed) {
+        localStorage.setItem(key, JSON.stringify(cons));
+        return cons as unknown as T;
+      }
+    }
+    if (key === KEYS.METERS) {
+      let meters = parsed as WaterMeter[];
+      let changed = false;
+      INITIAL_METERS.forEach(im => {
+        if (!meters.some(m => m.meterNumber === im.meterNumber)) {
+          meters.push(im);
+          changed = true;
+        }
+      });
+      if (changed) {
+        localStorage.setItem(key, JSON.stringify(meters));
+        return meters as unknown as T;
       }
     }
     if (key === KEYS.READINGS) {
-      const reads = parsed as MeterReading[];
+      let reads = parsed as MeterReading[];
       const hasMockReads = reads.some(r => r.id.startsWith('R-1001-A') || r.id.startsWith('R-1002-B'));
       if (hasMockReads) {
-        const cleanedReads = reads.filter(r => !r.id.startsWith('R-1001-A') && !r.id.startsWith('R-1002-B'));
-        localStorage.setItem(key, JSON.stringify(cleanedReads));
-        return cleanedReads as unknown as T;
+        reads = reads.filter(r => !r.id.startsWith('R-1001-A') && !r.id.startsWith('R-1002-B'));
+      }
+      let changed = hasMockReads;
+      INITIAL_READINGS.forEach(ir => {
+        if (!reads.some(r => r.id === ir.id || (r.accountNumber === ir.accountNumber && r.billingPeriod === ir.billingPeriod))) {
+          reads.push(ir);
+          changed = true;
+        }
+      });
+      if (changed) {
+        localStorage.setItem(key, JSON.stringify(reads));
+        return reads as unknown as T;
       }
     }
     return parsed;
@@ -159,14 +426,23 @@ function getStored<T>(key: string, initial: T): T {
 }
 
 function setStored<T>(key: string, value: T): void {
-  localStorage.setItem(key, JSON.stringify(value));
-  if (typeof window !== 'undefined') {
-    // Notify mounted components in same window immediately
-    window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key, timestamp: Date.now() } }));
-    // Cross-tab synchronization ping
-    try {
-      localStorage.setItem('twd_sync_ping', `${Date.now()}_${key}`);
-    } catch {}
+  try {
+    const json = JSON.stringify(value);
+    const existing = localStorage.getItem(key);
+    if (existing === json) {
+      return; // Data has not changed, do not trigger event loops
+    }
+    localStorage.setItem(key, json);
+    if (typeof window !== 'undefined') {
+      // Notify mounted components in same window immediately
+      window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key, timestamp: Date.now() } }));
+      // Cross-tab synchronization ping
+      try {
+        localStorage.setItem('twd_sync_ping', `${Date.now()}_${key}`);
+      } catch {}
+    }
+  } catch (e) {
+    console.warn(`[mockDb] Error persisting key "${key}":`, e);
   }
 }
 
@@ -252,9 +528,20 @@ export const mockDb = {
     });
   },
   saveReaders: (readers: MeterReader[]): void => {
-    setStored(KEYS.READERS, readers);
-    syncBatchToFirestore(COLLECTIONS.READERS, readers, 'id');
+    const seen = new Set<string>();
+    const deduplicated: MeterReader[] = [];
     readers.forEach(r => {
+      const key = (r.id || r.employeeId || r.email || '').trim().toLowerCase();
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        if (r.id) seen.add(r.id.trim().toLowerCase());
+        if (r.employeeId) seen.add(r.employeeId.trim().toLowerCase());
+        deduplicated.push(r);
+      }
+    });
+    setStored(KEYS.READERS, deduplicated);
+    syncBatchToFirestore(COLLECTIONS.READERS, deduplicated, 'id');
+    deduplicated.forEach(r => {
       if (r.id) {
         syncDocToFirestore(COLLECTIONS.READERS, r.id, r);
       }

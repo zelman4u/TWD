@@ -38,6 +38,7 @@ export interface Consumer {
   contactNumber: string;
   email: string;
   meterNumber: string;
+  meterBrand?: string;
   status: 'active' | 'inactive' | 'archived' | 'blocked' | 'pending_approval';
   isRegistered: boolean;
   registrationDate?: string;
@@ -51,6 +52,7 @@ export interface Consumer {
   blockExpiryDate?: string;
   outstandingBalance?: number;
   rfidTag?: string;
+  sequenceNo?: number | string;
 }
 
 export interface MeterReader {
@@ -73,8 +75,12 @@ export interface MeterReader {
 export interface WaterMeter {
   meterNumber: string;
   brand: string;
+  rfidTag?: string;
+  type?: string;
   size?: string;
   installationDate: string;
+  lastReadingDate?: string;
+  lastReadingValue?: number;
   status: 'active' | 'damaged' | 'maintenance' | 'unassigned';
   linkedAccountNumber: string;
 }
@@ -82,18 +88,23 @@ export interface WaterMeter {
 export interface MeterReading {
   id: string;
   meterNumber: string;
+  meterBrand?: string;
+  sequenceNo?: number | string;
   accountNumber: string;
   consumerName: string;
+  address?: string;
+  addressZone?: string;
   route: string;
-  previousReading: number; // m3
-  currentReading: number; // m3
-  consumption: number; // m3
+  previousReading: number; // m3 (Prev. Rdg.)
+  currentReading: number; // m3 (Pres. Rdg.)
+  consumption: number; // m3 (Usage = Pres - Prev)
   readingDate: string;
+  meterReaderDate?: string;
   status: 'pending' | 'verified' | 'flagged_abnormal' | 'cancelled';
   meterReaderName: string;
   imageUrl: string;
   notes?: string;
-  billingPeriod: string; // e.g., "June 2026"
+  billingPeriod: string; // e.g., "October 2024"
   paymentStatus?: 'unpaid' | 'paid' | 'partial' | 'processing';
   paymentDate?: string;
   paymentMethod?: string;
@@ -103,11 +114,22 @@ export interface MeterReading {
   gpsLocation?: string;
   meterImageUrl?: string;
   dueDate?: string;
+  billAmount?: number; // Basic water charge (Bill Amt.)
+  franchiseTax?: number; // 2% Franchise Tax
+  arrears?: number; // Unpaid balance from previous bills
+  totalAmount?: number; // Bill Amt + Franchise Tax + Arrears
+  amountAfterDueDate?: number; // Total + 10% Late Penalty
   paidAmount?: number;
   remainingBalance?: number;
   penaltyAmount?: number;
   orNumber?: string;
   cashierName?: string;
+  paymentReceiptUrl?: string;
+  receiptUploadDate?: string;
+  receiptStatus?: 'verified' | 'pending_verification' | 'rejected';
+  receiptNotes?: string;
+  isDisconnectionNoticeIssued?: boolean;
+  disconnectionDate?: string;
 }
 
 export interface ConsumerNotification {
@@ -116,13 +138,14 @@ export interface ConsumerNotification {
   title: string;
   message: string;
   timestamp: string;
-  type: 'payment' | 'billing' | 'announcement';
+  type: 'payment' | 'billing' | 'announcement' | 'disconnection' | 'receipt_upload';
   read: boolean;
   orNumber?: string;
   amountPaid?: number;
   remainingBalance?: number;
   readingId?: string;
   billingPeriod?: string;
+  receiptUrl?: string;
 }
 
 export interface RouteAssignment {
