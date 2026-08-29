@@ -21,10 +21,13 @@ import {
   Compass,
   Building,
   Calendar,
-  Waves
+  Waves,
+  Menu,
+  X
 } from 'lucide-react';
 import { Announcement } from '../types';
 import { calculateWaterTariff } from '../utils/tariffCalculator';
+import { DistrictProfileSection } from './common/DistrictProfileSection';
 
 interface LandingPageProps {
   announcements: Announcement[];
@@ -32,6 +35,9 @@ interface LandingPageProps {
 }
 
 export default function LandingPage({ announcements, onNavigate }: LandingPageProps) {
+  // Mobile Navigation Menu State
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
   // Frequently Asked Questions State
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   
@@ -90,17 +96,43 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
 
   return (
     <div className="bg-slate-50 min-h-screen text-slate-800 font-sans" id="twd-landing-page">
+      {/* Official Contact & Office Hours Top Bar */}
+      <div className="bg-slate-900 text-slate-300 text-xs py-1.5 px-3 sm:px-4 border-b border-slate-800">
+        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-y-1.5 gap-x-4 text-[11px]">
+          <div className="flex flex-wrap items-center gap-x-4 sm:gap-x-5 gap-y-1">
+            <div className="flex items-center space-x-1.5 whitespace-nowrap">
+              <Clock className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+              <span><strong className="text-white">Hours:</strong> Mon-Fri: 8:00am – 5:00pm</span>
+            </div>
+            <div className="flex items-center space-x-1.5 whitespace-nowrap">
+              <Phone className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+              <span><strong className="text-white">Call:</strong> <a href="tel:0888904946" className="hover:text-white transition font-medium">(088) 890 – 4946</a></span>
+            </div>
+            <div className="flex items-center space-x-1.5 whitespace-nowrap">
+              <Mail className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+              <span><strong className="text-white">Email:</strong> <a href="mailto:tagoloan_waterdistrict@yahoo.com" className="hover:text-white transition font-medium">tagoloan_waterdistrict@yahoo.com</a></span>
+            </div>
+          </div>
+          <div className="hidden md:flex items-center space-x-1.5 text-slate-400 whitespace-nowrap">
+            <MapPin className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+            <span><strong className="text-white">Office:</strong> Arellano St, Poblacion, Tagoloan</span>
+          </div>
+        </div>
+      </div>
+
       {/* Upper Announcement Marquee */}
-      <div className="bg-gradient-to-r from-blue-700 to-sky-600 text-white text-xs py-2 px-4 shadow-inner text-center font-medium overflow-hidden whitespace-nowrap">
+      <div className="bg-gradient-to-r from-blue-700 to-sky-600 text-white text-xs py-1 px-4 shadow-inner text-center font-medium overflow-hidden whitespace-nowrap">
         <span className="inline-block animate-pulse duration-1000 mr-2 font-bold bg-amber-500 text-slate-900 px-1.5 py-0.5 rounded text-[10px] uppercase">Urgent Notice:</span>
         Water Line Maintenance Scheduled on June 5, 2026. Please check the announcements section below for active service areas!
       </div>
 
       {/* Main Header / Navigation */}
-      <header className="sticky top-0 bg-white/95 backdrop-blur z-40 border-b border-slate-100 transition-all shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
-          <div className="flex items-center space-x-3.5">
-            <div className="relative h-13 w-13 rounded-2xl overflow-hidden bg-slate-900 border-2 border-blue-500/30 shadow-md shadow-blue-500/20 flex items-center justify-center p-0.5 group">
+      <header className="sticky top-0 bg-white/95 backdrop-blur z-40 border-b border-slate-100 transition-all shadow-xs">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 sm:h-20 flex items-center justify-between gap-x-2">
+          
+          {/* Logo & District Branding */}
+          <div className="flex items-center space-x-2.5 sm:space-x-3 shrink-0">
+            <div className="relative h-10 w-10 sm:h-12 sm:w-12 rounded-xl overflow-hidden bg-slate-900 border border-blue-500/30 shadow-md shadow-blue-500/10 flex items-center justify-center p-0.5 shrink-0 group">
               <img 
                 src="https://lh3.googleusercontent.com/d/1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg"
                 alt="Tagoloan Water District Logo"
@@ -108,39 +140,143 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                 onError={(e) => {
                   (e.target as HTMLImageElement).src = 'https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w500';
                 }}
-                className="w-full h-full object-cover rounded-xl group-hover:scale-105 transition duration-300"
+                className="w-full h-full object-cover rounded-lg group-hover:scale-105 transition duration-300"
               />
             </div>
-            <div>
-              <h1 className="text-xl font-black tracking-tight text-slate-900 font-sans">Tagoloan Water District</h1>
-              <p className="text-[10px] uppercase tracking-widest font-black text-blue-600">Province of Misamis Oriental</p>
+            <div className="min-w-0">
+              <h1 className="text-base sm:text-lg xl:text-xl font-black tracking-tight text-slate-900 truncate font-sans">
+                Tagoloan Water District
+              </h1>
+              <p className="text-[9px] sm:text-[10px] uppercase tracking-wider font-bold text-blue-600 truncate">
+                Province of Misamis Oriental
+              </p>
             </div>
           </div>
-          <nav className="hidden md:flex items-center space-x-8 text-sm font-medium text-slate-600">
-            <a href="#profile" className="hover:text-blue-600 transition">About Us</a>
-            <a href="#services" className="hover:text-blue-600 transition">Services & Tariff</a>
-            <a href="#announcements" className="hover:text-blue-600 transition">Announcements</a>
-            <a href="#calculator" className="hover:text-blue-600 transition">Bill Calculator</a>
-            <a href="#faq" className="hover:text-blue-600 transition">FAQ</a>
-            <a href="#contact" className="hover:text-blue-600 transition">Contact Support</a>
+
+          {/* Desktop Navigation Links */}
+          <nav className="hidden lg:flex items-center space-x-3 xl:space-x-5 2xl:space-x-6 text-xs xl:text-sm font-bold text-slate-600 whitespace-nowrap">
+            <a href="#profile" className="hover:text-blue-600 transition py-1">About Us</a>
+            <a href="#org-structure" className="hover:text-blue-600 transition py-1">Org Structure</a>
+            <a href="#services" className="hover:text-blue-600 transition py-1">Services & Tariff</a>
+            <a href="#announcements" className="hover:text-blue-600 transition py-1">Announcements</a>
+            <a href="#calculator" className="hover:text-blue-600 transition py-1">Bill Calculator</a>
+            <a href="#faq" className="hover:text-blue-600 transition py-1">FAQ</a>
+            <a href="#contact" className="hover:text-blue-600 transition py-1">Contact Support</a>
           </nav>
-          <div className="flex items-center space-x-3">
+
+          {/* Action Buttons & Mobile Menu Toggle */}
+          <div className="flex items-center space-x-2 sm:space-x-3 shrink-0">
             <button 
               id="nav-login-btn"
               onClick={() => onNavigate('login')}
-              className="px-5 py-2.5 rounded-lg text-sm font-semibold text-slate-700 hover:text-blue-600 hover:bg-slate-50 transition border border-slate-200"
+              className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-bold text-slate-700 hover:text-blue-600 hover:bg-slate-100 transition border border-slate-200 whitespace-nowrap"
             >
               Sign In
             </button>
             <button 
               id="nav-register-btn"
               onClick={() => onNavigate('register')}
-              className="px-5 py-2.5 bg-blue-600 shadow-md shadow-blue-150 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition"
+              className="px-3 py-1.5 sm:px-4 sm:py-2 bg-blue-600 shadow-md shadow-blue-500/20 text-white rounded-lg text-xs sm:text-sm font-bold hover:bg-blue-700 transition whitespace-nowrap"
             >
               Register Portal
             </button>
+
+            {/* Mobile Hamburger Toggle Button */}
+            <button
+              id="nav-mobile-toggle-btn"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="lg:hidden p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition border border-slate-200"
+              aria-label="Toggle navigation menu"
+            >
+              {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            </button>
           </div>
         </div>
+
+        {/* Mobile / Tablet Drawer Menu */}
+        {mobileMenuOpen && (
+          <div className="lg:hidden bg-white border-b border-slate-200 px-4 py-4 space-y-3 shadow-xl transition-all">
+            <div className="flex flex-col space-y-2 text-sm font-bold text-slate-700">
+              <a 
+                href="#profile" 
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3 py-2 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition flex items-center justify-between"
+              >
+                <span>About Us</span>
+                <ChevronRight className="h-4 w-4 text-slate-400" />
+              </a>
+              <a 
+                href="#org-structure" 
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3 py-2 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition flex items-center justify-between"
+              >
+                <span>Org Structure</span>
+                <ChevronRight className="h-4 w-4 text-slate-400" />
+              </a>
+              <a 
+                href="#services" 
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3 py-2 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition flex items-center justify-between"
+              >
+                <span>Services & Tariff</span>
+                <ChevronRight className="h-4 w-4 text-slate-400" />
+              </a>
+              <a 
+                href="#announcements" 
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3 py-2 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition flex items-center justify-between"
+              >
+                <span>Announcements</span>
+                <ChevronRight className="h-4 w-4 text-slate-400" />
+              </a>
+              <a 
+                href="#calculator" 
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3 py-2 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition flex items-center justify-between"
+              >
+                <span>Bill Calculator</span>
+                <ChevronRight className="h-4 w-4 text-slate-400" />
+              </a>
+              <a 
+                href="#faq" 
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3 py-2 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition flex items-center justify-between"
+              >
+                <span>FAQ</span>
+                <ChevronRight className="h-4 w-4 text-slate-400" />
+              </a>
+              <a 
+                href="#contact" 
+                onClick={() => setMobileMenuOpen(false)}
+                className="px-3 py-2 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition flex items-center justify-between"
+              >
+                <span>Contact Support</span>
+                <ChevronRight className="h-4 w-4 text-slate-400" />
+              </a>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex flex-col gap-2">
+              <button 
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onNavigate('login');
+                }}
+                className="w-full py-2.5 rounded-lg text-sm font-bold text-slate-800 bg-slate-100 hover:bg-slate-200 transition text-center"
+              >
+                Sign In to Portal
+              </button>
+              <button 
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onNavigate('register');
+                }}
+                className="w-full py-2.5 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 transition shadow-md text-center"
+              >
+                Register New Account
+              </button>
+            </div>
+          </div>
+        )}
       </header>
 
       {/* Hero Section */}
@@ -148,9 +284,9 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
             <div className="lg:col-span-7 space-y-6">
-              <div className="inline-flex items-center space-x-2 bg-blue-50 border border-blue-100 text-blue-700 px-3.5 py-1.5 rounded-full text-xs font-semibold">
-                <Droplet className="h-3.5 w-3.5 fill-blue-500" />
-                <span>Clean & Sustained Committment Since 1990</span>
+              <div className="inline-flex items-center space-x-2 bg-blue-50 border border-blue-100 text-blue-700 px-3.5 py-1.5 rounded-full text-xs font-bold shadow-xs">
+                <Droplet className="h-3.5 w-3.5 fill-blue-500 text-blue-600" />
+                <span>Clean & Sustained Commitment Since 2009</span>
               </div>
               <h2 className="text-4xl sm:text-5xl lg:text-6xl font-black text-slate-900 tracking-tight leading-none">
                 Empowering the Community of <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-sky-500">Tagoloan</span> with Abundant Water
@@ -258,46 +394,8 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
         </div>
       </section>
 
-      {/* Profile Section (Vision & Mission) */}
-      <section id="profile" className="py-20 border-t border-slate-100 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center space-y-4 max-w-3xl mx-auto mb-16">
-            <h2 className="text-xs font-extrabold uppercase tracking-widest text-blue-600">Organization Profile</h2>
-            <h3 className="text-3xl sm:text-4xl font-extrabold text-slate-950 tracking-tight">
-              Tagoloan Water District Objectives & Mandates
-            </h3>
-            <p className="text-slate-600 leading-relaxed">
-              Established with the commitment to uplift household sanitation and environmental reliability, Tagoloan Water District strives to keep our local water pure, continuous, and responsive to growing community parameters.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-            {/* Vision card */}
-            <div className="relative bg-slate-50 border border-slate-100 rounded-2xl p-8 hover:shadow-lg transition">
-              <div className="absolute top-0 right-0 h-24 w-24 bg-blue-500/5 rounded-full blur-xl"></div>
-              <div className="h-12 w-12 bg-blue-100 text-blue-700 rounded-xl flex items-center justify-center mb-6">
-                <Compass className="h-6 w-6 stroke-[2]" />
-              </div>
-              <h4 className="text-xl font-bold text-slate-900 mb-3">Our Vision</h4>
-              <p className="text-slate-600 leading-relaxed text-sm">
-                To be a premier and highly viable water supply utility in Misamis Oriental, renowned for delivering premium quality, accessible water resources 24/7, supported by modern water treatment technologies and exceptional community-centered assistance. We envision a district where water resource conservation ensures abundant reserves for generations to come.
-              </p>
-            </div>
-
-            {/* Mission card */}
-            <div className="relative bg-slate-50 border border-slate-100 rounded-2xl p-8 hover:shadow-lg transition">
-              <div className="absolute top-0 right-0 h-24 w-24 bg-blue-500/5 rounded-full blur-xl"></div>
-              <div className="h-12 w-12 bg-blue-100 text-blue-700 rounded-xl flex items-center justify-center mb-6">
-                <Building className="h-6 w-6 stroke-[2]" />
-              </div>
-              <h4 className="text-xl font-bold text-slate-900 mb-3">Our Mission</h4>
-              <p className="text-slate-600 leading-relaxed text-sm font-sans">
-                To construct, expand, operate, maintain, and secure a potable water-works mechanism system that systematically fulfills the residential, institutional, commercial, and agricultural development expectations in Tagoloan. We are committed to maintaining affordable progressive tariffs, safeguarding natural rivers, and empowering users with seamless transparency.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
+      {/* Official District Profile, Mission, Vision, Core Values & Org Structure */}
+      <DistrictProfileSection id="profile" />
 
       {/* Services Information & Live Tariff Table */}
       <section id="services" className="py-20 bg-slate-50 border-t border-slate-100">
@@ -567,43 +665,47 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
               </p>
 
               <div className="space-y-4 pt-2">
-                <div className="flex items-center space-x-4 bg-white p-4 rounded-xl border border-slate-100">
-                  <div className="h-10 w-10 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600">
+                <div className="flex items-center space-x-4 bg-white p-4 rounded-xl border border-slate-100 shadow-xs">
+                  <div className="h-10 w-10 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 shrink-0">
                     <MapPin className="h-5 w-5" />
                   </div>
                   <div>
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Office Address</h4>
-                    <p className="text-xs font-bold text-slate-800">Poblacion, Tagoloan, Misamis Oriental, PH</p>
+                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Visit Our Office</h4>
+                    <p className="text-xs font-bold text-slate-900">Arellano St, Poblacion, Tagoloan, Misamis Oriental</p>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-4 bg-white p-4 rounded-xl border border-slate-100">
-                  <div className="h-10 w-10 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600">
+                <div className="flex items-center space-x-4 bg-white p-4 rounded-xl border border-slate-100 shadow-xs">
+                  <div className="h-10 w-10 bg-emerald-50 rounded-lg flex items-center justify-center text-emerald-600 shrink-0">
                     <Phone className="h-5 w-5" />
                   </div>
                   <div>
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Hotline Contact Numbers</h4>
-                    <p className="text-xs font-bold text-slate-800">(088) 555-0145 / 0917-882-1234</p>
+                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Call Us</h4>
+                    <p className="text-xs font-bold text-slate-900">
+                      <a href="tel:0888904946" className="hover:text-blue-600 transition">(088) 890 – 4946</a>
+                    </p>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-4 bg-white p-4 rounded-xl border border-slate-100">
-                  <div className="h-10 w-10 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600">
+                <div className="flex items-center space-x-4 bg-white p-4 rounded-xl border border-slate-100 shadow-xs">
+                  <div className="h-10 w-10 bg-amber-50 rounded-lg flex items-center justify-center text-amber-600 shrink-0">
                     <Mail className="h-5 w-5" />
                   </div>
                   <div>
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Email Inquiry Support</h4>
-                    <p className="text-xs font-bold text-slate-800">support@tagoloanwater.gov.ph</p>
+                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Email Us</h4>
+                    <p className="text-xs font-bold text-slate-900">
+                      <a href="mailto:tagoloan_waterdistrict@yahoo.com" className="hover:text-blue-600 transition">tagoloan_waterdistrict@yahoo.com</a>
+                    </p>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-4 bg-white p-4 rounded-xl border border-slate-100">
-                  <div className="h-10 w-10 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600">
+                <div className="flex items-center space-x-4 bg-white p-4 rounded-xl border border-slate-100 shadow-xs">
+                  <div className="h-10 w-10 bg-sky-50 rounded-lg flex items-center justify-center text-sky-600 shrink-0">
                     <Clock className="h-5 w-5" />
                   </div>
                   <div>
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">District Working Hours</h4>
-                    <p className="text-xs font-bold text-slate-800">Monday - Friday: 8:00 AM - 5:00 PM</p>
+                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Opening Hours</h4>
+                    <p className="text-xs font-bold text-slate-900">Mon-Fri: 8:00am – 5:00pm</p>
                   </div>
                 </div>
               </div>
@@ -679,11 +781,34 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
             </div>
             <span className="text-lg font-black tracking-tight text-white">Tagoloan Water District</span>
           </div>
-          <p className="text-xs max-w-xl mx-auto leading-relaxed">
-            Tagoloan Water District is committed to preserving environmental integrity while delivering continuous municipal services. All billing and logging statistics synchronised for testing purposes across these local portals.
+
+          <div className="flex flex-wrap justify-center items-center gap-x-6 gap-y-2 text-xs text-slate-300">
+            <span className="flex items-center gap-1.5">
+              <MapPin className="h-3.5 w-3.5 text-rose-400" />
+              Arellano St, Poblacion, Tagoloan, Misamis Oriental
+            </span>
+            <span className="text-slate-600 hidden sm:inline">•</span>
+            <span className="flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5 text-blue-400" />
+              Mon-Fri: 8:00am – 5:00pm
+            </span>
+            <span className="text-slate-600 hidden sm:inline">•</span>
+            <span className="flex items-center gap-1.5">
+              <Phone className="h-3.5 w-3.5 text-emerald-400" />
+              <a href="tel:0888904946" className="hover:text-white transition">(088) 890 – 4946</a>
+            </span>
+            <span className="text-slate-600 hidden sm:inline">•</span>
+            <span className="flex items-center gap-1.5">
+              <Mail className="h-3.5 w-3.5 text-amber-400" />
+              <a href="mailto:tagoloan_waterdistrict@yahoo.com" className="hover:text-white transition">tagoloan_waterdistrict@yahoo.com</a>
+            </span>
+          </div>
+
+          <p className="text-xs max-w-xl mx-auto leading-relaxed text-slate-400">
+            Tagoloan Water District is committed to preserving environmental integrity while delivering continuous municipal services conforming to standard water quality guidelines.
           </p>
           <div className="text-[10px] text-slate-500">
-            &copy; 2026 Tagoloan Water District. All Rights Reserved. Created and managed internally by TWD IT Div.
+            &copy; 2026 Tagoloan Water District. All Rights Reserved. Province of Misamis Oriental.
           </div>
         </div>
       </footer>

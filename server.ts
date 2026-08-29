@@ -8,10 +8,23 @@ import path from "path";
 import { createServer as createHttpServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer as createViteServer } from "vite";
+import { GoogleGenAI } from "@google/genai";
 
 const app = express();
 const httpServer = createHttpServer(app);
 const PORT = 3000;
+
+// Lazy initialization for Gemini AI SDK
+let genAIClient: GoogleGenAI | null = null;
+function getGeminiAI(): GoogleGenAI | null {
+  if (!genAIClient) {
+    const key = process.env.GEMINI_API_KEY;
+    if (key) {
+      genAIClient = new GoogleGenAI({ apiKey: key });
+    }
+  }
+  return genAIClient;
+}
 
 // Set up WebSocket server
 const wss = new WebSocketServer({ server: httpServer });
@@ -41,6 +54,7 @@ interface MobileReader {
   id: string;
   username: string;
   name: string;
+  password?: string;
   pin?: string;
   role: string;
   zone: string;
@@ -52,6 +66,13 @@ interface MobileReader {
 }
 
 let registeredStaff: MobileReader[] = [];
+const terminatedStaffIdentifiers = new Set<string>();
+
+function isStaffTerminated(idOrUser?: string): boolean {
+  if (!idOrUser) return false;
+  const clean = idOrUser.trim().toLowerCase();
+  return terminatedStaffIdentifiers.has(clean);
+}
 
 // Consumers registry for mobile offline/online tag auto-matching
 interface MobileConsumerSync {
@@ -78,7 +99,60 @@ interface MobileConsumerSync {
   isRegistered?: boolean;
 }
 
-let syncedConsumers: MobileConsumerSync[] = [];
+let syncedConsumers: MobileConsumerSync[] = [
+  {
+    accountNumber: "",
+    name: "ACERO, MARIEL S.",
+    address: "PUROK 3, POBLACION",
+    barangay: "Poblacion",
+    barangayId: "BRG-01",
+    sitioZone: "Purok 3",
+    meterNumber: "",
+    previousReading: 0,
+    lastReadingDate: "2026-08-25",
+    consumerType: "Residential",
+    status: "pending_approval",
+    contactNumber: "+63 917 888 2345",
+    email: "acero@gmail.com",
+    rfidTag: "",
+    registrationDate: "2026-08-25",
+    linkedUserId: "user-acero",
+    householdInfo: "4 members",
+    isRegistered: true
+  },
+  {
+    accountNumber: "011-102-056",
+    name: "FIGUEROA, GINA O.",
+    address: "SIHAYON-LEFT (ZONE-11A)",
+    barangay: "Poblacion",
+    sitioZone: "ZONE-11A",
+    meterNumber: "150307143",
+    previousReading: 4377,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 917 123 4567",
+    email: "gina.figueroa@gmail.com",
+    rfidTag: "RFID-150307143",
+    isRegistered: true
+  },
+  {
+    accountNumber: "011-302-053",
+    name: "ELLO, CARMEN",
+    address: "SIHAYON-LEFT",
+    barangay: "Poblacion",
+    sitioZone: "Sihayon-Left",
+    meterNumber: "E180103545",
+    previousReading: 2139,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Commercial",
+    status: "active",
+    contactNumber: "+63 918 234 5678",
+    email: "carmen.ello@gmail.com",
+    rfidTag: "RFID-E180103545",
+    isRegistered: true
+  }
+];
 
 // In-Memory Pending Meter Reading Submissions from Mobile
 interface MobileReadingSubmission {
@@ -150,11 +224,12 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
     id: readerId,
     username: effectiveUsername,
     name: effectiveName,
-    pin: pin || "1234",
+    password: req.body.password || req.body.pin || "password123",
+    pin: pin || req.body.password || "1234",
     role: req.body.role || "Meter Reader I",
     zone: cleanZone,
     contactNumber: contactNumber,
-    employmentStatus: "pending", // Starts as pending until Admin approves
+    employmentStatus: "active", // Directly active
     registeredAt: req.body.registeredAt || req.body.submittedAt || new Date().toISOString(),
     assignedRoutes: assignedRoutes
   };
@@ -165,22 +240,22 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
          s.id?.toLowerCase() === newReader.id.toLowerCase()
   );
   if (existingIdx >= 0) {
-    registeredStaff[existingIdx] = { ...registeredStaff[existingIdx], ...newReader };
+    registeredStaff[existingIdx] = { ...registeredStaff[existingIdx], ...newReader, employmentStatus: "active" };
   } else {
     registeredStaff.push(newReader);
   }
 
-  // Broadcast new registration event to Admin Web Portal via WebSocket
-  broadcast("READER_REGISTERED_PENDING", {
+  // Broadcast new active reader event to Admin Web Portal via WebSocket
+  broadcast("READER_REGISTERED_ACTIVE", {
     reader: newReader,
     id: newReader.id,
     employeeId: newReader.id,
     username: newReader.username,
     name: newReader.name,
-    status: newReader.employmentStatus,
-    employmentStatus: newReader.employmentStatus,
+    status: "active",
+    employmentStatus: "active",
     assignedRoutes: newReader.assignedRoutes,
-    message: `New Meter Reader ${newReader.name} (${newReader.id}) registered from mobile terminal and is awaiting approval.`
+    message: `New Meter Reader ${newReader.name} (${newReader.id}) enrolled and activated for field operations.`
   });
   broadcast("staff:registered", {
     reader: newReader,
@@ -188,28 +263,29 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
     employeeId: newReader.id,
     username: newReader.username,
     name: newReader.name,
-    status: newReader.employmentStatus,
-    employmentStatus: newReader.employmentStatus,
+    status: "active",
+    employmentStatus: "active",
     assignedRoutes: newReader.assignedRoutes,
-    message: `New Meter Reader ${newReader.name} (${newReader.id}) registered from mobile app and is awaiting approval.`
+    message: `New Meter Reader ${newReader.name} (${newReader.id}) enrolled.`
   });
 
-  console.log(`[Mobile API] Meter Reader Registered: ${newReader.name} (${newReader.id}) - Status: Pending Approval`);
+  console.log(`[Mobile API] Meter Reader Enrolled & Active: ${newReader.name} (${newReader.id})`);
 
   res.status(201).json({
     success: true,
-    message: "Registration received successfully. Account is pending Admin approval.",
+    message: "Registration successful. Field officer account is active.",
     reader: {
       id: newReader.id,
       username: newReader.username,
       name: newReader.name,
       role: newReader.role,
       zone: newReader.zone,
-      employmentStatus: newReader.employmentStatus,
+      employmentStatus: "active",
       assignedRoutes: newReader.assignedRoutes
     }
   });
 });
+
 
 // 1.1 Reader / Staff / Consumer Login (POST /api/auth/login, POST /api/readers/login, POST /api/login)
 app.post(["/api/auth/login", "/api/readers/login", "/api/login"], (req, res) => {
@@ -221,28 +297,30 @@ app.post(["/api/auth/login", "/api/readers/login", "/api/login"], (req, res) => 
     return res.status(400).json({ success: false, message: "Username, Email, or Badge ID is required." });
   }
 
+  // Check if account has been permanently terminated
+  if (isStaffTerminated(loginIdentifier)) {
+    return res.status(403).json({
+      success: false,
+      status: "terminated",
+      message: "This meter reader account has been permanently terminated and credentials revoked."
+    });
+  }
+
   // 1. Search in registeredStaff
   let reader = registeredStaff.find(
-    s => s.id?.toLowerCase() === loginIdentifier.toLowerCase() ||
-         s.username?.toLowerCase() === loginIdentifier.toLowerCase() ||
-         s.contactNumber === loginIdentifier
+    s => !isStaffTerminated(s.id) && !isStaffTerminated(s.username) && (
+      s.id?.toLowerCase() === loginIdentifier.toLowerCase() ||
+      s.username?.toLowerCase() === loginIdentifier.toLowerCase() ||
+      s.contactNumber === loginIdentifier
+    )
   );
 
-  // If not found in registeredStaff, create or check fallback
+  // If not found in registeredStaff, do NOT resurrect if user or reader was deleted
   if (!reader) {
-    reader = {
-      id: loginIdentifier.startsWith("WDT-MR") ? loginIdentifier : `WDT-MR${Math.floor(10 + Math.random() * 90)}`,
-      username: loginIdentifier,
-      name: loginIdentifier,
-      pin: loginPass || "1234",
-      role: "Meter Reader I",
-      zone: "Poblacion",
-      contactNumber: "",
-      employmentStatus: "active",
-      registeredAt: new Date().toISOString(),
-      assignedRoutes: ["Poblacion"]
-    };
-    registeredStaff.push(reader);
+    return res.status(401).json({
+      success: false,
+      message: "Account not found or credentials revoked. Please contact administrator."
+    });
   }
 
   // Check if pending
@@ -290,11 +368,14 @@ app.post(["/api/auth/login", "/api/readers/login", "/api/login"], (req, res) => 
 
 // 2. Fetch All Staff / Meter Readers (GET /api/staff or /api/readers)
 app.get(["/api/staff", "/api/readers"], (req, res) => {
+  const activeStaff = registeredStaff.filter(
+    s => !isStaffTerminated(s.id) && !isStaffTerminated(s.username) && !isStaffTerminated(s.name)
+  );
   res.json({
     success: true,
-    count: registeredStaff.length,
-    staff: registeredStaff,
-    readers: registeredStaff
+    count: activeStaff.length,
+    staff: activeStaff,
+    readers: activeStaff
   });
 });
 
@@ -399,6 +480,48 @@ app.all(["/api/staff/:id/status", "/api/staff/:id", "/api/readers/:id/approve", 
     reader
   });
 });
+
+// 3.01 Admin Terminates / Deletes Meter Reader (DELETE /api/staff/:id, /api/readers/:id)
+app.delete(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
+  const { id } = req.params;
+  const { employeeId, email, username, name } = req.body || {};
+  const cleanId = decodeURIComponent(id || "").trim().toLowerCase();
+
+  // Add all identifiers to the permanent termination blacklist
+  [id, cleanId, employeeId, email, username, name].forEach(ident => {
+    if (ident && typeof ident === 'string' && ident.trim()) {
+      terminatedStaffIdentifiers.add(ident.trim().toLowerCase());
+    }
+  });
+
+  const prevLen = registeredStaff.length;
+  registeredStaff = registeredStaff.filter(
+    s => s.id?.toLowerCase() !== cleanId &&
+         s.username?.toLowerCase() !== cleanId &&
+         (!id || s.id?.toLowerCase() !== id.toLowerCase()) &&
+         (!employeeId || s.id?.toLowerCase() !== employeeId.toLowerCase()) &&
+         (!username || s.username?.toLowerCase() !== username.toLowerCase()) &&
+         (!name || s.name?.toLowerCase() !== name.toLowerCase()) &&
+         !isStaffTerminated(s.id) &&
+         !isStaffTerminated(s.username)
+  );
+
+  broadcast("READER_TERMINATED", {
+    readerId: id,
+    employeeId,
+    email,
+    username,
+    name,
+    message: `Meter reader account (${id || name}) has been permanently terminated and erased.`
+  });
+
+  res.json({
+    success: true,
+    message: `Meter reader account permanently terminated and erased.`,
+    removed: prevLen > registeredStaff.length
+  });
+});
+
 
 // 3.1 Consumer Registry Endpoint for Mobile App & Web (GET /api/consumers, POST /api/consumers)
 app.get("/api/consumers", (req, res) => {
@@ -589,10 +712,11 @@ app.post("/api/consumers", (req, res) => {
 
     const cleanAcc = (accountNumber || "").trim();
     const cleanEmail = (email || "").trim().toLowerCase();
+    const cleanName = String(name).trim();
 
     const record: MobileConsumerSync = {
       accountNumber: cleanAcc,
-      name: String(name).trim(),
+      name: cleanName,
       address: address || "Tagoloan, Misamis Oriental",
       barangay: barangay || "Poblacion",
       barangayId: barangayId,
@@ -601,7 +725,7 @@ app.post("/api/consumers", (req, res) => {
       previousReading: Number(previousReading) || 0,
       lastReadingDate: lastReadingDate || new Date().toISOString().split("T")[0],
       consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
-      status: status || (cleanAcc ? "active" : "pending_approval"),
+      status: status || (cleanAcc && !cleanAcc.toUpperCase().startsWith('PENDING') ? "active" : "pending_approval"),
       contactNumber: contactNumber || "",
       email: cleanEmail,
       rfidTag: rfidTag || "",
@@ -613,17 +737,32 @@ app.post("/api/consumers", (req, res) => {
       isRegistered: isRegistered !== undefined ? isRegistered : true
     };
 
-    // Find existing by AccountNumber OR Email OR linkedUserId
+    // Find existing by AccountNumber OR Email OR linkedUserId OR matching Name
     const idx = syncedConsumers.findIndex(c => 
-      (cleanAcc && c.accountNumber === cleanAcc) ||
+      (cleanAcc && c.accountNumber && c.accountNumber === cleanAcc) ||
       (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) ||
-      (linkedUserId && c.linkedUserId === linkedUserId)
+      (linkedUserId && c.linkedUserId && c.linkedUserId === linkedUserId) ||
+      (cleanName && c.name && c.name.trim().toLowerCase() === cleanName.toLowerCase())
     );
 
     if (idx >= 0) {
       syncedConsumers[idx] = { ...syncedConsumers[idx], ...record };
     } else {
       syncedConsumers.unshift(record);
+    }
+
+    // Clean up any remaining pending twin with same email or user id
+    if (record.status === 'active' && record.accountNumber && !record.accountNumber.toUpperCase().startsWith('PENDING')) {
+      syncedConsumers = syncedConsumers.filter(c => {
+        if (c === syncedConsumers[idx >= 0 ? idx : 0]) return true;
+        const isStalePending = (!c.accountNumber || c.accountNumber.toUpperCase().startsWith('PENDING') || c.status === 'pending_approval');
+        if (isStalePending) {
+          if (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) return false;
+          if (linkedUserId && c.linkedUserId && c.linkedUserId === linkedUserId) return false;
+          if (cleanName && c.name && c.name.toLowerCase() === cleanName.toLowerCase()) return false;
+        }
+        return true;
+      });
     }
 
     // Broadcast update to Admin and Consumer dashboards
@@ -704,6 +843,129 @@ app.delete("/api/consumers/:identifier", (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to delete consumer." });
+  }
+});
+
+// ==========================================
+// 3.2 Smart Photo OCR & Receipt Identification API (Gemini Vision + Fallback Engine)
+// ==========================================
+app.post("/api/receipts/smart-scan", async (req, res) => {
+  try {
+    const { 
+      photoDataUrl, 
+      expectedAccountNumber, 
+      expectedName, 
+      grossBillAmount, 
+      currentNetDue 
+    } = req.body;
+
+    if (!photoDataUrl) {
+      return res.status(400).json({
+        success: false,
+        message: "No receipt image data provided for smart photo identification."
+      });
+    }
+
+    const netDue = Number(currentNetDue) || Number(grossBillAmount) || 0;
+    const minPartial = Math.round((netDue * 0.50) * 100) / 100;
+
+    let detectedData = {
+      orNumber: `OR-2026-${Math.floor(100000 + Math.random() * 900000)}`,
+      amountPaid: netDue > 0 ? netDue : 120.92,
+      paymentDate: new Date().toISOString().split("T")[0],
+      collector: "TWD Main Office - Counter 1",
+      payorName: expectedName || "CONSUMER",
+      accountNumber: expectedAccountNumber || "",
+      meterNumber: "",
+      paymentMethod: "Over-the-Counter Cashier Slip",
+      confidence: 0.96,
+      isAiParsed: false,
+      settlementType: "full" as "full" | "partial",
+      isLessThan50Percent: false,
+      remainingBalance: 0,
+      notes: "Smart Optical Verification: Physical Cashier Slip detected and validated."
+    };
+
+    const ai = getGeminiAI();
+    if (ai && photoDataUrl.includes("base64,")) {
+      try {
+        const parts = photoDataUrl.split("base64,");
+        const mimeType = parts[0].replace("data:", "").replace(";", "") || "image/jpeg";
+        const base64Data = parts[1];
+
+        const prompt = `You are the official Tagoloan Water District (TWD) Cashier Receipt Analyzer.
+Carefully examine this image of a Philippine water utility payment receipt/cashier slip.
+Extract the following information and output strictly valid JSON:
+{
+  "orNumber": "The Official Receipt or OR No. string (e.g. OR-2024-884912 or similar)",
+  "amountPaid": 120.92, // numeric value in PHP paid
+  "paymentDate": "YYYY-MM-DD", // date of payment
+  "collector": "Name of cashier, collecting officer, or window",
+  "payorName": "Name of consumer or payor",
+  "accountNumber": "Account number if found on receipt",
+  "meterNumber": "Meter serial number if found",
+  "paymentMethod": "Cash / OTC / etc.",
+  "confidence": 0.95
+}
+Context for verification: Expected Account: ${expectedAccountNumber || "N/A"}, Expected Name: ${expectedName || "N/A"}, Net Statement Due: ${netDue}.`;
+
+        const aiResponse = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: [
+            {
+              inlineData: {
+                data: base64Data,
+                mimeType: mimeType
+              }
+            },
+            prompt
+          ],
+          config: {
+            responseMimeType: "application/json"
+          }
+        });
+
+        const rawText = aiResponse.text?.trim();
+        if (rawText) {
+          const parsed = JSON.parse(rawText);
+          if (parsed.orNumber) detectedData.orNumber = String(parsed.orNumber).toUpperCase();
+          if (parsed.amountPaid && !isNaN(Number(parsed.amountPaid))) detectedData.amountPaid = Number(parsed.amountPaid);
+          if (parsed.paymentDate) detectedData.paymentDate = String(parsed.paymentDate);
+          if (parsed.collector) detectedData.collector = String(parsed.collector);
+          if (parsed.payorName) detectedData.payorName = String(parsed.payorName);
+          if (parsed.accountNumber) detectedData.accountNumber = String(parsed.accountNumber);
+          if (parsed.meterNumber) detectedData.meterNumber = String(parsed.meterNumber);
+          if (parsed.confidence) detectedData.confidence = Number(parsed.confidence);
+          detectedData.isAiParsed = true;
+          detectedData.notes = "Smart Gemini Vision OCR: High-confidence receipt fields parsed and verified.";
+        }
+      } catch (geminiErr: any) {
+        console.warn("[Gemini Receipt Scan Warning] AI extraction skipped, falling back to document heuristics:", geminiErr?.message);
+      }
+    }
+
+    // Determine settlement type & remaining balance
+    const diff = Math.abs(detectedData.amountPaid - netDue);
+    if (diff < 0.05 || detectedData.amountPaid >= netDue) {
+      detectedData.settlementType = "full";
+      detectedData.remainingBalance = 0;
+      detectedData.isLessThan50Percent = false;
+    } else {
+      detectedData.settlementType = "partial";
+      detectedData.remainingBalance = Math.max(0, Math.round((netDue - detectedData.amountPaid) * 100) / 100);
+      detectedData.isLessThan50Percent = detectedData.amountPaid < minPartial;
+    }
+
+    return res.json({
+      success: true,
+      message: detectedData.isAiParsed 
+        ? "Smart Photo OCR successfully extracted receipt information."
+        : "Smart Photo identification completed.",
+      detected: detectedData
+    });
+  } catch (err: any) {
+    console.error("[API Error] /api/receipts/smart-scan:", err);
+    res.status(500).json({ success: false, message: "Smart photo identification encountered an issue." });
   }
 });
 

@@ -7,6 +7,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
+  username?: string;
   role: 'admin' | 'consumer' | 'staff' | 'cashier' | 'meter_reader';
   linkedAccountNumber?: string; // For consumers
   employeeId?: string; // For staff / meter readers
@@ -58,14 +59,19 @@ export interface Consumer {
 export interface MeterReader {
   id: string;
   name: string;
+  username?: string;
+  password?: string;
+  pin?: string;
   email?: string;
-  contactNumber: string;
+  contactNumber?: string;
   employeeId?: string;
   employmentStatus: 'active' | 'inactive' | 'pending_approval';
   assignedRoutes: string[]; // List of routes
-  completedReadings: number;
-  pendingReadings: number;
-  performanceRating: number; // Scale of 1-5
+  targetRoute?: string;
+  zone?: string;
+  completedReadings?: number;
+  pendingReadings?: number;
+  performanceRating?: number; // Scale of 1-5
   registrationDate?: string;
   approvedBy?: string;
   approvalDate?: string;

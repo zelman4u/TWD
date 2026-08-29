@@ -66,9 +66,9 @@ import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotific
 import { ConsumerPortalSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import { OverdueBillBanner } from './consumer/OverdueBillBanner';
 import { DynamicDueAlert } from './consumer/DynamicDueAlert';
-import { SimulatedPaymentModal } from './consumer/SimulatedPaymentModal';
 import { UploadReceiptModal } from './consumer/UploadReceiptModal';
 import { BillDetails } from './consumer/BillDetails';
+import { DistrictProfileSection } from './common/DistrictProfileSection';
 import { useToast } from '../context/ToastContext';
 import { calculateWaterTariff } from '../utils/tariffCalculator';
 
@@ -130,20 +130,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Notifications Filter State
   const [notifFilter, setNotifFilter] = useState<'all' | 'billing' | 'payment' | 'announcement'>('all');
 
-  // Payment Checkout States
-  const [activePaymentBill, setActivePaymentBill] = useState<MeterReading | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<'card' | 'gcash' | 'maya' | 'bank'>('gcash');
-  const [paymentMode, setPaymentMode] = useState<'full' | 'partial'>('full');
-  const [partialCustomAmount, setPartialCustomAmount] = useState<string>('');
-  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
-  const [paymentStep, setPaymentStep] = useState<{ step: number; percentage: number; text: string } | null>(null);
-  const [successReceipt, setSuccessReceipt] = useState<any>(null);
-
-  // Global Simulated Payment Gateway Modal States
-  const [isSimulatedModalOpen, setIsSimulatedModalOpen] = useState(false);
-  const [simulatedModalReading, setSimulatedModalReading] = useState<MeterReading | null>(null);
-  const [simulatedModalMode, setSimulatedModalMode] = useState<'full' | 'partial'>('full');
-
   // Official Office Receipt Upload & Validation Modal States
   const [isUploadReceiptOpen, setIsUploadReceiptOpen] = useState(false);
   const [uploadReceiptReading, setUploadReceiptReading] = useState<MeterReading | null>(null);
@@ -155,14 +141,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Bill Details Modal States
   const [billDetailsReading, setBillDetailsReading] = useState<MeterReading | null>(null);
   const [isBillDetailsOpen, setIsBillDetailsOpen] = useState(false);
-
-  // Checkout Form Fields
-  const [cardName, setCardName] = useState('');
-  const [cardNumber, setCardNumber] = useState('');
-  const [cardExpiry, setCardExpiry] = useState('');
-  const [cardCvv, setCardCvv] = useState('');
-  const [gcashPhone, setGcashPhone] = useState('');
-  const [bankAccountNum, setBankAccountNum] = useState('');
 
   // Track previous readings to detect admin payment modifications
   const prevReadingsRef = useRef<MeterReading[]>([]);
@@ -210,9 +188,18 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 );
                 let changed = false;
                 if (idx >= 0) {
-                  if (JSON.stringify(currentLocal[idx]) !== JSON.stringify({ ...currentLocal[idx], ...matchedApi })) {
-                    currentLocal[idx] = { ...currentLocal[idx], ...matchedApi };
-                    changed = true;
+                  const local = currentLocal[idx];
+                  const isLocalActiveIssued = Boolean(
+                    local.accountNumber && 
+                    !local.accountNumber.toUpperCase().startsWith('PENDING') && 
+                    local.status === 'active'
+                  );
+                  // Only update if server is not downgrading an active issued local record
+                  if (!isLocalActiveIssued || (matchedApi.accountNumber && matchedApi.status === 'active')) {
+                    if (JSON.stringify(currentLocal[idx]) !== JSON.stringify({ ...currentLocal[idx], ...matchedApi })) {
+                      currentLocal[idx] = { ...currentLocal[idx], ...matchedApi };
+                      changed = true;
+                    }
                   }
                 } else {
                   currentLocal.unshift(matchedApi);
@@ -221,9 +208,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 if (changed) {
                   mockDb.saveConsumers(currentLocal);
                 }
-                if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(matchedApi)) {
-                  consumerRecordRef.current = matchedApi;
-                  setConsumerRecord(matchedApi);
+                const targetRecord = idx >= 0 ? currentLocal[idx] : matchedApi;
+                if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(targetRecord)) {
+                  consumerRecordRef.current = targetRecord;
+                  setConsumerRecord(targetRecord);
                 }
               }
             }
@@ -615,185 +603,19 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   };
 
-  // Quick simulated payment trigger
-  const handleOpenSimulatedPayment = (reading: MeterReading, mode: 'full' | 'partial' = 'full') => {
-    setSimulatedModalReading(reading);
-    setSimulatedModalMode(mode);
-    setIsSimulatedModalOpen(true);
+  // Cashier Receipt Verification & Payment Trigger
+  const handleStartPayment = (reading: MeterReading, _presetMode: 'full' | 'partial' = 'full') => {
+    setUploadReceiptReading(reading);
+    setIsUploadReceiptOpen(true);
   };
 
-  // Checkout Handlers
-  const handleStartPayment = (reading: MeterReading, presetMode: 'full' | 'partial' = 'full') => {
-    handleOpenSimulatedPayment(reading, presetMode);
-    setActivePaymentBill(reading);
-    setSuccessReceipt(null);
-    setPaymentStep(null);
-    setIsProcessingPayment(false);
-
-    const gross = calculateCostOf(reading.consumption, consumerRecord?.consumerType);
-    const already = reading.paidAmount || 0;
-    const netDue = Math.max(0, gross - already);
-
-    setPaymentMode(presetMode);
-    setPartialCustomAmount(netDue.toFixed(2));
-    
-    // Clear inputs for user's real-time entry
-    setCardName(consumerRecord?.name || currentUser.name || '');
-    setCardNumber('');
-    setCardExpiry('');
-    setCardCvv('');
-    setGcashPhone(consumerRecord?.contactNumber ? consumerRecord.contactNumber.replace(/[^0-9]/g, '').slice(-10) : '');
-    setBankAccountNum('');
-  };
-
-  const getMethodLabel = (method: 'card' | 'gcash' | 'maya' | 'bank') => {
-    if (method === 'card') return 'Credit/Debit Card';
-    if (method === 'gcash') return 'GCash Wallet';
-    if (method === 'maya') return 'Maya Digital Wallet';
-    return 'Landbank Link.BizPortal';
-  };
-
-  const handleConfirmPayment = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activePaymentBill || !consumerRecord) return;
-
-    const grossBillAmt = calculateCostOf(activePaymentBill.consumption, consumerRecord.consumerType);
-    const alreadyPaidAmt = activePaymentBill.paidAmount || 0;
-    const remainingDue = Math.max(0, grossBillAmt - alreadyPaidAmt);
-
-    const amountToPay = paymentMode === 'full' 
-      ? remainingDue 
-      : Math.min(Math.max(1, parseFloat(partialCustomAmount) || 0), remainingDue);
-
-    if (amountToPay <= 0) {
-      alert("Please enter a valid payment amount greater than ₱0.00.");
-      return;
-    }
-
-    setIsProcessingPayment(true);
-    let currentStep = 0;
-    
-    const interval = setInterval(() => {
-      currentStep++;
-      if (currentStep === 1) {
-        setPaymentStep({ step: 1, percentage: 25, text: `Connecting to ${getMethodLabel(paymentMethod)} Gateway...` });
-      } else if (currentStep === 2) {
-        setPaymentStep({ step: 2, percentage: 60, text: 'Authorizing water tariff settlement credentials...' });
-      } else if (currentStep === 3) {
-        setPaymentStep({ step: 3, percentage: 85, text: 'Updating Tagoloan central municipal ledger...' });
-      } else if (currentStep === 4) {
-        clearInterval(interval);
-        
-        const transactionId = `TXN-${Math.floor(10000000 + Math.random() * 90000000)}`;
-        const paymentReference = `PAYREF-${Math.floor(100000 + Math.random() * 900000)}`;
-        const orNumber = `OR-TWD-${Math.floor(100000 + Math.random() * 900000)}`;
-        const paymentDate = new Date().toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric'
-        });
-
-        const newTotalPaid = alreadyPaidAmt + amountToPay;
-        const newRemainingBalance = Math.max(0, grossBillAmt - newTotalPaid);
-        const isFullSettlement = newRemainingBalance <= 0.01;
-        const newPaymentStatus: 'paid' | 'partial' = isFullSettlement ? 'paid' : 'partial';
-
-        const successPayload = {
-          readingId: activePaymentBill.id,
-          accountNumber: activePaymentBill.accountNumber,
-          amount: amountToPay,
-          grossAmount: grossBillAmt,
-          totalPaid: newTotalPaid,
-          remainingBalance: newRemainingBalance,
-          paymentMethod: getMethodLabel(paymentMethod),
-          billingPeriod: activePaymentBill.billingPeriod,
-          transactionId,
-          paymentReference,
-          orNumber,
-          paymentDate,
-          isPartial: !isFullSettlement,
-          message: isFullSettlement 
-            ? 'Payment successfully processed and verified in full.' 
-            : `Partial payment of ₱${amountToPay.toFixed(2)} recorded. Remaining balance: ₱${newRemainingBalance.toFixed(2)}.`
-        };
-
-        // Update reading in mockDb
-        const allReadings = mockDb.getReadings();
-        const updated = allReadings.map(r => {
-          if (r.id === successPayload.readingId) {
-            return {
-              ...r,
-              paymentStatus: newPaymentStatus,
-              paymentDate: successPayload.paymentDate,
-              paymentMethod: successPayload.paymentMethod,
-              transactionId: successPayload.transactionId,
-              paymentReference: successPayload.paymentReference,
-              orNumber: successPayload.orNumber,
-              paidAmount: newTotalPaid,
-              remainingBalance: newRemainingBalance
-            };
-          }
-          return r;
-        });
-        mockDb.saveReadings(updated);
-
-        // Re-calculate Consumer Master Outstanding Balance
-        const conUnpaid = updated.filter(
-          r => r.accountNumber === consumerRecord.accountNumber && r.paymentStatus !== 'paid'
-        );
-        const newTotalArrears = conUnpaid.reduce((acc, r) => {
-          const gross = calculateCostOf(r.consumption, consumerRecord.consumerType);
-          const paid = r.paidAmount || 0;
-          return acc + Math.max(0, gross - paid);
-        }, 0);
-
-        const updatedConsumers = mockDb.getConsumers().map(c => 
-          c.accountNumber === consumerRecord.accountNumber
-            ? { ...c, outstandingBalance: newTotalArrears }
-            : c
-        );
-        mockDb.saveConsumers(updatedConsumers);
-
-        // Add Smart Notification
-        mockDb.addNotification({
-          accountNumber: consumerRecord.accountNumber,
-          title: isFullSettlement 
-            ? `Payment Confirmed - ${successPayload.billingPeriod}` 
-            : `Partial Payment Recorded - ${successPayload.billingPeriod}`,
-          message: isFullSettlement 
-            ? `Your payment of ₱${amountToPay.toFixed(2)} for ${successPayload.billingPeriod} has been cleared in full via ${successPayload.paymentMethod}. Official Receipt #: ${orNumber}. Outstanding balance: ₱0.00.`
-            : `Partial payment of ₱${amountToPay.toFixed(2)} for ${successPayload.billingPeriod} has been received via ${successPayload.paymentMethod}. Official Receipt #: ${orNumber}. Remaining balance of ₱${newRemainingBalance.toFixed(2)} is due by ${activePaymentBill.dueDate || '20th of Month'}.`,
-          type: 'payment',
-          orNumber,
-          amountPaid: amountToPay,
-          remainingBalance: newRemainingBalance
-        });
-
-        // Add Audit Log
-        mockDb.addAuditLog(
-          currentUser.id,
-          currentUser.name,
-          'consumer',
-          isFullSettlement ? 'Settle Bill Online' : 'Partial Payment Online',
-          `${isFullSettlement ? 'Settled in full' : 'Made partial payment of ₱' + amountToPay.toFixed(2)} for billing cycle ${successPayload.billingPeriod} (Total Paid: ₱${newTotalPaid.toFixed(2)}, Remaining: ₱${newRemainingBalance.toFixed(2)}) via ${successPayload.paymentMethod} (Ref: ${paymentReference}).`
-        );
-
-        // Re-sync
-        loadConsumerInfo(true);
-
-        setSuccessReceipt(successPayload);
-        setIsProcessingPayment(false);
-        setPaymentStep(null);
-        
-        setStatusMsg({ 
-          type: 'success', 
-          msg: isFullSettlement 
-            ? `Water bill settled in full! Official OR #: ${orNumber}` 
-            : `Partial payment of ₱${amountToPay.toFixed(2)} recorded! Remaining: ₱${newRemainingBalance.toFixed(2)}` 
-        });
-        setTimeout(() => setStatusMsg(null), 6000);
-      }
-    }, 600);
+  const handleOpenSimulatedPayment = (
+    reading: MeterReading, 
+    _mode: 'full' | 'partial' = 'full',
+    _tab: 'online' | 'receipt' = 'receipt'
+  ) => {
+    setUploadReceiptReading(reading);
+    setIsUploadReceiptOpen(true);
   };
 
   // Profile Update Handler
@@ -1145,32 +967,22 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               <span className="text-[11px] uppercase tracking-wider">Water District Office</span>
             </div>
             <p className="text-[11px] text-slate-300">
-              Hotline: <strong className="text-white">(088) 555-0145</strong>
+              Call: <a href="tel:0888904946" className="text-white hover:text-blue-300 transition font-bold">(088) 890 – 4946</a>
             </p>
             <p className="text-[10px] text-slate-400">
-              Mon - Fri: 8:00 AM - 5:00 PM
+              Hours: <span className="text-slate-300 font-medium">Mon-Fri: 8:00am – 5:00pm</span>
+            </p>
+            <p className="text-[10px] text-slate-400 truncate">
+              Email: <a href="mailto:tagoloan_waterdistrict@yahoo.com" className="text-blue-400 hover:underline">tagoloan_waterdistrict@yahoo.com</a>
+            </p>
+            <p className="text-[10px] text-slate-400">
+              Office: <span className="text-slate-300">Arellano St, Poblacion</span>
             </p>
           </div>
         </div>
 
         {/* Sidebar Footer */}
-        <div className="p-4 border-t border-slate-800 space-y-3 shrink-0">
-          <div className="flex items-center justify-between text-[10px] text-slate-400">
-            <span className="flex items-center gap-1.5 font-bold text-emerald-400">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-              Live Sync 5s
-            </span>
-            <button 
-              onClick={() => loadConsumerInfo()} 
-              disabled={isSyncing}
-              className="text-slate-400 hover:text-white transition flex items-center gap-1 cursor-pointer"
-              title="Refresh Data Now"
-            >
-              <RefreshCw className={`h-3 w-3 ${isSyncing ? 'animate-spin text-blue-400' : ''}`} />
-              <span>{lastSyncTime}</span>
-            </button>
-          </div>
-
+        <div className="p-4 border-t border-slate-800 shrink-0">
           <button
             onClick={onLogout}
             className="w-full py-2.5 px-3 bg-slate-800/80 hover:bg-rose-600/90 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 border border-slate-700/80 hover:border-rose-500 cursor-pointer"
@@ -2349,366 +2161,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
             </div>
 
-            {/* Interactive Checkout Modal (if active) */}
-            {activePaymentBill && (
-              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl animate-fade-in text-white">
-                <div className="flex justify-between items-center pb-4 border-b border-slate-800">
-                  <div>
-                    <h3 className="text-base font-black text-white uppercase tracking-wider flex items-center gap-2">
-                      <ShieldCheck className="h-5 w-5 text-blue-400" />
-                      <span>Online Payment Terminal</span>
-                    </h3>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Settling {activePaymentBill.billingPeriod} Statement for Account #{activePaymentBill.accountNumber}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setActivePaymentBill(null)}
-                    className="p-1.5 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition cursor-pointer"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
-
-                {isProcessingPayment && paymentStep ? (
-                  /* Processing Loader */
-                  <div className="py-12 text-center space-y-5">
-                    <div className="relative h-16 w-16 mx-auto">
-                      <div className="absolute inset-0 rounded-full border-4 border-slate-800 border-t-blue-500 animate-spin"></div>
-                      <div className="absolute inset-3 rounded-full bg-blue-950/60 flex items-center justify-center">
-                        <Activity className="h-4 w-4 text-blue-400 animate-pulse" />
-                      </div>
-                    </div>
-                    <div className="max-w-sm mx-auto space-y-2">
-                      <div className="flex justify-between text-xs font-bold text-slate-400 px-1">
-                        <span>Authorizing Settlement</span>
-                        <span>{paymentStep.percentage}%</span>
-                      </div>
-                      <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-blue-500 transition-all duration-500 ease-out"
-                          style={{ width: `${paymentStep.percentage}%` }}
-                        ></div>
-                      </div>
-                      <p className="text-xs font-bold text-slate-200 pt-1">{paymentStep.text}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <form onSubmit={handleConfirmPayment} className="space-y-6">
-                    {/* Bill Payable Summary */}
-                    {(() => {
-                      const totalBill = calculateCostOf(activePaymentBill.consumption, consumerRecord.consumerType);
-                      const credited = activePaymentBill.paidAmount || 0;
-                      const maxPayable = Math.max(0, totalBill - credited);
-                      const currentPaying = paymentMode === 'full' 
-                        ? maxPayable 
-                        : Math.min(maxPayable, Math.max(1, parseFloat(partialCustomAmount) || 0));
-                      const remainingAfter = Math.max(0, maxPayable - currentPaying);
-
-                      return (
-                        <>
-                          <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                            <div>
-                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Billing Period</span>
-                              <span className="font-extrabold text-white text-sm">{activePaymentBill.billingPeriod} Water Tariff</span>
-                              <div className="text-[11px] text-slate-400 mt-0.5">
-                                Gross Bill: <strong className="font-mono text-slate-200">₱{totalBill.toFixed(2)}</strong>
-                                {credited > 0 && (
-                                  <span> • Previously Paid: <strong className="font-mono text-emerald-400">₱{credited.toFixed(2)}</strong></span>
-                                )}
-                              </div>
-                            </div>
-                            <div className="text-left sm:text-right">
-                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Net Remaining Due</span>
-                              <span className="font-mono font-black text-rose-400 text-2xl">
-                                ₱{maxPayable.toFixed(2)}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Payment Mode Selector (Full vs Partial) */}
-                          <div className="space-y-3">
-                            <label className="block text-xs font-black text-slate-300 uppercase tracking-wider">
-                              Choose Payment Option
-                            </label>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              <button
-                                type="button"
-                                onClick={() => setPaymentMode('full')}
-                                className={`p-4 border-2 rounded-2xl text-left transition cursor-pointer flex flex-col justify-between space-y-2 ${
-                                  paymentMode === 'full'
-                                    ? 'border-blue-500 bg-blue-950/60 shadow-md shadow-blue-950'
-                                    : 'border-slate-800 bg-slate-950/80 hover:border-slate-700 hover:bg-slate-800/70 text-slate-300'
-                                }`}
-                              >
-                                <div className="flex justify-between items-center">
-                                  <span className="text-xs font-black text-white uppercase tracking-wider">
-                                    Pay Full Amount
-                                  </span>
-                                  <CheckCircle2 className={`h-4 w-4 ${paymentMode === 'full' ? 'text-blue-400' : 'text-slate-600'}`} />
-                                </div>
-                                <div className="font-mono font-black text-blue-400 text-lg">
-                                  ₱{maxPayable.toFixed(2)}
-                                </div>
-                                <span className="text-[10px] text-slate-400 font-medium">Clears entire statement balance instantly</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setPaymentMode('partial');
-                                  if (!partialCustomAmount || parseFloat(partialCustomAmount) <= 0) {
-                                    setPartialCustomAmount((maxPayable / 2).toFixed(2));
-                                  }
-                                }}
-                                className={`p-4 border-2 rounded-2xl text-left transition cursor-pointer flex flex-col justify-between space-y-2 ${
-                                  paymentMode === 'partial'
-                                    ? 'border-amber-500 bg-amber-950/60 shadow-md shadow-amber-950'
-                                    : 'border-slate-800 bg-slate-950/80 hover:border-slate-700 hover:bg-slate-800/70 text-slate-300'
-                                }`}
-                              >
-                                <div className="flex justify-between items-center">
-                                  <span className="text-xs font-black text-white uppercase tracking-wider">
-                                    Pay Partial / Staggered
-                                  </span>
-                                  <AlertTriangle className={`h-4 w-4 ${paymentMode === 'partial' ? 'text-amber-400' : 'text-slate-600'}`} />
-                                </div>
-                                <div className="font-mono font-black text-amber-400 text-lg">
-                                  ₱{currentPaying.toFixed(2)}
-                                </div>
-                                <span className="text-[10px] text-slate-400 font-medium">Tender partial amount & keep balance active</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Partial Amount Input & Quick Chips */}
-                          {paymentMode === 'partial' && (
-                            <div className="bg-slate-950/90 border border-amber-900/60 rounded-2xl p-4 space-y-3 animate-fade-in">
-                              <div className="flex justify-between items-center">
-                                <label className="block text-[11px] font-black text-amber-400 uppercase tracking-wider">
-                                  Enter Partial Amount to Pay (₱)
-                                </label>
-                                <span className="text-[10px] font-bold text-amber-300">
-                                  Max: ₱{maxPayable.toFixed(2)}
-                                </span>
-                              </div>
-                              <div className="relative">
-                                <span className="absolute left-3.5 top-2.5 text-slate-400 font-mono font-bold text-base">₱</span>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  min="1"
-                                  max={maxPayable}
-                                  required
-                                  value={partialCustomAmount}
-                                  onChange={(e) => setPartialCustomAmount(e.target.value)}
-                                  className="w-full bg-slate-900 border border-amber-700/80 pl-8 pr-3 py-2.5 text-base rounded-xl font-mono font-black text-white focus:border-amber-500"
-                                  placeholder="0.00"
-                                />
-                              </div>
-
-                              {/* Quick Selection Chips */}
-                              <div className="flex flex-wrap items-center gap-2 pt-1">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Quick:</span>
-                                <button
-                                  type="button"
-                                  onClick={() => setPartialCustomAmount((maxPayable * 0.25).toFixed(2))}
-                                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/60 rounded-lg text-xs font-bold font-mono cursor-pointer"
-                                >
-                                  25% (₱{(maxPayable * 0.25).toFixed(2)})
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setPartialCustomAmount((maxPayable * 0.50).toFixed(2))}
-                                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/60 rounded-lg text-xs font-bold font-mono cursor-pointer"
-                                >
-                                  50% (₱{(maxPayable * 0.50).toFixed(2)})
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setPartialCustomAmount((maxPayable * 0.75).toFixed(2))}
-                                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/60 rounded-lg text-xs font-bold font-mono cursor-pointer"
-                                >
-                                  75% (₱{(maxPayable * 0.75).toFixed(2)})
-                                </button>
-                              </div>
-
-                              {/* Real-time Aftermath Calculation */}
-                              <div className="pt-2 border-t border-slate-800 flex justify-between items-center text-xs">
-                                <span className="text-amber-300 font-bold">Remaining Balance After Payment:</span>
-                                <span className="font-mono font-black text-rose-400">₱{remainingAfter.toFixed(2)}</span>
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      );
-                    })()}
-
-                    {/* Method Selector */}
-                    <div>
-                      <label className="block text-xs font-black text-slate-300 uppercase tracking-wider mb-2.5">
-                        Select Payment Method
-                      </label>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <button
-                          type="button"
-                          onClick={() => setPaymentMethod('gcash')}
-                          className={`p-3.5 border rounded-2xl flex flex-col items-center justify-center space-y-2 transition cursor-pointer ${
-                            paymentMethod === 'gcash' 
-                              ? 'border-blue-500 bg-blue-950/80 text-blue-300 shadow-xs' 
-                              : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-800 text-slate-300'
-                          }`}
-                        >
-                          <Smartphone className="h-5 w-5 text-blue-400" />
-                          <span className="text-xs font-bold">GCash Mobile</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPaymentMethod('maya')}
-                          className={`p-3.5 border rounded-2xl flex flex-col items-center justify-center space-y-2 transition cursor-pointer ${
-                            paymentMethod === 'maya' 
-                              ? 'border-emerald-500 bg-emerald-950/80 text-emerald-300 shadow-xs' 
-                              : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-800 text-slate-300'
-                          }`}
-                        >
-                          <Smartphone className="h-5 w-5 text-emerald-400" />
-                          <span className="text-xs font-bold">Maya Wallet</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPaymentMethod('card')}
-                          className={`p-3.5 border rounded-2xl flex flex-col items-center justify-center space-y-2 transition cursor-pointer ${
-                            paymentMethod === 'card' 
-                              ? 'border-indigo-500 bg-indigo-950/80 text-indigo-300 shadow-xs' 
-                              : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-800 text-slate-300'
-                          }`}
-                        >
-                          <CreditCard className="h-5 w-5 text-indigo-400" />
-                          <span className="text-xs font-bold">Debit/Credit Card</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPaymentMethod('bank')}
-                          className={`p-3.5 border rounded-2xl flex flex-col items-center justify-center space-y-2 transition cursor-pointer ${
-                            paymentMethod === 'bank' 
-                              ? 'border-amber-500 bg-amber-950/80 text-amber-300 shadow-xs' 
-                              : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-800 text-slate-300'
-                          }`}
-                        >
-                          <Waves className="h-5 w-5 text-amber-400" />
-                          <span className="text-xs font-bold">Landbank Link</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Method Inputs */}
-                    {(paymentMethod === 'gcash' || paymentMethod === 'maya') && (
-                      <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
-                        <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                          Registered {paymentMethod === 'gcash' ? 'GCash' : 'Maya'} Mobile Number
-                        </label>
-                        <div className="relative">
-                          <span className="absolute left-3.5 top-2.5 text-slate-500 font-mono font-bold text-xs">+63</span>
-                          <input
-                            type="tel"
-                            required
-                            value={gcashPhone}
-                            onChange={(e) => setGcashPhone(e.target.value)}
-                            placeholder="917 123 4567"
-                            className="w-full bg-slate-900 border border-slate-700 pl-12 pr-3 py-2.5 text-xs rounded-xl focus:border-blue-500 font-mono font-bold text-white"
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {paymentMethod === 'card' && (
-                      <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3">
-                        <div>
-                          <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">Cardholder Name</label>
-                          <input
-                            type="text"
-                            required
-                            value={cardName}
-                            onChange={(e) => setCardName(e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-700 px-3 py-2 text-xs rounded-xl focus:border-blue-500 text-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">Card Number</label>
-                          <input
-                            type="text"
-                            required
-                            value={cardNumber}
-                            onChange={(e) => setCardNumber(e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-700 px-3 py-2 text-xs rounded-xl focus:border-blue-500 font-mono text-white"
-                          />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">Expiry Date</label>
-                            <input
-                              type="text"
-                              required
-                              value={cardExpiry}
-                              onChange={(e) => setCardExpiry(e.target.value)}
-                              placeholder="MM/YY"
-                              className="w-full bg-slate-900 border border-slate-700 px-3 py-2 text-xs rounded-xl text-center font-mono text-white"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">CVV</label>
-                            <input
-                              type="password"
-                              required
-                              value={cardCvv}
-                              onChange={(e) => setCardCvv(e.target.value)}
-                              className="w-full bg-slate-900 border border-slate-700 px-3 py-2 text-xs rounded-xl text-center font-mono text-white"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {paymentMethod === 'bank' && (
-                      <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
-                        <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                          Landbank Account / Partner ID
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={bankAccountNum}
-                          onChange={(e) => setBankAccountNum(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs rounded-xl font-mono text-white"
-                        />
-                      </div>
-                    )}
-
-                    <div className="flex justify-end space-x-3 pt-2">
-                      <button
-                        type="button"
-                        onClick={() => setActivePaymentBill(null)}
-                        className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl cursor-pointer border border-slate-700"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-md transition cursor-pointer"
-                      >
-                        {(() => {
-                          const total = calculateCostOf(activePaymentBill.consumption, consumerRecord.consumerType);
-                          const rem = Math.max(0, total - (activePaymentBill.paidAmount || 0));
-                          const paying = paymentMode === 'full' ? rem : Math.min(rem, parseFloat(partialCustomAmount) || 0);
-                          return `Authorize Settlement of ₱${paying.toFixed(2)}`;
-                        })()}
-                      </button>
-                    </div>
-                  </form>
-                )}
-              </div>
-            )}
-
             {/* Complete Bills Table & Responsive Grid - Eye-Friendly Dark Navy Slate Theme */}
             <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl text-slate-100">
               {/* Desktop & Tablet Table View */}
@@ -2881,19 +2333,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                         setUploadReceiptReading(r);
                                         setIsUploadReceiptOpen(true);
                                       }}
-                                      className="px-2.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-black text-xs rounded-xl transition inline-flex items-center space-x-1 cursor-pointer"
-                                      title="Upload physical cashier receipt"
+                                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                      id={`table-pay-partial-${r.id}`}
+                                      title="Upload municipal cashier receipt to settle remaining balance"
                                     >
                                       <Upload className="h-3.5 w-3.5" />
-                                      <span className="hidden lg:inline">Upload OR</span>
-                                    </button>
-                                    <button
-                                      onClick={() => handleStartPayment(r, 'full')}
-                                      className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
-                                      id={`table-pay-partial-${r.id}`}
-                                    >
-                                      <CreditCard className="h-3.5 w-3.5" />
-                                      <span>Pay ₱{remainingDue.toFixed(2)}</span>
+                                      <span>Settle Balance (₱{remainingDue.toFixed(2)})</span>
                                     </button>
                                   </div>
                                 ) : (
@@ -2903,19 +2348,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                         setUploadReceiptReading(r);
                                         setIsUploadReceiptOpen(true);
                                       }}
-                                      className="px-2.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-black text-xs rounded-xl transition inline-flex items-center space-x-1 cursor-pointer"
-                                      title="Upload physical Official Receipt (OR) from municipal cashier"
-                                    >
-                                      <Upload className="h-3.5 w-3.5" />
-                                      <span className="hidden lg:inline">Upload OR</span>
-                                    </button>
-                                    <button
-                                      onClick={() => handleStartPayment(r, 'full')}
-                                      className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                      className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
                                       id={`table-pay-btn-${r.id}`}
+                                      title="Upload physical Official Receipt (OR) issued by municipal cashier"
                                     >
-                                      <CreditCard className="h-3.5 w-3.5" />
-                                      <span>Pay Online</span>
+                                      <ReceiptText className="h-3.5 w-3.5" />
+                                      <span>Upload Cashier Receipt (OTC)</span>
                                     </button>
                                   </div>
                                 )}
@@ -3042,17 +2480,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   setUploadReceiptReading(r);
                                   setIsUploadReceiptOpen(true);
                                 }}
-                                className="px-2.5 py-2 bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold text-xs rounded-xl transition cursor-pointer"
-                                title="Upload Cashier OR"
-                              >
-                                <Upload className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                onClick={() => handleStartPayment(r, 'full')}
                                 className="flex-1 py-2 bg-amber-600 hover:bg-amber-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
                               >
-                                <CreditCard className="h-3.5 w-3.5" />
-                                <span>Pay ₱{remainingDue.toFixed(2)}</span>
+                                <Upload className="h-3.5 w-3.5" />
+                                <span>Settle Balance (₱{remainingDue.toFixed(2)})</span>
                               </button>
                             </div>
                           ) : (
@@ -3062,17 +2493,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   setUploadReceiptReading(r);
                                   setIsUploadReceiptOpen(true);
                                 }}
-                                className="px-2.5 py-2 bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold text-xs rounded-xl transition cursor-pointer"
-                                title="Upload Cashier OR"
-                              >
-                                <Upload className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                onClick={() => handleStartPayment(r, 'full')}
                                 className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
                               >
-                                <CreditCard className="h-3.5 w-3.5" />
-                                <span>Pay Online</span>
+                                <ReceiptText className="h-3.5 w-3.5" />
+                                <span>Upload Cashier Receipt (OTC)</span>
                               </button>
                             </div>
                           )}
@@ -3626,6 +3050,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             </div>
 
+            {/* Official District Mandate, Vision, Mission, Core Values & Staffing Structure */}
+            <div className="pt-6">
+              <DistrictProfileSection id="consumer-district-profile" />
+            </div>
+
           </div>
         )}
 
@@ -3752,32 +3181,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
           </div>
         </div>
-      )}
-
-      {/* GLOBAL SIMULATED PAYMENT GATEWAY MODAL */}
-      {consumerRecord && simulatedModalReading && (
-        <SimulatedPaymentModal
-          isOpen={isSimulatedModalOpen}
-          reading={simulatedModalReading}
-          consumerRecord={consumerRecord}
-          initialMode={simulatedModalMode}
-          onClose={() => {
-            setIsSimulatedModalOpen(false);
-            setSimulatedModalReading(null);
-          }}
-          onPaymentSuccess={(receipt) => {
-            setPaymentConfirmationToast({
-              period: receipt.billingPeriod,
-              amount: receipt.amountPaid,
-              remaining: receipt.remainingBalance,
-              isPartial: receipt.isPartial,
-              reference: receipt.orNumber,
-              date: receipt.paymentDate
-            });
-            loadConsumerInfo(true);
-          }}
-          calculateCostOf={calculateCostOf}
-        />
       )}
 
       {/* BILL DETAILS ITEMIZED BREAKDOWN MODAL */}

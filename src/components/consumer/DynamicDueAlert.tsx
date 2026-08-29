@@ -237,12 +237,12 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
           {/* Action CTAs */}
           <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 shrink-0 w-full lg:w-auto">
             <button
-              onClick={() => onPayNow(overdueBills[0], 'full')}
+              onClick={() => onUploadReceipt(overdueBills[0])}
               className="px-6 py-3.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl hover:shadow-2xl transition flex items-center justify-center space-x-2 cursor-pointer transform active:scale-98"
               id="dynamic-alert-pay-overdue-btn"
             >
-              <CreditCard className="h-4 w-4" />
-              <span>Settle Overdue (₱{totalOverdueWithPenalty.toFixed(2)})</span>
+              <ReceiptText className="h-4 w-4" />
+              <span>Settle Overdue via Cashier Receipt (₱{totalOverdueWithPenalty.toFixed(2)})</span>
             </button>
 
             <div className="flex items-center gap-2 w-full">
@@ -253,7 +253,7 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
                 title="Already paid at municipal hall? Upload OR"
               >
                 <Upload className="h-3.5 w-3.5 text-amber-300" />
-                <span>Upload OR</span>
+                <span>Upload OR Photo</span>
               </button>
 
               <button
@@ -364,7 +364,7 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
         {/* Right Action Buttons */}
         <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 shrink-0 w-full lg:w-auto">
           <button
-            onClick={() => onPayNow(latestReading, 'full')}
+            onClick={() => onUploadReceipt(latestReading)}
             className={`px-6 py-3.5 font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl transition flex items-center justify-center space-x-2 cursor-pointer transform active:scale-98 ${
               isDueToday || isDueSoon 
                 ? 'bg-white hover:bg-slate-50 text-slate-950 shadow-white/20' 
@@ -372,8 +372,8 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
             }`}
             id="dynamic-alert-pay-current-btn"
           >
-            <CreditCard className="h-4 w-4 text-blue-700" />
-            <span>Pay ₱{netLatestDue.toFixed(2)} Online</span>
+            <ReceiptText className="h-4 w-4 text-blue-700" />
+            <span>Validate Cashier Receipt (₱{netLatestDue.toFixed(2)})</span>
           </button>
 
           <div className="flex items-center gap-2 w-full">
@@ -384,7 +384,7 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
               title="Upload physical receipt from municipal office"
             >
               <Upload className="h-3.5 w-3.5 text-amber-300" />
-              <span>Upload OR</span>
+              <span>Upload Photo</span>
             </button>
 
             <button

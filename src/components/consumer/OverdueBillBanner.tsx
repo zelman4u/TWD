@@ -366,7 +366,7 @@ export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
             </h3>
             
             <p className="text-xs sm:text-sm text-rose-100/90 leading-relaxed max-w-3xl">
-              Water service statement for cycle <strong>{primaryBill.billingPeriod}</strong> ({primaryBill.consumption} m³) was due on <strong>{formattedDueDate}</strong>. Outstanding balance remains unpaid. Settle online now or upload a photo of your office payment receipt to clear this alert immediately.
+              Water service statement for cycle <strong>{primaryBill.billingPeriod}</strong> ({primaryBill.consumption} m³) was due on <strong>{formattedDueDate}</strong>. Outstanding balance remains unpaid. Present your official cashier receipt or upload a photo of your payment slip to clear this alert immediately.
             </p>
 
             {/* Micro Details Row */}
@@ -394,23 +394,14 @@ export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
             {onUploadReceipt && (
               <button
                 onClick={() => onUploadReceipt(primaryBill)}
-                className="w-full px-5 py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg transition flex items-center justify-center space-x-2 cursor-pointer border border-blue-400"
+                className="w-full px-5 py-3.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl hover:shadow-2xl transition-all transform hover:-translate-y-0.5 flex items-center justify-center space-x-2 cursor-pointer border border-emerald-400 group"
+                id="overdue-banner-pay-now-btn"
               >
                 <ReceiptText className="h-4 w-4" />
-                <span>Upload Cashier Receipt</span>
+                <span>Upload Cashier Receipt (₱{netDue.toFixed(2)})</span>
+                <ArrowRight className="h-4 w-4 ml-1 group-hover:translate-x-1 transition-transform" />
               </button>
             )}
-
-            {/* Direct Pay Now Button */}
-            <button
-              onClick={() => onPayNow(primaryBill, 'full')}
-              className="w-full px-5 py-3.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl hover:shadow-2xl transition-all transform hover:-translate-y-0.5 flex items-center justify-center space-x-2 cursor-pointer border border-emerald-400 group"
-              id="overdue-banner-pay-now-btn"
-            >
-              <CreditCard className="h-4 w-4" />
-              <span>Pay Now (₱{netDue.toFixed(2)})</span>
-              <ArrowRight className="h-4 w-4 ml-1 group-hover:translate-x-1 transition-transform" />
-            </button>
 
             {/* Collapsible Details Trigger */}
             <button

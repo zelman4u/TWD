@@ -4,7 +4,17 @@
  */
 
 import { User, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerNotification, Barangay } from './types';
-import { initializeFirestoreSeed, syncBatchToFirestore, syncDocToFirestore, COLLECTIONS } from './services/firebaseDb';
+import { 
+  initializeFirestoreSeed, 
+  syncBatchToFirestore, 
+  syncDocToFirestore, 
+  deleteDocFromFirestore, 
+  eraseAccountFromFirestore,
+  isAccountTerminated,
+  addTerminatedAccountKeys,
+  COLLECTIONS 
+} from './services/firebaseDb';
+
 
 // Purge all legacy storage keys containing old mock data
 try {
@@ -58,10 +68,41 @@ const INITIAL_USERS: User[] = [
     role: 'admin',
     status: 'active',
     password: 'AdminWater2025!',
+  },
+  {
+    id: 'user-acero',
+    email: 'acero@gmail.com',
+    name: 'Bruce Acero',
+    role: 'consumer',
+    status: 'active',
+    password: 'Password123!',
+    registrationDate: '2026-08-25',
   }
 ];
 
 const INITIAL_CONSUMERS: Consumer[] = [
+  {
+    accountNumber: 'BRG-01-3117',
+    name: 'Bruce Acero',
+    address: 'PUROK 3, POBLACION',
+    barangay: 'Poblacion',
+    barangayId: 'BRG-01',
+    sitioZone: 'Purok 3',
+    contactNumber: '+63 917 888 2345',
+    email: 'acero@gmail.com',
+    meterNumber: '150309988',
+    meterBrand: 'EVER',
+    status: 'active',
+    isRegistered: true,
+    registrationDate: '2026-08-25',
+    consumerType: 'Residential',
+    meterSize: '1/2"',
+    householdInfo: '4 members',
+    outstandingBalance: 120.92,
+    rfidTag: 'MT-88373',
+    sequenceNo: 138,
+    linkedUserId: 'user-acero',
+  },
   {
     accountNumber: '011-102-056',
     name: 'FIGUEROA, GINA O.',
@@ -128,12 +169,17 @@ const INITIAL_CONSUMERS: Consumer[] = [
 const INITIAL_READERS: MeterReader[] = [
   {
     id: 'reader-1',
-    employeeId: 'TWD-MR-01',
+    employeeId: 'TWD-2026-001',
     name: 'Marco Polo',
-    email: 'reader@tagoloanwater.gov.ph',
-    contactNumber: '+63 917 555 0199',
+    username: 'marco_polo',
+    password: 'password123',
+    pin: '1234',
+    email: 'marco_polo@tagoloanwater.gov.ph',
+    contactNumber: '0917-555-0199',
     employmentStatus: 'active',
-    assignedRoutes: ['Zone 1 - Sihayon Left', 'Poblacion'],
+    assignedRoutes: ['Zone 1-4: Poblacion (Main Central)'],
+    targetRoute: 'Zone 1-4: Poblacion (Main Central)',
+    zone: 'Zone 1-4: Poblacion (Main Central)',
     completedReadings: 142,
     pendingReadings: 3,
     performanceRating: 4.9
@@ -266,6 +312,36 @@ const INITIAL_READINGS: MeterReading[] = [
     penaltyAmount: 13.30,
     amountAfterDueDate: 148.76,
     paymentStatus: 'unpaid',
+  },
+  {
+    id: 'R-BRG-01-3117-202608',
+    accountNumber: 'BRG-01-3117',
+    consumerName: 'Bruce Acero',
+    meterNumber: '150309988',
+    meterBrand: 'EVER',
+    sequenceNo: 138,
+    address: 'PUROK 3, POBLACION',
+    addressZone: 'Purok 3',
+    route: 'Poblacion Zone 3 Route',
+    previousReading: 0,
+    currentReading: 15,
+    consumption: 15,
+    readingDate: '2026-08-25',
+    meterReaderDate: '2026-08-25',
+    status: 'pending',
+    meterReaderName: 'MARCO POLO',
+    imageUrl: 'https://images.unsplash.com/photo-1584467735815-f778f274e296?w=600&auto=format&fit=crop&q=80',
+    billingPeriod: 'August 2026',
+    dueDate: 'September 15, 2026',
+    classification: 'Residential',
+    billAmount: 118.50,
+    franchiseTax: 2.42,
+    arrears: 0.00,
+    totalAmount: 120.92,
+    penaltyAmount: 11.85,
+    amountAfterDueDate: 132.77,
+    paymentStatus: 'unpaid',
+    notes: '8.5028° N, 124.7738° E • Field Meter Read (Poblacion Zone 3 Route)'
   }
 ];
 const INITIAL_ROUTES: RouteAssignment[] = [];
@@ -297,8 +373,11 @@ const INITIAL_AUDIT_LOGS: AuditLog[] = [
 function getStored<T>(key: string, initial: T): T {
   const data = localStorage.getItem(key);
   if (!data) {
-    localStorage.setItem(key, JSON.stringify(initial));
-    return initial;
+    const validInitial = Array.isArray(initial) 
+      ? initial.filter((item: any) => !isAccountTerminated(item)) 
+      : initial;
+    localStorage.setItem(key, JSON.stringify(validInitial));
+    return validInitial as unknown as T;
   }
   try {
     const parsed = JSON.parse(data);
@@ -308,11 +387,13 @@ function getStored<T>(key: string, initial: T): T {
       const seenIds = new Set<string>();
       const deduplicatedReaders: MeterReader[] = [];
       readers.forEach(r => {
-        const idKey = (r.id || r.employeeId || r.email || '').trim().toLowerCase();
+        if (isAccountTerminated(r)) return; // Strictly ignore terminated accounts
+        const idKey = (r.id || r.employeeId || r.username || r.email || r.name || '').trim().toLowerCase();
         if (idKey && !seenIds.has(idKey)) {
           seenIds.add(idKey);
           if (r.employeeId) seenIds.add(r.employeeId.trim().toLowerCase());
           if (r.id) seenIds.add(r.id.trim().toLowerCase());
+          if (r.username) seenIds.add(r.username.trim().toLowerCase());
           deduplicatedReaders.push(r);
         }
       });
@@ -327,10 +408,15 @@ function getStored<T>(key: string, initial: T): T {
       const seenUsers = new Set<string>();
       const deduplicatedUsers: User[] = [];
       users.forEach(u => {
-        const userKey = (u.id || u.email || '').trim().toLowerCase();
+        if (isAccountTerminated(u)) {
+          modified = true;
+          return;
+        }
+        const userKey = (u.id || u.email || u.username || '').trim().toLowerCase();
         if (userKey && !seenUsers.has(userKey)) {
           seenUsers.add(userKey);
           if (u.email) seenUsers.add(u.email.trim().toLowerCase());
+          if (u.username) seenUsers.add(u.username.trim().toLowerCase());
           deduplicatedUsers.push(u);
         }
       });
@@ -348,11 +434,31 @@ function getStored<T>(key: string, initial: T): T {
             modified = true;
           }
         }
+        if (u.email && u.email.toLowerCase() === 'acero@gmail.com') {
+          if (u.name !== 'Bruce Acero') {
+            u.name = 'Bruce Acero';
+            modified = true;
+          }
+          if (u.status !== 'active') {
+            u.status = 'active';
+            modified = true;
+          }
+        }
       });
       const hasMockUsers = deduplicatedUsers.some(u => u.email === 'john@example.com' || u.email === 'maria@example.com');
       const adminExists = deduplicatedUsers.some(u => u.email && u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph');
+      
+      // Ensure essential baseline users exist (Admin + Acero demo account) only if NOT terminated
+      INITIAL_USERS.forEach(iu => {
+        if (!isAccountTerminated(iu) && !deduplicatedUsers.some(u => (iu.email && u.email?.toLowerCase() === iu.email.toLowerCase()) || (iu.id && u.id === iu.id))) {
+          deduplicatedUsers.push(iu);
+          modified = true;
+        }
+      });
+
       if (hasMockUsers || !adminExists || modified) {
-        const cleanedUsers = deduplicatedUsers.filter(u => u.email !== 'john@example.com' && u.email !== 'maria@example.com');
+        const cleanedUsers = deduplicatedUsers
+          .filter(u => !isAccountTerminated(u) && u.email !== 'john@example.com' && u.email !== 'maria@example.com');
         if (!cleanedUsers.some(u => u.email && u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph')) {
           cleanedUsers.unshift(INITIAL_USERS[0]);
         }
@@ -374,10 +480,28 @@ function getStored<T>(key: string, initial: T): T {
       if (hasMockConsumers) {
         cons = cons.filter(c => c.accountNumber !== '1001-A' && c.accountNumber !== '1002-B' && c.accountNumber !== '1003-C');
       }
-      // Ensure authentic example consumers exist
+      // Ensure authentic example consumers exist including Bruce Acero
       let changed = hasMockConsumers;
+      cons.forEach(c => {
+        if (c.email && c.email.toLowerCase() === 'acero@gmail.com') {
+          if (c.name !== 'Bruce Acero' || c.accountNumber !== 'BRG-01-3117' || c.rfidTag !== 'MT-88373') {
+            c.name = 'Bruce Acero';
+            c.accountNumber = 'BRG-01-3117';
+            c.rfidTag = 'MT-88373';
+            c.meterNumber = '150309988';
+            c.meterBrand = 'EVER';
+            c.status = 'active';
+            changed = true;
+          }
+        }
+      });
       INITIAL_CONSUMERS.forEach(ic => {
-        if (!cons.some(c => c.accountNumber === ic.accountNumber)) {
+        const exists = cons.some(c => 
+          (ic.accountNumber && c.accountNumber === ic.accountNumber) ||
+          (ic.email && c.email && c.email.toLowerCase() === ic.email.toLowerCase()) ||
+          (ic.linkedUserId && c.linkedUserId && c.linkedUserId === ic.linkedUserId)
+        );
+        if (!exists) {
           cons.push(ic);
           changed = true;
         }
@@ -408,12 +532,52 @@ function getStored<T>(key: string, initial: T): T {
         reads = reads.filter(r => !r.id.startsWith('R-1001-A') && !r.id.startsWith('R-1002-B'));
       }
       let changed = hasMockReads;
+
+      // Migrate any old pending Acero readings to Bruce Acero with BRG-01-3117
+      reads.forEach(r => {
+        if (r.id === 'R-PENDING-ACERO-202608' || r.accountNumber === 'PENDING-ACERO' || r.consumerName === 'ACERO, MARIEL S.') {
+          r.id = 'R-BRG-01-3117-202608';
+          r.accountNumber = 'BRG-01-3117';
+          r.consumerName = 'Bruce Acero';
+          r.meterNumber = '150309988';
+          r.meterBrand = 'EVER';
+          r.route = 'Poblacion Zone 3 Route';
+          changed = true;
+        }
+      });
+
       INITIAL_READINGS.forEach(ir => {
-        if (!reads.some(r => r.id === ir.id || (r.accountNumber === ir.accountNumber && r.billingPeriod === ir.billingPeriod))) {
+        const alreadyExists = reads.some(r => r.id === ir.id || (r.consumerName.trim().toLowerCase() === ir.consumerName.trim().toLowerCase() && r.billingPeriod === ir.billingPeriod));
+        if (!alreadyExists) {
           reads.push(ir);
           changed = true;
         }
       });
+
+      // Synchronize reading account numbers if consumer was assigned official IDs
+      try {
+        const storedConsumers = localStorage.getItem(KEYS.CONSUMERS);
+        if (storedConsumers) {
+          const consumersList = JSON.parse(storedConsumers) as Consumer[];
+          reads = reads.map(r => {
+            const matchedConsumer = consumersList.find(c => 
+              (c.accountNumber && c.accountNumber === r.accountNumber) ||
+              (c.name && c.name.trim().toLowerCase() === r.consumerName.trim().toLowerCase())
+            );
+            if (matchedConsumer && matchedConsumer.accountNumber && matchedConsumer.accountNumber !== r.accountNumber && !matchedConsumer.accountNumber.toUpperCase().startsWith('PENDING')) {
+              changed = true;
+              return {
+                ...r,
+                accountNumber: matchedConsumer.accountNumber,
+                meterNumber: matchedConsumer.meterNumber || r.meterNumber,
+                meterBrand: matchedConsumer.meterBrand || r.meterBrand
+              };
+            }
+            return r;
+          });
+        }
+      } catch {}
+
       if (changed) {
         localStorage.setItem(key, JSON.stringify(reads));
         return reads as unknown as T;
@@ -531,11 +695,13 @@ export const mockDb = {
     const seen = new Set<string>();
     const deduplicated: MeterReader[] = [];
     readers.forEach(r => {
-      const key = (r.id || r.employeeId || r.email || '').trim().toLowerCase();
+      if (isAccountTerminated(r)) return; // Never save terminated accounts
+      const key = (r.id || r.employeeId || r.username || r.email || r.name || '').trim().toLowerCase();
       if (key && !seen.has(key)) {
         seen.add(key);
         if (r.id) seen.add(r.id.trim().toLowerCase());
         if (r.employeeId) seen.add(r.employeeId.trim().toLowerCase());
+        if (r.username) seen.add(r.username.trim().toLowerCase());
         deduplicated.push(r);
       }
     });
@@ -550,6 +716,84 @@ export const mockDb = {
       }
     });
   },
+  deleteReader: (readerId: string, employeeId?: string, email?: string, username?: string, name?: string): void => {
+    // 1. Mark identifiers in blacklist
+    addTerminatedAccountKeys([readerId, employeeId, email, username, name]);
+
+    // 2. Remove from local READERS
+    const currentReaders = getStored<MeterReader[]>(KEYS.READERS, INITIAL_READERS);
+    const updatedReaders = currentReaders.filter(r => 
+      !isAccountTerminated(r) &&
+      r.id !== readerId && 
+      (!employeeId || r.employeeId !== employeeId) && 
+      (!email || !r.email || r.email.toLowerCase() !== email.toLowerCase()) &&
+      (!username || !r.username || r.username.toLowerCase() !== username.toLowerCase()) &&
+      (!name || r.name.toLowerCase() !== name.toLowerCase())
+    );
+    setStored(KEYS.READERS, updatedReaders);
+
+    // 3. Remove from local USERS
+    const allUsers = getStored<User[]>(KEYS.USERS, INITIAL_USERS);
+    const updatedUsers = allUsers.filter(u => 
+      !isAccountTerminated(u) &&
+      u.id !== readerId && 
+      (!employeeId || u.employeeId !== employeeId) && 
+      (!email || !u.email || u.email.toLowerCase() !== email.toLowerCase()) &&
+      (!username || !u.username || u.username.toLowerCase() !== username.toLowerCase()) &&
+      (!name || u.name.toLowerCase() !== name.toLowerCase())
+    );
+    setStored(KEYS.USERS, updatedUsers);
+
+    // 4. Clear any route assignments for this reader
+    const currentRoutes = getStored<RouteAssignment[]>(KEYS.ROUTES, INITIAL_ROUTES);
+    const updatedRoutes = currentRoutes.map(rt => {
+      if (rt.assignedReaderId === readerId || (employeeId && rt.assignedReaderId === employeeId) || (name && rt.assignedReaderName === name)) {
+        return {
+          ...rt,
+          assignedReaderId: '',
+          assignedReaderName: '',
+          status: 'pending' as const
+        };
+      }
+      return rt;
+    });
+    setStored(KEYS.ROUTES, updatedRoutes);
+
+    // 5. If current active user in session is this reader, log them out
+    const currentUser = mockDb.getCurrentUser();
+    if (currentUser && (
+      currentUser.id === readerId || 
+      (employeeId && currentUser.employeeId === employeeId) || 
+      (email && currentUser.email?.toLowerCase() === email.toLowerCase()) ||
+      (username && currentUser.username?.toLowerCase() === username.toLowerCase())
+    )) {
+      mockDb.setCurrentUser(null);
+    }
+
+    // 6. Deep erasure across Firestore (documents and queries)
+    eraseAccountFromFirestore({
+      id: readerId,
+      employeeId,
+      email,
+      username,
+      name
+    });
+  },
+
+  deleteUser: (userId: string, email?: string, username?: string, name?: string): void => {
+    addTerminatedAccountKeys([userId, email, username, name]);
+    const allUsers = getStored<User[]>(KEYS.USERS, INITIAL_USERS);
+    const updatedUsers = allUsers.filter(u => 
+      !isAccountTerminated(u) &&
+      u.id !== userId &&
+      (!email || !u.email || u.email.toLowerCase() !== email.toLowerCase()) &&
+      (!username || !u.username || u.username.toLowerCase() !== username.toLowerCase()) &&
+      (!name || u.name.toLowerCase() !== name.toLowerCase())
+    );
+    setStored(KEYS.USERS, updatedUsers);
+    eraseAccountFromFirestore({ id: userId, email, username, name });
+  },
+
   saveMeters: (meters: WaterMeter[]): void => {
     setStored(KEYS.METERS, meters);
     syncBatchToFirestore(COLLECTIONS.METERS, meters, 'meterNumber');

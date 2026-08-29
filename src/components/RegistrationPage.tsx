@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { UserCheck, AlertCircle, ArrowLeft, Waves, Briefcase, Clock } from 'lucide-react';
+import { UserCheck, AlertCircle, ArrowLeft, Waves, Briefcase, Clock, Eye, EyeOff, CheckCircle2, XCircle, Lock } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Consumer, Barangay } from '../types';
 import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
@@ -27,15 +27,15 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
   const [barangay, setBarangay] = useState('');
   const [sitioZone, setSitioZone] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   
   // Available Barangays loaded from DB
   const [availableBarangays, setAvailableBarangays] = useState<Barangay[]>([]);
   
   // Consumer Classification State
   const [consumerType, setConsumerType] = useState<'Residential' | 'Commercial'>('Residential');
-  const [householdInfo, setHouseholdInfo] = useState('');
-  const [businessName, setBusinessName] = useState('');
-  const [businessType, setBusinessType] = useState('');
   
   // Logic State
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +70,21 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
 
     if (!email.trim() || !contactNumber.trim() || !password.trim()) {
       setError('Please complete all required fields.');
+      return;
+    }
+
+    if (!confirmPassword.trim()) {
+      setError('Please re-enter your password to confirm.');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setError('Passwords do not match. Please ensure both password fields are identical.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters in length.');
       return;
     }
 
@@ -130,9 +145,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         registrationDate: new Date().toISOString().split('T')[0],
         linkedUserId: newUserId,
         consumerType: consumerType,
-        householdInfo: consumerType === 'Residential' ? householdInfo.trim() : undefined,
-        businessName: consumerType === 'Commercial' ? businessName.trim() : undefined,
-        businessType: consumerType === 'Commercial' ? businessType.trim() : undefined,
         outstandingBalance: 0
       };
 
@@ -158,9 +170,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
           barangayId: matchedBarangay.id,
           sitioZone: sitioZone.trim(),
           consumerType: consumerType,
-          householdInfo: consumerType === 'Residential' ? householdInfo.trim() : undefined,
-          businessName: consumerType === 'Commercial' ? businessName.trim() : undefined,
-          businessType: consumerType === 'Commercial' ? businessType.trim() : undefined,
           linkedUserId: newUserId
         })
       }).catch(err => {
@@ -319,7 +328,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                       <option value="">-- Select Registered Barangay --</option>
                       {availableBarangays.map((b) => (
                         <option key={b.id} value={b.name}>
-                          {b.name} ({b.code})
+                          {b.name}
                         </option>
                       ))}
                     </select>
@@ -338,17 +347,95 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                     />
                   </div>
 
-                  {/* Password */}
-                  <div className="space-y-1 text-left sm:col-span-2">
+                  {/* Password & Confirm Password Section */}
+                  <div className="space-y-1 text-left sm:col-span-1">
                     <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Portal Password <span className="text-red-400">*</span></label>
-                    <input 
-                      type="password" 
-                      required 
-                      placeholder="Choose a strong password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
-                    />
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-slate-400">
+                        <Lock className="h-3.5 w-3.5" />
+                      </span>
+                      <input 
+                        type={showPassword ? "text" : "password"} 
+                        required 
+                        placeholder="Choose a strong password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 pl-9 pr-10 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200 transition cursor-pointer p-0.5 focus:outline-none"
+                        title={showPassword ? "Hide password" : "Show password"}
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                      >
+                        {showPassword ? (
+                          <EyeOff className="h-3.5 w-3.5" />
+                        ) : (
+                          <Eye className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Re-enter Password Field */}
+                  <div className="space-y-1 text-left sm:col-span-1">
+                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Re-enter Password <span className="text-red-400">*</span></label>
+                    <div className="relative">
+                      <span className={`absolute left-3 top-2.5 transition-colors ${
+                        confirmPassword.length > 0 
+                          ? confirmPassword === password 
+                            ? 'text-emerald-400' 
+                            : 'text-rose-400' 
+                          : 'text-slate-400'
+                      }`}>
+                        <Lock className="h-3.5 w-3.5" />
+                      </span>
+                      <input 
+                        type={showConfirmPassword ? "text" : "password"} 
+                        required 
+                        placeholder="Re-enter password to match"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        className={`w-full rounded-xl py-2 pl-9 pr-10 text-xs placeholder-slate-500 focus:outline-none transition-all ${
+                          confirmPassword.length > 0
+                            ? confirmPassword === password
+                              ? 'bg-emerald-950/20 border-2 border-emerald-500 ring-2 ring-emerald-500/20 text-emerald-100'
+                              : 'bg-rose-950/20 border-2 border-rose-500 ring-2 ring-rose-500/20 text-rose-100'
+                            : 'bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-slate-200'
+                        }`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200 transition cursor-pointer p-0.5 focus:outline-none"
+                        title={showConfirmPassword ? "Hide password" : "Show password"}
+                        aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                      >
+                        {showConfirmPassword ? (
+                          <EyeOff className="h-3.5 w-3.5" />
+                        ) : (
+                          <Eye className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Password Match Status Indicator */}
+                    {confirmPassword.length > 0 && (
+                      <div>
+                        {confirmPassword === password ? (
+                          <div className="flex items-center space-x-1.5 text-[11px] font-bold text-emerald-400 pt-0.5">
+                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                            <span>Passwords match</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center space-x-1.5 text-[11px] font-bold text-rose-400 pt-0.5">
+                            <XCircle className="h-3.5 w-3.5 shrink-0" />
+                            <span>Passwords do not match</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Classification Info */}
@@ -380,44 +467,6 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                         <span>Commercial</span>
                       </button>
                     </div>
-
-                    {consumerType === 'Residential' ? (
-                      <div className="space-y-1 text-left pt-1">
-                        <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Household / Property Info (Optional)</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. 2-Storey House, 4 Occupants"
-                          value={householdInfo}
-                          onChange={(e) => setHouseholdInfo(e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-1.5 px-2.5 text-xs text-slate-200 focus:outline-none"
-                        />
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-left">
-                        <div className="space-y-1">
-                          <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Business Trade Name <span className="text-red-400">*</span></label>
-                          <input
-                            type="text"
-                            required
-                            placeholder="e.g. Tagoloan Bakeshop"
-                            value={businessName}
-                            onChange={(e) => setBusinessName(e.target.value)}
-                            className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-1.5 px-2.5 text-xs text-slate-200 focus:outline-none"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="block text-[8px] font-black text-slate-400 uppercase tracking-wider">Business Type <span className="text-red-400">*</span></label>
-                          <input
-                            type="text"
-                            required
-                            placeholder="e.g. Restaurant, Retail Store, Hotel"
-                            value={businessType}
-                            onChange={(e) => setBusinessType(e.target.value)}
-                            className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-1.5 px-2.5 text-xs text-slate-200 focus:outline-none"
-                          />
-                        </div>
-                      </div>
-                    )}
                   </div>
                 </div>
 

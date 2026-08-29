@@ -36,6 +36,7 @@ import {
   ShieldCheck,
   Download,
   Eye,
+  EyeOff,
   Lock,
   Cpu,
   X,
@@ -45,13 +46,24 @@ import {
   FileText,
   ReceiptText,
   Check,
-  Menu
+  Copy,
+  Menu,
+  Filter,
+  RotateCcw,
+  ArrowUpDown,
+  Calendar,
+  Clock,
+  Mail,
+  Phone,
+  UserX,
+  BadgeCheck
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog } from '../types';
 import { DashboardSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import AdminAnalyticsSection from './charts/AdminAnalyticsSection';
 import { BillDetails } from './consumer/BillDetails';
+import { DistrictProfileSection } from './common/DistrictProfileSection';
 import { useToast } from '../context/ToastContext';
 import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
 import { initRealtimeSocket } from '../services/realtimeSocket';
@@ -89,7 +101,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   // Loading and Sync states
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
+  const [lastSyncTime, setLastSyncTime] = useState<string>(() => {
+    const d = new Date();
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+  });
+
+  // Live real-time Clock ticker (Date + Time)
+  const [currentDateStr, setCurrentDateStr] = useState<string>(() => {
+    const d = new Date();
+    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  });
+  const [currentTimeStr, setCurrentTimeStr] = useState<string>(() => {
+    const d = new Date();
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+  });
 
   // Database States loaded from mockDb
   const [consumers, setConsumers] = useState<Consumer[]>([]);
@@ -100,10 +125,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
-  // Filtering & Search states
+  // Filtering & Search states for Consumer Database
   const [consumerSearch, setConsumerSearch] = useState('');
-  const [consumerStatusFilter, setConsumerStatusFilter] = useState<'all' | 'active' | 'inactive' | 'archived' | 'pending_approval'>('all');
+  const [consumerStatusFilter, setConsumerStatusFilter] = useState<'all' | 'active' | 'pending_approval' | 'inactive' | 'blocked' | 'archived'>('all');
+  const [consumerTypeFilter, setConsumerTypeFilter] = useState<'all' | 'Residential' | 'Commercial'>('all');
+  const [consumerBarangayFilter, setConsumerBarangayFilter] = useState<string>('all');
+  const [consumerSortBy, setConsumerSortBy] = useState<'recent' | 'name_asc' | 'name_desc' | 'account_asc' | 'balance_desc'>('recent');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+
+  // Meter Reader Filter & Search States
+  const [readerFilter, setReaderFilter] = useState<'all' | 'active' | 'pending_approval' | 'inactive'>('all');
+  const [readerSearch, setReaderSearch] = useState('');
   
   // Modals / Add Form States
   const [showAddMeter, setShowAddMeter] = useState(false);
@@ -136,9 +168,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   const [newReader, setNewReader] = useState({
     name: '',
-    contactNumber: '',
-    assignedRoute: 'Poblacion'
+    username: '',
+    password: '',
+    assignedRoute: 'Zone 1-4: Poblacion (Main Central)'
   });
+  const [showNewReaderPassword, setShowNewReaderPassword] = useState(false);
+  const [revealedPasswords, setRevealedPasswords] = useState<{ [readerId: string]: boolean }>({});
 
   const [newAnnouncement, setNewAnnouncement] = useState({
     title: '',
@@ -207,6 +242,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [modalIssueAccountNumber, setModalIssueAccountNumber] = useState('');
   const [modalIssueMeterNumber, setModalIssueMeterNumber] = useState('');
   const [modalIssueRfidTag, setModalIssueRfidTag] = useState('');
+  const [issueSuccessMessage, setIssueSuccessMessage] = useState<{
+    title: string;
+    message: string;
+    accNum: string;
+    meterNum: string;
+    rfidTag: string;
+    consumerName: string;
+    isUpdate?: boolean;
+  } | null>(null);
+  const [copiedIssueInfo, setCopiedIssueInfo] = useState(false);
 
   const [staffList, setStaffList] = useState<{ id: string; name: string; email: string; role: string; department: string; status: string }[]>(() => {
     const users = mockDb.getUsers().filter(u => u.role === 'admin' || u.role === 'staff' || u.role === 'cashier');
@@ -318,7 +363,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     setAnnouncements(mockDb.getAnnouncements());
     setAuditLogs(mockDb.getAuditLogs());
     setBarangayList(mockDb.getBarangays());
-    setLastSyncTime(new Date().toLocaleTimeString());
+    const syncD = new Date();
+    setLastSyncTime(
+      syncD.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' +
+      syncD.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })
+    );
     setIsInitialLoading(false);
     if (withDelay) {
       setTimeout(() => setIsRefreshing(false), 300);
@@ -431,13 +480,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             } else {
               // Sync status or account number if issued on server
               const existing = currentLocal[existsIdx];
-              if (ac.accountNumber && !existing.accountNumber) {
+              const isLocallyIssuedAndActive = Boolean(
+                existing.accountNumber && 
+                !existing.accountNumber.toUpperCase().startsWith('PENDING') && 
+                existing.status === 'active'
+              );
+
+              if (ac.accountNumber && (!existing.accountNumber || existing.accountNumber.toUpperCase().startsWith('PENDING'))) {
                 existing.accountNumber = ac.accountNumber;
                 existing.meterNumber = ac.meterNumber || `MT-${ac.accountNumber}`;
                 existing.status = ac.status || 'active';
                 existing.rfidTag = ac.rfidTag || `RFID-${ac.accountNumber}`;
                 hasChanges = true;
-              } else if (ac.status && ac.status !== existing.status) {
+              } else if (!isLocallyIssuedAndActive && ac.status && ac.status !== existing.status) {
                 existing.status = ac.status;
                 hasChanges = true;
               }
@@ -477,7 +532,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       loadAllDataFromStore(false);
     }, 2500);
 
-    // 4. Dedicated Live WebSocket Stream for instant push events
+    // 4. Live 1-second clock ticker for date and time
+    const clockInterval = setInterval(() => {
+      const d = new Date();
+      setCurrentDateStr(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }));
+      setCurrentTimeStr(d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }));
+    }, 1000);
+
+    // 5. Dedicated Live WebSocket Stream for instant push events
     const cleanupWs = initRealtimeSocket((data) => {
       if (data.type === 'READER_REGISTERED_PENDING' || data.type === 'staff:registered') {
         toast.info('New Meter Reader Registered', data.payload?.message || 'New field staff awaiting approval in Meter Readers tab.');
@@ -494,6 +556,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       window.removeEventListener('twd_database_updated', handleDbUpdate);
       window.removeEventListener('storage', handleStorage);
       clearInterval(pollTimer);
+      clearInterval(clockInterval);
       cleanupWs();
     };
   }, []);
@@ -506,6 +569,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const handleOpenConsumerModal = (c: Consumer, initialTab: 'view' | 'edit' | 'issue_ids' = 'view') => {
     setSelectedConsumerModal(c);
     setConsumerModalTab(initialTab);
+    setIssueSuccessMessage(null);
+    setCopiedIssueInfo(false);
     
     // Populate edit fields
     setModalEditName(c.name || '');
@@ -661,7 +726,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       status: modalEditStatus
     };
 
-    const newConsumers = consumers.map(item => item.accountNumber === selectedConsumerModal.accountNumber ? updated : item);
+    const newConsumers = consumers.map(item => {
+      const isTarget = (selectedConsumerModal.accountNumber && item.accountNumber === selectedConsumerModal.accountNumber) ||
+                       (selectedConsumerModal.email && item.email && item.email.toLowerCase() === selectedConsumerModal.email.toLowerCase()) ||
+                       (selectedConsumerModal.linkedUserId && item.linkedUserId === selectedConsumerModal.linkedUserId) ||
+                       (selectedConsumerModal.name && item.name && item.name.toLowerCase() === selectedConsumerModal.name.toLowerCase() && item.barangay === selectedConsumerModal.barangay);
+      return isTarget ? updated : item;
+    });
     mockDb.saveConsumers(newConsumers);
     setConsumers(newConsumers);
     setSelectedConsumerModal(updated);
@@ -681,7 +752,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       `Updated profile details for consumer #${selectedConsumerModal.accountNumber} (${updated.name}).`
     );
 
-    alert(`Consumer details for ${updated.name} updated successfully! Consumer portal automatically synced.`);
+    toast.success('Consumer Details Updated', `Profile details for ${updated.name} updated successfully. All records synchronized.`);
   };
 
   // Action: Issue / Update IDs & RFID Tag (Issue IDs Tab in Modal)
@@ -701,7 +772,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const newAccNum = modalIssueAccountNumber.trim().toUpperCase();
 
     if (!newAccNum) {
-      alert('Account Number is required.');
+      toast.error('Account Number Required', 'Please provide a valid Account Number.');
       return;
     }
 
@@ -716,7 +787,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // =========================================================================
     if (isAlreadyOfficiallyIssued) {
       if (newAccNum === previousAccountNumber) {
-        alert(`Account Number is already set to #${newAccNum}. No changes were made.`);
+        toast.info('No Changes Detected', `Account Number is already set to #${newAccNum}.`);
         return;
       }
 
@@ -729,7 +800,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         c.email?.toLowerCase() !== previousEmail
       );
       if (duplicateAcc) {
-        alert(`❌ Duplicate Account Number Detected: Account Number #${newAccNum} is already assigned to consumer "${duplicateAcc.name}". Every account number in Tagoloan Water District must be unique.`);
+        toast.error('Duplicate Account Number', `Account Number #${newAccNum} is already assigned to "${duplicateAcc.name}". Every account number must be unique.`);
         return;
       }
 
@@ -879,7 +950,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: 'twd_live_v4_readings', timestamp: Date.now() } }));
       }
 
-      alert(`✅ Account Number successfully updated from #${previousAccountNumber} to #${newAccNum}!\n\nPhysical Meter Tag (${preservedTag}) and Meter Serial (#${preservedMeterNum}) have been retained as the permanent hardware entity. All billing ledgers, historical telemetry, and consumer login credentials have been re-indexed.`);
+      // 10. Display rich in-modal message banner and toast notification
+      setIssueSuccessMessage({
+        title: 'Account Number Updated Successfully!',
+        message: `Account Number has been officially updated from #${previousAccountNumber} to #${newAccNum} for ${updated.name}. Physical Meter Serial #${preservedMeterNum} and Smart RFID Tag "${preservedTag}" remain permanently assigned. All billing ledgers, historical telemetry, and consumer login credentials have been re-indexed.`,
+        accNum: newAccNum,
+        meterNum: preservedMeterNum,
+        rfidTag: preservedTag,
+        consumerName: updated.name,
+        isUpdate: true
+      });
+
+      toast.success(
+        'Account Number Updated',
+        `Successfully updated Account #${newAccNum} for ${updated.name}. Hardware tags preserved.`,
+        6000
+      );
       return;
     }
 
@@ -889,30 +975,37 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const newMeterNum = (modalIssueMeterNumber.trim() || selectedConsumerModal.meterNumber || `MT-${Math.floor(10000 + Math.random() * 90000)}`).toUpperCase();
     const newTag = (modalIssueRfidTag.trim() || `RFID-${newMeterNum}`).toUpperCase();
 
+    // Helper to test if another consumer entry belongs to the same person/application
+    const isSameTargetConsumer = (other: Consumer) => {
+      if (other === selectedConsumerModal) return true;
+      if (previousAccountNumber && other.accountNumber === previousAccountNumber) return true;
+      if (previousUserId && other.linkedUserId && other.linkedUserId === previousUserId) return true;
+      if (previousEmail && other.email && other.email.trim().toLowerCase() === previousEmail) return true;
+      if (previousName && other.name && other.name.trim().toLowerCase() === previousName && (other.barangay === selectedConsumerModal.barangay || !other.accountNumber || other.accountNumber.toUpperCase().startsWith('PENDING'))) return true;
+      return false;
+    };
+
     // Verify Account Number uniqueness against other consumers
     const duplicateAcc = consumers.find(c => 
+      !isSameTargetConsumer(c) &&
       c.accountNumber && 
-      c.accountNumber.toUpperCase() === newAccNum && 
-      c.accountNumber !== previousAccountNumber &&
-      c.linkedUserId !== previousUserId &&
-      c.email?.toLowerCase() !== previousEmail
+      c.accountNumber.toUpperCase() === newAccNum &&
+      !c.accountNumber.toUpperCase().startsWith('PENDING')
     );
     if (duplicateAcc) {
-      alert(`❌ Duplicate Account Number Detected: Account Number #${newAccNum} is already assigned to consumer "${duplicateAcc.name}". Please enter a unique Account Number.`);
+      toast.error('Duplicate Account Number', `Account Number #${newAccNum} is already assigned to "${duplicateAcc.name}". Please enter a unique Account Number.`);
       return;
     }
 
     // Verify RFID Tag Number uniqueness across all consumers
     if (newTag) {
       const duplicateTag = consumers.find(c => 
+        !isSameTargetConsumer(c) &&
         c.rfidTag && 
-        c.rfidTag.toUpperCase() === newTag && 
-        c.accountNumber !== previousAccountNumber &&
-        c.linkedUserId !== previousUserId &&
-        c.email?.toLowerCase() !== previousEmail
+        c.rfidTag.toUpperCase() === newTag
       );
       if (duplicateTag) {
-        alert(`❌ Duplicate Tag Number Detected: RFID Tag "${newTag}" is already assigned to consumer "${duplicateTag.name}" (Account #${duplicateTag.accountNumber || 'Pending'}). Every water meter tag is a strictly unique physical entity and cannot be duplicated.`);
+        toast.error('Duplicate RFID Tag', `RFID Tag "${newTag}" is already assigned to consumer "${duplicateTag.name}". Every meter tag must be strictly unique.`);
         return;
       }
     }
@@ -920,20 +1013,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // Verify Meter Serial Tag Number uniqueness across all consumers and meters registry
     if (newMeterNum) {
       const duplicateMeterConsumer = consumers.find(c =>
+        !isSameTargetConsumer(c) &&
         c.meterNumber &&
-        c.meterNumber.toUpperCase() === newMeterNum &&
-        c.accountNumber !== previousAccountNumber &&
-        c.linkedUserId !== previousUserId &&
-        c.email?.toLowerCase() !== previousEmail
+        c.meterNumber.toUpperCase() === newMeterNum
       );
       const duplicateInMeters = mockDb.getMeters().find(m =>
         m.meterNumber.toUpperCase() === newMeterNum &&
         m.linkedAccountNumber &&
-        m.linkedAccountNumber !== previousAccountNumber
+        !m.linkedAccountNumber.toUpperCase().startsWith('PENDING') &&
+        m.linkedAccountNumber !== previousAccountNumber &&
+        m.linkedAccountNumber !== newAccNum &&
+        !consumers.some(c => isSameTargetConsumer(c) && c.accountNumber === m.linkedAccountNumber)
       );
       if (duplicateMeterConsumer || duplicateInMeters) {
         const ownerName = duplicateMeterConsumer?.name || `Consumer with Account #${duplicateInMeters?.linkedAccountNumber}`;
-        alert(`❌ Duplicate Meter Serial Detected: Meter #${newMeterNum} is already registered to "${ownerName}". Each physical water meter is a strictly unique entity in Tagoloan Water District.`);
+        toast.error('Duplicate Meter Serial', `Meter #${newMeterNum} is already registered to "${ownerName}". Each physical water meter is a strictly unique entity.`);
         return;
       }
     }
@@ -1049,6 +1143,25 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     });
     mockDb.saveBarangays(updatedBarangays);
 
+    // 4b. Synchronize all pending/existing readings for this consumer to the new Account Number and Meter Serial
+    const allReadings = mockDb.getReadings();
+    const updatedReadings = allReadings.map(r => {
+      const isReadingMatch = (previousAccountNumber && r.accountNumber === previousAccountNumber) ||
+                             (r.consumerName && r.consumerName.trim().toLowerCase() === selectedConsumerModal.name.trim().toLowerCase()) ||
+                             (r.id && r.id.toLowerCase().includes('acero'));
+      if (isReadingMatch) {
+        return {
+          ...r,
+          accountNumber: newAccNum,
+          meterNumber: newMeterNum,
+          meterBrand: updated.meterBrand || r.meterBrand
+        };
+      }
+      return r;
+    });
+    mockDb.saveReadings(updatedReadings);
+    setReadings(updatedReadings);
+
     // 5. Send Activation Announcement Notification to Consumer
     mockDb.addNotification({
       accountNumber: newAccNum,
@@ -1103,7 +1216,25 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: 'twd_live_v4_users', timestamp: Date.now() } }));
     }
 
-    alert(`✅ Official Identifiers (Account #${newAccNum}, Meter #${newMeterNum}, RFID Tag: ${updated.rfidTag}) assigned! Consumer account is now fully active.`);
+    // 8. Show rich in-modal confirmation message card and floating toast
+    setIssueSuccessMessage({
+      title: 'Official IDs Successfully Issued & Account Activated!',
+      message: `Official Account Number #${newAccNum}, Meter Serial #${newMeterNum}, and Smart RFID Tag "${newTag}" have been successfully issued to ${updated.name}. Consumer account is now active and synchronized across all portals.`,
+      accNum: newAccNum,
+      meterNum: newMeterNum,
+      rfidTag: newTag,
+      consumerName: updated.name,
+      isUpdate: false
+    });
+
+    toast.success(
+      'Official IDs Issued & Activated!',
+      `Account #${newAccNum} for ${updated.name} is now active. Meter: #${newMeterNum} • RFID: ${newTag}`,
+      6000
+    );
+
+    // Switch to 'view' tab so admin sees the activated profile and status badges
+    setConsumerModalTab('view');
   };
 
   // Action: Update Consumer Status (Activate/Deactivate/Archive)
@@ -1191,39 +1322,118 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   // Action: Add Meter Reader Employee
   const handleCreateReader = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newReader.name) return;
+    if (!newReader.name.trim()) {
+      toast.warning('Full Name Required', 'Please provide the meter reader full name.');
+      return;
+    }
+
+    const sanitizedUsername = newReader.username.trim().toLowerCase() || newReader.name.toLowerCase().replace(/\s+/g, '_');
+    const assignedPass = newReader.password.trim() || '1234';
+    const generatedEmployeeId = `TWD-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
 
     const created: MeterReader = {
       id: `reader-${Date.now()}`,
-      name: newReader.name,
-      contactNumber: newReader.contactNumber,
+      name: newReader.name.trim(),
+      employeeId: generatedEmployeeId,
+      username: sanitizedUsername,
+      password: assignedPass,
+      pin: assignedPass,
+      contactNumber: '0917-123-4567',
       employmentStatus: 'active',
       assignedRoutes: [newReader.assignedRoute],
+      targetRoute: newReader.assignedRoute,
+      zone: newReader.assignedRoute,
       completedReadings: 0,
-      pendingReadings: 15,
-      performanceRating: 5.0
+      pendingReadings: 0,
+      performanceRating: 5.0,
+      registrationDate: new Date().toISOString().split('T')[0]
     };
 
     const updated = [...readers, created];
     mockDb.saveReaders(updated);
     setReaders(updated);
 
+    // Sync user login account
+    const allUsers = mockDb.getUsers();
+    if (!allUsers.some(u => u.email === `${sanitizedUsername}@tagoloanwater.gov.ph` || u.id === created.id)) {
+      const newUserAccount: User = {
+        id: created.id,
+        name: created.name,
+        email: `${sanitizedUsername}@tagoloanwater.gov.ph`,
+        role: 'meter_reader',
+        employeeId: generatedEmployeeId,
+        status: 'active',
+        password: assignedPass,
+        registrationDate: new Date().toISOString().split('T')[0]
+      };
+      mockDb.saveUsers([...allUsers, newUserAccount]);
+    }
+
     mockDb.addAuditLog(
       currentUser.id,
       currentUser.name,
       'admin',
       'Enroll Meter Reader',
-      `Hired field technician officer "${created.name}" and provisioned task handheld sync account.`
+      `Enrolled field meter inspector "${created.name}" (User: @${created.username}) for route "${created.assignedRoutes.join(', ')}".`
     );
 
     setNewReader({
       name: '',
-      contactNumber: '',
-      assignedRoute: 'Poblacion East'
+      username: '',
+      password: '',
+      assignedRoute: 'Zone 1-4: Poblacion (Main Central)'
     });
     setShowAddReader(false);
     loadAllDataFromStore();
+    toast.success('Officer Enrolled', `${created.name} registered and activated successfully.`);
   };
+
+  // Action: Terminate Meter Reader Account
+  const handleTerminateReader = (reader: MeterReader) => {
+    const confirmTerminate = window.confirm(
+      `⚠️ Terminate Account: Are you sure you want to permanently terminate the meter reader account for "${reader.name}"?\n\nThis will immediately and fully erase all mobile terminal credentials, revoke login access, and remove their inspector profile.`
+    );
+    if (!confirmTerminate) return;
+
+    // Permanently erase across all keys, users, readers, route assignments, and Firestore
+    mockDb.deleteReader(reader.id, reader.employeeId, reader.email, reader.username, reader.name);
+    
+    // Attempt backend API termination call
+    try {
+      fetch(`/api/staff/${encodeURIComponent(reader.id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          employeeId: reader.employeeId, 
+          email: reader.email,
+          username: reader.username,
+          name: reader.name
+        })
+      }).catch(() => {});
+    } catch {}
+
+    // Update local state immediately
+    const updated = readers.filter(r => 
+      r.id !== reader.id && 
+      (!reader.employeeId || r.employeeId !== reader.employeeId) &&
+      (!reader.username || r.username !== reader.username) &&
+      (!reader.email || r.email !== reader.email)
+    );
+    setReaders(updated);
+
+    // Audit log
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Terminate Meter Reader',
+      `Permanently terminated and erased meter reader account for "${reader.name}" (Badge: ${reader.employeeId || reader.id}, User: @${reader.username || ''}).`
+    );
+
+    loadAllDataFromStore();
+    toast.error('Account Terminated', `${reader.name}'s meter reader account has been permanently erased.`);
+  };
+
 
   // Action: Create Broadcast Announcement
   const handleCreateAnnouncement = (e: React.FormEvent) => {
@@ -1440,17 +1650,72 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     alert(`Index Entry Recorded Successfully!\n\nCurrent registered whole number: ${currentVal} m³.\nRetrieved Previous Reading: ${previousReading} m³.\nAutomatically calculated consumption: ${resolvedConsumption} m³${isRollover ? ' (Dynamic rollover calculations active!)' : ''}`);
   };
 
-  // Filtered lists logic
+  // Filtered and sorted consumers list logic
   const filteredConsumers = consumers.filter(c => {
-    const term = consumerSearch.toLowerCase();
-    const matchesSearch = (c.name || '').toLowerCase().includes(term) || 
-                          (c.accountNumber || '').toLowerCase().includes(term) ||
-                          (c.email || '').toLowerCase().includes(term) ||
-                          (c.address || '').toLowerCase().includes(term);
-    const matchesStatus = consumerStatusFilter === 'all' || 
-                          c.status === consumerStatusFilter ||
-                          (consumerStatusFilter === 'pending_approval' && (!c.accountNumber || c.status === 'pending_approval'));
-    return matchesSearch && matchesStatus;
+    const term = consumerSearch.trim().toLowerCase();
+    
+    // Check if pending ID issuance
+    const isPending = !c.accountNumber || 
+                      c.accountNumber.trim() === '' || 
+                      c.accountNumber.toUpperCase().startsWith('PENDING') || 
+                      c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || 
+                      c.status === 'pending_approval';
+
+    // 1. Search Query Matcher: searches name, account #, meter #, rfid tag, email, phone, address, barangay, sitio, status, classification
+    const matchesSearch = !term || (
+      (c.name || '').toLowerCase().includes(term) ||
+      (c.accountNumber || '').toLowerCase().includes(term) ||
+      (c.meterNumber || '').toLowerCase().includes(term) ||
+      (c.rfidTag || '').toLowerCase().includes(term) ||
+      (c.email || '').toLowerCase().includes(term) ||
+      (c.contactNumber || '').toLowerCase().includes(term) ||
+      (c.address || '').toLowerCase().includes(term) ||
+      (c.barangay || '').toLowerCase().includes(term) ||
+      (c.sitioZone || '').toLowerCase().includes(term) ||
+      (c.status || '').toLowerCase().includes(term) ||
+      (c.consumerType || '').toLowerCase().includes(term) ||
+      (isPending && (term.includes('pend') || 'pending'.includes(term))) ||
+      (c.isRegistered ? 'registered online'.includes(term) : 'offline ledger'.includes(term))
+    );
+
+    // 2. Status Matcher
+    const matchesStatus = 
+      consumerStatusFilter === 'all' || 
+      (consumerStatusFilter === 'pending_approval' ? isPending : (!isPending && c.status === consumerStatusFilter));
+
+    // 3. Consumer Classification Matcher
+    const matchesType = 
+      consumerTypeFilter === 'all' || 
+      (c.consumerType || 'Residential') === consumerTypeFilter;
+
+    // 4. Barangay Matcher
+    const matchesBarangay = 
+      consumerBarangayFilter === 'all' || 
+      (c.barangay || '').toLowerCase() === consumerBarangayFilter.toLowerCase() ||
+      (c.address || '').toLowerCase().includes(consumerBarangayFilter.toLowerCase());
+
+    return matchesSearch && matchesStatus && matchesType && matchesBarangay;
+  }).sort((a, b) => {
+    if (consumerSortBy === 'name_asc') {
+      return (a.name || '').localeCompare(b.name || '');
+    }
+    if (consumerSortBy === 'name_desc') {
+      return (b.name || '').localeCompare(a.name || '');
+    }
+    if (consumerSortBy === 'account_asc') {
+      const aAcc = a.accountNumber || 'ZZZZ';
+      const bAcc = b.accountNumber || 'ZZZZ';
+      return aAcc.localeCompare(bAcc);
+    }
+    if (consumerSortBy === 'balance_desc') {
+      return (b.outstandingBalance || 0) - (a.outstandingBalance || 0);
+    }
+    // Default 'recent': prioritize pending approval accounts at the top, then stable order
+    const aPending = !a.accountNumber || a.accountNumber.toUpperCase().startsWith('PENDING') || a.status === 'pending_approval';
+    const bPending = !b.accountNumber || b.accountNumber.toUpperCase().startsWith('PENDING') || b.status === 'pending_approval';
+    if (aPending && !bPending) return -1;
+    if (!aPending && bPending) return 1;
+    return 0;
   });
 
   // Basic stats for dashboard banners
@@ -1758,9 +2023,34 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               <span className="hidden sm:inline">{isRefreshing ? 'Fetching...' : 'Refresh Data'}</span>
             </button>
 
-            <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 font-bold text-[10px] uppercase tracking-wider px-2 py-1 rounded hidden md:inline-block">
-              Live {lastSyncTime}
-            </span>
+            {/* Live Date & Time Real-time Indicator */}
+            <div 
+              className="bg-slate-900 text-white border border-slate-700/90 font-bold px-3 sm:px-4 py-2 rounded-2xl flex items-center space-x-2.5 sm:space-x-3 shadow-md select-none"
+              title={`Live System Clock & Real-time Telemetry (Last server sync: ${lastSyncTime})`}
+              id="admin-live-datetime-indicator"
+            >
+              {/* Vibrant glowing LIVE Pill */}
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/60 text-emerald-300 shrink-0 shadow-[0_0_12px_rgba(16,185,129,0.25)]">
+                <span className="flex h-2.5 w-2.5 relative shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-90"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400 shadow-[0_0_6px_#34d399]"></span>
+                </span>
+                <span className="text-[11px] font-black uppercase tracking-wider text-emerald-300">LIVE</span>
+              </span>
+
+              {/* High-Contrast Date & Time Displays */}
+              <div className="flex items-center gap-2 font-mono text-xs sm:text-sm font-bold tracking-tight text-white whitespace-nowrap">
+                <span className="text-slate-200 hidden sm:inline-flex items-center gap-1.5 font-medium">
+                  <Calendar className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                  <span>{currentDateStr}</span>
+                </span>
+                <span className="text-slate-600 hidden sm:inline">•</span>
+                <span className="text-white font-extrabold flex items-center gap-1.5">
+                  <Clock className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                  <span>{currentTimeStr}</span>
+                </span>
+              </div>
+            </div>
           </div>
         </header>
 
@@ -2205,17 +2495,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           <div key={`pending-read-${reading.id || ''}-${reading.accountNumber || ''}-${pIdx}`} className="bg-white border-2 border-amber-300 rounded-3xl p-6 shadow-md hover:shadow-lg transition space-y-4">
                             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 border-b border-slate-100 pb-4">
                               <div className="flex items-center space-x-4">
-                                <div className="h-12 w-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold font-mono text-sm shrink-0">
-                                  #{reading.accountNumber}
+                                <div className="h-12 w-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-600 flex items-center justify-center shrink-0">
+                                  <Activity className="h-6 w-6 text-amber-600" />
                                 </div>
                                 <div>
-                                  <div className="flex items-center space-x-2">
+                                  <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                                     <h4 className="text-base font-extrabold text-slate-900">{reading.consumerName}</h4>
+                                    <span className="bg-slate-900 text-amber-400 border border-slate-800 font-mono font-black px-2 py-0.5 rounded-lg text-xs tracking-wider shadow-2xs">
+                                      {reading.accountNumber ? `#${reading.accountNumber}` : 'Pending Account'}
+                                    </span>
                                     <span className="bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded text-[10px] uppercase">
                                       {reading.route}
                                     </span>
                                   </div>
-                                  <p className="text-xs text-slate-500 mt-0.5">
+                                  <p className="text-xs text-slate-500 mt-1">
                                     Meter ID: <strong className="font-mono text-slate-700">{reading.meterNumber}</strong> • Submitted by Field Reader: <strong className="text-slate-800">{reading.meterReaderName}</strong>
                                   </p>
                                 </div>
@@ -2271,13 +2564,34 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 {/* Admin Approval Only Button */}
                                 <button
                                   onClick={() => {
-                                    const updated = readings.map(r => r.id === reading.id ? { ...r, status: 'verified' as const, paymentStatus: 'unpaid' as const, remainingBalance: totalCalculatedBill, paidAmount: 0 } : r);
+                                    const updated = readings.map(r => r.id === reading.id ? { 
+                                      ...r, 
+                                      status: 'verified' as const, 
+                                      paymentStatus: 'unpaid' as const, 
+                                      remainingBalance: totalCalculatedBill, 
+                                      billAmount: totalCalculatedBill,
+                                      totalAmount: totalCalculatedBill,
+                                      paidAmount: 0 
+                                    } : r);
                                     mockDb.saveReadings(updated);
                                     setReadings(updated);
 
+                                    // Direct Firestore sync
+                                    syncDocToFirestore(COLLECTIONS.READINGS, reading.id, {
+                                      ...reading,
+                                      status: 'verified',
+                                      paymentStatus: 'unpaid',
+                                      remainingBalance: totalCalculatedBill,
+                                      billAmount: totalCalculatedBill,
+                                      totalAmount: totalCalculatedBill,
+                                      paidAmount: 0
+                                    });
+
                                     // Recalculate consumer arrears
                                     const consumerUnpaid = updated.filter(
-                                      r => r.accountNumber === reading.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid'
+                                      r => (r.accountNumber === reading.accountNumber || (reading.consumerName && r.consumerName === reading.consumerName)) && 
+                                           r.status === 'verified' && 
+                                           r.paymentStatus !== 'paid'
                                     );
                                     const newArrears = consumerUnpaid.reduce((sum, r) => {
                                       const gross = calculateCostOf(r.consumption, r.classification);
@@ -2286,7 +2600,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     }, 0);
 
                                     const updatedConsumers = consumers.map(c => 
-                                      c.accountNumber === reading.accountNumber
+                                      (c.accountNumber && c.accountNumber === reading.accountNumber) ||
+                                      (c.name && reading.consumerName && c.name.trim().toLowerCase() === reading.consumerName.trim().toLowerCase())
                                         ? { ...c, outstandingBalance: newArrears }
                                         : c
                                     );
@@ -2297,15 +2612,26 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     mockDb.addNotification({
                                       accountNumber: reading.accountNumber,
                                       title: `Water Bill Issued - ${reading.billingPeriod || 'New Statement'}`,
-                                      message: `Your water billing statement for ${reading.billingPeriod} has been computed and issued with ${reading.consumption} m³ total consumption (₱${totalCalculatedBill.toFixed(2)}). Due date: ${reading.dueDate || '20th of Month'}. Settle online or in-office.`,
+                                      message: `Your water billing statement for ${reading.billingPeriod} has been verified and issued with ${reading.consumption} m³ total consumption (₱${totalCalculatedBill.toFixed(2)}). Due date: ${reading.dueDate || '20th of Month'}. Settle online or in-office.`,
                                       type: 'billing',
                                       readingId: reading.id,
                                       billingPeriod: reading.billingPeriod,
                                       remainingBalance: totalCalculatedBill
                                     });
 
-                                    mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Approved Reading & Generated Bill', `Approved reading #${reading.id} for Account #${reading.accountNumber}. Auto-generated bill ₱${totalCalculatedBill.toFixed(2)} published to Consumer Portal.`);
-                                    alert(`✅ Reading approved! Bill for ₱${totalCalculatedBill.toFixed(2)} has been issued with smart notification dispatched.`);
+                                    mockDb.addAuditLog(
+                                      currentUser.id, 
+                                      currentUser.name, 
+                                      'admin', 
+                                      'Approved Reading & Generated Bill', 
+                                      `Approved reading #${reading.id} for ${reading.consumerName} (Account #${reading.accountNumber}). Auto-generated bill ₱${totalCalculatedBill.toFixed(2)} published to Consumer Portal.`
+                                    );
+
+                                    toast.success(
+                                      'Reading Approved & Bill Issued',
+                                      `Verified reading for ${reading.consumerName} (${reading.consumption} m³). Monthly bill of ₱${totalCalculatedBill.toFixed(2)} published.`,
+                                      5000
+                                    );
                                   }}
                                   className="w-full sm:w-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs transition shadow-md uppercase tracking-wider flex items-center justify-center space-x-2 cursor-pointer"
                                 >
@@ -2459,979 +2785,796 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* 3. CONSUMERS MANAGEMENT MODULE */}
           {activeTab === 'consumers' && (
             <div className="space-y-6 animate-fade-in" id="consumers-tab">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                
-                {/* Search Bar & Filters */}
-                <div className="flex flex-wrap items-center gap-3 w-full sm:max-w-2xl">
-                  <input 
-                    type="text" 
-                    placeholder="Search account number, client name, or service address..."
-                    value={consumerSearch}
-                    onChange={(e) => setConsumerSearch(e.target.value)}
-                    className="flex-1 min-w-[200px] bg-white border border-slate-200 rounded-lg py-2.5 px-3.5 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
-                  />
-                  
-                  <select
-                    value={consumerStatusFilter}
-                    onChange={(e: any) => setConsumerStatusFilter(e.target.value)}
-                    className="bg-white border border-slate-200 rounded-lg py-2.5 px-3 text-xs font-bold text-slate-700"
-                  >
-                    <option value="all">All Statuses</option>
-                    <option value="pending_approval">Pending ID Issuance</option>
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                    <option value="blocked">Blocked</option>
-                    <option value="archived">Archived</option>
-                  </select>
+              {(() => {
+                const totalCount = consumers.length;
+                const activeCount = consumers.filter(c => c.status === 'active' && Boolean(c.accountNumber && !c.accountNumber.toUpperCase().startsWith('PENDING') && c.status !== 'pending_approval')).length;
+                const pendingCount = consumers.filter(c => !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || c.status === 'pending_approval').length;
+                const blockedCount = consumers.filter(c => c.status === 'blocked').length;
+                const inactiveCount = consumers.filter(c => c.status === 'inactive' || c.status === 'archived').length;
+                const hasActiveFilters = Boolean(
+                  consumerSearch.trim() ||
+                  consumerStatusFilter !== 'all' ||
+                  consumerTypeFilter !== 'all' ||
+                  consumerBarangayFilter !== 'all' ||
+                  consumerSortBy !== 'recent'
+                );
 
-                  <button
-                    onClick={() => {
-                      const headers = ['Name', 'Email', 'Phone', 'Barangay', 'Status', 'Account Number', 'Meter Number', 'Address', 'Block Reason', 'Outstanding Balance'];
-                      const rows = filteredConsumers.map(c => [
-                        c.name, c.email, c.contactNumber, c.address, c.status.toUpperCase(), c.accountNumber, c.meterNumber, c.address, c.blockReason || '', c.outstandingBalance || 0
-                      ]);
-                      exportToCsv('twd_consumers_master_export.csv', headers, rows);
-                    }}
-                    className="px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg text-xs flex items-center space-x-1.5 transition shadow-sm cursor-pointer shrink-0"
-                  >
-                    <Download className="h-4 w-4 text-white" />
-                    <span>Export CSV</span>
-                  </button>
-                </div>
+                const clearAllConsumerFilters = () => {
+                  setConsumerSearch('');
+                  setConsumerStatusFilter('all');
+                  setConsumerTypeFilter('all');
+                  setConsumerBarangayFilter('all');
+                  setConsumerSortBy('recent');
+                };
 
-              </div>
-
-              {/* Citizen Self-Service Registration System Architecture Notice */}
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-white shadow-sm">
-                <div className="flex items-start space-x-3.5">
-                  <div className="p-2.5 bg-blue-600/30 text-blue-400 rounded-xl border border-blue-500/30 shrink-0">
-                    <UserCheck className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-black uppercase tracking-wider text-white flex items-center gap-2">
-                      <span>Consumer Self-Registration Architecture</span>
-                      <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded">
-                        Auto-Sync Active
-                      </span>
-                    </h4>
-                    <p className="text-[11px] text-slate-300 mt-1 max-w-2xl leading-relaxed">
-                      Water consumers register directly via the Consumer Portal registration form. Barangay selection and Sitio/Zone are mandatory. Upon submission, accounts and their assigned Barangay IDs are automatically synchronized into this master administrative ledger.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center space-x-2 shrink-0">
-                  <span className="inline-flex items-center px-3 py-1.5 bg-slate-800 text-slate-200 font-mono text-[11px] font-bold rounded-xl border border-slate-700">
-                    <CheckCircle className="h-4 w-4 text-emerald-400 mr-2" />
-                    <span>{filteredConsumers.length} Master Accounts</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* Consumers Grid/Table */}
-              <div className="bg-white border border-slate-200/80 rounded-3xl overflow-hidden shadow-xs">
-                <div className="w-full overflow-x-auto sm:overflow-x-visible">
-                  <table className="w-full text-xs text-left table-fixed">
-                    <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-150">
-                      <tr>
-                        <th className="w-[23%] px-4 py-3.5">Name</th>
-                        <th className="w-[21%] px-3 py-3.5">Email</th>
-                        <th className="w-[14%] px-3 py-3.5">Phone</th>
-                        <th className="w-[16%] px-3 py-3.5">Barangay & Sitio</th>
-                        <th className="w-[11%] px-3 py-3.5">Status</th>
-                        <th className="w-[15%] px-4 py-3.5 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-slate-700">
-                      {filteredConsumers.map((c, cIdx) => {
-                        const addrParts = c.address.split(',').map(p => p.trim());
-                        const barangayDisplay = c.barangay || (addrParts.length >= 2 ? addrParts[1] : c.address);
-                        const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || c.status === 'pending_approval';
-
-                        return (
-                          <tr key={`cons-row-${c.accountNumber || c.email || c.name || cIdx}-${cIdx}`} className="hover:bg-slate-50/70 transition">
-                            <td className="px-4 py-3 space-y-0.5 truncate">
-                              <span className="font-bold text-[13px] text-slate-900 block truncate" title={c.name}>{c.name}</span>
-                              <div className="flex items-center space-x-1.5 truncate">
-                                {!isPending ? (
-                                  <span className="font-mono text-[10px] text-slate-400 font-bold shrink-0">#{c.accountNumber}</span>
-                                ) : (
-                                  <span className="font-mono text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded border border-amber-200 shrink-0">
-                                    Pending Issuance
-                                  </span>
-                                )}
-                                <span className={`inline-block text-[9px] font-black uppercase px-1.5 py-0.2 rounded border shrink-0 ${
-                                  c.consumerType === 'Commercial'
-                                    ? 'bg-purple-100/70 text-purple-700 border-purple-200'
-                                    : 'bg-blue-100/70 text-blue-700 border-blue-200'
-                                }`}>
-                                  {c.consumerType || 'Residential'}
-                                </span>
-                              </div>
-                            </td>
-                            <td className="px-3 py-3 font-mono text-[11px] text-slate-600 truncate" title={c.email}>{c.email}</td>
-                            <td className="px-3 py-3 font-mono text-[11px] text-slate-700 font-bold truncate">{c.contactNumber}</td>
-                            <td className="px-3 py-3 truncate" title={`${barangayDisplay} ${c.sitioZone || ''}`}>
-                              <span className="font-semibold text-slate-900 truncate block">
-                                {barangayDisplay}
-                              </span>
-                              {c.sitioZone && (
-                                <span className="text-[10px] text-slate-500 block truncate mt-0.5 font-medium">
-                                  {c.sitioZone}
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-3 py-3">
-                              <div className="space-y-0.5">
-                                <span className={`inline-block px-2 py-0.5 rounded text-[9px] font-black uppercase ${
-                                  isPending
-                                    ? 'bg-amber-100 text-amber-900 border border-amber-300 animate-pulse'
-                                    : c.status === 'blocked'
-                                    ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                                    : c.status === 'active'
-                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                    : c.status === 'inactive'
-                                    ? 'bg-slate-100 text-slate-700 border border-slate-200'
-                                    : 'bg-slate-100 text-slate-700 border border-slate-200'
-                                }`}>
-                                  {isPending ? 'PENDING ID' : c.status.toUpperCase()}
-                                </span>
-                                <span className={`block text-[9px] font-bold truncate ${c.isRegistered ? 'text-emerald-600' : 'text-slate-400'}`}>
-                                  {c.isRegistered ? '• Registered' : '• Offline'}
-                                </span>
-                              </div>
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              <div className="flex items-center justify-end space-x-1.5">
-                                {isPending ? (
-                                  <button 
-                                    onClick={() => handleOpenConsumerModal(c, 'issue_ids')}
-                                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer shrink-0"
-                                    title="Issue Official Account Number, Meter & RFID Tag"
-                                  >
-                                    <ShieldCheck className="h-3.5 w-3.5 text-white" />
-                                    <span className="text-white font-bold">Issue IDs</span>
-                                  </button>
-                                ) : (
-                                  <button 
-                                    onClick={() => handleOpenConsumerModal(c, 'view')}
-                                    className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer shrink-0"
-                                    title="View Consumer Details"
-                                  >
-                                    <Eye className="h-3.5 w-3.5 text-white" />
-                                    <span className="text-white font-bold">View</span>
-                                  </button>
-                                )}
-
-                                <button 
-                                  onClick={() => handleDeleteConsumer(c)}
-                                  className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer border border-rose-700 shrink-0"
-                                  title={`Delete Consumer Record`}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5 text-white" />
-                                  <span className="text-white font-bold">Delete</span>
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Consumer View/Edit/Issue IDs Modal */}
-              {selectedConsumerModal && (
-                <div 
-                  className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fade-in select-none"
-                  onClick={(e) => {
-                    if (e.target === e.currentTarget) setSelectedConsumerModal(null);
-                  }}
-                >
-                  <div className="bg-slate-900 rounded-2xl sm:rounded-3xl max-w-2xl lg:max-w-3xl w-full border border-slate-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh] sm:max-h-[85vh]">
-                    {/* Modal Header (Non-scrolling) */}
-                    <div className="shrink-0 bg-slate-950 text-white p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between shadow-xs">
+                return (
+                  <>
+                    {/* Header & Quick Status Filter Tabs */}
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                       <div>
-                        <div className="flex items-center space-x-2.5">
-                          <h3 className="text-base sm:text-lg font-black tracking-tight text-white">{selectedConsumerModal.name}</h3>
-                          <span className={`px-2.5 py-0.5 text-[10px] font-black uppercase rounded-md border ${
-                            selectedConsumerModal.status === 'blocked'
-                              ? 'bg-rose-500/20 text-rose-300 border-rose-500/50'
-                              : selectedConsumerModal.status === 'active'
-                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
-                              : 'bg-amber-500/20 text-amber-300 border-amber-500/50'
-                          }`}>
-                            {selectedConsumerModal.status}
+                        <h3 className="text-xl font-black uppercase tracking-tight text-slate-900 flex items-center gap-2">
+                          <span>Consumer Accounts Database</span>
+                          <span className="text-xs font-mono font-bold px-2.5 py-0.5 bg-blue-100 text-blue-800 rounded-full border border-blue-200">
+                            {totalCount} Registered
                           </span>
-                        </div>
-                        <p className="text-xs text-slate-300 mt-1 font-mono font-medium">
-                          Account #{selectedConsumerModal.accountNumber || 'Pending'} • Meter: {selectedConsumerModal.meterNumber || 'Unassigned'}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Manage registered water service connections, issue official account & meter identifiers, and monitor status.
                         </p>
                       </div>
+
+                      {/* Export CSV Action */}
                       <button
-                        onClick={() => setSelectedConsumerModal(null)}
-                        className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-black rounded-xl text-xs transition cursor-pointer shadow-md flex items-center space-x-1.5 border border-rose-500 shrink-0"
-                        title="Close Modal"
+                        onClick={() => {
+                          const headers = ['Name', 'Email', 'Phone', 'Barangay', 'Sitio / Zone', 'Classification', 'Status', 'Account Number', 'Meter Number', 'RFID Tag', 'Address', 'Outstanding Balance'];
+                          const rows = filteredConsumers.map(c => [
+                            c.name, c.email, c.contactNumber, c.barangay || '', c.sitioZone || '', c.consumerType || 'Residential', c.status.toUpperCase(), c.accountNumber, c.meterNumber, c.rfidTag || '', c.address, c.outstandingBalance || 0
+                          ]);
+                          exportToCsv('twd_consumers_master_export.csv', headers, rows);
+                        }}
+                        className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold rounded-xl text-xs flex items-center space-x-2 transition shadow-sm cursor-pointer shrink-0 self-start md:self-auto"
                       >
-                        <X className="h-4 w-4" />
-                        <span className="hidden sm:inline">Close</span>
+                        <Download className="h-4 w-4 text-white" />
+                        <span>Export Filtered List ({filteredConsumers.length})</span>
                       </button>
                     </div>
 
-                    {/* Modal Tab Buttons (Non-scrolling) */}
-                    <div className="shrink-0 flex border-b border-slate-800 bg-slate-950/90 px-4 sm:px-6 pt-3 space-x-2 sm:space-x-3 overflow-x-auto">
+                    {/* Quick Status Pill Bar */}
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
                       <button
-                        onClick={() => setConsumerModalTab('view')}
-                        className={`px-4 py-2 text-xs font-black uppercase tracking-wider transition rounded-t-xl flex items-center space-x-2 shrink-0 cursor-pointer ${
-                          consumerModalTab === 'view'
+                        onClick={() => setConsumerStatusFilter('all')}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition shrink-0 flex items-center space-x-2 ${
+                          consumerStatusFilter === 'all'
                             ? 'bg-blue-600 text-white shadow-md'
-                            : 'bg-slate-800/80 text-slate-300 hover:bg-slate-800 hover:text-white'
+                            : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
                         }`}
                       >
-                        <Eye className="h-4 w-4" />
-                        <span>View Profile</span>
+                        <span>All Accounts</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${
+                          consumerStatusFilter === 'all' ? 'bg-blue-800 text-white' : 'bg-slate-100 text-slate-700'
+                        }`}>
+                          {totalCount}
+                        </span>
                       </button>
 
                       <button
-                        onClick={() => setConsumerModalTab('edit')}
-                        className={`px-4 py-2 text-xs font-black uppercase tracking-wider transition rounded-t-xl flex items-center space-x-2 shrink-0 cursor-pointer ${
-                          consumerModalTab === 'edit'
-                            ? 'bg-blue-600 text-white shadow-md'
-                            : 'bg-slate-800/80 text-slate-300 hover:bg-slate-800 hover:text-white'
+                        onClick={() => setConsumerStatusFilter('active')}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition shrink-0 flex items-center space-x-2 ${
+                          consumerStatusFilter === 'active'
+                            ? 'bg-emerald-600 text-white shadow-md'
+                            : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
                         }`}
                       >
-                        <Edit2 className="h-4 w-4" />
-                        <span>Edit Details</span>
+                        <span>Active</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${
+                          consumerStatusFilter === 'active' ? 'bg-emerald-800 text-white' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        }`}>
+                          {activeCount}
+                        </span>
                       </button>
 
                       <button
-                        onClick={() => setConsumerModalTab('issue_ids')}
-                        className={`px-4 py-2 text-xs font-black uppercase tracking-wider transition rounded-t-xl flex items-center space-x-2 shrink-0 cursor-pointer ${
-                          consumerModalTab === 'issue_ids'
-                            ? 'bg-blue-600 text-white shadow-md'
-                            : 'bg-slate-800/80 text-slate-300 hover:bg-slate-800 hover:text-white'
+                        onClick={() => setConsumerStatusFilter('pending_approval')}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition shrink-0 flex items-center space-x-2 ${
+                          consumerStatusFilter === 'pending_approval'
+                            ? 'bg-amber-500 text-slate-950 shadow-md'
+                            : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
                         }`}
                       >
-                        <ShieldCheck className="h-4 w-4" />
-                        <span>
-                          {selectedConsumerModal.accountNumber && 
-                           !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') &&
-                           selectedConsumerModal.status !== 'pending_approval'
-                            ? 'Account & Tag IDs'
-                            : 'Issue IDs & Tag'}
+                        <span>⏳ Pending ID Issuance</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-black ${
+                          consumerStatusFilter === 'pending_approval' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-900 border border-amber-300'
+                        }`}>
+                          {pendingCount}
+                        </span>
+                      </button>
+
+                      <button
+                        onClick={() => setConsumerStatusFilter('blocked')}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition shrink-0 flex items-center space-x-2 ${
+                          consumerStatusFilter === 'blocked'
+                            ? 'bg-rose-600 text-white shadow-md'
+                            : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                        }`}
+                      >
+                        <span>Blocked</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${
+                          consumerStatusFilter === 'blocked' ? 'bg-rose-800 text-white' : 'bg-rose-50 text-rose-700 border border-rose-200'
+                        }`}>
+                          {blockedCount}
+                        </span>
+                      </button>
+
+                      <button
+                        onClick={() => setConsumerStatusFilter('inactive')}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition shrink-0 flex items-center space-x-2 ${
+                          consumerStatusFilter === 'inactive' || consumerStatusFilter === 'archived'
+                            ? 'bg-slate-700 text-white shadow-md'
+                            : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                        }`}
+                      >
+                        <span>Inactive / Archived</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${
+                          consumerStatusFilter === 'inactive' || consumerStatusFilter === 'archived' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'
+                        }`}>
+                          {inactiveCount}
                         </span>
                       </button>
                     </div>
 
-                    {/* Modal Body - Scrollable Content Area */}
-                    <div className="flex-1 overflow-y-auto min-h-0 p-4 sm:p-6 space-y-4 text-left bg-slate-900 text-slate-100">
-                      {/* VIEW TAB */}
-                      {consumerModalTab === 'view' && (() => {
-                        const allR = mockDb.getReadings();
-                        const isIssued = selectedConsumerModal.accountNumber && selectedConsumerModal.accountNumber.trim() !== '' && !selectedConsumerModal.accountNumber.startsWith('PENDING');
-                        const modalReadings = isIssued
-                          ? allR.filter(r => r.accountNumber === selectedConsumerModal.accountNumber || (selectedConsumerModal.meterNumber && r.meterNumber === selectedConsumerModal.meterNumber))
-                          : [];
-                        const modalUnpaid = modalReadings.filter(r => r.paymentStatus !== 'paid');
-                        const computedOutstanding = isIssued
-                          ? modalUnpaid.reduce((acc, b) => {
-                              const total = calculateCostOf(b.consumption, selectedConsumerModal.consumerType);
-                              const paid = b.paidAmount || 0;
-                              return acc + Math.max(0, total - paid);
-                            }, 0)
-                          : 0;
-
-                        return (
-                        <div className="space-y-4">
-                          {/* Status Banner */}
-                          <div className="bg-slate-800/90 p-4 rounded-xl border border-slate-700 shadow-xs grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-                            <div>
-                              <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Identifiers Status</span>
-                              <span className="font-extrabold text-white text-xs flex items-center space-x-1 mt-1.5">
-                                {selectedConsumerModal.accountNumber ? (
-                                  <span className="text-emerald-300 font-black flex items-center bg-emerald-950/80 px-2.5 py-1 rounded border border-emerald-600/50">
-                                    <CheckCircle className="h-3.5 w-3.5 text-emerald-400 mr-1.5 inline shrink-0" /> Issued (#{selectedConsumerModal.accountNumber})
-                                  </span>
-                                ) : (
-                                  <span className="text-amber-300 font-black bg-amber-950/80 px-2.5 py-1 rounded border border-amber-600/50">⚠️ Pending Issue</span>
-                                )}
-                              </span>
-                            </div>
-
-                            <div>
-                              <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Account Status</span>
-                              <span className={`mt-1.5 inline-block font-black text-xs uppercase px-3 py-1 rounded border ${
-                                selectedConsumerModal.status === 'blocked'
-                                  ? 'bg-rose-950/80 text-rose-300 border-rose-600/50'
-                                  : selectedConsumerModal.status === 'active'
-                                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-600/50'
-                                  : 'bg-amber-950/80 text-amber-300 border-amber-600/50'
-                              }`}>
-                                {selectedConsumerModal.status}
-                              </span>
-                            </div>
-
-                            <div>
-                              <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Outstanding Balance</span>
-                              <span className={`font-mono font-black text-base mt-1 block ${
-                                computedOutstanding > 0 ? 'text-amber-400' : 'text-emerald-400'
-                              }`}>
-                                ₱{computedOutstanding.toFixed(2)}
-                              </span>
-                            </div>
+                    {/* Master Search & Filter Controls Panel */}
+                    <div className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-5 shadow-xs space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
+                        
+                        {/* 1. Primary Search Input */}
+                        <div className="lg:col-span-4 relative">
+                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                            <Search className="h-4 w-4" />
                           </div>
-
-                          {/* Detail Grid */}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-                            <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                              <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Full Name</span>
-                              <span className="font-black text-white text-xs truncate block" title={selectedConsumerModal.name}>{selectedConsumerModal.name}</span>
-                            </div>
-
-                            <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                              <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Email Address</span>
-                              <span className="font-mono text-slate-200 font-bold text-xs truncate block" title={selectedConsumerModal.email || 'N/A'}>{selectedConsumerModal.email || 'N/A'}</span>
-                            </div>
-
-                            <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                              <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Phone Number</span>
-                              <span className="font-mono text-slate-200 font-bold text-xs truncate block">{selectedConsumerModal.contactNumber || 'N/A'}</span>
-                            </div>
-
-                            <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                              <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Address / Barangay</span>
-                              <span className="font-bold text-slate-200 text-xs truncate block" title={selectedConsumerModal.address}>{selectedConsumerModal.address}</span>
-                            </div>
-
-                            <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                              <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Consumer Type</span>
-                              <span className="font-black text-white text-xs block">{selectedConsumerModal.consumerType || 'Residential'}</span>
-                            </div>
-
-                            <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                              <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Assigned Meter</span>
-                              <span className="font-mono font-black text-blue-300 text-xs truncate block">{selectedConsumerModal.meterNumber || 'UNASSIGNED'}</span>
-                            </div>
-
-                            <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                              <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Smart RFID Tag</span>
-                              <span className="font-mono font-black text-slate-200 text-xs truncate block">{selectedConsumerModal.rfidTag || 'None Assigned'}</span>
-                            </div>
-
-                            <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                              <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Web Portal</span>
-                              <span className="font-black text-slate-200 text-xs block">
-                                {selectedConsumerModal.isRegistered ? '✅ Registered' : '❌ Offline'}
-                              </span>
-                            </div>
-                          </div>
-
-                          {selectedConsumerModal.consumerType === 'Commercial' && (
-                            <div className="bg-purple-950/60 p-4 rounded-xl border border-purple-700/60 text-xs flex items-center justify-between">
-                              <div>
-                                <span className="text-[10px] font-black text-purple-300 uppercase tracking-wider block">Commercial Establishment</span>
-                                <span className="font-black text-white text-xs">{selectedConsumerModal.businessName || 'N/A'}</span>
-                              </div>
-                              <span className="text-purple-200 font-extrabold text-[11px] bg-purple-900/80 px-3 py-1 rounded-md border border-purple-600/60">Type: {selectedConsumerModal.businessType || 'General Commercial'}</span>
-                            </div>
+                          <input 
+                            type="text" 
+                            placeholder="Search by name, account #, meter #, email, phone, or address..."
+                            value={consumerSearch}
+                            onChange={(e) => setConsumerSearch(e.target.value)}
+                            className="w-full bg-slate-50 hover:bg-slate-100/60 focus:bg-white border border-slate-200 focus:border-blue-500 rounded-2xl py-2.5 pl-10 pr-9 text-xs text-slate-900 font-medium placeholder-slate-400 focus:outline-none transition shadow-2xs"
+                          />
+                          {consumerSearch && (
+                            <button
+                              onClick={() => setConsumerSearch('')}
+                              className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                              title="Clear search"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
                           )}
                         </div>
-                        );
-                      })()}
 
-                      {/* EDIT TAB */}
-                      {consumerModalTab === 'edit' && (
-                        <form onSubmit={handleUpdateConsumerDetails} className="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4 text-xs">
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                            <div>
-                              <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Consumer Name *</label>
-                              <input
-                                type="text"
-                                required
-                                value={modalEditName}
-                                onChange={(e) => setModalEditName(e.target.value)}
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Email Address *</label>
-                              <input
-                                type="email"
-                                required
-                                value={modalEditEmail}
-                                onChange={(e) => setModalEditEmail(e.target.value)}
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Phone Number *</label>
-                              <input
-                                type="text"
-                                required
-                                value={modalEditContactNumber}
-                                onChange={(e) => setModalEditContactNumber(e.target.value)}
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Address / Barangay *</label>
-                              <input
-                                type="text"
-                                required
-                                value={modalEditAddress}
-                                onChange={(e) => setModalEditAddress(e.target.value)}
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Classification</label>
-                              <select
-                                value={modalEditConsumerType}
-                                onChange={(e) => setModalEditConsumerType(e.target.value as any)}
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs cursor-pointer"
-                              >
-                                <option value="Residential">Residential</option>
-                                <option value="Commercial">Commercial</option>
-                              </select>
-                            </div>
-
-                            <div>
-                              <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Account Status</label>
-                              <select
-                                value={modalEditStatus}
-                                onChange={(e) => setModalEditStatus(e.target.value as any)}
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs cursor-pointer"
-                              >
-                                <option value="active">Active</option>
-                                <option value="inactive">Inactive</option>
-                                <option value="blocked">Blocked</option>
-                                <option value="archived">Archived</option>
-                              </select>
-                            </div>
-                          </div>
-
-                          {modalEditConsumerType === 'Commercial' && (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-purple-950/60 p-3.5 rounded-xl border border-purple-700/60">
-                              <div>
-                                <label className="block text-purple-200 font-black mb-1.5 text-xs">Business Name</label>
-                                <input
-                                  type="text"
-                                  value={modalEditBusinessName}
-                                  onChange={(e) => setModalEditBusinessName(e.target.value)}
-                                  className="w-full bg-slate-950 border border-purple-600/60 rounded-lg p-2.5 text-white font-bold focus:outline-none focus:border-purple-400 text-xs"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-purple-200 font-black mb-1.5 text-xs">Business Type</label>
-                                <input
-                                  type="text"
-                                  value={modalEditBusinessType}
-                                  onChange={(e) => setModalEditBusinessType(e.target.value)}
-                                  className="w-full bg-slate-950 border border-purple-600/60 rounded-lg p-2.5 text-white font-bold focus:outline-none focus:border-purple-400 text-xs"
-                                />
-                              </div>
-                            </div>
-                          )}
-
-                          <div className="pt-2 flex justify-end">
-                            <button
-                              type="submit"
-                              className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl text-xs transition shadow-md cursor-pointer uppercase tracking-wider"
+                        {/* 2. Status Filter Dropdown */}
+                        <div className="lg:col-span-2">
+                          <div className="relative">
+                            <select
+                              value={consumerStatusFilter}
+                              onChange={(e: any) => setConsumerStatusFilter(e.target.value)}
+                              className="w-full bg-slate-50 hover:bg-slate-100/60 focus:bg-white border border-slate-200 focus:border-blue-500 rounded-2xl py-2.5 px-3 text-xs font-bold text-slate-700 focus:outline-none transition cursor-pointer appearance-none shadow-2xs"
                             >
-                              Update Details
-                            </button>
+                              <option value="all">All Statuses</option>
+                              <option value="active">Active</option>
+                              <option value="pending_approval">Pending ID Issuance</option>
+                              <option value="inactive">Inactive</option>
+                              <option value="blocked">Blocked</option>
+                              <option value="archived">Archived</option>
+                            </select>
+                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-500">
+                              <Filter className="h-3.5 w-3.5" />
+                            </div>
                           </div>
-                        </form>
-                      )}
+                        </div>
 
-                      {/* ISSUE / UPDATE IDS TAB */}
-                      {consumerModalTab === 'issue_ids' && (() => {
-                        const isAlreadyIssued = Boolean(
-                          selectedConsumerModal.accountNumber && 
-                          !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') &&
-                          selectedConsumerModal.accountNumber.toUpperCase() !== 'PENDING ADMIN ISSUANCE' &&
-                          selectedConsumerModal.status !== 'pending_approval'
-                        );
+                        {/* 3. Classification Filter (Residential / Commercial) */}
+                        <div className="lg:col-span-2">
+                          <div className="relative">
+                            <select
+                              value={consumerTypeFilter}
+                              onChange={(e: any) => setConsumerTypeFilter(e.target.value)}
+                              className="w-full bg-slate-50 hover:bg-slate-100/60 focus:bg-white border border-slate-200 focus:border-blue-500 rounded-2xl py-2.5 px-3 text-xs font-bold text-slate-700 focus:outline-none transition cursor-pointer appearance-none shadow-2xs"
+                            >
+                              <option value="all">All Classifications</option>
+                              <option value="Residential">Residential</option>
+                              <option value="Commercial">Commercial</option>
+                            </select>
+                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-500">
+                              <Building className="h-3.5 w-3.5" />
+                            </div>
+                          </div>
+                        </div>
 
-                        return (
-                        <form onSubmit={handleIssueIdentifiers} className="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4 text-xs">
-                          {isAlreadyIssued ? (
-                            <div className="bg-slate-950 p-4 rounded-xl border border-blue-500/50 space-y-1.5 shadow-2xs">
-                              <h5 className="font-black text-blue-300 flex items-center space-x-1.5 text-xs">
-                                <Cpu className="h-4 w-4 text-blue-400 mr-1 inline shrink-0" />
-                                <span>Permanent Meter Tag Hardware Entity & Editable Account Number</span>
-                              </h5>
-                              <p className="text-slate-300 font-medium text-[11px] leading-relaxed">
-                                The Smart RFID Tag (<strong>{selectedConsumerModal.rfidTag}</strong>) and Meter Serial (<strong>#{selectedConsumerModal.meterNumber}</strong>) are permanent physical hardware entities attached to the consumer's water pipe. You can update or transfer the <strong>Account Number</strong> below (e.g. for change of ownership, transfer of service, or account re-numbering) while retaining the physical meter tag.
-                              </p>
+                        {/* 4. Barangay Filter */}
+                        <div className="lg:col-span-2">
+                          <div className="relative">
+                            <select
+                              value={consumerBarangayFilter}
+                              onChange={(e) => setConsumerBarangayFilter(e.target.value)}
+                              className="w-full bg-slate-50 hover:bg-slate-100/60 focus:bg-white border border-slate-200 focus:border-blue-500 rounded-2xl py-2.5 px-3 text-xs font-bold text-slate-700 focus:outline-none transition cursor-pointer appearance-none shadow-2xs"
+                            >
+                              <option value="all">All Barangays</option>
+                              {barangayList.map((b) => (
+                                <option key={b.id || b.code} value={b.name}>
+                                  {b.name}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-500">
+                              <MapPin className="h-3.5 w-3.5" />
                             </div>
-                          ) : (
-                            <div className="bg-blue-950/60 p-4 rounded-xl border border-blue-600/60 space-y-1">
-                              <h5 className="font-black text-blue-200 flex items-center space-x-1.5 text-xs">
-                                <ShieldCheck className="h-4 w-4 text-blue-400 mr-1 inline shrink-0" />
-                                <span>Issue Official Identifiers & Activate Consumer Account</span>
-                              </h5>
-                              <p className="text-blue-100 font-medium text-[11px]">
-                                Assign official Account Number, physical Meter Tag / Serial Number, and Smart RFID Tag for <strong>{selectedConsumerModal.name}</strong> ({selectedConsumerModal.barangay || 'Tagoloan'}). Every tag number must be a strictly unique entity in the water district.
-                              </p>
+                          </div>
+                        </div>
+
+                        {/* 5. Sort Dropdown */}
+                        <div className="lg:col-span-2">
+                          <div className="relative">
+                            <select
+                              value={consumerSortBy}
+                              onChange={(e: any) => setConsumerSortBy(e.target.value)}
+                              className="w-full bg-slate-50 hover:bg-slate-100/60 focus:bg-white border border-slate-200 focus:border-blue-500 rounded-2xl py-2.5 px-3 text-xs font-bold text-slate-700 focus:outline-none transition cursor-pointer appearance-none shadow-2xs"
+                            >
+                              <option value="recent">Sort: Priority / Recent</option>
+                              <option value="name_asc">Name: A to Z</option>
+                              <option value="name_desc">Name: Z to A</option>
+                              <option value="account_asc">Account # Sequential</option>
+                              <option value="balance_desc">Highest Outstanding Balance</option>
+                            </select>
+                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-500">
+                              <ArrowUpDown className="h-3.5 w-3.5" />
                             </div>
+                          </div>
+                        </div>
+
+                      </div>
+
+                      {/* Active Filter Chips & Feedback Counter */}
+                      <div className="flex flex-wrap items-center justify-between gap-3 pt-1 text-xs border-t border-slate-100">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-slate-500 font-medium">
+                            Showing <strong className="text-slate-900 font-black">{filteredConsumers.length}</strong> of <strong className="text-slate-900 font-black">{totalCount}</strong> accounts
+                          </span>
+
+                          {/* Active Chips */}
+                          {consumerSearch && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-200 text-[11px] font-bold">
+                              <span>Query: "{consumerSearch}"</span>
+                              <button onClick={() => setConsumerSearch('')} className="hover:text-blue-950">
+                                <X className="h-3 w-3" />
+                              </button>
+                            </span>
                           )}
 
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                            {/* ACCOUNT NUMBER (ALWAYS EDITABLE) */}
-                            <div>
-                              <div className="flex items-center justify-between mb-1.5">
-                                <label className="block text-slate-200 font-extrabold text-xs">Account Number *</label>
-                                {isAlreadyIssued && (
-                                  <span className="text-[10px] font-black text-blue-300 bg-blue-950/80 px-2 py-0.5 rounded border border-blue-600/60 flex items-center space-x-0.5">
-                                    <Edit2 className="h-3 w-3 mr-0.5 inline shrink-0" /> Editable
-                                  </span>
-                                )}
-                              </div>
-                              <input
-                                type="text"
-                                required
-                                placeholder="e.g. NT-2026-001"
-                                value={modalIssueAccountNumber}
-                                onChange={(e) => setModalIssueAccountNumber(e.target.value)}
-                                className="w-full bg-slate-950 text-white border border-slate-700 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg p-2.5 font-mono font-black text-xs shadow-2xs"
-                              />
-                              <p className="text-[10px] text-slate-400 mt-1">
-                                {isAlreadyIssued 
-                                  ? '✏️ Editable for account updates, transfer, or re-numbering.'
-                                  : 'Assign unique official municipal account number.'}
-                              </p>
-                            </div>
-
-                            {/* METER SERIAL / TAG (LOCKED IF ISSUED) */}
-                            <div>
-                              <div className="flex items-center justify-between mb-1.5">
-                                <label className="block text-slate-200 font-extrabold text-xs">Meter Tag / Serial *</label>
-                                {isAlreadyIssued && (
-                                  <span className="text-[10px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/60 flex items-center space-x-0.5">
-                                    <Lock className="h-3 w-3 mr-0.5 inline shrink-0" /> Permanent
-                                  </span>
-                                )}
-                              </div>
-                              <input
-                                type="text"
-                                required
-                                placeholder="e.g. MT-88204"
-                                value={modalIssueMeterNumber}
-                                onChange={(e) => setModalIssueMeterNumber(e.target.value)}
-                                readOnly={isAlreadyIssued}
-                                className={`w-full border rounded-lg p-2.5 font-mono font-black text-xs shadow-2xs ${
-                                  isAlreadyIssued
-                                    ? 'bg-slate-950/80 text-slate-400 border-slate-800 cursor-not-allowed select-none'
-                                    : 'bg-slate-950 text-white border-slate-700 focus:outline-none focus:border-blue-500'
-                                }`}
-                              />
-                              <p className="text-[10px] text-slate-400 mt-1">
-                                {isAlreadyIssued
-                                  ? '🔒 Fixed physical mechanical meter serial attached on-site.'
-                                  : 'Assign unique meter serial number.'}
-                              </p>
-                            </div>
-
-                            {/* SMART RFID TAG (LOCKED IF ISSUED) */}
-                            <div>
-                              <div className="flex items-center justify-between mb-1.5">
-                                <label className="block text-slate-200 font-extrabold text-xs">Smart RFID Tag *</label>
-                                {isAlreadyIssued && (
-                                  <span className="text-[10px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/60 flex items-center space-x-0.5">
-                                    <Lock className="h-3 w-3 mr-0.5 inline shrink-0" /> Permanent
-                                  </span>
-                                )}
-                              </div>
-                              <input
-                                type="text"
-                                required
-                                placeholder="e.g. RFID-88204"
-                                value={modalIssueRfidTag}
-                                onChange={(e) => setModalIssueRfidTag(e.target.value)}
-                                readOnly={isAlreadyIssued}
-                                className={`w-full border rounded-lg p-2.5 font-mono font-black text-xs shadow-2xs ${
-                                  isAlreadyIssued
-                                    ? 'bg-slate-950/80 text-slate-400 border-slate-800 cursor-not-allowed select-none'
-                                    : 'bg-slate-950 text-white border-slate-700 focus:outline-none focus:border-blue-500'
-                                }`}
-                              />
-                              <p className="text-[10px] text-slate-400 mt-1">
-                                {isAlreadyIssued
-                                  ? '🔒 Unique physical RFID entity across Tagoloan Water District.'
-                                  : 'Assign unique RFID reader tag.'}
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="pt-2 flex justify-end">
-                            {isAlreadyIssued ? (
-                              <button
-                                type="submit"
-                                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl text-xs transition shadow-md uppercase tracking-wider cursor-pointer flex items-center space-x-1.5"
-                              >
-                                <RefreshCw className="h-4 w-4" />
-                                <span>Update Account Number</span>
+                          {consumerStatusFilter !== 'all' && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px] font-bold">
+                              <span>Status: {consumerStatusFilter.replace('_', ' ').toUpperCase()}</span>
+                              <button onClick={() => setConsumerStatusFilter('all')} className="hover:text-emerald-950">
+                                <X className="h-3 w-3" />
                               </button>
-                            ) : (
-                              <button
-                                type="submit"
-                                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs transition shadow-md uppercase tracking-wider cursor-pointer flex items-center space-x-1.5"
-                              >
-                                <ShieldCheck className="h-4 w-4" />
-                                <span>Issue Identifiers & Activate Account</span>
-                              </button>
-                            )}
-                          </div>
-                        </form>
-                        );
-                      })()}
-                    </div>
+                            </span>
+                          )}
 
-                    {/* Modal Footer (Non-scrolling) */}
-                    <div className="shrink-0 bg-slate-950 p-4 border-t border-slate-800 flex items-center justify-between">
-                      <div className="text-xs text-slate-400 font-mono font-semibold hidden sm:block">
-                        Consumer ID: <span className="text-slate-200 font-bold">{selectedConsumerModal.accountNumber || 'Unissued'}</span>
+                          {consumerTypeFilter !== 'all' && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-50 text-purple-800 border border-purple-200 text-[11px] font-bold">
+                              <span>Type: {consumerTypeFilter}</span>
+                              <button onClick={() => setConsumerTypeFilter('all')} className="hover:text-purple-950">
+                                <X className="h-3 w-3" />
+                              </button>
+                            </span>
+                          )}
+
+                          {consumerBarangayFilter !== 'all' && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 text-teal-800 border border-teal-200 text-[11px] font-bold">
+                              <span>Barangay: {consumerBarangayFilter}</span>
+                              <button onClick={() => setConsumerBarangayFilter('all')} className="hover:text-teal-950">
+                                <X className="h-3 w-3" />
+                              </button>
+                            </span>
+                          )}
+                        </div>
+
+                        {hasActiveFilters && (
+                          <button
+                            onClick={clearAllConsumerFilters}
+                            className="inline-flex items-center gap-1 text-slate-500 hover:text-rose-600 font-bold transition text-xs cursor-pointer ml-auto"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            <span>Reset All Filters</span>
+                          </button>
+                        )}
                       </div>
-                      <button
-                        onClick={() => setSelectedConsumerModal(null)}
-                        className="px-6 py-2.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-black rounded-xl text-xs uppercase tracking-wider transition cursor-pointer shadow-lg flex items-center space-x-2 border border-rose-500 ml-auto"
-                      >
-                        <X className="h-4 w-4" />
-                        <span>Close Window</span>
-                      </button>
                     </div>
-                  </div>
-                </div>
-              )}
+
+                    {/* Citizen Self-Service Registration Architecture Notice */}
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-white shadow-sm">
+                      <div className="flex items-start space-x-3.5">
+                        <div className="p-2.5 bg-blue-600/30 text-blue-400 rounded-xl border border-blue-500/30 shrink-0">
+                          <UserCheck className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-black uppercase tracking-wider text-white flex items-center gap-2">
+                            <span>Consumer Self-Registration Architecture</span>
+                            <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded">
+                              Auto-Sync Active
+                            </span>
+                          </h4>
+                          <p className="text-[11px] text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                            Water consumers register directly via the Consumer Portal registration form. Barangay selection and Sitio/Zone are mandatory. Upon submission, accounts and their assigned Barangay IDs are automatically synchronized into this master administrative ledger.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2 shrink-0">
+                        <span className="inline-flex items-center px-3 py-1.5 bg-slate-800 text-slate-200 font-mono text-[11px] font-bold rounded-xl border border-slate-700">
+                          <CheckCircle className="h-4 w-4 text-emerald-400 mr-2" />
+                          <span>{filteredConsumers.length} Matching Accounts</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Consumers Grid/Table or Empty State */}
+                    {filteredConsumers.length === 0 ? (
+                      <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center space-y-4 shadow-xs">
+                        <div className="h-16 w-16 bg-slate-100 text-slate-400 rounded-3xl flex items-center justify-center mx-auto">
+                          <Search className="h-8 w-8 text-slate-400" />
+                        </div>
+                        <div className="space-y-1 max-w-md mx-auto">
+                          <h4 className="text-base font-extrabold text-slate-800">No Consumers Found</h4>
+                          <p className="text-xs text-slate-500">
+                            {hasActiveFilters 
+                              ? `No consumer records match your current search "${consumerSearch || 'all'}" with the selected filters.`
+                              : "No registered water consumers found in the master database."}
+                          </p>
+                        </div>
+                        {hasActiveFilters && (
+                          <button
+                            onClick={clearAllConsumerFilters}
+                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition inline-flex items-center space-x-1.5 cursor-pointer shadow-sm"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            <span>Clear All Filters</span>
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="bg-white border border-slate-200/80 rounded-3xl overflow-hidden shadow-xs">
+                        <div className="w-full overflow-x-auto sm:overflow-x-visible">
+                          <table className="w-full text-xs text-left table-fixed">
+                            <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-150">
+                              <tr>
+                                <th className="w-[23%] px-4 py-3.5">Name</th>
+                                <th className="w-[21%] px-3 py-3.5">Email</th>
+                                <th className="w-[14%] px-3 py-3.5">Phone</th>
+                                <th className="w-[16%] px-3 py-3.5">Barangay & Sitio</th>
+                                <th className="w-[11%] px-3 py-3.5">Status</th>
+                                <th className="w-[15%] px-4 py-3.5 text-right">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 text-slate-700">
+                              {filteredConsumers.map((c, cIdx) => {
+                                const addrParts = c.address.split(',').map(p => p.trim());
+                                const barangayDisplay = c.barangay || (addrParts.length >= 2 ? addrParts[1] : c.address);
+                                const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || c.status === 'pending_approval';
+
+                                return (
+                                  <tr key={`cons-row-${c.accountNumber || c.email || c.name || cIdx}-${cIdx}`} className="hover:bg-slate-50/70 transition">
+                                    <td className="px-4 py-3 space-y-0.5 truncate">
+                                      <span className="font-bold text-[13px] text-slate-900 block truncate" title={c.name}>{c.name}</span>
+                                      <div className="flex items-center space-x-1.5 truncate">
+                                        {!isPending ? (
+                                          <span className="font-mono text-[10px] text-slate-400 font-bold shrink-0">#{c.accountNumber}</span>
+                                        ) : (
+                                          <span className="font-mono text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded border border-amber-200 shrink-0">
+                                            Pending Issuance
+                                          </span>
+                                        )}
+                                        <span className={`inline-block text-[9px] font-black uppercase px-1.5 py-0.2 rounded border shrink-0 ${
+                                          c.consumerType === 'Commercial'
+                                            ? 'bg-purple-100/70 text-purple-700 border-purple-200'
+                                            : 'bg-blue-100/70 text-blue-700 border-blue-200'
+                                        }`}>
+                                          {c.consumerType || 'Residential'}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-3 font-mono text-[11px] text-slate-600 truncate" title={c.email}>{c.email}</td>
+                                    <td className="px-3 py-3 font-mono text-[11px] text-slate-700 font-bold truncate">{c.contactNumber}</td>
+                                    <td className="px-3 py-3 truncate" title={`${barangayDisplay} ${c.sitioZone || ''}`}>
+                                      <span className="font-semibold text-slate-900 truncate block">
+                                        {barangayDisplay}
+                                      </span>
+                                      {c.sitioZone && (
+                                        <span className="text-[10px] text-slate-500 block truncate mt-0.5 font-medium">
+                                          {c.sitioZone}
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="px-3 py-3">
+                                      <div className="space-y-0.5">
+                                        <span className={`inline-block px-2 py-0.5 rounded text-[9px] font-black uppercase ${
+                                          isPending
+                                            ? 'bg-amber-100 text-amber-900 border border-amber-300 animate-pulse'
+                                            : c.status === 'blocked'
+                                            ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                            : c.status === 'active'
+                                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                            : c.status === 'inactive'
+                                            ? 'bg-slate-100 text-slate-700 border border-slate-200'
+                                            : 'bg-slate-100 text-slate-700 border border-slate-200'
+                                        }`}>
+                                          {isPending ? 'PENDING ID' : c.status.toUpperCase()}
+                                        </span>
+                                        <span className={`block text-[9px] font-bold truncate ${c.isRegistered ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                          {c.isRegistered ? '• Registered' : '• Offline'}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                      <div className="flex items-center justify-end space-x-1.5">
+                                        {isPending ? (
+                                          <button 
+                                            onClick={() => handleOpenConsumerModal(c, 'issue_ids')}
+                                            className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer shrink-0"
+                                            title="Issue Official Account Number, Meter & RFID Tag"
+                                          >
+                                            <ShieldCheck className="h-3.5 w-3.5 text-white" />
+                                            <span className="text-white font-bold">Issue IDs</span>
+                                          </button>
+                                        ) : (
+                                          <button 
+                                            onClick={() => handleOpenConsumerModal(c, 'view')}
+                                            className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer shrink-0"
+                                            title="View Consumer Details"
+                                          >
+                                            <Eye className="h-3.5 w-3.5 text-white" />
+                                            <span className="text-white font-bold">View</span>
+                                          </button>
+                                        )}
+
+                                        <button 
+                                          onClick={() => handleDeleteConsumer(c)}
+                                          className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer border border-rose-700 shrink-0"
+                                          title={`Delete Consumer Record`}
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5 text-white" />
+                                          <span className="text-white font-bold">Delete</span>
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
 
           {/* 3. METER READER MANAGEMENT MODULE */}
-          {activeTab === 'readers' && (
-            <div className="space-y-6 animate-fade-in" id="readers-tab">
-              <div className="flex justify-between items-center">
-                <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-wider">Meter Reading Staff registry</h3>
-                
-                <button
-                  onClick={() => setShowAddReader(!showAddReader)}
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider transition flex items-center space-x-2 shrink-0"
-                >
-                  <Plus className="h-4.5 w-4.5" />
-                  <span>Enroll Field Officer</span>
-                </button>
-              </div>
+          {activeTab === 'readers' && (() => {
+            const filteredStaff = readers.filter(r => {
+              if (readerSearch.trim()) {
+                const q = readerSearch.toLowerCase();
+                const matchesName = r.name?.toLowerCase().includes(q);
+                const matchesId = (r.employeeId || r.id)?.toLowerCase().includes(q);
+                const matchesEmail = r.email?.toLowerCase().includes(q);
+                const matchesPhone = r.contactNumber?.toLowerCase().includes(q);
+                const matchesRoute = r.assignedRoutes?.some(route => route.toLowerCase().includes(q));
+                return matchesName || matchesId || matchesEmail || matchesPhone || matchesRoute;
+              }
+              return true;
+            });
 
-              {/* PENDING APPROVAL QUEUE BANNER */}
-              {readers.some(r => r.employmentStatus === 'pending_approval') && (
-                <div className="bg-amber-50 border border-amber-200 p-5 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2.5">
-                      <div className="h-8 w-8 rounded-xl bg-amber-500/20 text-amber-800 flex items-center justify-center font-bold">
-                        ⏳
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-extrabold text-amber-950">
-                          Pending Field Reader Registrations ({readers.filter(r => r.employmentStatus === 'pending_approval').length})
-                        </h4>
-                        <p className="text-xs text-amber-800">
-                          Pending meter reader accounts require administrator confirmation before activation.
-                        </p>
-                      </div>
-                    </div>
+            const uniqueRoutesCount = new Set(readers.flatMap(r => r.assignedRoutes || ['Zone 1-4: Poblacion (Main Central)'])).size;
+
+            return (
+              <div className="space-y-6 animate-fade-in" id="readers-tab">
+                {/* Header & Main Controls */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-base sm:text-lg font-black text-slate-950 uppercase tracking-wider font-sans">
+                      Meter Reading Staff Registry
+                    </h3>
+                    <p className="text-xs text-slate-500 font-medium mt-0.5">
+                      Manage municipal field inspectors, register handheld terminal accounts, or terminate field staff access.
+                    </p>
+                  </div>
+                  
+                  <button
+                    onClick={() => setShowAddReader(!showAddReader)}
+                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition flex items-center space-x-2 shrink-0 shadow-sm active:scale-95 cursor-pointer"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>Enroll Field Officer</span>
+                  </button>
+                </div>
+
+                {/* Status Summary & Quick Stats Chips */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div className="p-3.5 rounded-2xl border bg-white border-slate-200 shadow-xs">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">Total Enrolled Officers</span>
+                    <span className="text-xl sm:text-2xl font-black text-slate-900">{readers.length}</span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                    {readers.filter(r => r.employmentStatus === 'pending_approval').map((pendingReader, pIdx) => (
-                      <div key={`pending-reader-${pendingReader.id || ''}-${pendingReader.employeeId || ''}-${pIdx}`} className="bg-white border border-amber-200 rounded-xl p-4 shadow-sm flex flex-col justify-between space-y-3">
-                        <div>
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <h5 className="text-sm font-bold text-slate-900">{pendingReader.name}</h5>
-                              <p className="text-[11px] text-slate-500 font-mono">Badge: {pendingReader.employeeId || pendingReader.id}</p>
-                            </div>
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                              PENDING APPROVAL
-                            </span>
-                          </div>
+                  <div className="p-3.5 rounded-2xl border bg-emerald-50 border-emerald-300 ring-2 ring-emerald-500/20 shadow-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 block">Active Mobile Terminals</span>
+                      <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    </div>
+                    <span className="text-xl sm:text-2xl font-black text-emerald-900">{readers.length}</span>
+                  </div>
 
-                          <div className="mt-2 space-y-1 text-xs text-slate-600 bg-slate-50 p-2.5 rounded-lg">
-                            <div className="flex justify-between">
-                              <span>Email:</span>
-                              <span className="font-mono text-slate-800">{pendingReader.email || 'N/A'}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>Phone:</span>
-                              <span className="font-mono text-slate-800">{pendingReader.contactNumber || 'N/A'}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>Assigned Route:</span>
-                              <span className="font-bold text-blue-600">{pendingReader.assignedRoutes.join(', ') || 'Poblacion'}</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center space-x-2 pt-2 border-t border-slate-100">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              // Approve reader
-                              const updatedReaders = readers.map(r => {
-                                if (r.id === pendingReader.id) {
-                                  return { ...r, employmentStatus: 'active' as const };
-                                }
-                                return r;
-                              });
-                              mockDb.saveReaders(updatedReaders);
-                              setReaders(updatedReaders);
-
-                              // Sync to backend Express / Vercel API
-                              try {
-                                fetch(`/api/staff/${encodeURIComponent(pendingReader.id)}/status`, {
-                                  method: 'PATCH',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ status: 'active', assignedRoutes: pendingReader.assignedRoutes })
-                                }).catch(() => {});
-                              } catch {}
-
-                              // Update linked User if exists
-                              const allUsers = mockDb.getUsers();
-                              const updatedUsers = allUsers.map(u => {
-                                if (u.id === pendingReader.linkedUserId || (pendingReader.email && u.email && u.email.toLowerCase() === pendingReader.email.toLowerCase())) {
-                                  return { ...u, status: 'active' as const };
-                                }
-                                return u;
-                              });
-                              mockDb.saveUsers(updatedUsers);
-
-                              // Audit log
-                              mockDb.addAuditLog(
-                                currentUser.id,
-                                currentUser.name,
-                                'admin',
-                                'Approve Meter Reader',
-                                `Approved field meter reader account for ${pendingReader.name} (Badge: ${pendingReader.employeeId || pendingReader.id}).`
-                              );
-
-                              toast.success('Reader Approved', `${pendingReader.name} has been activated.`);
-                            }}
-                            className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition shadow-sm"
-                          >
-                            ✓ Approve & Activate
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const confirmReject = window.confirm(`Decline application for ${pendingReader.name}?`);
-                              if (!confirmReject) return;
-
-                              const updatedReaders = readers.filter(r => r.id !== pendingReader.id);
-                              mockDb.saveReaders(updatedReaders);
-                              setReaders(updatedReaders);
-
-                              toast.info('Application Removed', `Reader registration for ${pendingReader.name} declined.`);
-                            }}
-                            className="px-3 py-2 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-600 font-bold text-xs rounded-lg transition border border-slate-200"
-                          >
-                            Decline
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                  <div className="col-span-2 sm:col-span-1 p-3.5 rounded-2xl border bg-blue-50 border-blue-200 shadow-xs">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-blue-700 block">Active Coverage Zones</span>
+                    <span className="text-xl sm:text-2xl font-black text-blue-900">{uniqueRoutesCount || 1}</span>
                   </div>
                 </div>
-              )}
 
-              {/* Add Meter Reader Form */}
-              {showAddReader && (
-                <form onSubmit={handleCreateReader} className="bg-white border border-slate-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-2xl">
-                  <h4 className="text-sm font-bold uppercase text-slate-850">Enroll Field Officer Specs</h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Full Name</label>
+                {/* Search Bar */}
+                <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-xs">
+                  <div className="flex flex-col sm:flex-row items-center gap-3">
+                    <div className="relative flex-1 w-full">
+                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                       <input 
-                        type="text" 
-                        required
-                        placeholder="e.g. Rodrigo Garcia"
-                        value={newReader.name}
-                        onChange={(e) => setNewReader({ ...newReader, name: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
+                        type="text"
+                        placeholder="Search officer name, employee ID, route, email, or phone..."
+                        value={readerSearch}
+                        onChange={(e) => setReaderSearch(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                       />
                     </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Contact Number</label>
-                      <input 
-                        type="tel" 
-                        placeholder="e.g. 0915-111-2222"
-                        value={newReader.contactNumber}
-                        onChange={(e) => setNewReader({ ...newReader, contactNumber: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Assign Primary Route</label>
-                      <select 
-                        value={newReader.assignedRoute}
-                        onChange={(e) => setNewReader({ ...newReader, assignedRoute: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs font-bold text-slate-700"
+
+                    {readerSearch && (
+                      <button
+                        onClick={() => setReaderSearch('')}
+                        className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer shrink-0"
                       >
-                        <option value="Poblacion East">Poblacion East</option>
-                        <option value="Natumolan">Natumolan</option>
-                        <option value="Baluarte">Baluarte</option>
-                        <option value="Sta. Ana">Sta. Ana</option>
-                        <option value="Sta. Cruz">Sta. Cruz</option>
-                      </select>
-                    </div>
+                        Clear Search
+                      </button>
+                    )}
                   </div>
-                  <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
-                    <button 
-                      type="button" 
-                      onClick={() => setShowAddReader(false)} 
-                      className="px-4.5 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold text-slate-700"
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      type="submit" 
-                      className="px-4.5 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700"
-                    >
-                      Submit Account
-                    </button>
-                  </div>
-                </form>
-              )}
+                </div>
 
-              {/* Readers Catalog Layout */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {readers.map((r, rIdx) => (
-                  <div key={`reader-card-${r.id || ''}-${r.employeeId || ''}-${rIdx}`} className="bg-white border border-slate-150 rounded-2xl p-6 shadow-sm flex flex-col justify-between">
-                    <div className="space-y-4">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h4 className="text-base font-extrabold text-slate-900">{r.name}</h4>
-                          <p className="text-[10px] text-slate-400 tracking-wider font-mono">ID: {r.id} {r.employeeId ? `(${r.employeeId})` : ''}</p>
-                        </div>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          r.employmentStatus === 'active' 
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' 
-                            : r.employmentStatus === 'pending_approval'
-                            ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                            : 'bg-rose-50 text-rose-700 border border-rose-100'
-                        }`}>
-                          {r.employmentStatus === 'active' ? 'ACTIVE FIELD DUTY' : r.employmentStatus === 'pending_approval' ? 'PENDING APPROVAL' : 'SUSPENDED/LEAVE'}
-                        </span>
+                {/* Add Meter Reader Form */}
+                {showAddReader && (
+                  <form onSubmit={handleCreateReader} className="bg-white border-2 border-blue-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-2xl animate-fade-in">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                      <div>
+                        <h4 className="text-sm font-black uppercase text-slate-900">Enroll Mobile Meter Reader</h4>
+                        <p className="text-xs text-slate-500">Register field inspector credentials matching mobile terminal sync parameters.</p>
                       </div>
-
-                      <div className="space-y-1.5 text-xs text-slate-600 bg-slate-50 p-3.5 rounded-xl border border-slate-100">
-                        <div className="flex justify-between">
-                          <span>Primary Route Coverage:</span>
-                          <span className="font-bold text-slate-800">{r.assignedRoutes.join(', ')}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Verified Submissions:</span>
-                          <span className="font-mono font-bold text-slate-800">{r.completedReadings} m³ indices</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Assigned Leads Pending:</span>
-                          <span className="font-mono font-bold text-amber-600">{r.pendingReadings} lines</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>District rating:</span>
-                          <span className="font-bold text-slate-850">⭐ {r.performanceRating.toFixed(1)} / 5.0</span>
-                        </div>
-                      </div>
+                      <button 
+                        type="button" 
+                        onClick={() => setShowAddReader(false)}
+                        className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
                     </div>
 
-                    <div className="pt-4 border-t border-slate-150 mt-4 flex items-center justify-between">
-                      <p className="text-[10px] text-slate-500 font-mono">Phone: {r.contactNumber || 'N/A'}</p>
-                      
-                      <div className="flex items-center space-x-2">
-                        {r.employmentStatus === 'pending_approval' ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Full Name *</label>
+                        <input 
+                          type="text" 
+                          required
+                          placeholder="Full name"
+                          value={newReader.name}
+                          onChange={(e) => setNewReader({ ...newReader, name: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-medium text-slate-800 focus:bg-white focus:border-blue-500 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Username *</label>
+                        <input 
+                          type="text" 
+                          required
+                          placeholder="Username"
+                          value={newReader.username}
+                          onChange={(e) => setNewReader({ ...newReader, username: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-mono font-medium text-slate-800 focus:bg-white focus:border-blue-500 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Password *</label>
+                        <div className="relative">
+                          <input 
+                            type={showNewReaderPassword ? "text" : "password"} 
+                            required
+                            placeholder="Password"
+                            value={newReader.password}
+                            onChange={(e) => setNewReader({ ...newReader, password: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 pl-3 pr-10 text-xs font-mono font-medium text-slate-800 focus:bg-white focus:border-blue-500 outline-none"
+                          />
                           <button
-                            onClick={() => {
-                              const updated = readers.map(x => {
-                                if (x.id === r.id) {
-                                  return { ...x, employmentStatus: 'active' as const };
-                                }
-                                return x;
-                              });
-                              mockDb.saveReaders(updated);
-                              setReaders(updated);
-
-                              const allUsers = mockDb.getUsers();
-                              const updatedUsers = allUsers.map(u => {
-                                if (u.id === r.linkedUserId || (r.email && u.email && u.email.toLowerCase() === r.email.toLowerCase())) {
-                                  return { ...u, status: 'active' as const };
-                                }
-                                return u;
-                              });
-                              mockDb.saveUsers(updatedUsers);
-
-                              // Sync to backend Express API
-                              try {
-                                fetch(`/api/staff/${encodeURIComponent(r.id)}/status`, {
-                                  method: 'PATCH',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ status: 'active', name: r.name, username: r.username, assignedRoutes: r.assignedRoutes })
-                                }).catch(() => {});
-                              } catch {}
-
-                              mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Approve Meter Reader', `Approved meter reader: ${r.name}`);
-                              toast.success('Approved', `${r.name} authorized for mobile access.`);
-                            }}
-                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl transition shadow-xs flex items-center space-x-1.5 cursor-pointer uppercase tracking-wider"
+                            type="button"
+                            onClick={() => setShowNewReaderPassword(!showNewReaderPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                           >
-                            <CheckCircle className="h-3.5 w-3.5" />
-                            <span>Approve</span>
+                            {showNewReaderPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                           </button>
-                        ) : (
-                          <div className="flex items-center space-x-2">
-                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                              Approved & Active
-                            </span>
-                            <button
-                              onClick={() => {
-                                const nextStatus = r.employmentStatus === 'active' ? 'inactive' as const : 'active' as const;
-                                const updated = readers.map(x => {
-                                  if (x.id === r.id) {
-                                    return { ...x, employmentStatus: nextStatus };
-                                  }
-                                  return x;
-                                });
-                                mockDb.saveReaders(updated);
-                                setReaders(updated);
-
-                                // Sync user status
-                                const allUsers = mockDb.getUsers();
-                                const updatedUsers = allUsers.map(u => {
-                                  if (u.id === r.linkedUserId || (r.email && u.email && u.email.toLowerCase() === r.email.toLowerCase())) {
-                                    return { ...u, status: nextStatus };
-                                  }
-                                  return u;
-                                });
-                                mockDb.saveUsers(updatedUsers);
-
-                                mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Toggle Employment Status', `Switched staff status of reader ${r.name} to ${nextStatus}.`);
-                                toast.info('Status Updated', `${r.name} status changed to ${nextStatus}.`);
-                              }}
-                              className="text-xs text-slate-500 font-bold hover:text-slate-700 hover:underline cursor-pointer"
-                            >
-                              {r.employmentStatus === 'active' ? 'Deactivate' : 'Activate'}
-                            </button>
-                          </div>
-                        )}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Target Route / Barangay Assignment</label>
+                        <select 
+                          value={newReader.assignedRoute}
+                          onChange={(e) => setNewReader({ ...newReader, assignedRoute: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-bold text-slate-700 focus:bg-white focus:border-blue-500 outline-none cursor-pointer"
+                        >
+                          <option value="Zone 1-4: Poblacion (Main Central)">Zone 1-4: Poblacion (Main Central)</option>
+                          <option value="Zone 5-8: Natumolan District">Zone 5-8: Natumolan District</option>
+                          <option value="Zone 9-12: Baluarte Perimeter">Zone 9-12: Baluarte Perimeter</option>
+                          <option value="Zone 13-16: Sta. Ana Coverage">Zone 13-16: Sta. Ana Coverage</option>
+                          <option value="Zone 17-20: Sta. Cruz Valley">Zone 17-20: Sta. Cruz Valley</option>
+                          <option value="Zone 21-24: Casinglot Coastal">Zone 21-24: Casinglot Coastal</option>
+                          <option value="Zone 25-28: Gracia Sector">Zone 25-28: Gracia Sector</option>
+                          <option value="Zone 29-32: Mohon Foothill">Zone 29-32: Mohon Foothill</option>
+                          <option value="Zone 33-36: Sugbongcogon">Zone 33-36: Sugbongcogon</option>
+                        </select>
                       </div>
                     </div>
+
+                    <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
+                      <button 
+                        type="button" 
+                        onClick={() => setShowAddReader(false)} 
+                        className="px-4 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 transition cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        type="submit" 
+                        className="px-5 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition shadow-sm cursor-pointer"
+                      >
+                        Enroll Officer
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {/* Empty State */}
+                {filteredStaff.length === 0 && (
+                  <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center space-y-3">
+                    <div className="h-12 w-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center font-bold text-xl">
+                      🔍
+                    </div>
+                    <h4 className="text-base font-bold text-slate-800">No Meter Readers Found</h4>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                      {readerSearch ? `No staff records matching "${readerSearch}". Try a different keyword or clear search.` : 'No meter readers recorded.'}
+                    </p>
+                    {readerSearch && (
+                      <button
+                        onClick={() => setReaderSearch('')}
+                        className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 transition cursor-pointer"
+                      >
+                        Clear Search
+                      </button>
+                    )}
                   </div>
-                ))}
+                )}
+
+                {/* Unified Meter Readers Cards Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                  {filteredStaff.map((r, rIdx) => {
+                    const initials = r.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() || 'MR';
+                    const readerKey = r.id || `reader-${rIdx}`;
+                    const isPasswordRevealed = !!revealedPasswords[readerKey];
+                    const displayedPassword = r.password || r.pin || '1234';
+                    const targetRouteDisplay = (r.assignedRoutes && r.assignedRoutes.length > 0) 
+                      ? r.assignedRoutes[0] 
+                      : (r.targetRoute || r.zone || 'Zone 1-4: Poblacion (Main Central)');
+
+                    return (
+                      <div 
+                        key={`reader-unified-card-${r.id || ''}-${r.username || ''}-${rIdx}`} 
+                        className="bg-white rounded-2xl p-5 shadow-xs border border-slate-200 hover:border-blue-300 hover:shadow-md transition-all flex flex-col justify-between space-y-4 relative"
+                      >
+                        {/* Card Header: Avatar, Name & Active Status Pill */}
+                        <div className="space-y-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center space-x-3 min-w-0">
+                              <div className="h-11 w-11 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 shadow-xs bg-blue-600 text-white">
+                                {initials}
+                              </div>
+                              <div className="min-w-0">
+                                <h4 className="text-sm sm:text-base font-black text-slate-900 truncate">
+                                  {r.name}
+                                </h4>
+                                <p className="text-[11px] text-blue-600 font-mono font-bold">
+                                  @{r.username || r.name.toLowerCase().replace(/\s+/g, '_')}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Status Pill */}
+                            <span className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wider shrink-0 border bg-emerald-50 text-emerald-700 border-emerald-200 flex items-center space-x-1">
+                              <Check className="h-3 w-3 inline mr-0.5" />
+                              <span>Active Duty</span>
+                            </span>
+                          </div>
+
+                          {/* Mobile Meter Reader Info Details Card */}
+                          <div className="space-y-2.5 text-xs bg-slate-50 border border-slate-150 p-4 rounded-xl">
+                            {/* Full Name */}
+                            <div className="flex items-center justify-between text-slate-600 pb-2 border-b border-slate-200/60">
+                              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Full Name</span>
+                              <span className="font-bold text-slate-900 text-xs truncate max-w-[170px]">
+                                {r.name}
+                              </span>
+                            </div>
+
+                            {/* Username */}
+                            <div className="flex items-center justify-between text-slate-600 pb-2 border-b border-slate-200/60">
+                              <div className="flex items-center space-x-1.5 text-slate-500">
+                                <UserCheck className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                                <span className="text-[11px] font-bold uppercase tracking-wider">Username</span>
+                              </div>
+                              <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded text-xs">
+                                {r.username || r.name.toLowerCase().replace(/\s+/g, '_')}
+                              </span>
+                            </div>
+
+                            {/* Password */}
+                            <div className="flex items-center justify-between text-slate-600 pb-2 border-b border-slate-200/60">
+                              <div className="flex items-center space-x-1.5 text-slate-500">
+                                <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                                <span className="text-[11px] font-bold uppercase tracking-wider">Password</span>
+                              </div>
+                              <div className="flex items-center space-x-1.5">
+                                <span className="font-mono font-bold text-slate-800 bg-white px-2 py-0.5 rounded border border-slate-200 text-xs">
+                                  {isPasswordRevealed ? displayedPassword : '••••••••'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setRevealedPasswords(prev => ({ ...prev, [readerKey]: !prev[readerKey] }))}
+                                  className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded transition cursor-pointer"
+                                  title={isPasswordRevealed ? "Hide Password" : "Show Password"}
+                                >
+                                  {isPasswordRevealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Target Route / Barangay Assignment */}
+                            <div className="pt-1">
+                              <div className="flex items-center space-x-1 text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                                <MapPin className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                                <span>Target Route / Barangay Assignment</span>
+                              </div>
+                              <div className="p-2 bg-blue-50/80 rounded-lg border border-blue-200/70 text-blue-800 font-bold text-xs">
+                                {targetRouteDisplay}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Card Action Footer: Terminate Account */}
+                        <div className="pt-3 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => handleTerminateReader(r)}
+                            className="w-full py-2.5 px-3 bg-rose-50 hover:bg-rose-600 active:scale-95 text-rose-700 hover:text-white font-bold text-xs rounded-xl border border-rose-200 hover:border-rose-600 transition shadow-xs flex items-center justify-center space-x-2 cursor-pointer group"
+                          >
+                            <UserX className="h-4 w-4 text-rose-600 group-hover:text-white transition" />
+                            <span>Terminate Account</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
+
 
           {/* 4. WATER METER REGISTRATION & MANAGEMENT */}
           {activeTab === 'meters' && (
@@ -5337,6 +5480,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   </button>
                 </div>
               </div>
+
+              {/* Official District Profile, Mission, Vision, Core Values & Staffing Structure */}
+              <div className="pt-4">
+                <DistrictProfileSection id="admin-district-profile" />
+              </div>
             </div>
           )}
           </>
@@ -5370,7 +5518,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 alt="Meter face verification file" 
                 className="max-h-[380px] object-contain rounded-xl shadow-lg border border-slate-800/80"
                 referrerPolicy="no-referrer"
+                onError={(e) => {
+                  (e.target as HTMLElement).style.display = 'none';
+                  const fb = document.getElementById('meter-dial-fallback-view');
+                  if (fb) fb.style.display = 'flex';
+                }}
               />
+              <div id="meter-dial-fallback-view" style={{ display: 'none' }} className="flex-col items-center justify-center p-8 text-center space-y-3 bg-slate-900/90 rounded-2xl border border-slate-700">
+                <Activity className="h-16 w-16 text-amber-400 mx-auto animate-pulse" />
+                <div>
+                  <p className="text-sm font-bold text-white uppercase tracking-wider">Field Meter Dial Photo Verified</p>
+                  <p className="text-xs text-slate-400 mt-1">Recorded Index by Reader: {selectedPhotoAccount}</p>
+                </div>
+              </div>
               <div className="absolute bottom-4 left-4 bg-slate-950/75 text-slate-200 border border-slate-800/80 p-2.5 rounded-lg text-[9px] uppercase tracking-wider font-mono">
                 <span className="text-emerald-400 font-extrabold flex items-center">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 mr-1.5 inline-block animate-pulse"></span>
@@ -5387,6 +5547,568 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 Close dial inspection
               </button>
             </footer>
+          </div>
+        </div>
+      )}
+
+      {/* OFFICIAL WATER BILLING NOTICE STATEMENT MODAL */}
+      {selectedNoticeReading && selectedNoticeConsumer && (
+        <BillDetails
+          isModal={true}
+          isOpen={true}
+          reading={selectedNoticeReading}
+          consumer={selectedNoticeConsumer}
+          onClose={() => {
+            setSelectedNoticeReading(null);
+            setSelectedNoticeConsumer(null);
+          }}
+        />
+      )}
+
+      {/* CONSUMER VIEW / EDIT / ISSUE IDS MODAL (FIXED VIEWPORT-CENTERED ROOT OVERLAY) */}
+      {selectedConsumerModal && (
+        <div 
+          className="fixed inset-0 z-[100] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-hidden animate-fade-in select-none"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedConsumerModal(null);
+          }}
+        >
+          <div 
+            className="bg-slate-900 rounded-2xl sm:rounded-3xl max-w-2xl lg:max-w-3xl w-full border border-slate-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh] sm:max-h-[85vh] my-auto select-text"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header (Non-scrolling) */}
+            <div className="shrink-0 bg-slate-950 text-white p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between shadow-xs">
+              <div>
+                <div className="flex items-center space-x-2.5">
+                  <h3 className="text-base sm:text-lg font-black tracking-tight text-white">{selectedConsumerModal.name}</h3>
+                  <span className={`px-2.5 py-0.5 text-[10px] font-black uppercase rounded-md border ${
+                    selectedConsumerModal.status === 'blocked'
+                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/50'
+                      : selectedConsumerModal.status === 'active'
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                      : 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                  }`}>
+                    {selectedConsumerModal.status}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-1 font-mono font-medium">
+                  Account #{selectedConsumerModal.accountNumber || 'Pending'} • Meter: {selectedConsumerModal.meterNumber || 'Unassigned'}
+                </p>
+              </div>
+              <button
+                onClick={() => setSelectedConsumerModal(null)}
+                className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-black rounded-xl text-xs transition cursor-pointer shadow-md flex items-center space-x-1.5 border border-rose-500 shrink-0"
+                title="Close Modal"
+              >
+                <X className="h-4 w-4" />
+                <span className="hidden sm:inline">Close</span>
+              </button>
+            </div>
+
+            {/* Modal Tab Buttons (Non-scrolling) */}
+            <div className="shrink-0 flex border-b border-slate-800 bg-slate-950/90 px-4 sm:px-6 pt-3 space-x-2 sm:space-x-3 overflow-x-auto">
+              <button
+                onClick={() => setConsumerModalTab('view')}
+                className={`px-4 py-2 text-xs font-black uppercase tracking-wider transition rounded-t-xl flex items-center space-x-2 shrink-0 cursor-pointer ${
+                  consumerModalTab === 'view'
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : 'bg-slate-800/80 text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <Eye className="h-4 w-4" />
+                <span>View Profile</span>
+              </button>
+
+              <button
+                onClick={() => setConsumerModalTab('edit')}
+                className={`px-4 py-2 text-xs font-black uppercase tracking-wider transition rounded-t-xl flex items-center space-x-2 shrink-0 cursor-pointer ${
+                  consumerModalTab === 'edit'
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : 'bg-slate-800/80 text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <Edit2 className="h-4 w-4" />
+                <span>Edit Details</span>
+              </button>
+
+              <button
+                onClick={() => setConsumerModalTab('issue_ids')}
+                className={`px-4 py-2 text-xs font-black uppercase tracking-wider transition rounded-t-xl flex items-center space-x-2 shrink-0 cursor-pointer ${
+                  consumerModalTab === 'issue_ids'
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : 'bg-slate-800/80 text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <ShieldCheck className="h-4 w-4" />
+                <span>
+                  {selectedConsumerModal.accountNumber && 
+                   !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') &&
+                   selectedConsumerModal.status !== 'pending_approval'
+                    ? 'Account & Tag IDs'
+                    : 'Issue IDs & Tag'}
+                </span>
+              </button>
+            </div>
+
+            {/* Modal Body - Scrollable Content Area */}
+            <div className="flex-1 overflow-y-auto min-h-0 p-4 sm:p-6 space-y-4 text-left bg-slate-900 text-slate-100">
+              {/* PROMINENT ISSUE IDs SUCCESS CONFIRMATION BANNER */}
+              {issueSuccessMessage && (
+                <div className="bg-gradient-to-r from-emerald-950/95 via-slate-900 to-emerald-950/95 border-2 border-emerald-500/80 rounded-2xl p-4 sm:p-5 text-emerald-100 shadow-2xl space-y-3 relative overflow-hidden">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start space-x-3">
+                      <div className="p-2.5 bg-emerald-500/20 rounded-xl border border-emerald-500/40 text-emerald-400 shrink-0">
+                        <CheckCircle className="h-6 w-6 text-emerald-400" />
+                      </div>
+                      <div>
+                        <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                          <h4 className="text-sm sm:text-base font-black text-white">{issueSuccessMessage.title}</h4>
+                          <span className="px-2 py-0.5 text-[10px] font-black uppercase rounded bg-emerald-500 text-slate-950">
+                            {issueSuccessMessage.isUpdate ? 'Updated' : 'Official IDs Active'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-emerald-200/90 font-medium mt-1 leading-relaxed">
+                          {issueSuccessMessage.message}
+                        </p>
+                      </div>
+                    </div>
+                    <button 
+                      type="button"
+                      onClick={() => setIssueSuccessMessage(null)}
+                      className="text-slate-400 hover:text-white p-1 hover:bg-slate-800/60 rounded-lg transition shrink-0 cursor-pointer"
+                      title="Dismiss message"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  {/* Issued Credentials Quick Bar */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-xs">
+                    <div className="bg-slate-950/90 p-2.5 rounded-xl border border-emerald-500/40 flex flex-col">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Official Account Number</span>
+                      <span className="font-mono font-black text-white text-xs mt-0.5">#{issueSuccessMessage.accNum}</span>
+                    </div>
+                    <div className="bg-slate-950/90 p-2.5 rounded-xl border border-emerald-500/40 flex flex-col">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Meter Tag / Serial</span>
+                      <span className="font-mono font-black text-blue-300 text-xs mt-0.5">{issueSuccessMessage.meterNum}</span>
+                    </div>
+                    <div className="bg-slate-950/90 p-2.5 rounded-xl border border-emerald-500/40 flex flex-col">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Smart RFID Tag</span>
+                      <span className="font-mono font-black text-emerald-300 text-xs mt-0.5">{issueSuccessMessage.rfidTag}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const info = `Tagoloan Water District - Official Identifiers\nConsumer: ${issueSuccessMessage.consumerName}\nAccount Number: #${issueSuccessMessage.accNum}\nMeter Serial: #${issueSuccessMessage.meterNum}\nRFID Tag: ${issueSuccessMessage.rfidTag}`;
+                        navigator.clipboard.writeText(info);
+                        setCopiedIssueInfo(true);
+                        setTimeout(() => setCopiedIssueInfo(false), 3000);
+                        toast.success('Copied to Clipboard', 'Account identifiers copied.');
+                      }}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs flex items-center space-x-1.5 transition cursor-pointer shadow-xs"
+                    >
+                      {copiedIssueInfo ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                      <span>{copiedIssueInfo ? 'Copied to Clipboard!' : 'Copy Account Details'}</span>
+                    </button>
+
+                    {consumerModalTab !== 'view' && (
+                      <button
+                        type="button"
+                        onClick={() => setConsumerModalTab('view')}
+                        className="text-xs text-emerald-300 hover:text-white font-bold underline flex items-center space-x-1 cursor-pointer"
+                      >
+                        <span>View Full Profile</span>
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* VIEW TAB */}
+              {consumerModalTab === 'view' && (() => {
+                const allR = mockDb.getReadings();
+                const isIssued = selectedConsumerModal.accountNumber && selectedConsumerModal.accountNumber.trim() !== '' && !selectedConsumerModal.accountNumber.startsWith('PENDING');
+                const modalReadings = isIssued
+                  ? allR.filter(r => r.accountNumber === selectedConsumerModal.accountNumber || (selectedConsumerModal.meterNumber && r.meterNumber === selectedConsumerModal.meterNumber))
+                  : [];
+                const modalUnpaid = modalReadings.filter(r => r.paymentStatus !== 'paid');
+                const computedOutstanding = isIssued
+                  ? modalUnpaid.reduce((acc, b) => {
+                      const total = calculateCostOf(b.consumption, selectedConsumerModal.consumerType);
+                      const paid = b.paidAmount || 0;
+                      return acc + Math.max(0, total - paid);
+                    }, 0)
+                  : 0;
+
+                return (
+                <div className="space-y-4">
+                  {/* Status Banner */}
+                  <div className="bg-slate-800/90 p-4 rounded-xl border border-slate-700 shadow-xs grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                    <div>
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Identifiers Status</span>
+                      <span className="font-extrabold text-white text-xs flex items-center space-x-1 mt-1.5">
+                        {selectedConsumerModal.accountNumber ? (
+                          <span className="text-emerald-300 font-black flex items-center bg-emerald-950/80 px-2.5 py-1 rounded border border-emerald-600/50">
+                            <CheckCircle className="h-3.5 w-3.5 text-emerald-400 mr-1.5 inline shrink-0" /> Issued (#{selectedConsumerModal.accountNumber})
+                          </span>
+                        ) : (
+                          <span className="text-amber-300 font-black bg-amber-950/80 px-2.5 py-1 rounded border border-amber-600/50">⚠️ Pending Issue</span>
+                        )}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Account Status</span>
+                      <span className={`mt-1.5 inline-block font-black text-xs uppercase px-3 py-1 rounded border ${
+                        selectedConsumerModal.status === 'blocked'
+                          ? 'bg-rose-950/80 text-rose-300 border-rose-600/50'
+                          : selectedConsumerModal.status === 'active'
+                          ? 'bg-emerald-950/80 text-emerald-300 border-emerald-600/50'
+                          : 'bg-amber-950/80 text-amber-300 border-amber-600/50'
+                      }`}>
+                        {selectedConsumerModal.status}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Outstanding Balance</span>
+                      <span className={`font-mono font-black text-base mt-1 block ${
+                        computedOutstanding > 0 ? 'text-amber-400' : 'text-emerald-400'
+                      }`}>
+                        ₱{computedOutstanding.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Detail Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                    <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Full Name</span>
+                      <span className="font-black text-white text-xs truncate block" title={selectedConsumerModal.name}>{selectedConsumerModal.name}</span>
+                    </div>
+
+                    <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Email Address</span>
+                      <span className="font-mono text-slate-200 font-bold text-xs truncate block" title={selectedConsumerModal.email || 'N/A'}>{selectedConsumerModal.email || 'N/A'}</span>
+                    </div>
+
+                    <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Phone Number</span>
+                      <span className="font-mono text-slate-200 font-bold text-xs truncate block">{selectedConsumerModal.contactNumber || 'N/A'}</span>
+                    </div>
+
+                    <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Address / Barangay</span>
+                      <span className="font-bold text-slate-200 text-xs truncate block" title={selectedConsumerModal.address}>{selectedConsumerModal.address}</span>
+                    </div>
+
+                    <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Consumer Type</span>
+                      <span className="font-black text-white text-xs block">{selectedConsumerModal.consumerType || 'Residential'}</span>
+                    </div>
+
+                    <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Assigned Meter</span>
+                      <span className="font-mono font-black text-blue-300 text-xs truncate block">{selectedConsumerModal.meterNumber || 'UNASSIGNED'}</span>
+                    </div>
+
+                    <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Smart RFID Tag</span>
+                      <span className="font-mono font-black text-slate-200 text-xs truncate block">{selectedConsumerModal.rfidTag || 'None Assigned'}</span>
+                    </div>
+
+                    <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Web Portal</span>
+                      <span className="font-black text-slate-200 text-xs block">
+                        {selectedConsumerModal.isRegistered ? '✅ Registered' : '❌ Offline'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {selectedConsumerModal.consumerType === 'Commercial' && (
+                    <div className="bg-purple-950/60 p-4 rounded-xl border border-purple-700/60 text-xs flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-black text-purple-300 uppercase tracking-wider block">Commercial Establishment</span>
+                        <span className="font-black text-white text-xs">{selectedConsumerModal.businessName || 'N/A'}</span>
+                      </div>
+                      <span className="text-purple-200 font-extrabold text-[11px] bg-purple-900/80 px-3 py-1 rounded-md border border-purple-600/60">Type: {selectedConsumerModal.businessType || 'General Commercial'}</span>
+                    </div>
+                  )}
+                </div>
+                );
+              })()}
+
+              {/* EDIT TAB */}
+              {consumerModalTab === 'edit' && (
+                <form onSubmit={handleUpdateConsumerDetails} className="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Consumer Name *</label>
+                      <input
+                        type="text"
+                        required
+                        value={modalEditName}
+                        onChange={(e) => setModalEditName(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Email Address *</label>
+                      <input
+                        type="email"
+                        required
+                        value={modalEditEmail}
+                        onChange={(e) => setModalEditEmail(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Phone Number *</label>
+                      <input
+                        type="text"
+                        required
+                        value={modalEditContactNumber}
+                        onChange={(e) => setModalEditContactNumber(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Address / Barangay *</label>
+                      <input
+                        type="text"
+                        required
+                        value={modalEditAddress}
+                        onChange={(e) => setModalEditAddress(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Classification</label>
+                      <select
+                        value={modalEditConsumerType}
+                        onChange={(e) => setModalEditConsumerType(e.target.value as any)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs cursor-pointer"
+                      >
+                        <option value="Residential">Residential</option>
+                        <option value="Commercial">Commercial</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-200 font-extrabold mb-1.5 text-xs">Account Status</label>
+                      <select
+                        value={modalEditStatus}
+                        onChange={(e) => setModalEditStatus(e.target.value as any)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 font-bold text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-xs shadow-2xs cursor-pointer"
+                      >
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                        <option value="blocked">Blocked</option>
+                        <option value="archived">Archived</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {modalEditConsumerType === 'Commercial' && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-purple-950/60 p-3.5 rounded-xl border border-purple-700/60">
+                      <div>
+                        <label className="block text-purple-200 font-black mb-1.5 text-xs">Business Name</label>
+                        <input
+                          type="text"
+                          value={modalEditBusinessName}
+                          onChange={(e) => setModalEditBusinessName(e.target.value)}
+                          className="w-full bg-slate-950 border border-purple-600/60 rounded-lg p-2.5 text-white font-bold focus:outline-none focus:border-purple-400 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-purple-200 font-black mb-1.5 text-xs">Business Type</label>
+                        <input
+                          type="text"
+                          value={modalEditBusinessType}
+                          onChange={(e) => setModalEditBusinessType(e.target.value)}
+                          className="w-full bg-slate-950 border border-purple-600/60 rounded-lg p-2.5 text-white font-bold focus:outline-none focus:border-purple-400 text-xs"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="submit"
+                      className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl text-xs transition shadow-md cursor-pointer uppercase tracking-wider"
+                    >
+                      Update Details
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* ISSUE / UPDATE IDS TAB */}
+              {consumerModalTab === 'issue_ids' && (() => {
+                const isAlreadyIssued = Boolean(
+                  selectedConsumerModal.accountNumber && 
+                  !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') &&
+                  selectedConsumerModal.accountNumber.toUpperCase() !== 'PENDING ADMIN ISSUANCE' &&
+                  selectedConsumerModal.status !== 'pending_approval'
+                );
+
+                return (
+                <form onSubmit={handleIssueIdentifiers} className="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4 text-xs">
+                  {isAlreadyIssued ? (
+                    <div className="bg-slate-950 p-4 rounded-xl border border-blue-500/50 space-y-1.5 shadow-2xs">
+                      <h5 className="font-black text-blue-300 flex items-center space-x-1.5 text-xs">
+                        <Cpu className="h-4 w-4 text-blue-400 mr-1 inline shrink-0" />
+                        <span>Permanent Meter Tag Hardware Entity & Editable Account Number</span>
+                      </h5>
+                      <p className="text-slate-300 font-medium text-[11px] leading-relaxed">
+                        The Smart RFID Tag (<strong>{selectedConsumerModal.rfidTag}</strong>) and Meter Serial (<strong>#{selectedConsumerModal.meterNumber}</strong>) are permanent physical hardware entities attached to the consumer's water pipe. You can update or transfer the <strong>Account Number</strong> below (e.g. for change of ownership, transfer of service, or account re-numbering) while retaining the physical meter tag.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="bg-blue-950/60 p-4 rounded-xl border border-blue-600/60 space-y-1">
+                      <h5 className="font-black text-blue-200 flex items-center space-x-1.5 text-xs">
+                        <ShieldCheck className="h-4 w-4 text-blue-400 mr-1 inline shrink-0" />
+                        <span>Issue Official Identifiers & Activate Consumer Account</span>
+                      </h5>
+                      <p className="text-blue-100 font-medium text-[11px]">
+                        Assign official Account Number, physical Meter Tag / Serial Number, and Smart RFID Tag for <strong>{selectedConsumerModal.name}</strong> ({selectedConsumerModal.barangay || 'Tagoloan'}). Every tag number must be a strictly unique entity in the water district.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    {/* ACCOUNT NUMBER (ALWAYS EDITABLE) */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-slate-200 font-extrabold text-xs">Account Number *</label>
+                        {isAlreadyIssued && (
+                          <span className="text-[10px] font-black text-blue-300 bg-blue-950/80 px-2 py-0.5 rounded border border-blue-600/60 flex items-center space-x-0.5">
+                            <Edit2 className="h-3 w-3 mr-0.5 inline shrink-0" /> Editable
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. NT-2026-001"
+                        value={modalIssueAccountNumber}
+                        onChange={(e) => setModalIssueAccountNumber(e.target.value)}
+                        className="w-full bg-slate-950 text-white border border-slate-700 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg p-2.5 font-mono font-black text-xs shadow-2xs"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        {isAlreadyIssued 
+                          ? '✏️ Editable for account updates, transfer, or re-numbering.'
+                          : 'Assign unique official municipal account number.'}
+                      </p>
+                    </div>
+
+                    {/* METER SERIAL / TAG (LOCKED IF ISSUED) */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-slate-200 font-extrabold text-xs">Meter Tag / Serial *</label>
+                        {isAlreadyIssued && (
+                          <span className="text-[10px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/60 flex items-center space-x-0.5">
+                            <Lock className="h-3 w-3 mr-0.5 inline shrink-0" /> Permanent
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. MT-88204"
+                        value={modalIssueMeterNumber}
+                        onChange={(e) => setModalIssueMeterNumber(e.target.value)}
+                        readOnly={isAlreadyIssued}
+                        className={`w-full border rounded-lg p-2.5 font-mono font-black text-xs shadow-2xs ${
+                          isAlreadyIssued
+                            ? 'bg-slate-950/80 text-slate-400 border-slate-800 cursor-not-allowed select-none'
+                            : 'bg-slate-950 text-white border-slate-700 focus:outline-none focus:border-blue-500'
+                        }`}
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        {isAlreadyIssued
+                          ? '🔒 Fixed physical mechanical meter serial attached on-site.'
+                          : 'Assign unique meter serial number.'}
+                      </p>
+                    </div>
+
+                    {/* SMART RFID TAG (LOCKED IF ISSUED) */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-slate-200 font-extrabold text-xs">Smart RFID Tag *</label>
+                        {isAlreadyIssued && (
+                          <span className="text-[10px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/60 flex items-center space-x-0.5">
+                            <Lock className="h-3 w-3 mr-0.5 inline shrink-0" /> Permanent
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. RFID-88204"
+                        value={modalIssueRfidTag}
+                        onChange={(e) => setModalIssueRfidTag(e.target.value)}
+                        readOnly={isAlreadyIssued}
+                        className={`w-full border rounded-lg p-2.5 font-mono font-black text-xs shadow-2xs ${
+                          isAlreadyIssued
+                            ? 'bg-slate-950/80 text-slate-400 border-slate-800 cursor-not-allowed select-none'
+                            : 'bg-slate-950 text-white border-slate-700 focus:outline-none focus:border-blue-500'
+                        }`}
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        {isAlreadyIssued
+                          ? '🔒 Unique physical RFID entity across Tagoloan Water District.'
+                          : 'Assign unique RFID reader tag.'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 flex justify-end">
+                    {isAlreadyIssued ? (
+                      <button
+                        type="submit"
+                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl text-xs transition shadow-md uppercase tracking-wider cursor-pointer flex items-center space-x-1.5"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        <span>Update Account Number</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="submit"
+                        className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs transition shadow-md uppercase tracking-wider cursor-pointer flex items-center space-x-1.5"
+                      >
+                        <ShieldCheck className="h-4 w-4" />
+                        <span>Issue Identifiers & Activate Account</span>
+                      </button>
+                    )}
+                  </div>
+                </form>
+                );
+              })()}
+            </div>
+
+            {/* Modal Footer (Non-scrolling) */}
+            <div className="shrink-0 bg-slate-950 p-4 border-t border-slate-800 flex items-center justify-between">
+              <div className="text-xs text-slate-400 font-mono font-semibold hidden sm:block">
+                Consumer ID: <span className="text-slate-200 font-bold">{selectedConsumerModal.accountNumber || 'Unissued'}</span>
+              </div>
+              <button
+                onClick={() => setSelectedConsumerModal(null)}
+                className="px-6 py-2.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-black rounded-xl text-xs uppercase tracking-wider transition cursor-pointer shadow-lg flex items-center space-x-2 border border-rose-500 ml-auto"
+              >
+                <X className="h-4 w-4" />
+                <span>Close Window</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
