@@ -9,6 +9,7 @@ import { createServer as createHttpServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import "dotenv/config";
 
 const app = express();
 const httpServer = createHttpServer(app);
@@ -30,8 +31,8 @@ function getGeminiAI(): GoogleGenAI | null {
 const wss = new WebSocketServer({ server: httpServer });
 
 // Express JSON and URL-encoded body parsing for Mobile App API
-app.use(express.json({ limit: "15mb" }));
-app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
 // Enable CORS for Mobile App and External API clients
 app.use((req, res, next) => {
@@ -41,7 +42,7 @@ app.use((req, res, next) => {
   }
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-client-version, x-app-id, Cache-Control, Pragma");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-client-version, x-app-id, x-reader-id, x-employee-id, x-user-id, Cache-Control, Pragma");
   res.header("Access-Control-Max-Age", "86400");
   if (req.method === "OPTIONS") {
     return res.status(200).end();
@@ -125,6 +126,7 @@ let syncedConsumers: MobileConsumerSync[] = [
     name: "FIGUEROA, GINA O.",
     address: "SIHAYON-LEFT (ZONE-11A)",
     barangay: "Poblacion",
+    barangayId: "BRG-01",
     sitioZone: "ZONE-11A",
     meterNumber: "150307143",
     previousReading: 4377,
@@ -141,6 +143,7 @@ let syncedConsumers: MobileConsumerSync[] = [
     name: "ELLO, CARMEN",
     address: "SIHAYON-LEFT",
     barangay: "Poblacion",
+    barangayId: "BRG-01",
     sitioZone: "Sihayon-Left",
     meterNumber: "E180103545",
     previousReading: 2139,
@@ -151,8 +154,176 @@ let syncedConsumers: MobileConsumerSync[] = [
     email: "carmen.ello@gmail.com",
     rfidTag: "RFID-E180103545",
     isRegistered: true
+  },
+  {
+    accountNumber: "022-204-118",
+    name: "SABIO, EDUARDO P.",
+    address: "PUROK 2, NATUMOLAN",
+    barangay: "Natumolan",
+    barangayId: "BRG-02",
+    sitioZone: "Purok 2",
+    meterNumber: "160408221",
+    previousReading: 1540,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 919 333 4455",
+    email: "eduardo.sabio@gmail.com",
+    rfidTag: "RFID-160408221",
+    isRegistered: true
+  },
+  {
+    accountNumber: "022-501-094",
+    name: "MAGPALE, TERESITA L.",
+    address: "COASTAL ROAD, NATUMOLAN",
+    barangay: "Natumolan",
+    barangayId: "BRG-02",
+    sitioZone: "Zone 5",
+    meterNumber: "160409934",
+    previousReading: 3210,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Commercial",
+    status: "active",
+    contactNumber: "+63 917 555 7890",
+    email: "teresita.magpale@gmail.com",
+    rfidTag: "RFID-160409934",
+    isRegistered: true
+  },
+  {
+    accountNumber: "033-101-077",
+    name: "CABALLES, ROLANDO B.",
+    address: "HIGHWAY PROPER, BALUARTE",
+    barangay: "Baluarte",
+    barangayId: "BRG-03",
+    sitioZone: "Zone 9",
+    meterNumber: "170501123",
+    previousReading: 2890,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 920 444 8899",
+    email: "rolando.caballes@gmail.com",
+    rfidTag: "RFID-170501123",
+    isRegistered: true
+  },
+  {
+    accountNumber: "066-202-045",
+    name: "DAGANATO, VICENTE K.",
+    address: "MOHON INDUSTRIAL CORRIDOR",
+    barangay: "Mohon",
+    barangayId: "BRG-06",
+    sitioZone: "Zone 11",
+    meterNumber: "180602345",
+    previousReading: 5120,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Commercial",
+    status: "active",
+    contactNumber: "+63 922 777 6611",
+    email: "vicente.daganato@gmail.com",
+    rfidTag: "RFID-180602345",
+    isRegistered: true
   }
 ];
+
+// Helper: Checks if a consumer belongs to any of the assigned routes/barangays/areas
+function doesConsumerMatchAreas(consumer: MobileConsumerSync, areas: string[]): boolean {
+  if (!areas || areas.length === 0) return true;
+  
+  const cBarangay = (consumer.barangay || "").toLowerCase().trim();
+  const cBarangayId = (consumer.barangayId || "").toLowerCase().trim();
+  const cAddress = (consumer.address || "").toLowerCase().trim();
+  const cSitio = (consumer.sitioZone || "").toLowerCase().trim();
+
+  return areas.some(area => {
+    if (!area || typeof area !== "string") return false;
+    const cleanArea = area.toLowerCase().trim();
+    if (cleanArea === "all" || cleanArea === "*") return true;
+
+    // Strip "Zone X-Y: " prefix if present (e.g. "Zone 1-4: Poblacion (Main Central)" -> "poblacion", "main central")
+    const stripped = cleanArea.replace(/^zone\s*[\d-]+\s*:\s*/i, "").trim();
+
+    // Check direct equality or substring matches
+    if (cBarangay && (cBarangay === cleanArea || cBarangay === stripped || cleanArea.includes(cBarangay) || stripped.includes(cBarangay))) {
+      return true;
+    }
+    if (cBarangayId && (cBarangayId === cleanArea || cleanArea.includes(cBarangayId))) {
+      return true;
+    }
+    if (cAddress && (cAddress.includes(cleanArea) || cAddress.includes(stripped))) {
+      return true;
+    }
+    if (cSitio && (cSitio.includes(cleanArea) || cSitio.includes(stripped))) {
+      return true;
+    }
+    return false;
+  });
+}
+
+// Helper: Extracts reader information and assigned coverage areas from request (headers, query, token)
+function extractReaderAssignedAreas(req: express.Request): { reader: MobileReader | null; assignedAreas: string[] | null } {
+  // 1. Check explicit reader id / username in query or params or body or headers
+  const readerIdParam = (
+    req.params.readerId || 
+    req.params.id || 
+    req.query.readerId || 
+    req.query.employeeId || 
+    req.query.reader || 
+    req.query.username || 
+    req.headers["x-reader-id"] || 
+    req.headers["x-employee-id"] ||
+    req.headers["x-user-id"] ||
+    ""
+  ).toString().trim();
+
+  // Check Bearer token if present
+  const authHeader = (req.headers.authorization || "").toString().trim();
+  let tokenReaderId = "";
+  if (authHeader.startsWith("Bearer twd_jwt_")) {
+    const parts = authHeader.split("_");
+    tokenReaderId = parts[parts.length - 1] || "";
+  }
+
+  const effectiveId = readerIdParam || tokenReaderId;
+
+  // 2. Direct areas / zones / barangays passed in query
+  let directAreas: string[] = [];
+  const queryBarangays = req.query.barangays || req.query.barangay;
+  const queryZones = req.query.zones || req.query.zone;
+  const queryRoutes = req.query.assignedRoutes || req.query.routes || req.query.coverageAreas;
+
+  if (Array.isArray(queryBarangays)) directAreas.push(...queryBarangays.map(String));
+  else if (typeof queryBarangays === "string" && queryBarangays.trim() && queryBarangays !== "All") directAreas.push(...queryBarangays.split(","));
+
+  if (Array.isArray(queryZones)) directAreas.push(...queryZones.map(String));
+  else if (typeof queryZones === "string" && queryZones.trim() && queryZones !== "All") directAreas.push(...queryZones.split(","));
+
+  if (Array.isArray(queryRoutes)) directAreas.push(...queryRoutes.map(String));
+  else if (typeof queryRoutes === "string" && queryRoutes.trim() && queryRoutes !== "All") directAreas.push(...queryRoutes.split(","));
+
+  directAreas = directAreas.map(a => a.trim()).filter(Boolean);
+
+  if (effectiveId) {
+    const clean = effectiveId.toLowerCase();
+    const reader = registeredStaff.find(
+      s => s.id?.toLowerCase() === clean || s.username?.toLowerCase() === clean || s.name?.toLowerCase() === clean
+    ) || null;
+
+    if (reader) {
+      const readerRoutes = (reader.assignedRoutes && reader.assignedRoutes.length > 0)
+        ? reader.assignedRoutes
+        : [reader.zone || "Poblacion"];
+      
+      const combined = Array.from(new Set([...readerRoutes, ...directAreas]));
+      return { reader, assignedAreas: combined };
+    }
+  }
+
+  if (directAreas.length > 0) {
+    return { reader: null, assignedAreas: directAreas };
+  }
+
+  return { reader: null, assignedAreas: null };
+}
 
 // In-Memory Pending Meter Reading Submissions from Mobile
 interface MobileReadingSubmission {
@@ -199,15 +370,32 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
   const username = (req.body.username || req.body.email || req.body.badgeId || name || "").toString().trim();
   const pin = (req.body.pin || req.body.password || "1234").toString().trim();
   const contactNumber = (req.body.contactNumber || req.body.phoneNumber || req.body.phone || "").toString().trim();
-  const rawZone = req.body.zone || (Array.isArray(req.body.assignedBarangays) ? req.body.assignedBarangays[0] : "") || (Array.isArray(req.body.assignedZones) ? req.body.assignedZones[0] : "") || "Poblacion";
-  const cleanZone = rawZone ? rawZone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim() : "Poblacion";
-  const assignedRoutes = Array.isArray(req.body.assignedRoutes) && req.body.assignedRoutes.length > 0
-    ? req.body.assignedRoutes
-    : (Array.isArray(req.body.assignedBarangays) && req.body.assignedBarangays.length > 0
-      ? req.body.assignedBarangays
-      : (Array.isArray(req.body.assignedZones) && req.body.assignedZones.length > 0
-        ? req.body.assignedZones
-        : [cleanZone]));
+
+  // Extract 1, 2, or multiple assigned areas / barangays / routes
+  let assignedRoutes: string[] = [];
+  const rawAssigned = req.body.assignedRoutes || req.body.assignedBarangays || req.body.assignedZones || req.body.coverageAreas || req.body.barangays || req.body.routes;
+  if (Array.isArray(rawAssigned)) {
+    assignedRoutes.push(...rawAssigned.map(String));
+  } else if (typeof rawAssigned === "string" && rawAssigned.trim()) {
+    assignedRoutes.push(...rawAssigned.split(","));
+  }
+
+  if (typeof req.body.barangay === "string" && req.body.barangay.trim()) {
+    assignedRoutes.push(...req.body.barangay.split(","));
+  }
+  if (typeof req.body.zone === "string" && req.body.zone.trim()) {
+    assignedRoutes.push(...req.body.zone.split(","));
+  }
+  if (typeof req.body.targetRoute === "string" && req.body.targetRoute.trim()) {
+    assignedRoutes.push(...req.body.targetRoute.split(","));
+  }
+
+  assignedRoutes = assignedRoutes.map(r => r.trim()).filter(Boolean);
+  if (assignedRoutes.length === 0) {
+    assignedRoutes = ["Poblacion"];
+  }
+
+  const primaryZone = assignedRoutes[0] || "Poblacion";
 
   if (!name && !username) {
     return res.status(400).json({
@@ -227,12 +415,19 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
     password: req.body.password || req.body.pin || "password123",
     pin: pin || req.body.password || "1234",
     role: req.body.role || "Meter Reader I",
-    zone: cleanZone,
+    zone: primaryZone,
     contactNumber: contactNumber,
-    employmentStatus: "active", // Directly active
+    employmentStatus: "active", // Directly active - no admin approval needed
     registeredAt: req.body.registeredAt || req.body.submittedAt || new Date().toISOString(),
     assignedRoutes: assignedRoutes
   };
+
+  // Clear any previous termination record so re-enrolled officer can connect again seamlessly
+  [readerId, effectiveUsername, effectiveName, username, name].forEach(ident => {
+    if (ident && typeof ident === "string") {
+      terminatedStaffIdentifiers.delete(ident.trim().toLowerCase());
+    }
+  });
 
   // Check if reader already exists
   const existingIdx = registeredStaff.findIndex(
@@ -255,7 +450,7 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
     status: "active",
     employmentStatus: "active",
     assignedRoutes: newReader.assignedRoutes,
-    message: `New Meter Reader ${newReader.name} (${newReader.id}) enrolled and activated for field operations.`
+    message: `New Meter Reader ${newReader.name} (${newReader.id}) enrolled with coverage: ${newReader.assignedRoutes.join(", ")}.`
   });
   broadcast("staff:registered", {
     reader: newReader,
@@ -269,26 +464,37 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
     message: `New Meter Reader ${newReader.name} (${newReader.id}) enrolled.`
   });
 
-  console.log(`[Mobile API] Meter Reader Enrolled & Active: ${newReader.name} (${newReader.id})`);
+  console.log(`[Mobile API] Meter Reader Enrolled & Active: ${newReader.name} (${newReader.id}) with routes:`, newReader.assignedRoutes);
 
   res.status(201).json({
     success: true,
-    message: "Registration successful. Field officer account is active.",
+    message: "Registration successful. Field officer account is active and ready to use.",
+    token: `twd_jwt_${Date.now()}_${newReader.id}`,
     reader: {
       id: newReader.id,
+      employeeId: newReader.id,
       username: newReader.username,
       name: newReader.name,
       role: newReader.role,
       zone: newReader.zone,
       employmentStatus: "active",
+      status: "active",
+      assignedRoutes: newReader.assignedRoutes
+    },
+    user: {
+      id: newReader.id,
+      employeeId: newReader.id,
+      username: newReader.username,
+      name: newReader.name,
+      role: newReader.role,
+      status: "active",
       assignedRoutes: newReader.assignedRoutes
     }
   });
 });
 
-
-// 1.1 Reader / Staff / Consumer Login (POST /api/auth/login, POST /api/readers/login, POST /api/login)
-app.post(["/api/auth/login", "/api/readers/login", "/api/login"], (req, res) => {
+// 1.1 Reader / Staff / Consumer Login (POST /api/auth/login, POST /api/readers/login, POST /api/login, POST /api/auth/token)
+app.post(["/api/auth/login", "/api/readers/login", "/api/login", "/api/auth/token"], (req, res) => {
   const { username, password, pin, role } = req.body;
   const loginIdentifier = (username || req.body.email || req.body.id || req.body.accountNumber || "").toString().trim();
   const loginPass = (password || pin || "").toString().trim();
@@ -319,16 +525,7 @@ app.post(["/api/auth/login", "/api/readers/login", "/api/login"], (req, res) => 
   if (!reader) {
     return res.status(401).json({
       success: false,
-      message: "Account not found or credentials revoked. Please contact administrator."
-    });
-  }
-
-  // Check if pending
-  if (reader.employmentStatus === "pending") {
-    return res.status(403).json({
-      success: false,
-      status: "pending",
-      message: "Account approval is pending. Please contact administrator to activate your meter reader ID."
+      message: "Account not found or credentials revoked. Please check your meter reader ID."
     });
   }
 
@@ -340,26 +537,29 @@ app.post(["/api/auth/login", "/api/readers/login", "/api/login"], (req, res) => 
     });
   }
 
-  // Success
+  // Success - reader is active immediately
   return res.json({
     success: true,
     message: "Login successful.",
     token: `twd_jwt_${Date.now()}_${reader.id}`,
     user: {
       id: reader.id,
+      employeeId: reader.id,
       username: reader.username,
       name: reader.name,
       role: reader.role || "meter_reader",
-      status: reader.employmentStatus,
+      status: reader.employmentStatus || "active",
       assignedRoutes: reader.assignedRoutes,
       zone: reader.zone
     },
     reader: {
       id: reader.id,
+      employeeId: reader.id,
       username: reader.username,
       name: reader.name,
       role: reader.role || "meter_reader",
-      employmentStatus: reader.employmentStatus,
+      employmentStatus: reader.employmentStatus || "active",
+      status: reader.employmentStatus || "active",
       assignedRoutes: reader.assignedRoutes,
       zone: reader.zone
     }
@@ -375,14 +575,24 @@ app.get(["/api/staff", "/api/readers"], (req, res) => {
     success: true,
     count: activeStaff.length,
     staff: activeStaff,
-    readers: activeStaff
+    readers: activeStaff,
+    data: activeStaff
   });
 });
 
 // 2.1 Check Single Reader Status (GET /api/readers/check-status/:id, GET /api/auth/check-status/:id, etc.)
-app.get(["/api/readers/check-status/:id", "/api/auth/check-status/:id", "/api/readers/:id/status", "/api/staff/check-status/:id"], (req, res) => {
+app.get(["/api/readers/check-status/:id", "/api/auth/check-status/:id", "/api/readers/:id/status", "/api/staff/check-status/:id", "/api/readers/:id"], (req, res) => {
   const { id } = req.params;
   const cleanId = decodeURIComponent(id || "").trim().toLowerCase();
+  
+  if (isStaffTerminated(cleanId)) {
+    return res.status(403).json({
+      success: false,
+      status: "terminated",
+      message: "This account has been terminated."
+    });
+  }
+
   let reader = registeredStaff.find(
     s => s.id?.toLowerCase() === cleanId || s.username?.toLowerCase() === cleanId
   );
@@ -393,95 +603,28 @@ app.get(["/api/readers/check-status/:id", "/api/auth/check-status/:id", "/api/re
       readerId: id,
       username: id,
       name: id,
-      status: "pending",
-      employmentStatus: "pending",
+      status: "active",
+      employmentStatus: "active",
       assignedRoutes: ["Poblacion"],
-      message: "Reader is awaiting admin review."
+      message: "Reader is active."
     });
   }
 
   res.json({
     success: true,
     readerId: reader.id,
-    username: reader.username,
-    name: reader.name,
-    status: reader.employmentStatus,
-    employmentStatus: reader.employmentStatus,
-    assignedRoutes: reader.assignedRoutes,
-    approvedAt: reader.approvedAt
-  });
-});
-
-// 3. Admin Approves / Activates Meter Reader (PATCH /api/staff/:id, /api/staff/:id/status, POST /api/readers/:id/approve, etc.)
-app.all(["/api/staff/:id/status", "/api/staff/:id", "/api/readers/:id/approve", "/api/readers/:id/status"], (req, res) => {
-  if (req.method !== "PATCH" && req.method !== "POST" && req.method !== "PUT") {
-    return res.status(405).json({ success: false, message: "Method Not Allowed" });
-  }
-
-  const { id } = req.params;
-  const { status, assignedRoutes, name, username } = req.body || {};
-  const cleanId = decodeURIComponent(id || "").trim().toLowerCase();
-
-  let reader = registeredStaff.find(s => s.id?.toLowerCase() === cleanId || s.username?.toLowerCase() === cleanId);
-  const targetStatus = status || "active";
-
-  if (!reader) {
-    // If not in array yet, add as active
-    reader = {
-      id: id || `WDT-MR${Math.floor(10 + Math.random() * 90)}`,
-      username: username || id,
-      name: name || id,
-      role: "Meter Reader I",
-      zone: "Poblacion",
-      contactNumber: "",
-      employmentStatus: targetStatus as any,
-      registeredAt: new Date().toISOString(),
-      approvedAt: targetStatus === "active" ? new Date().toISOString() : undefined,
-      assignedRoutes: assignedRoutes || ["Poblacion"]
-    };
-    registeredStaff.push(reader);
-  } else {
-    reader.employmentStatus = targetStatus as any;
-    if (targetStatus === "active") {
-      reader.approvedAt = new Date().toISOString();
-    }
-    if (assignedRoutes && Array.isArray(assignedRoutes)) {
-      reader.assignedRoutes = assignedRoutes;
-    }
-  }
-
-  // Broadcast approval to mobile terminal via WebSocket
-  broadcast("READER_APPROVED_ACTIVE", {
-    readerId: reader.id,
-    id: reader.id,
     employeeId: reader.id,
     username: reader.username,
     name: reader.name,
-    status: reader.employmentStatus,
-    employmentStatus: reader.employmentStatus,
+    status: reader.employmentStatus || "active",
+    employmentStatus: reader.employmentStatus || "active",
     assignedRoutes: reader.assignedRoutes,
-    message: `Reader ${reader.name} has been approved and activated.`
-  });
-  broadcast("staff:status_updated", {
-    readerId: reader.id,
-    id: reader.id,
-    employeeId: reader.id,
-    username: reader.username,
-    name: reader.name,
-    status: reader.employmentStatus,
-    employmentStatus: reader.employmentStatus,
-    assignedRoutes: reader.assignedRoutes,
-    message: `Reader ${reader.name} is now ${reader.employmentStatus.toUpperCase()}`
-  });
-
-  res.json({
-    success: true,
-    message: `Meter reader ${reader.name} status updated to ${reader.employmentStatus}.`,
-    reader
+    zone: reader.zone,
+    approvedAt: reader.approvedAt || reader.registeredAt
   });
 });
 
-// 3.01 Admin Terminates / Deletes Meter Reader (DELETE /api/staff/:id, /api/readers/:id)
+// 3. Admin Terminates / Deletes Meter Reader (DELETE /api/staff/:id, /api/readers/:id)
 app.delete(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
   const { id } = req.params;
   const { employeeId, email, username, name } = req.body || {};
@@ -489,7 +632,7 @@ app.delete(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
 
   // Add all identifiers to the permanent termination blacklist
   [id, cleanId, employeeId, email, username, name].forEach(ident => {
-    if (ident && typeof ident === 'string' && ident.trim()) {
+    if (ident && typeof ident === "string" && ident.trim()) {
       terminatedStaffIdentifiers.add(ident.trim().toLowerCase());
     }
   });
@@ -514,6 +657,14 @@ app.delete(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
     name,
     message: `Meter reader account (${id || name}) has been permanently terminated and erased.`
   });
+  broadcast("staff:terminated", {
+    readerId: id,
+    employeeId,
+    email,
+    username,
+    name,
+    message: `Meter reader account (${id || name}) has been permanently terminated.`
+  });
 
   res.json({
     success: true,
@@ -522,19 +673,18 @@ app.delete(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
   });
 });
 
-
-// 3.1 Consumer Registry Endpoint for Mobile App & Web (GET /api/consumers, POST /api/consumers)
-app.get("/api/consumers", (req, res) => {
+// 3.1 Consumer Registry Endpoint for Mobile App & Web (GET /api/consumers, GET /api/sync/pull, GET /api/sync/consumers)
+// Filters consumers strictly by the meter reader's assigned coverage areas if reader context is present
+app.get(["/api/consumers", "/api/sync/pull", "/api/sync/consumers"], (req, res) => {
   try {
-    const { zone, barangay, search, status } = req.query;
+    const { search, status } = req.query;
     let list = [...syncedConsumers];
 
-    if (barangay && typeof barangay === "string" && barangay.trim() !== "" && barangay !== "All") {
-      const bFilter = barangay.trim().toLowerCase();
-      list = list.filter(c => c.barangay.toLowerCase() === bFilter);
-    } else if (zone && typeof zone === "string" && zone.trim() !== "" && zone !== "All") {
-      const zFilter = zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim().toLowerCase();
-      list = list.filter(c => c.barangay.toLowerCase().includes(zFilter) || c.address.toLowerCase().includes(zFilter));
+    // Extract reader assignment filter
+    const { reader, assignedAreas } = extractReaderAssignedAreas(req);
+
+    if (assignedAreas && assignedAreas.length > 0) {
+      list = list.filter(c => doesConsumerMatchAreas(c, assignedAreas));
     }
 
     if (search && typeof search === "string" && search.trim() !== "") {
@@ -552,8 +702,28 @@ app.get("/api/consumers", (req, res) => {
 
     res.json({
       success: true,
+      timestamp: new Date().toISOString(),
+      coverageAreas: assignedAreas || ["all"],
+      readerId: reader ? reader.id : undefined,
       count: list.length,
-      consumers: list,
+      consumers: list.map(c => ({
+        accountNumber: c.accountNumber,
+        name: c.name,
+        address: c.address,
+        barangay: c.barangay,
+        barangayId: c.barangayId,
+        sitioZone: c.sitioZone,
+        meterNumber: c.meterNumber, // Tag Number for scanning & auto-matching
+        meterSerial: c.meterNumber,
+        previousReading: c.previousReading,
+        lastReadingDate: c.lastReadingDate,
+        meterSize: c.meterSize,
+        consumerType: c.consumerType,
+        status: c.status,
+        contactNumber: c.contactNumber,
+        email: c.email,
+        rfidTag: c.rfidTag
+      })),
       data: list
     });
   } catch (err) {
@@ -564,6 +734,29 @@ app.get("/api/consumers", (req, res) => {
       consumers: syncedConsumers,
       data: syncedConsumers
     });
+  }
+});
+
+// Dedicated endpoint: GET consumers by reader ID
+app.get(["/api/readers/:id/consumers", "/api/staff/:id/consumers", "/api/consumers/by-reader/:readerId", "/api/consumers/assigned/:readerId"], (req, res) => {
+  try {
+    const { reader, assignedAreas } = extractReaderAssignedAreas(req);
+    let list = [...syncedConsumers];
+
+    if (assignedAreas && assignedAreas.length > 0) {
+      list = list.filter(c => doesConsumerMatchAreas(c, assignedAreas));
+    }
+
+    res.json({
+      success: true,
+      readerId: reader ? reader.id : (req.params.id || req.params.readerId),
+      coverageAreas: assignedAreas || [],
+      count: list.length,
+      consumers: list,
+      data: list
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to retrieve reader's assigned consumers." });
   }
 });
 
@@ -725,7 +918,7 @@ app.post("/api/consumers", (req, res) => {
       previousReading: Number(previousReading) || 0,
       lastReadingDate: lastReadingDate || new Date().toISOString().split("T")[0],
       consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
-      status: status || (cleanAcc && !cleanAcc.toUpperCase().startsWith('PENDING') ? "active" : "pending_approval"),
+      status: status || (cleanAcc && !cleanAcc.toUpperCase().startsWith("PENDING") ? "active" : "pending_approval"),
       contactNumber: contactNumber || "",
       email: cleanEmail,
       rfidTag: rfidTag || "",
@@ -752,10 +945,10 @@ app.post("/api/consumers", (req, res) => {
     }
 
     // Clean up any remaining pending twin with same email or user id
-    if (record.status === 'active' && record.accountNumber && !record.accountNumber.toUpperCase().startsWith('PENDING')) {
+    if (record.status === "active" && record.accountNumber && !record.accountNumber.toUpperCase().startsWith("PENDING")) {
       syncedConsumers = syncedConsumers.filter(c => {
         if (c === syncedConsumers[idx >= 0 ? idx : 0]) return true;
-        const isStalePending = (!c.accountNumber || c.accountNumber.toUpperCase().startsWith('PENDING') || c.status === 'pending_approval');
+        const isStalePending = (!c.accountNumber || c.accountNumber.toUpperCase().startsWith("PENDING") || c.status === "pending_approval");
         if (isStalePending) {
           if (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) return false;
           if (linkedUserId && c.linkedUserId && c.linkedUserId === linkedUserId) return false;
@@ -768,7 +961,7 @@ app.post("/api/consumers", (req, res) => {
     // Broadcast update to Admin and Consumer dashboards
     broadcast("CONSUMER_UPDATED", {
       consumer: record,
-      message: `Consumer record for ${record.name} (${record.accountNumber || 'Pending'}) updated.`
+      message: `Consumer record for ${record.name} (${record.accountNumber || "Pending"}) updated.`
     });
 
     res.status(201).json({
@@ -969,41 +1162,8 @@ Context for verification: Expected Account: ${expectedAccountNumber || "N/A"}, E
   }
 });
 
-// 4. Mobile Sync Pull: Download Consumers & Meter Tags for Offline Recognition (GET /api/sync/pull)
-app.get("/api/sync/pull", (req, res) => {
-  const { zone, readerId } = req.query;
-
-  let consumers = [...syncedConsumers];
-
-  if (zone && typeof zone === "string" && zone.trim() !== "") {
-    const cleanZone = zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim().toLowerCase();
-    consumers = consumers.filter(c => c.barangay.toLowerCase().includes(cleanZone) || c.address.toLowerCase().includes(cleanZone));
-  }
-
-  res.json({
-    success: true,
-    timestamp: new Date().toISOString(),
-    zone: zone || "all",
-    count: consumers.length,
-    consumers: consumers.map(c => ({
-      accountNumber: c.accountNumber,
-      name: c.name,
-      address: c.address,
-      barangay: c.barangay,
-      sitioZone: c.sitioZone,
-      meterNumber: c.meterNumber, // Tag Number for scanning & auto-matching
-      meterSerial: c.meterNumber,
-      previousReading: c.previousReading,
-      lastReadingDate: c.lastReadingDate,
-      meterSize: c.meterSize,
-      consumerType: c.consumerType,
-      status: c.status
-    }))
-  });
-});
-
 // 5. Mobile Reading Push: Submit Scanned Meter Reading to Approval Queue (POST /api/readings, POST /api/sync/push or POST /api/readings/submit)
-app.post(["/api/readings", "/api/sync/push", "/api/readings/submit"], (req, res) => {
+app.post(["/api/readings", "/api/sync/push", "/api/readings/submit", "/api/readings/upload"], (req, res) => {
   const {
     accountNumber,
     meterNumber,
@@ -1077,8 +1237,8 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit"], (req, res)
   });
 });
 
-// 5.1 Batch Sync Readings: Upload Queued Offline Readings (POST /api/readings/batch)
-app.post("/api/readings/batch", (req, res) => {
+// 5.1 Batch Sync Readings: Upload Queued Offline Readings (POST /api/readings/batch, /api/sync/batch)
+app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req, res) => {
   const readingsList = Array.isArray(req.body) ? req.body : (req.body.readings || []);
 
   if (!readingsList || readingsList.length === 0) {
@@ -1196,7 +1356,6 @@ wss.on("connection", (ws) => {
   ws.on("message", (rawMessage) => {
     try {
       const data = JSON.parse(rawMessage.toString());
-      console.log("WS received payload:", data);
 
       if (data.type === "payment:start") {
         const { readingId, accountNumber, amount, paymentMethod, billingPeriod } = data.payload;
@@ -1247,10 +1406,10 @@ wss.on("connection", (ws) => {
           if (ws.readyState === WebSocket.OPEN) {
             const transactionId = `TXN-${Math.floor(10000000 + Math.random() * 90000000)}`;
             const paymentReference = `PAYREF-${Math.floor(100000 + Math.random() * 900000)}`;
-            const paymentDate = new Date().toLocaleDateString('en-US', {
-              year: 'numeric',
-              month: 'long',
-              day: 'numeric'
+            const paymentDate = new Date().toLocaleDateString("en-US", {
+              year: "numeric",
+              month: "long",
+              day: "numeric"
             });
 
             const successPayload = {
@@ -1299,20 +1458,20 @@ wss.on("connection", (ws) => {
   });
 });
 
-// Serve barangays and status routes
-app.get("/api/barangays", (req, res) => {
+// Serve barangays, routes, and status
+app.get(["/api/barangays", "/api/routes", "/api/areas"], (req, res) => {
   const barangays = [
-    { id: "BRG-01", name: "Poblacion", code: "PB-01", ratePerM3: 24.50 },
-    { id: "BRG-02", name: "Natumolan", code: "NT-02", ratePerM3: 24.50 },
-    { id: "BRG-03", name: "Baluarte", code: "BL-03", ratePerM3: 24.50 },
-    { id: "BRG-04", name: "Sta. Ana", code: "SA-04", ratePerM3: 24.50 },
-    { id: "BRG-05", name: "Sta. Cruz", code: "SC-05", ratePerM3: 24.50 },
-    { id: "BRG-06", name: "Mohon", code: "MH-06", ratePerM3: 24.50 },
-    { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 24.50 },
-    { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 24.50 },
-    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 24.50 }
+    { id: "BRG-01", name: "Poblacion", code: "PB-01", ratePerM3: 24.50, zone: "Zone 1-4: Poblacion (Main Central)" },
+    { id: "BRG-02", name: "Natumolan", code: "NT-02", ratePerM3: 24.50, zone: "Zone 5-8: Natumolan Coastal & Residential" },
+    { id: "BRG-03", name: "Baluarte", code: "BL-03", ratePerM3: 24.50, zone: "Zone 9-10: Baluarte Agricultural & Commercial" },
+    { id: "BRG-04", name: "Sta. Ana", code: "SA-04", ratePerM3: 24.50, zone: "Zone 4: Sta. Ana Rural" },
+    { id: "BRG-05", name: "Sta. Cruz", code: "SC-05", ratePerM3: 24.50, zone: "Zone 5: Sta. Cruz Sub-Central" },
+    { id: "BRG-06", name: "Mohon", code: "MH-06", ratePerM3: 24.50, zone: "Zone 11-12: Mohon Industrial Corridor" },
+    { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 24.50, zone: "Zone 7: Gracia Uplands" },
+    { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 24.50, zone: "Zone 8: Casinglot Residential" },
+    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 24.50, zone: "Zone 9: Sugbongcogon Valley" }
   ];
-  res.json({ success: true, count: barangays.length, barangays, data: barangays });
+  res.json({ success: true, count: barangays.length, barangays, routes: barangays, areas: barangays, data: barangays });
 });
 
 app.get(["/api/health", "/api/status", "/api/ping"], (req, res) => {
@@ -1322,6 +1481,14 @@ app.get(["/api/health", "/api/status", "/api/ping"], (req, res) => {
     consumersCount: syncedConsumers.length,
     staffCount: registeredStaff.length,
     timestamp: new Date().toISOString()
+  });
+});
+
+// Fallback for non-existent API routes to avoid returning HTML to mobile apps
+app.all("/api/*", (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `API endpoint ${req.method} ${req.originalUrl} not found on Tagoloan Water District server.`
   });
 });
 

@@ -64,12 +64,14 @@ import {
 import { mockDb } from '../mockDb';
 import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotification } from '../types';
 import { ConsumerPortalSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
+import DataLoadingIndicator from './common/DataLoadingIndicator';
 import { OverdueBillBanner } from './consumer/OverdueBillBanner';
 import { DynamicDueAlert } from './consumer/DynamicDueAlert';
 import { UploadReceiptModal } from './consumer/UploadReceiptModal';
 import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
 import { useToast } from '../context/ToastContext';
+import { useLoading } from '../context/LoadingContext';
 import { calculateWaterTariff } from '../utils/tariffCalculator';
 
 interface ConsumerPortalProps {
@@ -79,6 +81,8 @@ interface ConsumerPortalProps {
 
 export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortalProps) {
   const toast = useToast();
+  const { showLoading, hideLoading } = useLoading();
+
   // Navigation Modules: Dashboard, My Bills, My Usage, Notifications, My Profile
   const [activeTab, setActiveTab] = useState<'dashboard' | 'bills' | 'usage' | 'notifications' | 'profile'>('dashboard');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -86,6 +90,29 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Loading States
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isTabLoading, setIsTabLoading] = useState(false);
+
+  // Tab switching with data readiness indicator
+  const handleConsumerTabChange = (tab: typeof activeTab) => {
+    if (tab === activeTab) return;
+    setIsTabLoading(true);
+    setActiveTab(tab);
+    if (mobileSidebarOpen) setMobileSidebarOpen(false);
+    setTimeout(() => {
+      setIsTabLoading(false);
+    }, 220);
+  };
+
+  const getConsumerTabLoadingMessage = (tab: typeof activeTab) => {
+    switch (tab) {
+      case 'dashboard': return { title: 'Compiling Water Service Dashboard...', subtitle: 'Fetching current cubic meter index, billing summary, and active notices' };
+      case 'bills': return { title: 'Loading My Water Bills Ledger...', subtitle: 'Calculating itemized tariff breakdown, due dates, and official payment receipts' };
+      case 'usage': return { title: 'Querying Historical Consumption Telemetry...', subtitle: 'Aggregating monthly cubic meter trends and conservation metrics' };
+      case 'notifications': return { title: 'Retrieving Account Alerts & Bulletins...', subtitle: 'Loading water advisory notices, billing alerts, and payment confirmations' };
+      case 'profile': return { title: 'Loading Consumer Profile Information...', subtitle: 'Fetching registered address, account credentials, and meter serials' };
+      default: return { title: 'Fetching Consumer Records...', subtitle: 'Synchronizing with Tagoloan Water District database' };
+    }
+  };
 
   // Core Data States
   const [consumerRecord, setConsumerRecord] = useState<Consumer | null>(null);
@@ -814,10 +841,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             {/* Module 1: Dashboard */}
             <button
-              onClick={() => {
-                setActiveTab('dashboard');
-                setMobileSidebarOpen(false);
-              }}
+              onClick={() => handleConsumerTabChange('dashboard')}
               className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-left transition cursor-pointer group ${
                 activeTab === 'dashboard'
                   ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/30'
@@ -841,10 +865,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             {/* Module 2: My Bills */}
             <button
-              onClick={() => {
-                setActiveTab('bills');
-                setMobileSidebarOpen(false);
-              }}
+              onClick={() => handleConsumerTabChange('bills')}
               className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-left transition cursor-pointer group ${
                 activeTab === 'bills'
                   ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/30'
@@ -874,10 +895,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             {/* Module 3: My Usage */}
             <button
-              onClick={() => {
-                setActiveTab('usage');
-                setMobileSidebarOpen(false);
-              }}
+              onClick={() => handleConsumerTabChange('usage')}
               className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-left transition cursor-pointer group ${
                 activeTab === 'usage'
                   ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/30'
@@ -901,10 +919,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             {/* Module 4: Notifications */}
             <button
-              onClick={() => {
-                setActiveTab('notifications');
-                setMobileSidebarOpen(false);
-              }}
+              onClick={() => handleConsumerTabChange('notifications')}
               className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-left transition cursor-pointer group ${
                 activeTab === 'notifications'
                   ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/30'
@@ -934,10 +949,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             {/* Module 5: My Profile */}
             <button
-              onClick={() => {
-                setActiveTab('profile');
-                setMobileSidebarOpen(false);
-              }}
+              onClick={() => handleConsumerTabChange('profile')}
               className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-left transition cursor-pointer group ${
                 activeTab === 'profile'
                   ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/30'
@@ -1338,9 +1350,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         )}
 
         {/* ------------------------------------------------------------- */}
-        {/* MODULE 1: DASHBOARD                                          */}
+        {/* DATA LOADING INDICATOR FOR INITIAL LOAD, SYNC, OR TAB SWITCH  */}
         {/* ------------------------------------------------------------- */}
-        {activeTab === 'dashboard' && (
+        {isInitialLoading || isSyncing || isTabLoading ? (
+          <DataLoadingIndicator 
+            variant="card"
+            message={getConsumerTabLoadingMessage(activeTab).title}
+            subMessage={getConsumerTabLoadingMessage(activeTab).subtitle}
+            badgeText="TAGOLOAN CONSUMER LEDGER"
+          />
+        ) : (
+          <>
+            {/* ------------------------------------------------------------- */}
+            {/* MODULE 1: DASHBOARD                                          */}
+            {/* ------------------------------------------------------------- */}
+            {activeTab === 'dashboard' && (
           <div className="space-y-8 animate-fade-in" id="consumer-tab-dashboard">
             
             {/* DYNAMIC DUE ALERT & OVERDUE FLAGGING COMPONENT */}
@@ -3057,6 +3081,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
           </div>
         )}
+        </>
+      )}
 
       </main>
 

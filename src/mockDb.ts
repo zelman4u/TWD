@@ -12,6 +12,7 @@ import {
   eraseAccountFromFirestore,
   isAccountTerminated,
   addTerminatedAccountKeys,
+  removeTerminatedAccountKeys,
   COLLECTIONS 
 } from './services/firebaseDb';
 
@@ -792,6 +793,83 @@ export const mockDb = {
     );
     setStored(KEYS.USERS, updatedUsers);
     eraseAccountFromFirestore({ id: userId, email, username, name });
+  },
+
+  deleteConsumer: (accountNumber?: string, email?: string, linkedUserId?: string, name?: string): void => {
+    // 1. Add keys to blacklist
+    addTerminatedAccountKeys([accountNumber, email, linkedUserId, name]);
+
+    // 2. Erase from CONSUMERS
+    const allConsumers = getStored<Consumer[]>(KEYS.CONSUMERS, INITIAL_CONSUMERS);
+    const updatedConsumers = allConsumers.filter(c => 
+      !isAccountTerminated(c) &&
+      (!accountNumber || c.accountNumber !== accountNumber) &&
+      (!email || !c.email || c.email.toLowerCase() !== email.toLowerCase()) &&
+      (!linkedUserId || c.linkedUserId !== linkedUserId) &&
+      (!name || c.name.toLowerCase() !== name.toLowerCase())
+    );
+    setStored(KEYS.CONSUMERS, updatedConsumers);
+
+    // 3. Delete linked user account if exists
+    mockDb.deleteUser(linkedUserId || '', email, undefined, name);
+
+    // 4. Unassign any water meters linked to this consumer
+    if (accountNumber) {
+      const allMeters = getStored<WaterMeter[]>(KEYS.METERS, INITIAL_METERS);
+      const updatedMeters = allMeters.map(m => {
+        if (m.linkedAccountNumber === accountNumber) {
+          return { ...m, linkedAccountNumber: '' };
+        }
+        return m;
+      });
+      setStored(KEYS.METERS, updatedMeters);
+    }
+
+    // 5. Erase from Firestore
+    const docId = accountNumber || linkedUserId || (email ? `email_${email.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}` : '');
+    if (docId) {
+      deleteDocFromFirestore(COLLECTIONS.CONSUMERS, docId);
+    }
+    eraseAccountFromFirestore({ id: linkedUserId || accountNumber, email, name });
+  },
+
+  deleteMeter: (meterNumber: string): void => {
+    const allMeters = getStored<WaterMeter[]>(KEYS.METERS, INITIAL_METERS);
+    const updatedMeters = allMeters.filter(m => m.meterNumber !== meterNumber);
+    setStored(KEYS.METERS, updatedMeters);
+
+    // Unlink any consumer linked to this meter
+    const allConsumers = getStored<Consumer[]>(KEYS.CONSUMERS, INITIAL_CONSUMERS);
+    const updatedConsumers = allConsumers.map(c => {
+      if (c.meterNumber === meterNumber) {
+        return { ...c, meterNumber: 'UNASSIGNED', rfidTag: 'UNASSIGNED' };
+      }
+      return c;
+    });
+    setStored(KEYS.CONSUMERS, updatedConsumers);
+
+    deleteDocFromFirestore(COLLECTIONS.METERS, meterNumber);
+  },
+
+  deleteReading: (readingId: string): void => {
+    const allReadings = getStored<MeterReading[]>(KEYS.READINGS, INITIAL_READINGS);
+    const updatedReadings = allReadings.filter(r => r.id !== readingId);
+    setStored(KEYS.READINGS, updatedReadings);
+    deleteDocFromFirestore(COLLECTIONS.READINGS, readingId);
+  },
+
+  deleteAnnouncement: (id: string): void => {
+    const allAnnouncements = getStored<Announcement[]>(KEYS.ANNOUNCEMENTS, INITIAL_ANNOUNCEMENTS);
+    const updatedAnnouncements = allAnnouncements.filter(a => a.id !== id);
+    setStored(KEYS.ANNOUNCEMENTS, updatedAnnouncements);
+    deleteDocFromFirestore(COLLECTIONS.ANNOUNCEMENTS, id);
+  },
+
+  deleteBarangay: (id: string): void => {
+    const allBarangays = getStored<Barangay[]>(KEYS.BARANGAYS, INITIAL_BARANGAYS);
+    const updatedBarangays = allBarangays.filter(b => b.id !== id);
+    setStored(KEYS.BARANGAYS, updatedBarangays);
+    deleteDocFromFirestore(COLLECTIONS.BARANGAYS, id);
   },
 
   saveMeters: (meters: WaterMeter[]): void => {

@@ -83,6 +83,19 @@ export function addTerminatedAccountKeys(keys: (string | undefined | null)[]) {
   } catch {}
 }
 
+export function removeTerminatedAccountKeys(keys: (string | undefined | null)[]) {
+  try {
+    if (typeof window === 'undefined') return;
+    const current = getTerminatedAccountKeys();
+    keys.forEach(k => {
+      if (k && typeof k === 'string' && k.trim()) {
+        current.delete(k.trim().toLowerCase());
+      }
+    });
+    localStorage.setItem(TERMINATED_ACCOUNTS_KEY, JSON.stringify(Array.from(current)));
+  } catch {}
+}
+
 export function isAccountTerminated(account: { id?: string; employeeId?: string; username?: string; email?: string; name?: string }): boolean {
   const set = getTerminatedAccountKeys();
   if (set.size === 0) return false;

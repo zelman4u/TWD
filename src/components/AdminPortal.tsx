@@ -59,12 +59,14 @@ import {
   BadgeCheck
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
-import { User, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog } from '../types';
+import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog } from '../types';
 import { DashboardSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
+import DataLoadingIndicator from './common/DataLoadingIndicator';
 import AdminAnalyticsSection from './charts/AdminAnalyticsSection';
 import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
 import { useToast } from '../context/ToastContext';
+import { useLoading } from '../context/LoadingContext';
 import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
 import { initRealtimeSocket } from '../services/realtimeSocket';
 import { calculateWaterTariff } from '../utils/tariffCalculator';
@@ -76,6 +78,8 @@ interface AdminPortalProps {
 
 export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps) {
   const toast = useToast();
+  const { showLoading, hideLoading } = useLoading();
+  
   // Tariff calculation helper
   const calculateCostOf = (usage: number, classification?: string) => {
     return calculateWaterTariff(usage, classification === 'Commercial' ? 'Commercial' : 'Residential');
@@ -101,6 +105,40 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   // Loading and Sync states
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isTabLoading, setIsTabLoading] = useState(false);
+  const [isSubTabLoading, setIsSubTabLoading] = useState(false);
+
+  // Tab switching handler with data loading transition
+  const handleTabChange = (tab: typeof activeTab) => {
+    if (tab === activeTab) return;
+    setIsTabLoading(true);
+    setActiveTab(tab);
+    if (isMobileSidebarOpen) setIsMobileSidebarOpen(false);
+    setTimeout(() => {
+      setIsTabLoading(false);
+    }, 220);
+  };
+
+  // Helper to describe loading state for each tab
+  const getTabLoadingMessage = (tab: typeof activeTab) => {
+    switch (tab) {
+      case 'dashboard': return { title: 'Compiling Operational Dashboard Analytics...', subtitle: 'Calculating real-time water production, billing aggregates, and field metrics' };
+      case 'records': return { title: 'Querying Municipal Archive Records...', subtitle: 'Fetching unified data ledger across consumers, meters, readings, and payments' };
+      case 'consumers': return { title: 'Fetching Consumer Accounts Registry...', subtitle: 'Loading active water service accounts, meter bindings, and arrears ledgers' };
+      case 'approvals': return { title: 'Fetching Reading Approvals Queue...', subtitle: 'Querying telemetry photos, GPS tags, and anomaly flags for validation' };
+      case 'bills': return { title: 'Loading Invoicing & Billing Master Ledger...', subtitle: 'Computing tiered block consumption tariffs and overdue statements' };
+      case 'payments': return { title: 'Initializing Cashier & Payment Gateway...', subtitle: 'Connecting to Tagoloan revenue counter and official receipt registers' };
+      case 'readings': return { title: 'Loading Meter Readings History...', subtitle: 'Retrieving historical cubic meter index telemetry and photographic audit proofs' };
+      case 'meters': return { title: 'Loading Mechanical Water Meters Inventory...', subtitle: 'Syncing hardware serial registry, installation logs, and meter statuses' };
+      case 'readers': return { title: 'Fetching Meter Readers & Route Registry...', subtitle: 'Loading field technician rosters, credentials, and geographic assignments' };
+      case 'staff': return { title: 'Loading Staff & Permissions Directory...', subtitle: 'Verifying administrative access privileges and system security roles' };
+      case 'barangays': return { title: 'Loading Service Area Zones...', subtitle: 'Fetching barangay zone schedules, assigned inspectors, and tariff parameters' };
+      case 'announcements': return { title: 'Retrieving Public Advisories & Notices...', subtitle: 'Fetching emergency broadcasts, maintenance schedules, and district bulletins' };
+      case 'profile': return { title: 'Loading Administrator Settings...', subtitle: 'Retrieving municipal profile configuration and security preferences' };
+      default: return { title: 'Fetching data from Tagoloan Water District...', subtitle: 'Synchronizing records with municipal database' };
+    }
+  };
+
   const [lastSyncTime, setLastSyncTime] = useState<string>(() => {
     const d = new Date();
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
@@ -271,11 +309,18 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   });
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [newStaff, setNewStaff] = useState({ name: '', email: '', role: 'Cashier', department: 'Finance' });
+  const [editingStaffModal, setEditingStaffModal] = useState<{ id: string; name: string; email: string; role: string; department: string; status: string } | null>(null);
 
   // 11. Barangays Module State
   const [barangayList, setBarangayList] = useState(mockDb.getBarangays());
   const [showAddBarangay, setShowAddBarangay] = useState(false);
   const [newBarangay, setNewBarangay] = useState({ name: '', code: '', schedule: '', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 });
+  const [editingBarangayModal, setEditingBarangayModal] = useState<Barangay | null>(null);
+
+  // Additional Edit Modal States
+  const [editingMeterModal, setEditingMeterModal] = useState<WaterMeter | null>(null);
+  const [editingAnnouncementModal, setEditingAnnouncementModal] = useState<Announcement | null>(null);
+  const [editingReaderModal, setEditingReaderModal] = useState<MeterReader | null>(null);
 
   // 13. Profile Admin State
   const [adminProfile, setAdminProfile] = useState({
@@ -390,7 +435,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               (lr.email && ar.username && lr.email.toLowerCase() === ar.username.toLowerCase()) ||
               (lr.email && ar.email && lr.email.toLowerCase() === ar.email.toLowerCase())
             );
-            const normalizedStatus = (ar.employmentStatus === 'active' || ar.status === 'active') ? 'active' : 'pending_approval';
+            const normalizedStatus: 'active' | 'pending_approval' = (ar.employmentStatus === 'inactive') ? 'pending_approval' : 'active';
 
             if (!exists) {
               // Add new mobile registrant to local store
@@ -400,7 +445,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 email: ar.username || ar.email || `${ar.id.toLowerCase()}@tagoloanwater.gov.ph`,
                 employeeId: ar.id,
                 contactNumber: ar.contactNumber || 'N/A',
-                assignedRoutes: ar.assignedRoutes || [ar.zone || 'Poblacion'],
+                assignedRoutes: (ar.assignedRoutes && ar.assignedRoutes.length > 0) ? ar.assignedRoutes : [ar.zone || 'Poblacion'],
                 employmentStatus: normalizedStatus,
                 completedReadings: 0,
                 pendingReadings: 0,
@@ -408,9 +453,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               };
               currentLocal.push(newReaderObj);
               hasChanges = true;
-            } else if (exists.employmentStatus !== normalizedStatus) {
-              exists.employmentStatus = normalizedStatus;
-              hasChanges = true;
+            } else {
+              if (exists.employmentStatus !== normalizedStatus) {
+                exists.employmentStatus = normalizedStatus;
+                hasChanges = true;
+              }
+              if (ar.assignedRoutes && Array.isArray(ar.assignedRoutes) && ar.assignedRoutes.length > 0) {
+                exists.assignedRoutes = ar.assignedRoutes;
+                hasChanges = true;
+              }
             }
           });
 
@@ -541,11 +592,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     // 5. Dedicated Live WebSocket Stream for instant push events
     const cleanupWs = initRealtimeSocket((data) => {
-      if (data.type === 'READER_REGISTERED_PENDING' || data.type === 'staff:registered') {
-        toast.info('New Meter Reader Registered', data.payload?.message || 'New field staff awaiting approval in Meter Readers tab.');
+      if (data.type === 'READER_REGISTERED_ACTIVE' || data.type === 'READER_REGISTERED_PENDING' || data.type === 'staff:registered') {
+        toast.info('Meter Reader Enrolled', data.payload?.message || 'New field staff registered in Meter Readers module.');
         loadAllDataFromStore(false);
-      } else if (data.type === 'NEW_READING_SUBMITTED' || data.type === 'readings:new') {
-        toast.info('New Field Reading Received', data.payload?.message || 'Incoming meter reading queued for approval.');
+      } else if (data.type === 'READER_TERMINATED' || data.type === 'staff:terminated') {
+        loadAllDataFromStore(false);
+      } else if (data.type === 'NEW_READING_SUBMITTED' || data.type === 'readings:new' || data.type === 'READINGS_BATCH_SYNCED') {
+        toast.info('Field Readings Received', data.payload?.message || 'Incoming meter reading queued for review.');
         loadAllDataFromStore(false);
       } else if (data.type === 'CONSUMER_REGISTERED' || data.type === 'READER_APPROVED_ACTIVE' || data.type === 'staff:status_updated') {
         loadAllDataFromStore(false);
@@ -642,45 +695,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     }
   };
 
-  // Action: Delete Consumer Process with Safety Checks
+  // Action: Delete / Terminate Consumer Account (Full Erasure & Purge)
   const handleDeleteConsumer = (c: Consumer) => {
     const confirmDelete = window.confirm(
-      `Are you sure you want to delete consumer "${c.name}" (${c.accountNumber ? `Account #${c.accountNumber}` : 'Pending Application'})?\n\nThis will remove the consumer record from the system registry.`
+      `Are you sure you want to permanently delete and erase consumer "${c.name}" (${c.accountNumber ? `Account #${c.accountNumber}` : 'Pending Application'})?\n\n` +
+      `⚠️ Full Account Termination:\n` +
+      `• Permanently removes consumer profile from database\n` +
+      `• Erases all consumer portal login credentials and user accounts\n` +
+      `• Unlinks and frees any assigned water meters\n` +
+      `• Purges record from active billing rolls\n\n` +
+      `Do you want to proceed with permanent erasure?`
     );
     if (!confirmDelete) return;
 
-    // Safety Check 1: Assigned water meters
-    const allMeters = mockDb.getMeters();
-    const assignedMeters = allMeters.filter(m => c.accountNumber && (m.linkedAccountNumber === c.accountNumber || (c.meterNumber && c.meterNumber !== 'UNASSIGNED' && m.meterNumber === c.meterNumber)));
-
-    // Safety Check 2: Existing meter readings
-    const allReadings = mockDb.getReadings();
-    const matchingReadings = allReadings.filter(r => c.accountNumber && r.accountNumber === c.accountNumber);
-
-    // Safety Check 3: Generated bills (readings with billing status)
-    const matchingBills = allReadings.filter(r => c.accountNumber && r.accountNumber === c.accountNumber && r.paymentStatus !== undefined);
-
-    if (assignedMeters.length > 0 || matchingReadings.length > 0 || matchingBills.length > 0) {
-      alert(
-        `❌ Cannot delete consumer "${c.name}" (Account #${c.accountNumber}):\n\n` +
-        `Safety checks detected linked system records:\n` +
-        `• Assigned Water Meters: ${assignedMeters.length}\n` +
-        `• Meter Readings: ${matchingReadings.length}\n` +
-        `• Generated Bills: ${matchingBills.length}\n\n` +
-        `To preserve system audit integrity, consumer accounts with active meter, reading, or bill history cannot be deleted directly. Please set account status to INACTIVE, BLOCKED, or ARCHIVED instead.`
-      );
-      return;
-    }
-
-    // Permanent removal from database
-    const updatedConsumers = consumers.filter(item => {
-      if (c.accountNumber && item.accountNumber === c.accountNumber) return false;
-      if (c.email && item.email && item.email.toLowerCase() === c.email.toLowerCase()) return false;
-      if (c.linkedUserId && item.linkedUserId === c.linkedUserId) return false;
-      return true;
-    });
-    mockDb.saveConsumers(updatedConsumers);
-    setConsumers(updatedConsumers);
+    // Permanent erasure across mockDb, user accounts, meters, and firestore
+    mockDb.deleteConsumer(c.accountNumber, c.email, c.linkedUserId, c.name);
 
     // Sync deletion with backend API
     const deleteId = c.accountNumber || c.email || c.linkedUserId || '';
@@ -692,7 +721,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     if (selectedConsumerModal && (
       (c.accountNumber && selectedConsumerModal.accountNumber === c.accountNumber) ||
-      (c.email && selectedConsumerModal.email === c.email)
+      (c.email && selectedConsumerModal.email === c.email) ||
+      (c.linkedUserId && selectedConsumerModal.linkedUserId === c.linkedUserId)
     )) {
       setSelectedConsumerModal(null);
     }
@@ -701,11 +731,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       currentUser.id,
       currentUser.name,
       'admin',
-      'Delete Consumer Account',
-      `Permanently deleted consumer account ${c.accountNumber ? `#${c.accountNumber}` : 'Pending Profile'} (${c.name}).`
+      'Purge and Terminate Consumer Account',
+      `Permanently terminated and fully erased consumer account ${c.accountNumber ? `#${c.accountNumber}` : 'Pending Profile'} (${c.name}, Email: ${c.email || 'N/A'}).`
     );
 
-    alert(`Consumer record for ${c.name} has been removed successfully.`);
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
+    toast.error('Consumer Account Erased', `Consumer record for "${c.name}" has been permanently purged and erased.`);
   };
 
   // Action: Update Consumer Details (Edit Tab in Modal)
@@ -752,6 +784,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       `Updated profile details for consumer #${selectedConsumerModal.accountNumber} (${updated.name}).`
     );
 
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
     toast.success('Consumer Details Updated', `Profile details for ${updated.name} updated successfully. All records synchronized.`);
   };
 
@@ -1470,6 +1504,258 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
   };
 
+  // Action: Delete Water Meter
+  const handleDeleteMeter = (m: WaterMeter) => {
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete and decommission water meter #${m.meterNumber} (${m.brand})?\n\n` +
+      `If this meter is currently assigned to a consumer, the meter link will be automatically unlinked.`
+    );
+    if (!confirmDelete) return;
+
+    mockDb.deleteMeter(m.meterNumber);
+    setMeters(prev => prev.filter(item => item.meterNumber !== m.meterNumber));
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Delete Water Meter',
+      `Decommissioned and deleted water meter #${m.meterNumber} (${m.brand}).`
+    );
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
+    toast.error('Meter Deleted', `Water meter #${m.meterNumber} has been removed from inventory.`);
+  };
+
+  // Action: Update Water Meter
+  const handleUpdateMeter = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingMeterModal) return;
+
+    const allMeters = mockDb.getMeters();
+    const updated = allMeters.map(m => m.meterNumber === editingMeterModal.meterNumber ? editingMeterModal : m);
+    mockDb.saveMeters(updated);
+    setMeters(updated);
+
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Update Water Meter',
+      `Updated meter specifications for #${editingMeterModal.meterNumber} (Status: ${editingMeterModal.status}).`
+    );
+    setEditingMeterModal(null);
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
+    toast.success('Meter Updated', `Water meter #${editingMeterModal.meterNumber} updated successfully.`);
+  };
+
+  // Action: Delete / Terminate Staff Account
+  const handleDeleteStaff = (st: { id: string; name: string; email: string; role: string; department: string; status: string }) => {
+    const confirmDelete = window.confirm(
+      `⚠️ Terminate Staff Account: Are you sure you want to permanently erase and terminate staff member "${st.name}" (${st.email})?\n\n` +
+      `This will completely erase their system credentials, revoke all administrative access, and remove their profile.`
+    );
+    if (!confirmDelete) return;
+
+    mockDb.deleteUser(st.id, st.email, undefined, st.name);
+    setStaffList(prev => prev.filter(item => item.id !== st.id && item.email !== st.email));
+    
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Terminate Staff User',
+      `Permanently terminated and erased staff user "${st.name}" (${st.role}, ${st.email}).`
+    );
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
+    toast.error('Staff Account Terminated', `Staff account for "${st.name}" has been permanently purged.`);
+  };
+
+  // Action: Update Staff Member
+  const handleUpdateStaff = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStaffModal) return;
+
+    const allUsers = mockDb.getUsers();
+    const roleLower = editingStaffModal.role.toLowerCase();
+    const roleCode = roleLower.includes('admin') ? 'admin' : (roleLower.includes('cashier') ? 'cashier' : 'staff');
+    const updatedUsers = allUsers.map(u => {
+      if (u.id === editingStaffModal.id || (u.email && u.email.toLowerCase() === editingStaffModal.email.toLowerCase())) {
+        return {
+          ...u,
+          name: editingStaffModal.name,
+          email: editingStaffModal.email,
+          role: roleCode as any,
+          status: editingStaffModal.status as any
+        };
+      }
+      return u;
+    });
+    mockDb.saveUsers(updatedUsers);
+
+    setStaffList(prev => prev.map(s => s.id === editingStaffModal.id ? editingStaffModal : s));
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Update Staff User',
+      `Updated staff record for "${editingStaffModal.name}" (${editingStaffModal.role}).`
+    );
+    setEditingStaffModal(null);
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
+    toast.success('Staff Updated', `Staff details for "${editingStaffModal.name}" updated successfully.`);
+  };
+
+  // Action: Delete Barangay Zone
+  const handleDeleteBarangay = (bg: Barangay) => {
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete Barangay service zone "${bg.name}" (${bg.code})?\n\n` +
+      `This will remove the zone definition from the municipal district registry.`
+    );
+    if (!confirmDelete) return;
+
+    mockDb.deleteBarangay(bg.id);
+    setBarangayList(prev => prev.filter(item => item.id !== bg.id));
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Delete Barangay Zone',
+      `Deleted service zone ${bg.name} (${bg.code}).`
+    );
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
+    toast.error('Zone Removed', `Barangay ${bg.name} has been removed.`);
+  };
+
+  // Action: Update Barangay Zone
+  const handleUpdateBarangay = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingBarangayModal) return;
+
+    const allBarangays = mockDb.getBarangays();
+    const updated = allBarangays.map(b => b.id === editingBarangayModal.id ? editingBarangayModal : b);
+    mockDb.saveBarangays(updated);
+    setBarangayList(updated);
+
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Update Barangay Zone',
+      `Updated zone parameters for ${editingBarangayModal.name} (${editingBarangayModal.code}, ₱${editingBarangayModal.ratePerM3}/m³).`
+    );
+    setEditingBarangayModal(null);
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
+    toast.success('Zone Updated', `Barangay ${editingBarangayModal.name} updated successfully.`);
+  };
+
+  // Action: Delete Announcement
+  const handleDeleteAnnouncement = (ann: Announcement) => {
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete announcement "${ann.title}"?`
+    );
+    if (!confirmDelete) return;
+
+    mockDb.deleteAnnouncement(ann.id);
+    setAnnouncements(prev => prev.filter(item => item.id !== ann.id));
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Delete Public Bulletin',
+      `Deleted announcement "${ann.title}".`
+    );
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
+    toast.error('Announcement Deleted', `Bulletin "${ann.title}" removed.`);
+  };
+
+  // Action: Update Announcement
+  const handleUpdateAnnouncement = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAnnouncementModal) return;
+
+    const allAnnouncements = mockDb.getAnnouncements();
+    const updated = allAnnouncements.map(a => a.id === editingAnnouncementModal.id ? editingAnnouncementModal : a);
+    mockDb.saveAnnouncements(updated);
+    setAnnouncements(updated);
+
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Update Public Bulletin',
+      `Updated announcement "${editingAnnouncementModal.title}".`
+    );
+    setEditingAnnouncementModal(null);
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
+    toast.success('Announcement Updated', `Bulletin updated successfully.`);
+  };
+
+  // Action: Delete / Void Meter Reading
+  const handleDeleteReading = (readingId: string) => {
+    const confirmDelete = window.confirm(
+      `Are you sure you want to void and delete meter reading transaction #${readingId}?\n\n` +
+      `This will remove the reading entry from the system registry.`
+    );
+    if (!confirmDelete) return;
+
+    mockDb.deleteReading(readingId);
+    setReadings(prev => prev.filter(r => r.id !== readingId));
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Delete Meter Reading',
+      `Voided and deleted reading transaction #${readingId}.`
+    );
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
+    toast.error('Reading Deleted', `Reading #${readingId} has been deleted.`);
+  };
+
+  // Action: Update Meter Reader Officer
+  const handleUpdateReader = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingReaderModal) return;
+
+    const allReaders = mockDb.getReaders();
+    const updated = allReaders.map(r => r.id === editingReaderModal.id ? editingReaderModal : r);
+    mockDb.saveReaders(updated);
+    setReaders(updated);
+
+    // Sync user account
+    const allUsers = mockDb.getUsers();
+    const updatedUsers = allUsers.map(u => {
+      if (u.id === editingReaderModal.id || (editingReaderModal.username && u.email?.startsWith(editingReaderModal.username))) {
+        return {
+          ...u,
+          name: editingReaderModal.name,
+          status: (editingReaderModal.employmentStatus === 'active' ? 'active' : 'inactive') as User['status']
+        };
+      }
+      return u;
+    });
+    mockDb.saveUsers(updatedUsers);
+
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Update Meter Reader',
+      `Updated profile for meter reader officer "${editingReaderModal.name}".`
+    );
+    setEditingReaderModal(null);
+    loadAllDataFromStore();
+    window.dispatchEvent(new Event('twd_database_updated'));
+    toast.success('Officer Updated', `Reader profile for ${editingReaderModal.name} updated successfully.`);
+  };
+
   // Action: Route assignment changes
   const handleSaveRouteAssignment = (routeId: string) => {
     const selectedReader = readers.find(r => r.id === assignedReaderId);
@@ -1776,7 +2062,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Dashboard Module */}
           <button
             id="admin-nav-dashboard"
-            onClick={() => { setActiveTab('dashboard'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('dashboard')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'dashboard' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1788,7 +2074,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Records Module */}
           <button
             id="admin-nav-records"
-            onClick={() => { setActiveTab('records'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('records')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'records' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1800,7 +2086,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Consumers Module */}
           <button
             id="admin-nav-consumers"
-            onClick={() => { setActiveTab('consumers'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('consumers')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'consumers' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1812,7 +2098,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Approvals Module */}
           <button
             id="admin-nav-approvals"
-            onClick={() => { setActiveTab('approvals'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('approvals')}
             className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'approvals' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1831,7 +2117,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Bills Module */}
           <button
             id="admin-nav-bills"
-            onClick={() => { setActiveTab('bills'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('bills')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'bills' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1843,7 +2129,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Process Payment Module */}
           <button
             id="admin-nav-payments"
-            onClick={() => { setActiveTab('payments'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('payments')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'payments' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1855,7 +2141,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Meter Readings Module */}
           <button
             id="admin-nav-readings"
-            onClick={() => { setActiveTab('readings'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('readings')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'readings' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1867,7 +2153,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Water Meters Module */}
           <button
             id="admin-nav-meters"
-            onClick={() => { setActiveTab('meters'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('meters')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'meters' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1879,7 +2165,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Meter Readers Module */}
           <button
             id="admin-nav-readers"
-            onClick={() => { setActiveTab('readers'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('readers')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'readers' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1891,7 +2177,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Staff Module */}
           <button
             id="admin-nav-staff"
-            onClick={() => { setActiveTab('staff'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('staff')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'staff' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1903,7 +2189,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Barangays Module */}
           <button
             id="admin-nav-barangays"
-            onClick={() => { setActiveTab('barangays'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('barangays')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'barangays' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1915,7 +2201,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Announcements Module */}
           <button
             id="admin-nav-announcements"
-            onClick={() => { setActiveTab('announcements'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('announcements')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'announcements' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -1927,7 +2213,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* Profile Module */}
           <button
             id="admin-nav-profile"
-            onClick={() => { setActiveTab('profile'); if (isMobile) setIsMobileSidebarOpen(false); }}
+            onClick={() => handleTabChange('profile')}
             className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'profile' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
@@ -2057,15 +2343,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         {/* TAB WORKSPACE MODULE CONTENT */}
         <div className="p-4 sm:p-8 flex-grow">
           
-          {/* Global Skeleton View when initial data or refresh is executing */}
-          {isInitialLoading || isRefreshing ? (
-            activeTab === 'dashboard' ? (
-              <DashboardSkeleton title="Synchronizing District Operational Registers..." />
-            ) : activeTab === 'announcements' || activeTab === 'readers' || activeTab === 'barangays' ? (
-              <CardsGridSkeleton count={6} />
-            ) : (
-              <TableSkeleton title={`Loading ${activeTab.toUpperCase()} master register...`} rows={6} />
-            )
+          {/* Data Loading Indicator when initial data, refresh, or tab switch is executing */}
+          {isInitialLoading || isRefreshing || isTabLoading ? (
+            <DataLoadingIndicator 
+              variant="card"
+              message={getTabLoadingMessage(activeTab).title}
+              subMessage={getTabLoadingMessage(activeTab).subtitle}
+              badgeText="MUNICIPAL LEDGER SYNC"
+            />
           ) : (
             <>
               {/* 1. OPERATIONAL DASHBOARD */}
@@ -3556,15 +3841,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           </div>
                         </div>
 
-                        {/* Card Action Footer: Terminate Account */}
-                        <div className="pt-3 border-t border-slate-100">
+                        {/* Card Action Footer: Terminate Account Only */}
+                        <div className="pt-3 border-t border-slate-100 flex items-center">
                           <button
                             type="button"
                             onClick={() => handleTerminateReader(r)}
-                            className="w-full py-2.5 px-3 bg-rose-50 hover:bg-rose-600 active:scale-95 text-rose-700 hover:text-white font-bold text-xs rounded-xl border border-rose-200 hover:border-rose-600 transition shadow-xs flex items-center justify-center space-x-2 cursor-pointer group"
+                            className="w-full py-2.5 px-3 bg-rose-50 hover:bg-rose-600 active:scale-95 text-rose-700 hover:text-white font-bold text-xs rounded-xl border border-rose-200 hover:border-rose-600 transition shadow-xs flex items-center justify-center space-x-1.5 cursor-pointer group"
+                            title={`Terminate ${r.name}`}
                           >
-                            <UserX className="h-4 w-4 text-rose-600 group-hover:text-white transition" />
-                            <span>Terminate Account</span>
+                            <UserX className="h-3.5 w-3.5 text-rose-600 group-hover:text-white transition" />
+                            <span>Terminate</span>
                           </button>
                         </div>
                       </div>
@@ -3657,7 +3943,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         <th className="px-6 py-4">Brand / Manufacturer</th>
                         <th className="px-6 py-4">Installation Date</th>
                         <th className="px-6 py-4 font-mono">Linked Consumer Link</th>
-                        <th className="px-6 py-3 text-right">Operational Status</th>
+                        <th className="px-6 py-4">Operational Status</th>
+                        <th className="px-6 py-4 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
@@ -3669,7 +3956,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           <td className="px-6 py-4 font-mono font-bold text-blue-600">
                             {m.linkedAccountNumber ? `#${m.linkedAccountNumber}` : 'UNASSIGNED'}
                           </td>
-                          <td className="px-6 py-4 text-right">
+                          <td className="px-6 py-4">
                             <span className={`px-2.5 py-1 rounded text-[10px] font-bold ${
                               m.status === 'active' 
                                 ? 'bg-emerald-50 text-emerald-700' 
@@ -3679,6 +3966,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             }`}>
                               {m.status.toUpperCase()}
                             </span>
+                          </td>
+                          <td className="px-6 py-4 text-right space-x-2">
+                            <button
+                              onClick={() => setEditingMeterModal({ ...m })}
+                              className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 text-blue-700 rounded text-xs font-bold transition"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeleteMeter(m)}
+                              className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded text-xs font-bold transition"
+                            >
+                              Delete
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -3885,22 +4186,29 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 {r.status === 'flagged_abnormal' ? 'ANOMALOUS SUSPECTED' : r.status.toUpperCase()}
                               </span>
                             </td>
-                            <td className="px-6 py-4 text-right">
+                            <td className="px-6 py-4 text-right space-x-2">
                               {r.status === 'pending' || r.status === 'flagged_abnormal' ? (
                                 <button
                                   onClick={() => handleVerifyReading(r.id, 'verified')}
-                                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase rounded-xl transition inline-flex items-center space-x-1.5 shadow-xs cursor-pointer tracking-wider"
+                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase rounded-lg transition inline-flex items-center space-x-1 shadow-xs cursor-pointer tracking-wider"
                                   id={`approve-read-btn-${r.id}`}
                                 >
                                   <CheckCircle className="h-3.5 w-3.5" />
                                   <span>Approve</span>
                                 </button>
                               ) : (
-                                <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200 inline-flex items-center space-x-1">
+                                <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-1 rounded-md border border-emerald-200 inline-flex items-center space-x-1">
                                   <Check className="h-3 w-3 mr-0.5" />
                                   <span>Approved</span>
                                 </span>
                               )}
+                              <button
+                                onClick={() => handleDeleteReading(r.id)}
+                                className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-lg transition inline-flex items-center cursor-pointer"
+                                title="Void Reading"
+                              >
+                                Delete
+                              </button>
                             </td>
                           </tr>
                         );
@@ -4138,17 +4446,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     </div>
                     <div className="pt-3 border-t border-slate-50 mt-4 flex justify-between items-center text-[10px] uppercase font-bold text-slate-400">
                       <span>Posted by: {ann.postedBy}</span>
-                      <button
-                        onClick={() => {
-                          const updated = announcements.filter(x => x.id !== ann.id);
-                          mockDb.saveAnnouncements(updated);
-                          setAnnouncements(updated);
-                          mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Delete Public Bulletin', `Removed bulletin titled: ${ann.title}`);
-                        }}
-                        className="text-rose-600 hover:underline"
-                      >
-                        Delete Announcement
-                      </button>
+                      <div className="flex items-center space-x-3">
+                        <button
+                          onClick={() => setEditingAnnouncementModal({ ...ann })}
+                          className="text-blue-600 hover:underline cursor-pointer"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDeleteAnnouncement(ann)}
+                          className="text-rose-600 hover:underline cursor-pointer"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -5248,14 +5559,26 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             {st.status}
                           </span>
                         </td>
-                        <td className="px-6 py-4 text-right">
+                        <td className="px-6 py-4 text-right space-x-2">
+                          <button
+                            onClick={() => setEditingStaffModal({ ...st })}
+                            className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 text-blue-700 font-bold text-[10px] uppercase rounded-lg transition"
+                          >
+                            Edit
+                          </button>
                           <button
                             onClick={() => {
-                              alert(`Reset password link sent to ${st.email}`);
+                              alert(`Password reset notification initiated for ${st.email}`);
                             }}
-                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] uppercase rounded-lg transition"
+                            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] uppercase rounded-lg transition"
                           >
-                            Reset Password
+                            Reset Pwd
+                          </button>
+                          <button
+                            onClick={() => handleDeleteStaff(st)}
+                            className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[10px] uppercase rounded-lg transition"
+                          >
+                            Terminate
                           </button>
                         </td>
                       </tr>
@@ -5396,6 +5719,23 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       <div className="text-[11px] text-slate-500 flex justify-between items-center pt-2 border-t border-slate-100">
                         <span>Area Supervisor: <strong className="text-slate-800">{bg.supervisor}</strong></span>
                         <span className="font-mono font-bold text-emerald-700">₱{bg.ratePerM3}/m³</span>
+                      </div>
+
+                      <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                        <button
+                          onClick={() => setEditingBarangayModal({ ...bg })}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-blue-50 text-blue-700 rounded-lg text-xs font-bold transition flex items-center space-x-1"
+                        >
+                          <Edit2 className="h-3 w-3" />
+                          <span>Edit Zone</span>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteBarangay(bg)}
+                          className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold transition flex items-center space-x-1"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          <span>Delete</span>
+                        </button>
                       </div>
                     </div>
                   );
@@ -6109,6 +6449,362 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <span>Close Window</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT STAFF MODAL */}
+      {editingStaffModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-white shadow-2xl space-y-6 animate-fade-in">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-base font-extrabold text-white">Edit Staff Member</h3>
+                <p className="text-xs text-slate-400">Update system credentials and role permissions</p>
+              </div>
+              <button
+                onClick={() => setEditingStaffModal(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateStaff} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Full Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editingStaffModal.name}
+                  onChange={(e) => setEditingStaffModal({ ...editingStaffModal, name: e.target.value })}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Email Address</label>
+                <input
+                  type="email"
+                  required
+                  value={editingStaffModal.email}
+                  onChange={(e) => setEditingStaffModal({ ...editingStaffModal, email: e.target.value })}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Role</label>
+                  <select
+                    value={editingStaffModal.role}
+                    onChange={(e) => setEditingStaffModal({ ...editingStaffModal, role: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                  >
+                    <option value="Administrator">Administrator</option>
+                    <option value="Supervisor">Supervisor</option>
+                    <option value="Cashier">Cashier</option>
+                    <option value="Billing Officer">Billing Officer</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Status</label>
+                  <select
+                    value={editingStaffModal.status}
+                    onChange={(e) => setEditingStaffModal({ ...editingStaffModal, status: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                  >
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Department</label>
+                <input
+                  type="text"
+                  value={editingStaffModal.department}
+                  onChange={(e) => setEditingStaffModal({ ...editingStaffModal, department: e.target.value })}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                />
+              </div>
+              <div className="flex justify-end space-x-3 pt-4 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingStaffModal(null)}
+                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl uppercase tracking-wider"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT BARANGAY MODAL */}
+      {editingBarangayModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-white shadow-2xl space-y-6 animate-fade-in">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-base font-extrabold text-white">Edit Barangay Service Area</h3>
+                <p className="text-xs text-slate-400">Configure zone parameters and rate per cubic meter</p>
+              </div>
+              <button
+                onClick={() => setEditingBarangayModal(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateBarangay} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Barangay Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingBarangayModal.name}
+                    onChange={(e) => setEditingBarangayModal({ ...editingBarangayModal, name: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Zone Code</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingBarangayModal.code}
+                    onChange={(e) => setEditingBarangayModal({ ...editingBarangayModal, code: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Supervisor</label>
+                  <input
+                    type="text"
+                    value={editingBarangayModal.supervisor}
+                    onChange={(e) => setEditingBarangayModal({ ...editingBarangayModal, supervisor: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Rate (₱/m³)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    value={editingBarangayModal.ratePerM3}
+                    onChange={(e) => setEditingBarangayModal({ ...editingBarangayModal, ratePerM3: parseFloat(e.target.value) || 0 })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Billing / Reading Schedule</label>
+                <input
+                  type="text"
+                  value={editingBarangayModal.schedule}
+                  onChange={(e) => setEditingBarangayModal({ ...editingBarangayModal, schedule: e.target.value })}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                />
+              </div>
+              <div className="flex justify-end space-x-3 pt-4 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingBarangayModal(null)}
+                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl uppercase tracking-wider"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT METER MODAL */}
+      {editingMeterModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-white shadow-2xl space-y-6 animate-fade-in">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-base font-extrabold text-white">Edit Water Meter #{editingMeterModal.meterNumber}</h3>
+                <p className="text-xs text-slate-400">Update hardware details and operational status</p>
+              </div>
+              <button
+                onClick={() => setEditingMeterModal(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateMeter} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Meter Serial Number</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingMeterModal.meterNumber}
+                    onChange={(e) => setEditingMeterModal({ ...editingMeterModal, meterNumber: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Brand / Manufacturer</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingMeterModal.brand}
+                    onChange={(e) => setEditingMeterModal({ ...editingMeterModal, brand: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Linked Account #</label>
+                  <input
+                    type="text"
+                    value={editingMeterModal.linkedAccountNumber || ''}
+                    placeholder="Unassigned"
+                    onChange={(e) => setEditingMeterModal({ ...editingMeterModal, linkedAccountNumber: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Operational Status</label>
+                  <select
+                    value={editingMeterModal.status}
+                    onChange={(e: any) => setEditingMeterModal({ ...editingMeterModal, status: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                  >
+                    <option value="active">Active</option>
+                    <option value="damaged">Damaged</option>
+                    <option value="maintenance">Maintenance</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Installation Date</label>
+                <input
+                  type="date"
+                  value={editingMeterModal.installationDate}
+                  onChange={(e) => setEditingMeterModal({ ...editingMeterModal, installationDate: e.target.value })}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono"
+                />
+              </div>
+              <div className="flex justify-end space-x-3 pt-4 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingMeterModal(null)}
+                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl uppercase tracking-wider"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT ANNOUNCEMENT MODAL */}
+      {editingAnnouncementModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-white shadow-2xl space-y-6 animate-fade-in">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-base font-extrabold text-white">Edit Advisory Bulletin</h3>
+                <p className="text-xs text-slate-400">Update public announcement information</p>
+              </div>
+              <button
+                onClick={() => setEditingAnnouncementModal(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateAnnouncement} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Title</label>
+                <input
+                  type="text"
+                  required
+                  value={editingAnnouncementModal.title}
+                  onChange={(e) => setEditingAnnouncementModal({ ...editingAnnouncementModal, title: e.target.value })}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Category</label>
+                  <select
+                    value={editingAnnouncementModal.category}
+                    onChange={(e: any) => setEditingAnnouncementModal({ ...editingAnnouncementModal, category: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                  >
+                    <option value="disruption">Service Disruption</option>
+                    <option value="maintenance">Preventive Maintenance</option>
+                    <option value="event">Community Event</option>
+                    <option value="info">General Info</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Posted By</label>
+                  <input
+                    type="text"
+                    value={editingAnnouncementModal.postedBy}
+                    onChange={(e) => setEditingAnnouncementModal({ ...editingAnnouncementModal, postedBy: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Content</label>
+                <textarea
+                  rows={4}
+                  required
+                  value={editingAnnouncementModal.content}
+                  onChange={(e) => setEditingAnnouncementModal({ ...editingAnnouncementModal, content: e.target.value })}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                />
+              </div>
+              <div className="flex justify-end space-x-3 pt-4 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingAnnouncementModal(null)}
+                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl uppercase tracking-wider"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

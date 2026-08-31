@@ -38,6 +38,7 @@ const pageMotionVariants = {
 };
 
 function AppContent() {
+  const [isAppInitializing, setIsAppInitializing] = useState(true);
   const [currentPage, setCurrentPage] = useState<'landing' | 'login' | 'admin' | 'consumer'>('landing');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [announcements, setAnnouncements] = useState<any[]>([]);
@@ -47,24 +48,37 @@ function AppContent() {
 
   // Monitor session persistence & announcements
   useEffect(() => {
-    // Check if user is logged in
-    const activeUser = mockDb.getCurrentUser();
-    if (activeUser) {
-      if (activeUser.email && activeUser.email.toLowerCase() === 'admin@tagoloanwater.gov.ph') {
-        activeUser.name = 'Admin';
-      }
-      setCurrentUser(activeUser);
-      if (activeUser.role === 'admin') {
-        setCurrentPage('admin');
-      } else {
-        setCurrentPage('consumer');
-      }
-    } else {
-      setCurrentPage('landing');
-    }
+    // Initial fetch of session and data
+    const initializeApp = async () => {
+      try {
+        const activeUser = mockDb.getCurrentUser();
+        if (activeUser) {
+          if (activeUser.email && activeUser.email.toLowerCase() === 'admin@tagoloanwater.gov.ph') {
+            activeUser.name = 'Admin';
+          }
+          setCurrentUser(activeUser);
+          if (activeUser.role === 'admin') {
+            setCurrentPage('admin');
+          } else {
+            setCurrentPage('consumer');
+          }
+        } else {
+          setCurrentPage('landing');
+        }
 
-    // Load master list of announcements
-    setAnnouncements(mockDb.getAnnouncements());
+        // Load master list of announcements
+        setAnnouncements(mockDb.getAnnouncements());
+      } catch (err) {
+        console.error("Initialization error:", err);
+      } finally {
+        // Brief loading indicator to ensure data readiness across the system
+        setTimeout(() => {
+          setIsAppInitializing(false);
+        }, 400);
+      }
+    };
+
+    initializeApp();
 
     // Listen for database updates (e.g. admin issuing IDs or updating status)
     const handleDbSync = () => {
@@ -138,7 +152,37 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 selection:bg-blue-605 selection:text-white relative overflow-x-hidden">
-      <AnimatePresence mode="wait">
+      {isAppInitializing ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-md animate-fade-in">
+          <div className="flex flex-col items-center justify-center text-center p-8 max-w-sm mx-auto">
+            <div className="relative mb-5 flex items-center justify-center">
+              <div className="absolute -inset-4 rounded-full bg-blue-500/25 blur-xl animate-pulse"></div>
+              <div className="absolute -inset-1.5 rounded-3xl bg-linear-to-r from-blue-600 via-cyan-400 to-indigo-600 opacity-80 blur-sm animate-spin-slow"></div>
+              <div className="relative h-20 w-20 rounded-2xl bg-slate-900 border-2 border-white/30 shadow-2xl flex items-center justify-center backdrop-blur-md overflow-hidden p-0.5">
+                <img 
+                  src="https://lh3.googleusercontent.com/d/1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg"
+                  alt="Tagoloan Water District"
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = 'https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w500';
+                  }}
+                  className="w-full h-full object-cover rounded-xl animate-pulse"
+                />
+              </div>
+            </div>
+            <h3 className="text-base font-black text-slate-100 tracking-tight mb-1 animate-pulse">
+              Connecting to Tagoloan Water District
+            </h3>
+            <p className="text-xs text-slate-400 max-w-xs leading-relaxed font-medium">
+              Initializing municipal portal environment and fetching active session data...
+            </p>
+            <div className="w-44 h-1.5 bg-slate-800 rounded-full mt-4 overflow-hidden border border-slate-700/60">
+              <div className="h-full bg-linear-to-r from-blue-600 via-cyan-400 to-blue-600 rounded-full animate-indeterminate"></div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <AnimatePresence mode="wait">
         {isRegisterOpen ? (
           <motion.div
             key="register"
@@ -215,6 +259,7 @@ function AppContent() {
           </motion.div>
         ) : null}
       </AnimatePresence>
+      )}
     </div>
   );
 }
