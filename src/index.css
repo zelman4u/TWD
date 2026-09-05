@@ -93,7 +93,20 @@ a:hover {
   color: #3B82F6 !important;
 }
 
-/* Table element states */
+/* Table element states and sharp rectangular corner styling */
+table,
+thead,
+tbody,
+tfoot,
+tr,
+th,
+td,
+.table-container,
+div:has(> table),
+div:has(> div > table) {
+  border-radius: 0px !important;
+}
+
 tbody tr:hover {
   background-color: rgba(30, 41, 59, 0.45) !important;
 }
@@ -290,4 +303,100 @@ select:focus {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #475569;
+}
+
+/* =========================================================================
+   OFFICIAL PRINT STYLES (Zero Overlap, Crisp B&W / Color Typography)
+   ========================================================================= */
+@media print {
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
+
+  html, body {
+    background: #FFFFFF !important;
+    color: #000000 !important;
+    font-size: 9pt !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  #official-print-document,
+  #official-print-document * {
+    visibility: visible !important;
+  }
+
+  #official-print-document {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #FFFFFF !important;
+    color: #0F172A !important;
+    display: block !important;
+    z-index: 999999 !important;
+  }
+
+  #official-print-document .print-header-center {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    border-bottom: 2px solid #0F172A !important;
+    padding-bottom: 10px !important;
+    margin-bottom: 12px !important;
+  }
+
+  #official-print-document table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    margin-bottom: 12px !important;
+    page-break-inside: auto !important;
+    font-size: 8.5pt !important;
+  }
+
+  #official-print-document tr {
+    page-break-inside: avoid !important;
+    page-break-after: auto !important;
+  }
+
+  #official-print-document th,
+  #official-print-document td {
+    border: 1px solid #475569 !important;
+    padding: 4px 6px !important;
+    color: #0F172A !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #official-print-document th {
+    background-color: #E2E8F0 !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #official-print-document tfoot {
+    background-color: #CBD5E1 !important;
+    font-weight: 800 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #official-print-document span {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #official-print-document .no-print,
+  .no-print {
+    display: none !important;
+  }
 }

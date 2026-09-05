@@ -426,7 +426,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
               </div>
             </div>
 
-            <div className="lg:col-span-7 bg-white border border-slate-100 shadow-xl rounded-3xl p-6 sm:p-8 space-y-6">
+            <div className="lg:col-span-7 bg-white border border-slate-100 shadow-xl rounded-none p-6 sm:p-8 space-y-6">
               <h4 className="text-base font-extrabold text-slate-900">Current Tariff Rates Table</h4>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm text-left">

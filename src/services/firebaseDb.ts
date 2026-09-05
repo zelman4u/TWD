@@ -247,14 +247,14 @@ export function startRealtimeFirestoreListeners() {
 
         cloudReaders.forEach(r => {
           if (!isAccountTerminated(r)) {
-            const k = (r.employeeId || r.id || r.username || r.email || r.name).toLowerCase();
+            const k = ((r.employeeId || r.id || r.username || r.email || r.name || '').trim().toLowerCase()) || (`reader_${r.id || Math.random()}`);
             mergedMap.set(k, r);
           }
         });
 
         activeLocalReaders.forEach(r => {
           if (!isAccountTerminated(r)) {
-            const k = (r.employeeId || r.id || r.username || r.email || r.name).toLowerCase();
+            const k = ((r.employeeId || r.id || r.username || r.email || r.name || '').trim().toLowerCase()) || (`reader_${r.id || Math.random()}`);
             if (!mergedMap.has(k)) {
               mergedMap.set(k, r);
             } else {

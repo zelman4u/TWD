@@ -56,7 +56,11 @@ import {
   Mail,
   Phone,
   UserX,
-  BadgeCheck
+  BadgeCheck,
+  Gauge,
+  Tag,
+  Edit3,
+  Receipt
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog } from '../types';
@@ -65,6 +69,7 @@ import DataLoadingIndicator from './common/DataLoadingIndicator';
 import AdminAnalyticsSection from './charts/AdminAnalyticsSection';
 import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
+import { OfficialReportsGenerator } from './admin/OfficialReportsGenerator';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
 import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
@@ -221,11 +226,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   // New Modules State Managers
   // 2. Records Sub-module filter
-  const [recordsTab, setRecordsTab] = useState<'consumers' | 'meters' | 'readings' | 'bills' | 'payments' | 'staff' | 'barangays' | 'audit'>('consumers');
+  const [recordsTab, setRecordsTab] = useState<'reports' | 'consumers' | 'meters' | 'readings' | 'bills' | 'payments' | 'staff' | 'barangays' | 'audit'>('reports');
 
   // 4. Approvals Module Correction & History State
   const [approvalsSubTab, setApprovalsSubTab] = useState<'pending' | 'history'>('pending');
   const [approvalHistorySearch, setApprovalHistorySearch] = useState('');
+  const [pendingApprovalSearch, setPendingApprovalSearch] = useState('');
   const [correctingReadingId, setCorrectingReadingId] = useState<string | null>(null);
   const [correctionValue, setCorrectionValue] = useState<number>(0);
   const [rejectingReadingId, setRejectingReadingId] = useState<string | null>(null);
@@ -243,6 +249,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     link.click();
     document.body.removeChild(link);
   };
+
+  // Meter Readings Module Search & Filter
+  const [readingsSearch, setReadingsSearch] = useState('');
+  const [readingsStatusFilter, setReadingsStatusFilter] = useState<'all' | 'verified' | 'pending' | 'flagged_abnormal'>('all');
+
+  // Water Meters Module Search & Filter
+  const [meterSearch, setMeterSearch] = useState('');
+  const [meterStatusFilter, setMeterStatusFilter] = useState<'all' | 'active' | 'inactive' | 'damaged' | 'maintenance'>('all');
 
   // 5. Bills Module Search & Filter
   const [billSearch, setBillSearch] = useState('');
@@ -2434,57 +2448,91 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {/* Records Sub-Navigation Tabs */}
               <div className="flex space-x-2 border-b border-slate-200 pb-3 overflow-x-auto scrollbar-none">
                 <button
+                  type="button"
+                  onClick={() => setRecordsTab('reports')}
+                  className={`px-4 py-2.5 rounded-none text-xs font-black uppercase tracking-wider transition flex items-center space-x-2 border cursor-pointer ${
+                    recordsTab === 'reports'
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-md ring-2 ring-blue-400/30'
+                      : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                  }`}
+                >
+                  <FileSpreadsheet className="h-4 w-4 shrink-0 text-amber-300" />
+                  <span>Official Reports Center (PDF)</span>
+                  <span className="bg-amber-400 text-slate-950 font-black text-[9px] px-1.5 py-0.2 rounded-none uppercase">
+                    10 Reports
+                  </span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => setRecordsTab('consumers')}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition ${
-                    recordsTab === 'consumers' ? 'bg-slate-900 text-white shadow' : 'bg-white text-slate-600 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
+                    recordsTab === 'consumers' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
                   Consumers Archive ({consumers.length})
                 </button>
                 <button
+                  type="button"
                   onClick={() => setRecordsTab('meters')}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition ${
-                    recordsTab === 'meters' ? 'bg-slate-900 text-white shadow' : 'bg-white text-slate-600 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
+                    recordsTab === 'meters' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
                   Water Meters Inventory ({meters.length})
                 </button>
                 <button
+                  type="button"
                   onClick={() => setRecordsTab('readings')}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition ${
-                    recordsTab === 'readings' ? 'bg-slate-900 text-white shadow' : 'bg-white text-slate-600 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
+                    recordsTab === 'readings' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
                   Readings Trail ({readings.length})
                 </button>
                 <button
+                  type="button"
                   onClick={() => setRecordsTab('bills')}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition ${
-                    recordsTab === 'bills' ? 'bg-slate-900 text-white shadow' : 'bg-white text-slate-600 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
+                    recordsTab === 'bills' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
                   Bills Ledger ({readings.filter(r => r.status === 'verified').length})
                 </button>
                 <button
+                  type="button"
                   onClick={() => setRecordsTab('payments')}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition ${
-                    recordsTab === 'payments' ? 'bg-slate-900 text-white shadow' : 'bg-white text-slate-600 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
+                    recordsTab === 'payments' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
                   Receipts Log ({readings.filter(r => r.paymentStatus === 'paid').length})
                 </button>
                 <button
+                  type="button"
                   onClick={() => setRecordsTab('audit')}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition ${
-                    recordsTab === 'audit' ? 'bg-slate-900 text-white shadow' : 'bg-white text-slate-600 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
+                    recordsTab === 'audit' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
                   System Security Audit ({auditLogs.length})
                 </button>
               </div>
 
-              {/* Records Content Table */}
-              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+              {/* Reports Center Module View */}
+              {recordsTab === 'reports' && (
+                <OfficialReportsGenerator
+                  consumers={consumers}
+                  readings={readings}
+                  meters={meters}
+                  barangays={barangayList}
+                  meterReaders={readers}
+                  currentUser={currentUser}
+                />
+              )}
+
+              {/* Records Content Table (for other tabs) */}
+              {recordsTab !== 'reports' && (
+                <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-sm">
                 {recordsTab === 'consumers' && (
                   <div className="overflow-x-auto">
                     <table className="min-w-full text-xs text-left">
@@ -2568,32 +2616,33 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                 {recordsTab === 'readings' && (
                   <div className="overflow-x-auto">
-                    <table className="min-w-full text-xs text-left">
+                    <table className="w-full text-xs text-left border-collapse">
                       <thead className="bg-slate-50 text-slate-700 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200">
                         <tr>
-                          <th className="px-6 py-3.5">Reading ID</th>
-                          <th className="px-6 py-3.5">Account / Name</th>
-                          <th className="px-6 py-3.5">Index (Prev → Curr)</th>
-                          <th className="px-6 py-3.5">Consumption</th>
-                          <th className="px-6 py-3.5">Reading Date</th>
-                          <th className="px-6 py-3.5">Reader Staff</th>
-                          <th className="px-6 py-3.5">Approval Status</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Reading ID</th>
+                          <th className="px-4 py-3.5 min-w-[180px]">Account / Name</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Index (Prev → Curr)</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Consumption</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Reading Date</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Reader Staff</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap text-center">Status</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap text-right min-w-[140px]">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {readings.map((r, rIdx) => (
                           <tr key={`rec-reading-${r.id || r.accountNumber || rIdx}-${rIdx}`} className="hover:bg-slate-50 transition">
-                            <td className="px-6 py-3.5 font-mono font-bold text-slate-600">{r.id}</td>
-                            <td className="px-6 py-3.5">
-                              <span className="font-bold font-mono text-blue-600 block">{r.accountNumber}</span>
+                            <td className="px-4 py-3.5 font-mono font-bold text-slate-600 whitespace-nowrap">{r.id}</td>
+                            <td className="px-4 py-3.5">
+                              <span className="font-bold font-mono text-blue-600 block text-xs">{r.accountNumber}</span>
                               <span className="text-slate-900 font-bold">{r.consumerName}</span>
                             </td>
-                            <td className="px-6 py-3.5 font-mono text-slate-700">{r.previousReading} m³ → <strong className="text-slate-950 font-bold">{r.currentReading} m³</strong></td>
-                            <td className="px-6 py-3.5 font-mono font-bold text-emerald-600">{r.consumption} m³</td>
-                            <td className="px-6 py-3.5 text-slate-600 font-medium">{r.readingDate}</td>
-                            <td className="px-6 py-3.5 text-slate-800 font-bold">{r.meterReaderName}</td>
-                            <td className="px-6 py-3.5">
-                              <span className={`px-2.5 py-1 rounded-lg text-xs font-black uppercase tracking-wider border shadow-2xs inline-block ${
+                            <td className="px-4 py-3.5 font-mono text-slate-700 whitespace-nowrap">{r.previousReading} m³ → <strong className="text-slate-950 font-bold">{r.currentReading} m³</strong></td>
+                            <td className="px-4 py-3.5 font-mono font-bold text-emerald-600 whitespace-nowrap">{r.consumption} m³</td>
+                            <td className="px-4 py-3.5 text-slate-600 font-medium whitespace-nowrap">{r.readingDate}</td>
+                            <td className="px-4 py-3.5 text-slate-800 font-bold whitespace-nowrap">{r.meterReaderName || 'Field Handset'}</td>
+                            <td className="px-4 py-3.5 whitespace-nowrap text-center">
+                              <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider border shadow-2xs inline-block ${
                                 r.status === 'verified' ? 'bg-emerald-100 text-emerald-900 border-emerald-300' :
                                 r.status === 'pending' ? 'bg-amber-100 text-amber-900 border-amber-300' :
                                 'bg-rose-100 text-rose-900 border-rose-300'
@@ -2601,8 +2650,41 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 {r.status}
                               </span>
                             </td>
+                            <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1.5">
+                                {r.status !== 'verified' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleVerifyReading(r.id, 'verified')}
+                                    className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] uppercase rounded-lg transition inline-flex items-center gap-1 shadow-xs cursor-pointer tracking-wider shrink-0"
+                                  >
+                                    <CheckCircle className="h-3 w-3 shrink-0" />
+                                    <span>Approve</span>
+                                  </button>
+                                ) : (
+                                  <span className="text-[10px] text-emerald-800 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 inline-flex items-center gap-1">
+                                    <Check className="h-3 w-3 text-emerald-600 shrink-0" />
+                                    <span>Approved</span>
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteReading(r.id)}
+                                  className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[10px] rounded-lg transition inline-flex items-center cursor-pointer shrink-0"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </td>
                           </tr>
                         ))}
+                        {readings.length === 0 && (
+                          <tr>
+                            <td colSpan={8} className="px-6 py-8 text-center text-slate-400 text-xs">
+                              No archived readings found.
+                            </td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -2705,6 +2787,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   </div>
                 )}
               </div>
+              )}
             </div>
           )}
 
@@ -2764,172 +2847,305 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {/* PENDING APPROVALS SUB-TAB */}
               {approvalsSubTab === 'pending' && (
                 <>
-                  {readings.filter(r => r.status === 'pending').length === 0 ? (
-                    <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center space-y-3">
-                      <CheckCircle className="h-12 w-12 text-emerald-500 mx-auto" />
-                      <h4 className="text-base font-extrabold text-slate-800 uppercase">Approval Queue is All Clear!</h4>
-                      <p className="text-xs text-slate-500 max-w-md mx-auto">All field meter reader submissions have been reviewed and verified. Auto-generated bills have been published to consumer portals.</p>
+                  {/* Search and summary bar for pending items */}
+                  <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+                    <div className="relative flex-1 sm:max-w-md">
+                      <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search pending by consumer, meter reader, account #, or coverage..."
+                        value={pendingApprovalSearch}
+                        onChange={(e) => setPendingApprovalSearch(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2.5 pl-10 pr-3.5 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 shadow-2xs font-medium"
+                      />
                     </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {readings.filter(r => r.status === 'pending').map((reading, pIdx) => {
-                        const totalCalculatedBill = calculateCostOf(reading.consumption, reading.classification);
-                        const waterAmount = totalCalculatedBill;
+                    <div className="flex items-center space-x-2 text-xs text-slate-500">
+                      <span className="font-medium">Ready for Mobile Reader Interactions & Sync</span>
+                    </div>
+                  </div>
 
-                        return (
-                          <div key={`pending-read-${reading.id || ''}-${reading.accountNumber || ''}-${pIdx}`} className="bg-white border-2 border-amber-300 rounded-3xl p-6 shadow-md hover:shadow-lg transition space-y-4">
-                            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 border-b border-slate-100 pb-4">
-                              <div className="flex items-center space-x-4">
-                                <div className="h-12 w-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-600 flex items-center justify-center shrink-0">
-                                  <Activity className="h-6 w-6 text-amber-600" />
-                                </div>
-                                <div>
-                                  <div className="flex items-center space-x-2 flex-wrap gap-y-1">
-                                    <h4 className="text-base font-extrabold text-slate-900">{reading.consumerName}</h4>
-                                    <span className="bg-slate-900 text-amber-400 border border-slate-800 font-mono font-black px-2 py-0.5 rounded-lg text-xs tracking-wider shadow-2xs">
-                                      {reading.accountNumber ? `#${reading.accountNumber}` : 'Pending Account'}
-                                    </span>
-                                    <span className="bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded text-[10px] uppercase">
-                                      {reading.route}
-                                    </span>
+                  {(() => {
+                    const pendingList = readings.filter(r => r.status === 'pending');
+                    const q = (pendingApprovalSearch || '').toLowerCase().trim();
+                    const filteredPending = pendingList.filter(r => 
+                      !q ||
+                      (r.consumerName || '').toLowerCase().includes(q) ||
+                      (r.meterReaderName || '').toLowerCase().includes(q) ||
+                      (r.accountNumber || '').toLowerCase().includes(q) ||
+                      (r.meterNumber || '').toLowerCase().includes(q) ||
+                      (r.billingPeriod || '').toLowerCase().includes(q) ||
+                      (r.route || '').toLowerCase().includes(q)
+                    );
+
+                    if (filteredPending.length === 0) {
+                      return (
+                        <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center space-y-3">
+                          <CheckCircle className="h-12 w-12 text-emerald-500 mx-auto" />
+                          <h4 className="text-base font-extrabold text-slate-800 uppercase">
+                            {pendingList.length === 0 ? 'Approval Queue is All Clear!' : 'No Matching Pending Readings'}
+                          </h4>
+                          <p className="text-xs text-slate-500 max-w-md mx-auto">
+                            {pendingList.length === 0
+                              ? 'All field meter reader submissions have been reviewed and verified. Auto-generated bills have been published to consumer portals.'
+                              : 'Try adjusting your search criteria.'}
+                          </p>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-4">
+                        {filteredPending.map((reading, pIdx) => {
+                          const totalCalculatedBill = calculateCostOf(reading.consumption, reading.classification);
+                          const waterAmount = totalCalculatedBill;
+
+                          return (
+                            <div key={`pending-read-${reading.id || ''}-${reading.accountNumber || ''}-${pIdx}`} className="bg-white border-2 border-amber-300 rounded-3xl p-6 shadow-md hover:shadow-lg transition space-y-4">
+                              {/* Header: Organized Consumer, Reading & Geotag Details */}
+                              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 border-b border-slate-100 pb-5">
+                                {/* Left Section (8 cols): Consumer, Account, Route & Field Meta */}
+                                <div className="lg:col-span-8 flex items-start space-x-4">
+                                  <div className="h-12 w-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-600 flex items-center justify-center shrink-0 mt-1">
+                                    <Activity className="h-6 w-6 text-amber-600" />
                                   </div>
-                                  <p className="text-xs text-slate-500 mt-1">
-                                    Meter ID: <strong className="font-mono text-slate-700">{reading.meterNumber}</strong> • Submitted by Field Reader: <strong className="text-slate-800">{reading.meterReaderName}</strong>
-                                  </p>
+                                  <div className="space-y-3 flex-1 min-w-0">
+                                    {/* Primary Consumer Header */}
+                                    <div className="flex items-center space-x-2.5 flex-wrap gap-y-1.5">
+                                      <span className="text-[10px] bg-blue-100 text-blue-950 border border-blue-300 font-black uppercase px-2 py-0.5 rounded tracking-wide">
+                                        Consumer Name
+                                      </span>
+                                      <h4 className="text-lg font-black text-slate-900 tracking-tight">{reading.consumerName}</h4>
+                                      <span className="bg-slate-900 text-amber-400 border border-slate-800 font-mono font-black px-2.5 py-0.5 rounded-lg text-xs tracking-wider shadow-2xs">
+                                        {reading.accountNumber ? `#${reading.accountNumber}` : 'Pending Account'}
+                                      </span>
+                                      <span className="inline-flex items-center gap-1 bg-sky-100 border border-sky-300 text-sky-950 font-black px-2.5 py-0.5 rounded-lg text-xs tracking-wide shadow-2xs">
+                                        <MapPin className="h-3.5 w-3.5 text-sky-700 shrink-0" />
+                                        <span>{reading.route || 'Poblacion Zone 3 Route'}</span>
+                                      </span>
+                                    </div>
+
+                                    {/* Clean 4-Column Metadata Grid */}
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2 text-xs">
+                                      {/* Read Date */}
+                                      <div className="bg-amber-50/90 border border-amber-300 rounded-xl p-2.5 flex items-center space-x-2 shadow-2xs">
+                                        <Calendar className="h-4 w-4 text-amber-700 shrink-0" />
+                                        <div className="min-w-0">
+                                          <span className="text-[10px] uppercase font-bold text-amber-800 block leading-none">Read Date</span>
+                                          <span className="text-xs font-black text-amber-950 block mt-0.5 truncate">{reading.readingDate || reading.meterReaderDate || '2026-08-25'}</span>
+                                        </div>
+                                      </div>
+
+                                      {/* Meter No */}
+                                      <div className="bg-emerald-50/90 border border-emerald-300 rounded-xl p-2.5 flex items-center space-x-2 shadow-2xs">
+                                        <Gauge className="h-4 w-4 text-emerald-700 shrink-0" />
+                                        <div className="min-w-0">
+                                          <span className="text-[10px] uppercase font-bold text-emerald-800 block leading-none">Meter No.</span>
+                                          <span className="text-xs font-mono font-black text-emerald-950 block mt-0.5 truncate">
+                                            {reading.meterNumber} <span className="font-sans font-bold text-[10px] text-emerald-800">({reading.meterBrand || 'EVER'})</span>
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      {/* Meter Reader */}
+                                      <div className="bg-indigo-50/90 border border-indigo-300 rounded-xl p-2.5 flex items-center space-x-2 shadow-2xs">
+                                        <UserCheck className="h-4 w-4 text-indigo-700 shrink-0" />
+                                        <div className="min-w-0">
+                                          <span className="text-[10px] uppercase font-bold text-indigo-800 block leading-none">Meter Reader</span>
+                                          <span className="text-xs font-black text-indigo-950 block mt-0.5 uppercase truncate">{reading.meterReaderName || 'MARCO POLO'}</span>
+                                        </div>
+                                      </div>
+
+                                      {/* Coverage Month */}
+                                      <div className="bg-sky-50/90 border border-sky-300 rounded-xl p-2.5 flex items-center space-x-2 shadow-2xs">
+                                        <Clock className="h-4 w-4 text-sky-700 shrink-0" />
+                                        <div className="min-w-0">
+                                          <span className="text-[10px] uppercase font-bold text-sky-800 block leading-none">Coverage Month</span>
+                                          <span className="text-xs font-black text-sky-950 block mt-0.5 truncate">{reading.billingPeriod || 'August 2026'}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Right Section (4 cols): View Dial Photo Action & GPS Geotag Block */}
+                                <div className="lg:col-span-4 flex flex-col justify-between space-y-2.5 bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <button
+                                      onClick={() => {
+                                        setSelectedPhotoUrl(reading.imageUrl || 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop');
+                                        setSelectedPhotoAccount(reading.accountNumber);
+                                      }}
+                                      className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-black rounded-xl text-xs flex items-center justify-center space-x-2 transition-all shadow-md hover:shadow-lg cursor-pointer transform hover:-translate-y-0.5"
+                                    >
+                                      <Camera className="h-4 w-4 text-white" />
+                                      <span className="tracking-wider uppercase text-xs">View Dial Photo</span>
+                                    </button>
+                                  </div>
+
+                                  {/* Geotag & Coordinates Card */}
+                                  <div className="bg-white border-2 border-amber-300/80 rounded-xl p-2.5 space-y-1 shadow-2xs">
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center space-x-1.5 text-rose-600">
+                                        <MapPin className="h-3.5 w-3.5 shrink-0" />
+                                        <span className="font-mono font-black text-slate-900 text-xs tracking-tight">
+                                          {reading.notes?.includes('°') ? reading.notes.split('•')[0].trim() : '8.5028° N, 124.7738° E'}
+                                        </span>
+                                      </div>
+                                      <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 font-extrabold text-[9px] px-1.5 py-0.5 rounded uppercase">
+                                        GPS Tagged
+                                      </span>
+                                    </div>
+                                    <p className="text-[11px] font-bold text-amber-900 leading-snug">
+                                      {reading.notes?.includes('•') ? reading.notes.split('•').slice(1).join('•').trim() : (reading.notes || `Field Meter Read (${reading.route || 'Poblacion Zone 3 Route'})`)}
+                                    </p>
+                                  </div>
                                 </div>
                               </div>
 
-                              <div className="flex items-center space-x-3 self-end lg:self-center">
-                                <button
-                                  onClick={() => {
-                                    setSelectedPhotoUrl(reading.imageUrl || 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop');
-                                    setSelectedPhotoAccount(reading.accountNumber);
-                                  }}
-                                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs flex items-center space-x-1.5 transition"
-                                >
-                                  <Camera className="h-4 w-4 text-blue-600" />
-                                  <span>View Dial Photo</span>
-                                </button>
+                              {/* Reading Metrics Card: Previous, Present (Current), Usage (Consumption) & Bill */}
+                              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 bg-slate-50 p-4 rounded-2xl text-xs border border-slate-200/80">
+                                <div className="bg-white p-3 rounded-xl border border-slate-200/70 shadow-2xs">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] text-slate-500 font-extrabold uppercase block">Previous Reading</span>
+                                    <Clock className="h-3 w-3 text-slate-400" />
+                                  </div>
+                                  <span className="text-lg font-mono font-black text-slate-800 mt-1 block">{reading.previousReading} <span className="text-xs font-normal text-slate-500">m³</span></span>
+                                  <span className="text-[10px] text-slate-400 font-medium">Prior Index Base</span>
+                                </div>
 
-                                <span className="text-[11px] text-slate-400 font-mono">GPS: {reading.notes || '8.5024° N, 124.7731° E'}</span>
+                                <div className="bg-blue-50/70 p-3 rounded-xl border border-blue-200 shadow-2xs">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] text-blue-800 font-extrabold uppercase block">Present Reading</span>
+                                    <Gauge className="h-3 w-3 text-blue-600" />
+                                  </div>
+                                  <span className="text-lg font-mono font-black text-blue-700 mt-1 block">{reading.currentReading} <span className="text-xs font-normal text-blue-600">m³</span></span>
+                                  <span className="text-[10px] text-blue-600/80 font-medium">Field Dial Value</span>
+                                </div>
+
+                                <div className="bg-emerald-50/80 p-3 rounded-xl border border-emerald-200 shadow-2xs">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] text-emerald-800 font-extrabold uppercase block">Usage / Consumption</span>
+                                    <Droplet className="h-3 w-3 text-emerald-600" />
+                                  </div>
+                                  <span className="text-lg font-mono font-black text-emerald-700 mt-1 block">{reading.consumption} <span className="text-xs font-normal text-emerald-600">m³</span></span>
+                                  <span className="text-[10px] text-emerald-600/80 font-medium">{reading.currentReading} - {reading.previousReading} m³</span>
+                                </div>
+
+                                <div className="bg-white p-3 rounded-xl border border-slate-200/70 shadow-2xs">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] text-slate-500 font-extrabold uppercase block">Net Tariff</span>
+                                    <Receipt className="h-3 w-3 text-slate-400" />
+                                  </div>
+                                  <span className="text-lg font-mono font-black text-slate-800 mt-1 block">₱{waterAmount.toFixed(2)}</span>
+                                  <span className="text-[10px] text-slate-400 font-medium">{reading.classification || 'Residential'}</span>
+                                </div>
+
+                                <div className="col-span-2 sm:col-span-3 md:col-span-1 bg-emerald-600 text-white p-3 rounded-xl text-center shadow-sm flex flex-col justify-center">
+                                  <span className="text-[10px] text-emerald-100 font-black uppercase tracking-wider block">Auto Bill Amount</span>
+                                  <span className="text-xl font-mono font-black text-white mt-0.5 block">₱{totalCalculatedBill.toFixed(2)}</span>
+                                  <span className="text-[9px] text-emerald-200 font-medium mt-0.5">Due: {reading.dueDate || '15th of Month'}</span>
+                                </div>
+                              </div>
+
+                              {/* Actions and Audit Info Row */}
+                              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pt-1">
+                                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-700 font-medium">
+                                  <span className="inline-flex items-center gap-1.5 bg-amber-200/80 border border-amber-400 text-amber-950 font-bold px-2.5 py-1 rounded-lg text-xs shadow-2xs">
+                                    <Calendar className="h-3.5 w-3.5 text-amber-800" />
+                                    <span>Read Date: <strong className="text-amber-950 font-black">{reading.readingDate || reading.meterReaderDate || 'Today'}</strong></span>
+                                  </span>
+                                  <span className="text-slate-300">•</span>
+                                  <span>Coverage: <strong className="text-slate-900 font-black">{reading.billingPeriod || 'Current Period'}</strong></span>
+                                  <span className="text-slate-300">•</span>
+                                  <span>Reader: <strong className="text-slate-900 font-black">{reading.meterReaderName || 'Field Reader'}</strong></span>
+                                </div>
+
+                                <div className="flex items-center space-x-2 w-full sm:w-auto">
+                                  {/* Admin Approval Button */}
+                                  <button
+                                    onClick={() => {
+                                      const updated = readings.map(r => r.id === reading.id ? { 
+                                        ...r, 
+                                        status: 'verified' as const, 
+                                        paymentStatus: 'unpaid' as const, 
+                                        remainingBalance: totalCalculatedBill, 
+                                        billAmount: totalCalculatedBill,
+                                        totalAmount: totalCalculatedBill,
+                                        paidAmount: 0 
+                                      } : r);
+                                      mockDb.saveReadings(updated);
+                                      setReadings(updated);
+
+                                      // Direct Firestore sync
+                                      syncDocToFirestore(COLLECTIONS.READINGS, reading.id, {
+                                        ...reading,
+                                        status: 'verified',
+                                        paymentStatus: 'unpaid',
+                                        remainingBalance: totalCalculatedBill,
+                                        billAmount: totalCalculatedBill,
+                                        totalAmount: totalCalculatedBill,
+                                        paidAmount: 0
+                                      });
+
+                                      // Recalculate consumer arrears
+                                      const consumerUnpaid = updated.filter(
+                                        r => (r.accountNumber === reading.accountNumber || (reading.consumerName && r.consumerName === reading.consumerName)) && 
+                                             r.status === 'verified' && 
+                                             r.paymentStatus !== 'paid'
+                                      );
+                                      const newArrears = consumerUnpaid.reduce((sum, r) => {
+                                        const gross = calculateCostOf(r.consumption, r.classification);
+                                        const paid = r.paidAmount || 0;
+                                        return sum + Math.max(0, gross - paid);
+                                      }, 0);
+
+                                      const updatedConsumers = consumers.map(c => 
+                                        (c.accountNumber && c.accountNumber === reading.accountNumber) ||
+                                        (c.name && reading.consumerName && c.name.trim().toLowerCase() === reading.consumerName.trim().toLowerCase())
+                                          ? { ...c, outstandingBalance: newArrears }
+                                          : c
+                                      );
+                                      mockDb.saveConsumers(updatedConsumers);
+                                      setConsumers(updatedConsumers);
+
+                                      // Dispatch Smart Notification to Consumer Portal
+                                      mockDb.addNotification({
+                                        accountNumber: reading.accountNumber,
+                                        title: `Water Bill Issued - ${reading.billingPeriod || 'New Statement'}`,
+                                        message: `Your water billing statement for ${reading.billingPeriod} has been verified and issued with ${reading.consumption} m³ total consumption (₱${totalCalculatedBill.toFixed(2)}). Due date: ${reading.dueDate || '20th of Month'}. Settle online or in-office.`,
+                                        type: 'billing',
+                                        readingId: reading.id,
+                                        billingPeriod: reading.billingPeriod,
+                                        remainingBalance: totalCalculatedBill
+                                      });
+
+                                      mockDb.addAuditLog(
+                                        currentUser.id, 
+                                        currentUser.name, 
+                                        'admin', 
+                                        'Approved Reading & Generated Bill', 
+                                        `Approved reading #${reading.id} for ${reading.consumerName} (Account #${reading.accountNumber}, Reader: ${reading.meterReaderName}, Period: ${reading.billingPeriod}, ${reading.previousReading} → ${reading.currentReading} m³ = ${reading.consumption} m³). Auto-generated bill ₱${totalCalculatedBill.toFixed(2)} published to Consumer Portal.`
+                                      );
+
+                                      toast.success(
+                                        'Reading Approved & Bill Issued',
+                                        `Verified reading for ${reading.consumerName} (${reading.consumption} m³ by ${reading.meterReaderName || 'Field Reader'}). Monthly bill of ₱${totalCalculatedBill.toFixed(2)} for ${reading.billingPeriod} published.`,
+                                        5000
+                                      );
+                                    }}
+                                    className="w-full sm:w-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs transition shadow-md uppercase tracking-wider flex items-center justify-center space-x-2 cursor-pointer"
+                                  >
+                                    <CheckCircle className="h-4 w-4" />
+                                    <span>APPROVE READING & ISSUE BILL</span>
+                                  </button>
+                                </div>
                               </div>
                             </div>
-
-                            {/* Calculation Breakdown Grid */}
-                            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 bg-slate-50 p-4 rounded-2xl text-xs">
-                              <div>
-                                <span className="text-[10px] text-slate-400 font-bold uppercase block">Previous Index</span>
-                                <span className="text-sm font-mono font-bold text-slate-700">{reading.previousReading} m³</span>
-                              </div>
-                              <div>
-                                <span className="text-[10px] text-slate-400 font-bold uppercase block">Current Field Read</span>
-                                <span className="text-sm font-mono font-black text-blue-600">{reading.currentReading} m³</span>
-                              </div>
-                              <div>
-                                <span className="text-[10px] text-slate-400 font-bold uppercase block">Calculated Use</span>
-                                <span className="text-sm font-mono font-black text-emerald-600">{reading.consumption} m³</span>
-                              </div>
-                              <div>
-                                <span className="text-[10px] text-slate-400 font-bold uppercase block">Net Tariff</span>
-                                <span className="text-sm font-mono font-bold text-slate-800">₱{waterAmount.toFixed(2)}</span>
-                              </div>
-                              <div className="col-span-2 md:col-span-1 bg-emerald-100 border border-emerald-200 p-2 rounded-xl text-center">
-                                <span className="text-[9px] text-emerald-800 font-bold uppercase block">Auto Generated Bill</span>
-                                <span className="text-base font-mono font-black text-emerald-900">₱{totalCalculatedBill.toFixed(2)}</span>
-                              </div>
-                            </div>
-
-                            {/* Actions Row */}
-                            <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pt-2">
-                              <div className="text-[11px] text-slate-500">
-                                Billing Period: <strong className="text-slate-800 font-bold">{reading.billingPeriod || 'Current Period'}</strong>
-                              </div>
-
-                              <div className="flex items-center space-x-2 w-full sm:w-auto">
-                                {/* Admin Approval Only Button */}
-                                <button
-                                  onClick={() => {
-                                    const updated = readings.map(r => r.id === reading.id ? { 
-                                      ...r, 
-                                      status: 'verified' as const, 
-                                      paymentStatus: 'unpaid' as const, 
-                                      remainingBalance: totalCalculatedBill, 
-                                      billAmount: totalCalculatedBill,
-                                      totalAmount: totalCalculatedBill,
-                                      paidAmount: 0 
-                                    } : r);
-                                    mockDb.saveReadings(updated);
-                                    setReadings(updated);
-
-                                    // Direct Firestore sync
-                                    syncDocToFirestore(COLLECTIONS.READINGS, reading.id, {
-                                      ...reading,
-                                      status: 'verified',
-                                      paymentStatus: 'unpaid',
-                                      remainingBalance: totalCalculatedBill,
-                                      billAmount: totalCalculatedBill,
-                                      totalAmount: totalCalculatedBill,
-                                      paidAmount: 0
-                                    });
-
-                                    // Recalculate consumer arrears
-                                    const consumerUnpaid = updated.filter(
-                                      r => (r.accountNumber === reading.accountNumber || (reading.consumerName && r.consumerName === reading.consumerName)) && 
-                                           r.status === 'verified' && 
-                                           r.paymentStatus !== 'paid'
-                                    );
-                                    const newArrears = consumerUnpaid.reduce((sum, r) => {
-                                      const gross = calculateCostOf(r.consumption, r.classification);
-                                      const paid = r.paidAmount || 0;
-                                      return sum + Math.max(0, gross - paid);
-                                    }, 0);
-
-                                    const updatedConsumers = consumers.map(c => 
-                                      (c.accountNumber && c.accountNumber === reading.accountNumber) ||
-                                      (c.name && reading.consumerName && c.name.trim().toLowerCase() === reading.consumerName.trim().toLowerCase())
-                                        ? { ...c, outstandingBalance: newArrears }
-                                        : c
-                                    );
-                                    mockDb.saveConsumers(updatedConsumers);
-                                    setConsumers(updatedConsumers);
-
-                                    // Dispatch Smart Notification to Consumer Portal
-                                    mockDb.addNotification({
-                                      accountNumber: reading.accountNumber,
-                                      title: `Water Bill Issued - ${reading.billingPeriod || 'New Statement'}`,
-                                      message: `Your water billing statement for ${reading.billingPeriod} has been verified and issued with ${reading.consumption} m³ total consumption (₱${totalCalculatedBill.toFixed(2)}). Due date: ${reading.dueDate || '20th of Month'}. Settle online or in-office.`,
-                                      type: 'billing',
-                                      readingId: reading.id,
-                                      billingPeriod: reading.billingPeriod,
-                                      remainingBalance: totalCalculatedBill
-                                    });
-
-                                    mockDb.addAuditLog(
-                                      currentUser.id, 
-                                      currentUser.name, 
-                                      'admin', 
-                                      'Approved Reading & Generated Bill', 
-                                      `Approved reading #${reading.id} for ${reading.consumerName} (Account #${reading.accountNumber}). Auto-generated bill ₱${totalCalculatedBill.toFixed(2)} published to Consumer Portal.`
-                                    );
-
-                                    toast.success(
-                                      'Reading Approved & Bill Issued',
-                                      `Verified reading for ${reading.consumerName} (${reading.consumption} m³). Monthly bill of ₱${totalCalculatedBill.toFixed(2)} published.`,
-                                      5000
-                                    );
-                                  }}
-                                  className="w-full sm:w-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs transition shadow-md uppercase tracking-wider flex items-center justify-center space-x-2 cursor-pointer"
-                                >
-                                  <CheckCircle className="h-4 w-4" />
-                                  <span>APPROVE READING & ISSUE BILL</span>
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                 </>
               )}
 
@@ -2964,12 +3180,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     </button>
                   </div>
 
-                  <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                  <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-sm">
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs text-left border-collapse">
                         <thead className="bg-slate-50 text-slate-600 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
                           <tr>
                             <th className="px-3.5 py-3 whitespace-nowrap">Tx ID</th>
+                            <th className="px-3.5 py-3 whitespace-nowrap">Read Date</th>
                             <th className="px-3.5 py-3 whitespace-nowrap">Billing Period</th>
                             <th className="px-3.5 py-3 min-w-[140px]">Account & Consumer</th>
                             <th className="px-3.5 py-3 whitespace-nowrap">Meter No.</th>
@@ -2988,13 +3205,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 (r.accountNumber || '').toLowerCase().includes(q) ||
                                 (r.consumerName || '').toLowerCase().includes(q) ||
                                 (r.meterNumber || '').toLowerCase().includes(q) ||
+                                (r.readingDate && r.readingDate.toLowerCase().includes(q)) ||
                                 (r.notes && r.notes.toLowerCase().includes(q))
                               );
 
                             if (filteredHistory.length === 0) {
                               return (
                                 <tr>
-                                  <td colSpan={8} className="px-6 py-12 text-center text-slate-400">
+                                  <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
                                     <div className="space-y-1">
                                       <p className="text-xs font-bold text-slate-600">No approval history found</p>
                                       <p className="text-[11px]">No verified or rejected meter reading transactions match your filter.</p>
@@ -3013,6 +3231,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 <tr key={`hist-read-${r.id || ''}-${r.accountNumber || ''}-${hIdx}`} className="hover:bg-slate-50/80 transition">
                                   <td className="px-3.5 py-3 font-mono font-bold text-slate-500 text-[11px] whitespace-nowrap">
                                     {r.id}
+                                  </td>
+                                  <td className="px-3.5 py-3 whitespace-nowrap">
+                                    <span className="inline-flex items-center gap-1 font-bold text-slate-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-[11px]">
+                                      📅 {r.readingDate || r.meterReaderDate || 'Recent'}
+                                    </span>
                                   </td>
                                   <td className="px-3.5 py-3 font-bold text-slate-800 whitespace-nowrap">
                                     {r.billingPeriod || 'Current Period'}
@@ -3046,12 +3269,23 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                       {isRejected ? 'REJECTED' : isCorrected ? 'CORRECTED' : r.status.toUpperCase()}
                                     </span>
                                   </td>
-                                  <td className="px-3.5 py-3 max-w-xs space-y-0.5 min-w-[160px]">
-                                    <p className="text-[11px] text-slate-700 font-medium leading-normal" title={r.notes || 'Verified by Admin'}>
-                                      {r.notes || 'Verified by Admin & Auto-Billed'}
-                                    </p>
-                                    <p className="text-[10px] text-slate-400 font-mono">
-                                      Reader: <span className="text-slate-600 font-medium">{r.meterReaderName}</span>
+                                  <td className="px-3.5 py-3 max-w-xs space-y-1 min-w-[180px]">
+                                    {r.notes ? (
+                                      <div className="bg-slate-50 border border-slate-200/90 rounded-lg p-1.5 text-xs text-slate-900 font-medium">
+                                        {r.notes.includes('°') ? (
+                                          <div>
+                                            <span className="font-mono font-black text-slate-950 text-[11px] block text-rose-700">📍 {r.notes.split('•')[0].trim()}</span>
+                                            <span className="text-[11px] text-slate-700 font-bold block">{r.notes.split('•').slice(1).join('•').trim() || r.notes}</span>
+                                          </div>
+                                        ) : (
+                                          <p className="text-[11px] text-slate-800 font-semibold">{r.notes}</p>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-[11px] text-slate-500 font-medium">Verified & Auto-Billed</span>
+                                    )}
+                                    <p className="text-[11px] text-slate-600 font-medium">
+                                      Reader: <strong className="text-slate-900 font-bold">{r.meterReaderName || 'Field Reader'}</strong>
                                     </p>
                                   </td>
                                 </tr>
@@ -3424,7 +3658,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         )}
                       </div>
                     ) : (
-                      <div className="bg-white border border-slate-200/80 rounded-3xl overflow-hidden shadow-xs">
+                      <div className="bg-white border border-slate-200/80 rounded-none overflow-hidden shadow-xs">
                         <div className="w-full overflow-x-auto sm:overflow-x-visible">
                           <table className="w-full text-xs text-left table-fixed">
                             <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-150">
@@ -3865,67 +4099,85 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* 4. WATER METER REGISTRATION & MANAGEMENT */}
           {activeTab === 'meters' && (
             <div className="space-y-6 animate-fade-in" id="meters-tab">
-              <div className="flex justify-between items-center">
-                <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-wider font-sans">Mechanical Water Meter Catalog</h3>
-                
-                <button
-                  onClick={() => setShowAddMeter(!showAddMeter)}
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider transition flex items-center space-x-2"
-                >
-                  <Plus className="h-4.5 w-4.5" />
-                  <span>Register Mechanical Meter</span>
-                </button>
+              {/* Header */}
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-center space-x-3.5">
+                  <div className="p-3 bg-blue-50 text-blue-600 rounded-2xl border border-blue-100">
+                    <Gauge className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-extrabold text-slate-900 tracking-tight">Mechanical Water Meter Catalog & Hardware Inventory</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">Track serial numbers, hardware brands, installation telemetry, and linked consumer accounts</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddMeter(!showAddMeter)}
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition flex items-center space-x-2 shadow-xs cursor-pointer active:scale-95"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>{showAddMeter ? 'Close Form' : 'Register Mechanical Meter'}</span>
+                  </button>
+                </div>
               </div>
 
               {/* Add Meter Form */}
               {showAddMeter && (
-                <form onSubmit={handleCreateMeter} className="bg-white border border-slate-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-2xl">
-                  <h4 className="text-sm font-bold uppercase text-slate-850">Water Meter Mechanical Parameters</h4>
+                <form onSubmit={handleCreateMeter} className="bg-white border border-slate-200 p-6 rounded-3xl shadow-md space-y-4 max-w-3xl animate-slide-down">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <h4 className="text-sm font-bold uppercase text-slate-900 flex items-center gap-2">
+                      <Plus className="w-4 h-4 text-blue-600" />
+                      Register New Water Meter Hardware
+                    </h4>
+                    <span className="text-[11px] text-slate-400 font-medium">Step 1 of 1</span>
+                  </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Meter Serial Number</label>
+                      <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Meter Serial Number *</label>
                       <input 
                         type="text" 
                         required
                         placeholder="e.g. MT-8844"
                         value={newMeter.meterNumber}
                         onChange={(e) => setNewMeter({ ...newMeter, meterNumber: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs focus:outline-none"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Manufacturer / Brand</label>
+                      <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Manufacturer / Brand *</label>
                       <input 
                         type="text" 
                         required
-                        placeholder="e.g. NBI WaterTech"
+                        placeholder="e.g. NBI WaterTech / Kent"
                         value={newMeter.brand}
                         onChange={(e) => setNewMeter({ ...newMeter, brand: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs focus:outline-none"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Linked Account Number</label>
+                      <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Linked Account Number</label>
                       <input 
                         type="text" 
-                        placeholder="e.g. 1001-A"
+                        placeholder="e.g. 1001-A (optional)"
                         value={newMeter.linkedAccountNumber}
                         onChange={(e) => setNewMeter({ ...newMeter, linkedAccountNumber: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs focus:outline-none"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                       />
                     </div>
                   </div>
-                  <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                  <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
                     <button 
                       type="button" 
                       onClick={() => setShowAddMeter(false)} 
-                      className="px-4.5 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold text-slate-700"
+                      className="px-4 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 transition cursor-pointer"
                     >
                       Cancel
                     </button>
                     <button 
                       type="submit" 
-                      className="px-4.5 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold"
+                      className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer active:scale-95"
                     >
                       Insert Water Meter
                     </button>
@@ -3933,56 +4185,224 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 </form>
               )}
 
+              {/* Meter Summary & Filter Chips */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setMeterStatusFilter('all')}
+                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                    meterStatusFilter === 'all'
+                      ? 'bg-blue-50 border-blue-300 ring-2 ring-blue-500/20 shadow-xs'
+                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">Total Meters</span>
+                  <span className="text-xl sm:text-2xl font-black text-slate-900">{meters.length}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMeterStatusFilter('active')}
+                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                    meterStatusFilter === 'active'
+                      ? 'bg-emerald-50 border-emerald-300 ring-2 ring-emerald-500/20 shadow-xs'
+                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 block">Active & Deployed</span>
+                  <span className="text-xl sm:text-2xl font-black text-emerald-900">{meters.filter(m => m.status === 'active').length}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMeterStatusFilter('damaged')}
+                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                    meterStatusFilter === 'damaged'
+                      ? 'bg-rose-50 border-rose-300 ring-2 ring-rose-500/20 shadow-xs'
+                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700 block">Damaged / Faulty</span>
+                  <span className="text-xl sm:text-2xl font-black text-rose-900">{meters.filter(m => m.status === 'damaged').length}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMeterStatusFilter('maintenance')}
+                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                    meterStatusFilter === 'maintenance' || meterStatusFilter === 'inactive'
+                      ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-500/20 shadow-xs'
+                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 block">Under Maintenance</span>
+                  <span className="text-xl sm:text-2xl font-black text-amber-900">{meters.filter(m => m.status === 'maintenance' || m.status === 'inactive').length}</span>
+                </button>
+              </div>
+
+              {/* Search and Filters Bar */}
+              <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-xs flex flex-col sm:flex-row items-center gap-3">
+                <div className="relative flex-1 w-full">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search by meter serial, brand manufacturer, or linked account #..."
+                    value={meterSearch}
+                    onChange={(e) => setMeterSearch(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <select
+                    value={meterStatusFilter}
+                    onChange={(e) => setMeterStatusFilter(e.target.value as any)}
+                    className="bg-slate-50 border border-slate-200 text-slate-700 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer w-full sm:w-auto"
+                  >
+                    <option value="all">All Meter Statuses</option>
+                    <option value="active">Active Only</option>
+                    <option value="damaged">Damaged Only</option>
+                    <option value="maintenance">Maintenance Only</option>
+                    <option value="inactive">Inactive Only</option>
+                  </select>
+
+                  {(meterSearch || meterStatusFilter !== 'all') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMeterSearch('');
+                        setMeterStatusFilter('all');
+                      }}
+                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Meter list table */}
-              <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+              <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-xs">
                 <div className="overflow-x-auto">
-                  <table className="min-w-full text-xs text-left">
-                    <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-150">
+                  <table className="w-full text-xs text-left border-collapse">
+                    <thead className="bg-slate-50 text-slate-700 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200">
                       <tr>
-                        <th className="px-6 py-4">Meter serial</th>
-                        <th className="px-6 py-4">Brand / Manufacturer</th>
-                        <th className="px-6 py-4">Installation Date</th>
-                        <th className="px-6 py-4 font-mono">Linked Consumer Link</th>
-                        <th className="px-6 py-4">Operational Status</th>
-                        <th className="px-6 py-4 text-right">Actions</th>
+                        <th className="px-4 py-3.5 whitespace-nowrap">Meter Serial</th>
+                        <th className="px-4 py-3.5 min-w-[170px]">Brand / Manufacturer</th>
+                        <th className="px-4 py-3.5 whitespace-nowrap">Installation Date</th>
+                        <th className="px-4 py-3.5 min-w-[180px]">Linked Consumer Account</th>
+                        <th className="px-4 py-3.5 whitespace-nowrap text-center">Operational Status</th>
+                        <th className="px-4 py-3.5 whitespace-nowrap text-right min-w-[140px]">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                      {meters.map((m, mIdx) => (
-                        <tr key={`meter-inv-${m.meterNumber || mIdx}-${mIdx}`} className="hover:bg-slate-50/70">
-                          <td className="px-6 py-4 font-mono text-slate-900 font-black">{m.meterNumber}</td>
-                          <td className="px-6 py-4 font-bold">{m.brand}</td>
-                          <td className="px-6 py-4 font-sans text-slate-500">{m.installationDate}</td>
-                          <td className="px-6 py-4 font-mono font-bold text-blue-600">
-                            {m.linkedAccountNumber ? `#${m.linkedAccountNumber}` : 'UNASSIGNED'}
-                          </td>
-                          <td className="px-6 py-4">
-                            <span className={`px-2.5 py-1 rounded text-[10px] font-bold ${
-                              m.status === 'active' 
-                                ? 'bg-emerald-50 text-emerald-700' 
-                                : m.status === 'damaged' 
-                                ? 'bg-rose-50 text-rose-700' 
-                                : 'bg-amber-50 text-amber-700'
-                            }`}>
-                              {m.status.toUpperCase()}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-right space-x-2">
-                            <button
-                              onClick={() => setEditingMeterModal({ ...m })}
-                              className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 text-blue-700 rounded text-xs font-bold transition"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleDeleteMeter(m)}
-                              className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded text-xs font-bold transition"
-                            >
-                              Delete
-                            </button>
+                      {meters
+                        .filter((m) => {
+                          if (meterStatusFilter !== 'all') {
+                            if (meterStatusFilter === 'maintenance' && m.status !== 'maintenance' && m.status !== 'inactive') return false;
+                            if (meterStatusFilter !== 'maintenance' && m.status !== meterStatusFilter) return false;
+                          }
+                          if (meterSearch.trim()) {
+                            const q = meterSearch.toLowerCase().trim();
+                            const matchNum = (m.meterNumber || '').toLowerCase().includes(q);
+                            const matchBrand = (m.brand || '').toLowerCase().includes(q);
+                            const matchAcc = (m.linkedAccountNumber || '').toLowerCase().includes(q);
+                            return matchNum || matchBrand || matchAcc;
+                          }
+                          return true;
+                        })
+                        .map((m, mIdx) => {
+                          const linkedConsumer = consumers.find(c => c.accountNumber === m.linkedAccountNumber);
+                          return (
+                            <tr key={`meter-inv-${m.meterNumber || mIdx}-${mIdx}`} className="hover:bg-slate-50/80 transition-colors">
+                              {/* Serial */}
+                              <td className="px-4 py-3.5 whitespace-nowrap">
+                                <div className="flex items-center gap-1.5 font-mono text-slate-900 font-black text-xs">
+                                  <Tag className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                                  <span>{m.meterNumber}</span>
+                                </div>
+                              </td>
+
+                              {/* Brand */}
+                              <td className="px-4 py-3.5">
+                                <span className="font-bold text-slate-900 text-xs block">{m.brand}</span>
+                                <span className="text-[10px] text-slate-400">Mechanical Meter</span>
+                              </td>
+
+                              {/* Date */}
+                              <td className="px-4 py-3.5 font-sans text-slate-600 whitespace-nowrap text-xs">
+                                {m.installationDate || 'N/A'}
+                              </td>
+
+                              {/* Linked Consumer */}
+                              <td className="px-4 py-3.5">
+                                {m.linkedAccountNumber ? (
+                                  <div className="flex flex-col gap-0.5">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="font-mono font-bold text-blue-600 text-xs">#{m.linkedAccountNumber}</span>
+                                      {linkedConsumer?.consumerType && (
+                                        <span className="px-1.5 py-0.2 bg-slate-100 text-slate-600 rounded text-[9px] font-sans">
+                                          {linkedConsumer.consumerType}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="text-slate-900 font-semibold text-[11px] truncate max-w-[180px]" title={linkedConsumer?.name}>
+                                      {linkedConsumer?.name || 'Consumer Assigned'}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md inline-block">
+                                    UNASSIGNED
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* Status */}
+                              <td className="px-4 py-3.5 whitespace-nowrap text-center">
+                                <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border shadow-2xs inline-block ${
+                                  m.status === 'active' 
+                                    ? 'bg-emerald-100 text-emerald-900 border-emerald-300' 
+                                    : m.status === 'damaged' 
+                                    ? 'bg-rose-100 text-rose-900 border-rose-300 animate-pulse' 
+                                    : 'bg-amber-100 text-amber-900 border-amber-300'
+                                }`}>
+                                  {m.status.toUpperCase()}
+                                </span>
+                              </td>
+
+                              {/* Actions */}
+                              <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingMeterModal({ ...m })}
+                                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-blue-50 text-blue-700 hover:text-blue-800 border border-slate-200 hover:border-blue-200 rounded-lg text-xs font-bold transition cursor-pointer inline-flex items-center gap-1 shrink-0"
+                                    title="Edit Meter Parameters"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                    <span>Edit</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteMeter(m)}
+                                    className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200 rounded-lg text-xs font-bold transition cursor-pointer inline-flex items-center gap-1 shrink-0"
+                                    title="Deregister Meter"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>Delete</span>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      {meters.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="px-6 py-12 text-center text-slate-400 text-xs">
+                            No water meters registered in inventory.
                           </td>
                         </tr>
-                      ))}
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -4100,119 +4520,287 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 </form>
               )}
 
+              {/* Readings Summary & Quick Filter Chips */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setReadingsStatusFilter('all')}
+                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                    readingsStatusFilter === 'all'
+                      ? 'bg-blue-50 border-blue-300 ring-2 ring-blue-500/20 shadow-xs'
+                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">Total Readings</span>
+                  <span className="text-xl sm:text-2xl font-black text-slate-900">{readings.length}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setReadingsStatusFilter('verified')}
+                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                    readingsStatusFilter === 'verified'
+                      ? 'bg-emerald-50 border-emerald-300 ring-2 ring-emerald-500/20 shadow-xs'
+                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 block">Verified / Approved</span>
+                  <span className="text-xl sm:text-2xl font-black text-emerald-900">{readings.filter(r => r.status === 'verified').length}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setReadingsStatusFilter('pending')}
+                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                    readingsStatusFilter === 'pending'
+                      ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-500/20 shadow-xs'
+                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 block">Pending Review</span>
+                  <span className="text-xl sm:text-2xl font-black text-amber-900">{readings.filter(r => r.status === 'pending').length}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setReadingsStatusFilter('flagged_abnormal')}
+                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                    readingsStatusFilter === 'flagged_abnormal'
+                      ? 'bg-rose-50 border-rose-300 ring-2 ring-rose-500/20 shadow-xs'
+                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700 block">High Usage Alerts</span>
+                  <span className="text-xl sm:text-2xl font-black text-rose-900">{readings.filter(r => r.status === 'flagged_abnormal' || r.consumption >= 50).length}</span>
+                </button>
+              </div>
+
+              {/* Search and Filters Bar */}
+              <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-xs flex flex-col sm:flex-row items-center gap-3">
+                <div className="relative flex-1 w-full">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search by transaction ID, consumer name, account #, or meter #..."
+                    value={readingsSearch}
+                    onChange={(e) => setReadingsSearch(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <select
+                    value={readingsStatusFilter}
+                    onChange={(e) => setReadingsStatusFilter(e.target.value as any)}
+                    className="bg-slate-50 border border-slate-200 text-slate-700 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer w-full sm:w-auto"
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="verified">Approved Only</option>
+                    <option value="pending">Pending Only</option>
+                    <option value="flagged_abnormal">Flagged Anomalies</option>
+                  </select>
+
+                  {(readingsSearch || readingsStatusFilter !== 'all') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReadingsSearch('');
+                        setReadingsStatusFilter('all');
+                      }}
+                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Readings board layout */}
-              <div className="bg-white border border-slate-150 rounded-3xl overflow-hidden shadow-sm">
+              <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-xs">
                 <div className="overflow-x-auto">
-                  <table className="min-w-full text-xs text-left">
-                    <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-150">
+                  <table className="w-full text-xs text-left border-collapse">
+                    <thead className="bg-slate-50 text-slate-700 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200">
                       <tr>
-                        <th className="px-6 py-4">Tx ID</th>
-                        <th className="px-6 py-4">Consumer & Meter serial</th>
-                        <th className="px-6 py-4">Reading Period</th>
-                        <th className="px-6 py-4">Indices (Prev → Curr)</th>
-                        <th className="px-6 py-4">Handset Telemetry (GPS / Dial Photo)</th>
-                        <th className="px-6 py-4">Consumption (m³)</th>
-                        <th className="px-6 py-3">Verification Review</th>
-                        <th className="px-6 py-3 text-right">Review Action</th>
+                        <th className="px-4 py-3.5 whitespace-nowrap">Tx ID</th>
+                        <th className="px-4 py-3.5 min-w-[200px]">Consumer & Account</th>
+                        <th className="px-4 py-3.5 whitespace-nowrap">Period</th>
+                        <th className="px-4 py-3.5 whitespace-nowrap">Index (Prev → Curr)</th>
+                        <th className="px-4 py-3.5 min-w-[170px]">Telemetry & Verification</th>
+                        <th className="px-4 py-3.5 whitespace-nowrap">Consumption</th>
+                        <th className="px-4 py-3.5 whitespace-nowrap text-center">Status</th>
+                        <th className="px-4 py-3.5 whitespace-nowrap text-right min-w-[150px]">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-700">
-                      {readings.map((r, rIdx) => {
-                        const isAbnormal = r.consumption >= 50;
-                        const resolvedClassification = r.classification || 'Residential';
-                        return (
-                          <tr key={`board-reading-${r.id || ''}-${rIdx}`} className={`hover:bg-slate-55 transition ${isAbnormal && r.status === 'flagged_abnormal' ? 'bg-rose-500/10' : ''}`}>
-                            <td className="px-6 py-4 font-mono font-bold text-slate-500 text-[11px]">{r.id}</td>
-                            <td className="px-6 py-4 space-y-1">
-                              <div className="flex items-center space-x-2">
-                                <span className="font-bold text-slate-900 text-[13px]">{r.consumerName}</span>
-                                <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded border tracking-wider shrink-0 ${
-                                  resolvedClassification === 'Commercial'
-                                    ? 'bg-purple-100/80 text-purple-700 border-purple-200'
-                                    : 'bg-blue-105/80 text-blue-700 border-blue-200'
-                                }`}>
-                                  {resolvedClassification}
-                                </span>
-                              </div>
-                              <p className="text-[10px] text-slate-400 font-mono">Acc: {r.accountNumber} • Met: {r.meterNumber}</p>
-                            </td>
-                            <td className="px-6 py-4 text-slate-600 font-semibold">{r.billingPeriod}</td>
-                            <td className="px-6 py-4 font-mono">
-                              <span className="text-slate-400">{r.previousReading} m³</span>
-                              <span className="text-slate-300 mx-1.5">→</span>
-                              <span className="font-bold text-slate-800">{r.currentReading} m³</span>
-                            </td>
-                            <td className="px-6 py-4 space-y-1.5">
-                              {r.gpsLocation ? (
-                                <div className="flex items-center text-[10px] font-sans text-slate-500 font-semibold">
-                                  <MapPin className="h-3.5 w-3.5 text-rose-500 mr-1.5 shrink-0" />
-                                  <span>{r.gpsLocation}</span>
+                      {readings
+                        .filter((r) => {
+                          if (readingsStatusFilter === 'verified' && r.status !== 'verified') return false;
+                          if (readingsStatusFilter === 'pending' && r.status !== 'pending') return false;
+                          if (readingsStatusFilter === 'flagged_abnormal' && r.status !== 'flagged_abnormal' && r.consumption < 50) return false;
+
+                          if (readingsSearch.trim()) {
+                            const q = readingsSearch.toLowerCase().trim();
+                            const matchId = (r.id || '').toLowerCase().includes(q);
+                            const matchName = (r.consumerName || '').toLowerCase().includes(q);
+                            const matchAcc = (r.accountNumber || '').toLowerCase().includes(q);
+                            const matchMeter = (r.meterNumber || '').toLowerCase().includes(q);
+                            const matchPeriod = (r.billingPeriod || '').toLowerCase().includes(q);
+                            return matchId || matchName || matchAcc || matchMeter || matchPeriod;
+                          }
+                          return true;
+                        })
+                        .map((r, rIdx) => {
+                          const isAbnormal = r.consumption >= 50;
+                          const resolvedClassification = r.classification || 'Residential';
+                          return (
+                            <tr
+                              key={`board-reading-${r.id || ''}-${rIdx}`}
+                              className={`hover:bg-slate-50/80 transition-colors ${
+                                isAbnormal && r.status === 'flagged_abnormal' ? 'bg-rose-50/40' : ''
+                              }`}
+                            >
+                              {/* Tx ID */}
+                              <td className="px-4 py-3.5 font-mono font-bold text-slate-500 text-[11px] whitespace-nowrap">
+                                {r.id}
+                              </td>
+
+                              {/* Consumer & Account */}
+                              <td className="px-4 py-3.5">
+                                <div className="flex flex-col gap-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-bold text-slate-900 text-xs">{r.consumerName}</span>
+                                    <span
+                                      className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border tracking-wider shrink-0 ${
+                                        resolvedClassification === 'Commercial'
+                                          ? 'bg-purple-100 text-purple-700 border-purple-200'
+                                          : 'bg-blue-100 text-blue-700 border-blue-200'
+                                      }`}
+                                    >
+                                      {resolvedClassification}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono flex-wrap">
+                                    <span>Acc: <strong className="text-blue-600 font-bold">{r.accountNumber}</strong></span>
+                                    <span>•</span>
+                                    <span>Meter: <strong className="text-slate-700 font-bold">{r.meterNumber}</strong></span>
+                                  </div>
                                 </div>
-                              ) : (
-                                <span className="text-[10px] text-slate-400 italic">No GPS coordinates</span>
-                              )}
-                              <button 
-                                onClick={() => { 
-                                  setSelectedPhotoUrl(r.meterImageUrl || 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop'); 
-                                  setSelectedPhotoAccount(r.accountNumber); 
-                                }}
-                                className="flex items-center space-x-1.5 px-2 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-150 rounded text-[10px] font-extrabold transition uppercase"
-                              >
-                                <Camera className="h-3 w-3 shrink-0 text-blue-600" />
-                                <span>Check dial photo</span>
-                              </button>
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="flex items-center space-x-2">
-                                <span className={`font-mono font-bold text-sm ${isAbnormal ? 'text-rose-600 font-black' : 'text-slate-800'}`}>
-                                  {r.consumption} m³
-                                </span>
-                                {isAbnormal && (
-                                  <span className="bg-rose-100 border border-rose-200 text-rose-700 text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded tracking-wide flex items-center shrink-0">
-                                    <AlertTriangle className="h-2.5 w-2.5 mr-1" />
-                                    HIGH USAGE ALERT
+                              </td>
+
+                              {/* Billing Period */}
+                              <td className="px-4 py-3.5 text-slate-700 font-semibold whitespace-nowrap text-xs">
+                                {r.billingPeriod}
+                              </td>
+
+                              {/* Indices */}
+                              <td className="px-4 py-3.5 font-mono whitespace-nowrap">
+                                <span className="text-slate-500 text-xs">{r.previousReading} m³</span>
+                                <span className="text-slate-400 mx-1 font-sans">→</span>
+                                <span className="font-black text-slate-900 text-xs">{r.currentReading} m³</span>
+                              </td>
+
+                              {/* Telemetry (GPS / Photo) */}
+                              <td className="px-4 py-3.5">
+                                <div className="flex flex-col gap-1.5">
+                                  {r.gpsLocation ? (
+                                    <div className="flex items-center text-[10px] font-sans text-slate-600 font-medium">
+                                      <MapPin className="h-3 w-3 text-rose-500 mr-1 shrink-0" />
+                                      <span className="truncate max-w-[140px]" title={r.gpsLocation}>{r.gpsLocation}</span>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-400 italic">No GPS</span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedPhotoUrl(
+                                        r.meterImageUrl ||
+                                          'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop'
+                                      );
+                                      setSelectedPhotoAccount(r.accountNumber);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-[10px] font-bold transition uppercase tracking-wider w-fit cursor-pointer"
+                                  >
+                                    <Camera className="h-3 w-3 shrink-0 text-blue-600" />
+                                    <span>Dial Photo</span>
+                                  </button>
+                                </div>
+                              </td>
+
+                              {/* Consumption */}
+                              <td className="px-4 py-3.5 whitespace-nowrap">
+                                <div className="flex flex-col gap-0.5">
+                                  <span
+                                    className={`font-mono font-black text-xs ${
+                                      isAbnormal ? 'text-rose-600' : 'text-slate-900'
+                                    }`}
+                                  >
+                                    {r.consumption} m³
                                   </span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                r.status === 'verified' 
-                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' 
-                                  : r.status === 'flagged_abnormal' 
-                                  ? 'bg-rose-50 text-rose-700 border border-rose-150 animate-pulse' 
-                                  : 'bg-amber-50 text-amber-700 border border-amber-100'
-                              }`}>
-                                {r.status === 'flagged_abnormal' ? 'ANOMALOUS SUSPECTED' : r.status.toUpperCase()}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 text-right space-x-2">
-                              {r.status === 'pending' || r.status === 'flagged_abnormal' ? (
-                                <button
-                                  onClick={() => handleVerifyReading(r.id, 'verified')}
-                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase rounded-lg transition inline-flex items-center space-x-1 shadow-xs cursor-pointer tracking-wider"
-                                  id={`approve-read-btn-${r.id}`}
+                                  {isAbnormal && (
+                                    <span className="bg-rose-100 border border-rose-200 text-rose-700 text-[8px] font-black uppercase px-1.5 py-0.5 rounded tracking-wide inline-flex items-center gap-0.5 w-fit">
+                                      <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
+                                      <span>High Usage</span>
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* Status */}
+                              <td className="px-4 py-3.5 whitespace-nowrap text-center">
+                                <span
+                                  className={`inline-flex items-center px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider border shadow-2xs ${
+                                    r.status === 'verified'
+                                      ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                      : r.status === 'flagged_abnormal'
+                                      ? 'bg-rose-100 text-rose-900 border-rose-300 animate-pulse'
+                                      : 'bg-amber-100 text-amber-900 border-amber-300'
+                                  }`}
                                 >
-                                  <CheckCircle className="h-3.5 w-3.5" />
-                                  <span>Approve</span>
-                                </button>
-                              ) : (
-                                <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-1 rounded-md border border-emerald-200 inline-flex items-center space-x-1">
-                                  <Check className="h-3 w-3 mr-0.5" />
-                                  <span>Approved</span>
+                                  {r.status === 'flagged_abnormal' ? 'ANOMALY' : r.status}
                                 </span>
-                              )}
-                              <button
-                                onClick={() => handleDeleteReading(r.id)}
-                                className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-lg transition inline-flex items-center cursor-pointer"
-                                title="Void Reading"
-                              >
-                                Delete
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                              </td>
+
+                              {/* Actions */}
+                              <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  {r.status === 'pending' || r.status === 'flagged_abnormal' ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleVerifyReading(r.id, 'verified')}
+                                      className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] uppercase rounded-lg transition inline-flex items-center gap-1 shadow-xs cursor-pointer tracking-wider active:scale-95 shrink-0"
+                                      id={`approve-read-btn-${r.id}`}
+                                      title="Approve Reading"
+                                    >
+                                      <CheckCircle className="h-3.5 w-3.5 shrink-0" />
+                                      <span>Approve</span>
+                                    </button>
+                                  ) : (
+                                    <span className="text-[10px] text-emerald-800 font-bold bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200 inline-flex items-center gap-1 shrink-0">
+                                      <Check className="h-3 w-3 text-emerald-600 shrink-0" />
+                                      <span>Approved</span>
+                                    </span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteReading(r.id)}
+                                    className="px-2 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200 font-bold text-[11px] rounded-lg transition inline-flex items-center cursor-pointer shrink-0"
+                                    title="Void / Delete Reading"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      {readings.length === 0 && (
+                        <tr>
+                          <td colSpan={8} className="px-6 py-12 text-center text-slate-400 text-xs">
+                            No meter readings recorded.
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -4327,7 +4915,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 {/* Simulated Ledger metrics */}
                 <div className="space-y-4">
                   <h4 className="text-xs font-black uppercase text-slate-400 tracking-wider">Historical Water consumption readings for billing cycles</h4>
-                  <div className="border border-slate-150 rounded-2xl overflow-hidden">
+                  <div className="border border-slate-150 rounded-none overflow-hidden">
                     <table className="min-w-full text-xs text-left">
                       <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-100">
                         <tr>
@@ -4470,7 +5058,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* 9. SECURITY AUDIT TRAIL REGISTER */}
           {activeTab === 'audit' && (
             <div className="space-y-6 animate-fade-in" id="audit-tab">
-              <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+              <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-sm">
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-xs text-left">
                     <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-150">
@@ -4612,7 +5200,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               </div>
 
               {/* Bills List Table */}
-              <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+              <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-sm">
                 <div className="w-full overflow-x-auto">
                   <table className="min-w-full text-xs text-left">
                     <thead className="bg-slate-800 text-white font-extrabold uppercase border-b border-slate-700 text-[10px] select-none tracking-wider">
@@ -5532,7 +6120,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               )}
 
               {/* Staff List Table */}
-              <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+              <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-sm">
                 <table className="min-w-full text-xs text-left">
                   <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-200">
                     <tr>

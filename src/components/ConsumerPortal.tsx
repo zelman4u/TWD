@@ -2186,7 +2186,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             </div>
 
             {/* Complete Bills Table & Responsive Grid - Eye-Friendly Dark Navy Slate Theme */}
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl text-slate-100">
+            <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl text-slate-100">
               {/* Desktop & Tablet Table View */}
               <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-xs text-left border-collapse">
@@ -2583,7 +2583,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             </div>
 
             {/* Comprehensive Reading History Table */}
-            <div className="bg-white border border-slate-200/80 rounded-3xl overflow-hidden shadow-xs">
+            <div className="bg-white border border-slate-200/80 rounded-none overflow-hidden shadow-xs">
               <div className="overflow-x-auto">
                 <table className="min-w-full text-xs text-left">
                   <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-100">
