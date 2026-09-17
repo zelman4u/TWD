@@ -60,7 +60,8 @@ import {
   Gauge,
   Tag,
   Edit3,
-  Receipt
+  Receipt,
+  Home
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog } from '../types';
@@ -227,6 +228,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   // New Modules State Managers
   // 2. Records Sub-module filter
   const [recordsTab, setRecordsTab] = useState<'reports' | 'consumers' | 'meters' | 'readings' | 'bills' | 'payments' | 'staff' | 'barangays' | 'audit'>('reports');
+  const [readersSubTab, setReadersSubTab] = useState<'officers' | 'routes'>('officers');
 
   // 4. Approvals Module Correction & History State
   const [approvalsSubTab, setApprovalsSubTab] = useState<'pending' | 'history'>('pending');
@@ -538,6 +540,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 linkedUserId: ac.linkedUserId || `user-${Date.now()}`,
                 isRegistered: true,
                 rfidTag: ac.rfidTag || '',
+                createdAt: (ac as any).createdAt || Date.now(),
                 outstandingBalance: 0
               };
               currentLocal.unshift(newConsumerObj);
@@ -1996,6 +1999,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     return matchesSearch && matchesStatus && matchesType && matchesBarangay;
   }).sort((a, b) => {
+    // 1. Pending accounts without issued IDs ALWAYS sit at the very top of the list
+    // so administrators can immediately see new accounts without scrolling or searching
+    const aPending = !a.accountNumber || a.accountNumber.trim() === '' || a.accountNumber.toUpperCase().startsWith('PENDING') || a.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || a.accountNumber.toUpperCase() === 'UNASSIGNED' || a.accountNumber.toUpperCase() === 'UNISSUED' || a.status === 'pending_approval';
+    const bPending = !b.accountNumber || b.accountNumber.trim() === '' || b.accountNumber.toUpperCase().startsWith('PENDING') || b.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || b.accountNumber.toUpperCase() === 'UNASSIGNED' || b.accountNumber.toUpperCase() === 'UNISSUED' || b.status === 'pending_approval';
+
+    if (aPending && !bPending) return -1;
+    if (!aPending && bPending) return 1;
+
+    // When both are pending, newest created account sits strictly at the very top
+    if (aPending && bPending) {
+      const aTime = a.createdAt || (a.registrationDate ? new Date(a.registrationDate).getTime() : 0);
+      const bTime = b.createdAt || (b.registrationDate ? new Date(b.registrationDate).getTime() : 0);
+      if (bTime !== aTime) return bTime - aTime;
+    }
+
     if (consumerSortBy === 'name_asc') {
       return (a.name || '').localeCompare(b.name || '');
     }
@@ -2010,11 +2028,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     if (consumerSortBy === 'balance_desc') {
       return (b.outstandingBalance || 0) - (a.outstandingBalance || 0);
     }
-    // Default 'recent': prioritize pending approval accounts at the top, then stable order
-    const aPending = !a.accountNumber || a.accountNumber.toUpperCase().startsWith('PENDING') || a.status === 'pending_approval';
-    const bPending = !b.accountNumber || b.accountNumber.toUpperCase().startsWith('PENDING') || b.status === 'pending_approval';
-    if (aPending && !bPending) return -1;
-    if (!aPending && bPending) return 1;
+
+    // Default 'recent': newest created or registered accounts at the top
+    const aTime = a.createdAt || (a.registrationDate ? new Date(a.registrationDate).getTime() : 0);
+    const bTime = b.createdAt || (b.registrationDate ? new Date(b.registrationDate).getTime() : 0);
+    if (bTime !== aTime) return bTime - aTime;
+
     return 0;
   });
 
@@ -2791,54 +2810,51 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             </div>
           )}
 
-          {/* 4. APPROVALS MODULE (⭐ MOST IMPORTANT MODULE) */}
+          {/* 4. APPROVALS MODULE */}
           {activeTab === 'approvals' && (
             <div className="space-y-6 animate-fade-in" id="approvals-tab">
-              <div className="bg-blue-900 text-white p-6 rounded-3xl shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div className="space-y-1">
-                  <div className="flex items-center space-x-2">
-                    <span className="bg-amber-400 text-slate-950 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full">
-                      ⭐ Critical Workflow Gate
-                    </span>
-                    <span className="text-blue-200 text-xs font-mono">Real-time Meter Reader Submissions</span>
-                  </div>
-                  <h3 className="text-xl font-black uppercase tracking-tight">Reading Approvals & Auto-Billing Verification Queue</h3>
-                  <p className="text-xs text-blue-200 max-w-2xl">
-                    Approving a reading locks the field index, automatically generates the monthly water bill using tiered rates + fixed fees + VAT, posts it instantly to the Consumer Portal, and notifies the consumer.
+              {/* Clean, Professional Header */}
+              <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 tracking-tight">Meter Reading Approvals</h3>
+                  <p className="text-xs text-slate-500 mt-0.5 max-w-2xl">
+                    Review and verify field meter readings submitted by meter readers. Approving a reading generates the monthly billing statement and updates the consumer portal.
                   </p>
                 </div>
-                <div className="bg-blue-950/80 border border-blue-800 p-4 rounded-2xl text-center shrink-0">
-                  <span className="text-3xl font-black text-amber-400 block">{readings.filter(r => r.status === 'pending').length}</span>
-                  <span className="text-[10px] text-blue-300 uppercase tracking-widest font-bold">Pending Approvals</span>
+                <div className="flex items-center space-x-3 shrink-0">
+                  <div className="bg-slate-50 border border-slate-200 px-4 py-2 rounded-lg text-center">
+                    <span className="text-xl font-bold text-slate-900 block leading-tight font-mono">{readings.filter(r => r.status === 'pending').length}</span>
+                    <span className="text-[11px] text-slate-500 font-medium">Pending Approvals</span>
+                  </div>
                 </div>
               </div>
 
-              {/* Sub-tab Navigation: Pending Queue vs Permanent Approval History */}
-              <div className="flex border-b border-slate-200 space-x-4">
+              {/* Sub-tab Navigation */}
+              <div className="flex border-b border-slate-200 space-x-6">
                 <button
                   onClick={() => setApprovalsSubTab('pending')}
-                  className={`pb-3 text-xs font-black uppercase tracking-wider transition border-b-2 flex items-center space-x-2 ${
+                  className={`pb-3 text-xs font-bold transition border-b-2 flex items-center space-x-2 cursor-pointer ${
                     approvalsSubTab === 'pending'
                       ? 'border-blue-600 text-blue-600'
-                      : 'border-transparent text-slate-400 hover:text-slate-600'
+                      : 'border-transparent text-slate-500 hover:text-slate-700'
                   }`}
                 >
-                  <span>⏳ Pending Verification Queue</span>
-                  <span className="bg-amber-100 text-amber-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+                  <span>Pending Verification</span>
+                  <span className="bg-amber-100 text-amber-800 text-[11px] font-semibold px-2 py-0.5 rounded-full font-mono">
                     {readings.filter(r => r.status === 'pending').length}
                   </span>
                 </button>
 
                 <button
                   onClick={() => setApprovalsSubTab('history')}
-                  className={`pb-3 text-xs font-black uppercase tracking-wider transition border-b-2 flex items-center space-x-2 ${
+                  className={`pb-3 text-xs font-bold transition border-b-2 flex items-center space-x-2 cursor-pointer ${
                     approvalsSubTab === 'history'
                       ? 'border-blue-600 text-blue-600'
-                      : 'border-transparent text-slate-400 hover:text-slate-600'
+                      : 'border-transparent text-slate-500 hover:text-slate-700'
                   }`}
                 >
-                  <span>📜 Permanent Approval History</span>
-                  <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+                  <span>Approval History</span>
+                  <span className="bg-slate-100 text-slate-600 text-[11px] font-semibold px-2 py-0.5 rounded-full font-mono">
                     {readings.filter(r => r.status !== 'pending').length}
                   </span>
                 </button>
@@ -2850,218 +2866,176 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   {/* Search and summary bar for pending items */}
                   <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
                     <div className="relative flex-1 sm:max-w-md">
-                      <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
+                      <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400" />
                       <input
                         type="text"
-                        placeholder="Search pending by consumer, meter reader, account #, or coverage..."
+                        placeholder="Search by consumer name, account #, or meter reader..."
                         value={pendingApprovalSearch}
                         onChange={(e) => setPendingApprovalSearch(e.target.value)}
-                        className="w-full bg-white border border-slate-200 rounded-xl py-2.5 pl-10 pr-3.5 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 shadow-2xs font-medium"
+                        className="w-full bg-white border border-slate-200 rounded-lg py-2 pl-10 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 shadow-2xs font-normal"
                       />
-                    </div>
-                    <div className="flex items-center space-x-2 text-xs text-slate-500">
-                      <span className="font-medium">Ready for Mobile Reader Interactions & Sync</span>
                     </div>
                   </div>
 
                   {(() => {
                     const pendingList = readings.filter(r => r.status === 'pending');
                     const q = (pendingApprovalSearch || '').toLowerCase().trim();
-                    const filteredPending = pendingList.filter(r => 
-                      !q ||
-                      (r.consumerName || '').toLowerCase().includes(q) ||
-                      (r.meterReaderName || '').toLowerCase().includes(q) ||
-                      (r.accountNumber || '').toLowerCase().includes(q) ||
-                      (r.meterNumber || '').toLowerCase().includes(q) ||
-                      (r.billingPeriod || '').toLowerCase().includes(q) ||
-                      (r.route || '').toLowerCase().includes(q)
-                    );
+                    const cleanQ = q.replace(/^#/, '').trim();
+                    const filteredPending = pendingList.filter(r => {
+                      if (!q) return true;
+                      const acct = (r.accountNumber || '').toLowerCase();
+                      const name = (r.consumerName || '').toLowerCase();
+                      const reader = (r.meterReaderName || '').toLowerCase();
+                      const meter = (r.meterNumber || '').toLowerCase();
+                      const period = (r.billingPeriod || '').toLowerCase();
+                      const route = (r.route || '').toLowerCase();
+                      return (
+                        name.includes(q) ||
+                        reader.includes(q) ||
+                        acct.includes(q) ||
+                        acct.includes(cleanQ) ||
+                        `#${acct}`.includes(q) ||
+                        meter.includes(q) ||
+                        period.includes(q) ||
+                        route.includes(q)
+                      );
+                    });
 
                     if (filteredPending.length === 0) {
                       return (
-                        <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center space-y-3">
-                          <CheckCircle className="h-12 w-12 text-emerald-500 mx-auto" />
-                          <h4 className="text-base font-extrabold text-slate-800 uppercase">
-                            {pendingList.length === 0 ? 'Approval Queue is All Clear!' : 'No Matching Pending Readings'}
+                        <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-2">
+                          <CheckCircle className="h-10 w-10 text-slate-400 mx-auto" />
+                          <h4 className="text-sm font-bold text-slate-800">
+                            {pendingList.length === 0 ? 'No Pending Readings' : 'No Matching Readings'}
                           </h4>
-                          <p className="text-xs text-slate-500 max-w-md mx-auto">
+                          <p className="text-xs text-slate-500 max-w-sm mx-auto">
                             {pendingList.length === 0
-                              ? 'All field meter reader submissions have been reviewed and verified. Auto-generated bills have been published to consumer portals.'
-                              : 'Try adjusting your search criteria.'}
+                              ? 'All field readings have been reviewed and approved.'
+                              : 'No pending readings match your search query.'}
                           </p>
                         </div>
                       );
                     }
 
                     return (
-                      <div className="space-y-4">
+                      <div className="space-y-3">
                         {filteredPending.map((reading, pIdx) => {
                           const totalCalculatedBill = calculateCostOf(reading.consumption, reading.classification);
-                          const waterAmount = totalCalculatedBill;
 
                           return (
-                            <div key={`pending-read-${reading.id || ''}-${reading.accountNumber || ''}-${pIdx}`} className="bg-white border-2 border-amber-300 rounded-3xl p-6 shadow-md hover:shadow-lg transition space-y-4">
-                              {/* Header: Organized Consumer, Reading & Geotag Details */}
-                              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 border-b border-slate-100 pb-5">
-                                {/* Left Section (8 cols): Consumer, Account, Route & Field Meta */}
-                                <div className="lg:col-span-8 flex items-start space-x-4">
-                                  <div className="h-12 w-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-600 flex items-center justify-center shrink-0 mt-1">
-                                    <Activity className="h-6 w-6 text-amber-600" />
+                            <div 
+                              key={`pending-read-${reading.id || ''}-${reading.accountNumber || ''}-${pIdx}`} 
+                              className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs hover:border-slate-300 transition space-y-4"
+                            >
+                              {/* Header: Account Number (Bold & High Contrast), Consumer Info, Route, and Coverage */}
+                              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-slate-100">
+                                <div className="space-y-1.5">
+                                  <div className="flex items-center gap-2.5 flex-wrap">
+                                    {/* High-visibility, crisp Account Number Badge */}
+                                    <div className="inline-flex items-center gap-1.5 bg-slate-900 text-white px-2.5 py-1 rounded-md shadow-2xs">
+                                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Account</span>
+                                      <span className="font-mono text-sm font-black text-amber-300 tracking-wide">
+                                        {reading.accountNumber ? (reading.accountNumber.startsWith('#') ? reading.accountNumber : `#${reading.accountNumber}`) : 'Pending Account'}
+                                      </span>
+                                    </div>
+
+                                    {/* Consumer Full Name */}
+                                    <h4 className="text-base font-bold text-slate-900">{reading.consumerName}</h4>
+
+                                    {/* Classification Tag - Ultra-clear, high-contrast, prominent badges */}
+                                    {reading.classification?.toLowerCase().includes('comm') ? (
+                                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-black uppercase tracking-wider bg-purple-100 text-purple-950 border-2 border-purple-400 shadow-2xs">
+                                        <Building className="h-3.5 w-3.5 text-purple-700 shrink-0" />
+                                        <span>COMMERCIAL</span>
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-black uppercase tracking-wider bg-emerald-100 text-emerald-950 border-2 border-emerald-400 shadow-2xs">
+                                        <Home className="h-3.5 w-3.5 text-emerald-700 shrink-0" />
+                                        <span>{reading.classification ? reading.classification.toUpperCase() : 'RESIDENTIAL'}</span>
+                                      </span>
+                                    )}
                                   </div>
-                                  <div className="space-y-3 flex-1 min-w-0">
-                                    {/* Primary Consumer Header */}
-                                    <div className="flex items-center space-x-2.5 flex-wrap gap-y-1.5">
-                                      <span className="text-[10px] bg-blue-100 text-blue-950 border border-blue-300 font-black uppercase px-2 py-0.5 rounded tracking-wide">
-                                        Consumer Name
-                                      </span>
-                                      <h4 className="text-lg font-black text-slate-900 tracking-tight">{reading.consumerName}</h4>
-                                      <span className="bg-slate-900 text-amber-400 border border-slate-800 font-mono font-black px-2.5 py-0.5 rounded-lg text-xs tracking-wider shadow-2xs">
-                                        {reading.accountNumber ? `#${reading.accountNumber}` : 'Pending Account'}
-                                      </span>
-                                      <span className="inline-flex items-center gap-1 bg-sky-100 border border-sky-300 text-sky-950 font-black px-2.5 py-0.5 rounded-lg text-xs tracking-wide shadow-2xs">
-                                        <MapPin className="h-3.5 w-3.5 text-sky-700 shrink-0" />
-                                        <span>{reading.route || 'Poblacion Zone 3 Route'}</span>
-                                      </span>
-                                    </div>
 
-                                    {/* Clean 4-Column Metadata Grid */}
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2 text-xs">
-                                      {/* Read Date */}
-                                      <div className="bg-amber-50/90 border border-amber-300 rounded-xl p-2.5 flex items-center space-x-2 shadow-2xs">
-                                        <Calendar className="h-4 w-4 text-amber-700 shrink-0" />
-                                        <div className="min-w-0">
-                                          <span className="text-[10px] uppercase font-bold text-amber-800 block leading-none">Read Date</span>
-                                          <span className="text-xs font-black text-amber-950 block mt-0.5 truncate">{reading.readingDate || reading.meterReaderDate || '2026-08-25'}</span>
-                                        </div>
-                                      </div>
-
-                                      {/* Meter No */}
-                                      <div className="bg-emerald-50/90 border border-emerald-300 rounded-xl p-2.5 flex items-center space-x-2 shadow-2xs">
-                                        <Gauge className="h-4 w-4 text-emerald-700 shrink-0" />
-                                        <div className="min-w-0">
-                                          <span className="text-[10px] uppercase font-bold text-emerald-800 block leading-none">Meter No.</span>
-                                          <span className="text-xs font-mono font-black text-emerald-950 block mt-0.5 truncate">
-                                            {reading.meterNumber} <span className="font-sans font-bold text-[10px] text-emerald-800">({reading.meterBrand || 'EVER'})</span>
-                                          </span>
-                                        </div>
-                                      </div>
-
-                                      {/* Meter Reader */}
-                                      <div className="bg-indigo-50/90 border border-indigo-300 rounded-xl p-2.5 flex items-center space-x-2 shadow-2xs">
-                                        <UserCheck className="h-4 w-4 text-indigo-700 shrink-0" />
-                                        <div className="min-w-0">
-                                          <span className="text-[10px] uppercase font-bold text-indigo-800 block leading-none">Meter Reader</span>
-                                          <span className="text-xs font-black text-indigo-950 block mt-0.5 uppercase truncate">{reading.meterReaderName || 'MARCO POLO'}</span>
-                                        </div>
-                                      </div>
-
-                                      {/* Coverage Month */}
-                                      <div className="bg-sky-50/90 border border-sky-300 rounded-xl p-2.5 flex items-center space-x-2 shadow-2xs">
-                                        <Clock className="h-4 w-4 text-sky-700 shrink-0" />
-                                        <div className="min-w-0">
-                                          <span className="text-[10px] uppercase font-bold text-sky-800 block leading-none">Coverage Month</span>
-                                          <span className="text-xs font-black text-sky-950 block mt-0.5 truncate">{reading.billingPeriod || 'August 2026'}</span>
-                                        </div>
-                                      </div>
-                                    </div>
+                                  <div className="flex items-center space-x-3 text-xs text-slate-500 flex-wrap">
+                                    <span className="flex items-center gap-1">
+                                      <MapPin className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                                      <span>{reading.route || 'Poblacion Zone 3 Route'}</span>
+                                    </span>
+                                    <span>•</span>
+                                    <span>Meter No: <strong className="font-mono text-slate-700 font-semibold">{reading.meterNumber}</strong> {reading.meterBrand ? `(${reading.meterBrand})` : ''}</span>
                                   </div>
                                 </div>
 
-                                {/* Right Section (4 cols): View Dial Photo Action & GPS Geotag Block */}
-                                <div className="lg:col-span-4 flex flex-col justify-between space-y-2.5 bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <button
-                                      onClick={() => {
-                                        setSelectedPhotoUrl(reading.imageUrl || 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop');
-                                        setSelectedPhotoAccount(reading.accountNumber);
-                                      }}
-                                      className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-black rounded-xl text-xs flex items-center justify-center space-x-2 transition-all shadow-md hover:shadow-lg cursor-pointer transform hover:-translate-y-0.5"
-                                    >
-                                      <Camera className="h-4 w-4 text-white" />
-                                      <span className="tracking-wider uppercase text-xs">View Dial Photo</span>
-                                    </button>
-                                  </div>
-
-                                  {/* Geotag & Coordinates Card */}
-                                  <div className="bg-white border-2 border-amber-300/80 rounded-xl p-2.5 space-y-1 shadow-2xs">
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center space-x-1.5 text-rose-600">
-                                        <MapPin className="h-3.5 w-3.5 shrink-0" />
-                                        <span className="font-mono font-black text-slate-900 text-xs tracking-tight">
-                                          {reading.notes?.includes('°') ? reading.notes.split('•')[0].trim() : '8.5028° N, 124.7738° E'}
-                                        </span>
-                                      </div>
-                                      <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 font-extrabold text-[9px] px-1.5 py-0.5 rounded uppercase">
-                                        GPS Tagged
-                                      </span>
-                                    </div>
-                                    <p className="text-[11px] font-bold text-amber-900 leading-snug">
-                                      {reading.notes?.includes('•') ? reading.notes.split('•').slice(1).join('•').trim() : (reading.notes || `Field Meter Read (${reading.route || 'Poblacion Zone 3 Route'})`)}
-                                    </p>
-                                  </div>
+                                <div className="text-left sm:text-right text-xs text-slate-500 shrink-0">
+                                  <span className="block text-[11px] text-slate-400">Coverage Period</span>
+                                  <span className="font-semibold text-slate-800">{reading.billingPeriod || 'Current Period'}</span>
+                                  <span className="block text-[11px] text-slate-400 mt-0.5">Read Date: {reading.readingDate || reading.meterReaderDate || 'Today'}</span>
                                 </div>
                               </div>
 
-                              {/* Reading Metrics Card: Previous, Present (Current), Usage (Consumption) & Bill */}
-                              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 bg-slate-50 p-4 rounded-2xl text-xs border border-slate-200/80">
-                                <div className="bg-white p-3 rounded-xl border border-slate-200/70 shadow-2xs">
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-slate-500 font-extrabold uppercase block">Previous Reading</span>
-                                    <Clock className="h-3 w-3 text-slate-400" />
+                              {/* Reading Metrics: Previous, Present, Consumption, Bill */}
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 border border-slate-100 rounded-lg p-3.5">
+                                <div>
+                                  <span className="text-[11px] font-medium text-slate-500 block">Previous Index</span>
+                                  <div className="mt-0.5 flex items-baseline space-x-1">
+                                    <span className="text-base font-mono font-bold text-slate-700">{reading.previousReading}</span>
+                                    <span className="text-xs text-slate-400">m³</span>
                                   </div>
-                                  <span className="text-lg font-mono font-black text-slate-800 mt-1 block">{reading.previousReading} <span className="text-xs font-normal text-slate-500">m³</span></span>
-                                  <span className="text-[10px] text-slate-400 font-medium">Prior Index Base</span>
                                 </div>
 
-                                <div className="bg-blue-50/70 p-3 rounded-xl border border-blue-200 shadow-2xs">
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-blue-800 font-extrabold uppercase block">Present Reading</span>
-                                    <Gauge className="h-3 w-3 text-blue-600" />
+                                <div>
+                                  <span className="text-[11px] font-medium text-slate-500 block">Present Index</span>
+                                  <div className="mt-0.5 flex items-baseline space-x-1">
+                                    <span className="text-base font-mono font-bold text-blue-700">{reading.currentReading}</span>
+                                    <span className="text-xs text-blue-600">m³</span>
                                   </div>
-                                  <span className="text-lg font-mono font-black text-blue-700 mt-1 block">{reading.currentReading} <span className="text-xs font-normal text-blue-600">m³</span></span>
-                                  <span className="text-[10px] text-blue-600/80 font-medium">Field Dial Value</span>
                                 </div>
 
-                                <div className="bg-emerald-50/80 p-3 rounded-xl border border-emerald-200 shadow-2xs">
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-emerald-800 font-extrabold uppercase block">Usage / Consumption</span>
-                                    <Droplet className="h-3 w-3 text-emerald-600" />
+                                <div>
+                                  <span className="text-[11px] font-medium text-slate-500 block">Consumption</span>
+                                  <div className="mt-0.5 flex items-baseline space-x-1">
+                                    <span className="text-base font-mono font-bold text-emerald-700">+{reading.consumption}</span>
+                                    <span className="text-xs text-emerald-600">m³</span>
                                   </div>
-                                  <span className="text-lg font-mono font-black text-emerald-700 mt-1 block">{reading.consumption} <span className="text-xs font-normal text-emerald-600">m³</span></span>
-                                  <span className="text-[10px] text-emerald-600/80 font-medium">{reading.currentReading} - {reading.previousReading} m³</span>
                                 </div>
 
-                                <div className="bg-white p-3 rounded-xl border border-slate-200/70 shadow-2xs">
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-slate-500 font-extrabold uppercase block">Net Tariff</span>
-                                    <Receipt className="h-3 w-3 text-slate-400" />
+                                <div>
+                                  <span className="text-[11px] font-medium text-slate-500 block">Calculated Bill</span>
+                                  <div className="mt-0.5 flex items-baseline space-x-1">
+                                    <span className="text-base font-mono font-bold text-slate-900">₱{totalCalculatedBill.toFixed(2)}</span>
                                   </div>
-                                  <span className="text-lg font-mono font-black text-slate-800 mt-1 block">₱{waterAmount.toFixed(2)}</span>
-                                  <span className="text-[10px] text-slate-400 font-medium">{reading.classification || 'Residential'}</span>
-                                </div>
-
-                                <div className="col-span-2 sm:col-span-3 md:col-span-1 bg-emerald-600 text-white p-3 rounded-xl text-center shadow-sm flex flex-col justify-center">
-                                  <span className="text-[10px] text-emerald-100 font-black uppercase tracking-wider block">Auto Bill Amount</span>
-                                  <span className="text-xl font-mono font-black text-white mt-0.5 block">₱{totalCalculatedBill.toFixed(2)}</span>
-                                  <span className="text-[9px] text-emerald-200 font-medium mt-0.5">Due: {reading.dueDate || '15th of Month'}</span>
-                                </div>
-                              </div>
-
-                              {/* Actions and Audit Info Row */}
-                              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pt-1">
-                                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-700 font-medium">
-                                  <span className="inline-flex items-center gap-1.5 bg-amber-200/80 border border-amber-400 text-amber-950 font-bold px-2.5 py-1 rounded-lg text-xs shadow-2xs">
-                                    <Calendar className="h-3.5 w-3.5 text-amber-800" />
-                                    <span>Read Date: <strong className="text-amber-950 font-black">{reading.readingDate || reading.meterReaderDate || 'Today'}</strong></span>
+                                  <span className={`text-[10px] font-bold block mt-0.5 ${
+                                    reading.classification?.toLowerCase().includes('comm') ? 'text-purple-700' : 'text-emerald-700'
+                                  }`}>
+                                    {reading.classification?.toLowerCase().includes('comm') ? 'Commercial Tariff' : 'Residential Tariff'}
                                   </span>
-                                  <span className="text-slate-300">•</span>
-                                  <span>Coverage: <strong className="text-slate-900 font-black">{reading.billingPeriod || 'Current Period'}</strong></span>
-                                  <span className="text-slate-300">•</span>
-                                  <span>Reader: <strong className="text-slate-900 font-black">{reading.meterReaderName || 'Field Reader'}</strong></span>
+                                </div>
+                              </div>
+
+                              {/* Verification Details & Actions */}
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                                <div className="flex items-center space-x-3 text-xs text-slate-500 flex-wrap">
+                                  <span>Reader: <strong className="text-slate-700 font-semibold">{reading.meterReaderName || 'Field Reader'}</strong></span>
+                                  {reading.notes && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="text-slate-500 max-w-xs truncate">{reading.notes}</span>
+                                    </>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedPhotoUrl(reading.imageUrl || 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop');
+                                      setSelectedPhotoAccount(reading.accountNumber);
+                                    }}
+                                    className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium cursor-pointer"
+                                  >
+                                    <Camera className="h-3.5 w-3.5" />
+                                    <span>View Dial Photo</span>
+                                  </button>
                                 </div>
 
-                                <div className="flex items-center space-x-2 w-full sm:w-auto">
-                                  {/* Admin Approval Button */}
+                                <div className="flex items-center space-x-2 shrink-0">
                                   <button
                                     onClick={() => {
                                       const updated = readings.map(r => r.id === reading.id ? { 
@@ -3133,10 +3107,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                         5000
                                       );
                                     }}
-                                    className="w-full sm:w-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs transition shadow-md uppercase tracking-wider flex items-center justify-center space-x-2 cursor-pointer"
+                                    className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-xs transition shadow-xs flex items-center justify-center space-x-1.5 cursor-pointer"
                                   >
                                     <CheckCircle className="h-4 w-4" />
-                                    <span>APPROVE READING & ISSUE BILL</span>
+                                    <span>Approve & Issue Bill</span>
                                   </button>
                                 </div>
                               </div>
@@ -3198,16 +3172,27 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-700">
                           {(() => {
-                            const q = (approvalHistorySearch || '').toLowerCase();
+                            const q = (approvalHistorySearch || '').toLowerCase().trim();
+                            const cleanQ = q.replace(/^#/, '').trim();
                             const filteredHistory = readings
                               .filter(r => r.status !== 'pending')
-                              .filter(r => 
-                                (r.accountNumber || '').toLowerCase().includes(q) ||
-                                (r.consumerName || '').toLowerCase().includes(q) ||
-                                (r.meterNumber || '').toLowerCase().includes(q) ||
-                                (r.readingDate && r.readingDate.toLowerCase().includes(q)) ||
-                                (r.notes && r.notes.toLowerCase().includes(q))
-                              );
+                              .filter(r => {
+                                if (!q) return true;
+                                const acct = (r.accountNumber || '').toLowerCase();
+                                const name = (r.consumerName || '').toLowerCase();
+                                const meter = (r.meterNumber || '').toLowerCase();
+                                const date = (r.readingDate || '').toLowerCase();
+                                const notes = (r.notes || '').toLowerCase();
+                                return (
+                                  acct.includes(q) ||
+                                  acct.includes(cleanQ) ||
+                                  `#${acct}`.includes(q) ||
+                                  name.includes(q) ||
+                                  meter.includes(q) ||
+                                  date.includes(q) ||
+                                  notes.includes(q)
+                                );
+                              });
 
                             if (filteredHistory.length === 0) {
                               return (
@@ -3240,9 +3225,24 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                   <td className="px-3.5 py-3 font-bold text-slate-800 whitespace-nowrap">
                                     {r.billingPeriod || 'Current Period'}
                                   </td>
-                                  <td className="px-3.5 py-3 space-y-0.5 min-w-[140px]">
+                                  <td className="px-3.5 py-3 space-y-1 min-w-[140px]">
                                     <span className="font-bold text-slate-900 block leading-tight">{r.consumerName}</span>
-                                    <span className="font-mono text-blue-600 text-[11px] font-bold">#{r.accountNumber}</span>
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-mono text-blue-700 text-xs font-black bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200 inline-block">
+                                        {r.accountNumber ? (r.accountNumber.startsWith('#') ? r.accountNumber : `#${r.accountNumber}`) : 'Pending Acct'}
+                                      </span>
+                                      {r.classification?.toLowerCase().includes('comm') ? (
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-100 text-purple-900 border border-purple-300">
+                                          <Building className="h-2.5 w-2.5 text-purple-700 shrink-0" />
+                                          <span>COMMERCIAL</span>
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-900 border border-emerald-300">
+                                          <Home className="h-2.5 w-2.5 text-emerald-700 shrink-0" />
+                                          <span>RESIDENTIAL</span>
+                                        </span>
+                                      )}
+                                    </div>
                                   </td>
                                   <td className="px-3.5 py-3 font-mono text-slate-700 font-bold whitespace-nowrap">
                                     {r.meterNumber}
@@ -3342,20 +3342,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         </p>
                       </div>
 
-                      {/* Export CSV Action */}
-                      <button
-                        onClick={() => {
-                          const headers = ['Name', 'Email', 'Phone', 'Barangay', 'Sitio / Zone', 'Classification', 'Status', 'Account Number', 'Meter Number', 'RFID Tag', 'Address', 'Outstanding Balance'];
-                          const rows = filteredConsumers.map(c => [
-                            c.name, c.email, c.contactNumber, c.barangay || '', c.sitioZone || '', c.consumerType || 'Residential', c.status.toUpperCase(), c.accountNumber, c.meterNumber, c.rfidTag || '', c.address, c.outstandingBalance || 0
-                          ]);
-                          exportToCsv('twd_consumers_master_export.csv', headers, rows);
-                        }}
-                        className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold rounded-xl text-xs flex items-center space-x-2 transition shadow-sm cursor-pointer shrink-0 self-start md:self-auto"
-                      >
-                        <Download className="h-4 w-4 text-white" />
-                        <span>Export Filtered List ({filteredConsumers.length})</span>
-                      </button>
+                      {/* Action Buttons: Export CSV */}
+                      <div className="flex items-center gap-2.5 self-start md:self-auto shrink-0 flex-wrap">
+                        <button
+                          onClick={() => {
+                            const headers = ['Name', 'Email', 'Phone', 'Barangay', 'Sitio / Zone', 'Classification', 'Status', 'Account Number', 'Meter Number', 'RFID Tag', 'Address', 'Outstanding Balance'];
+                            const rows = filteredConsumers.map(c => [
+                              c.name, c.email, c.contactNumber, c.barangay || '', c.sitioZone || '', c.consumerType || 'Residential', c.status.toUpperCase(), c.accountNumber, c.meterNumber, c.rfidTag || '', c.address, c.outstandingBalance || 0
+                            ]);
+                            exportToCsv('twd_consumers_master_export.csv', headers, rows);
+                          }}
+                          className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold rounded-xl text-xs flex items-center space-x-2 transition shadow-sm cursor-pointer shrink-0"
+                        >
+                          <Download className="h-4 w-4 text-white" />
+                          <span>Export Filtered List ({filteredConsumers.length})</span>
+                        </button>
+                      </div>
                     </div>
 
                     {/* Quick Status Pill Bar */}
@@ -3678,23 +3680,43 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || c.status === 'pending_approval';
 
                                 return (
-                                  <tr key={`cons-row-${c.accountNumber || c.email || c.name || cIdx}-${cIdx}`} className="hover:bg-slate-50/70 transition">
+                                  <tr 
+                                    key={`cons-row-${c.accountNumber || c.email || c.name || cIdx}-${cIdx}`} 
+                                    className={`transition ${
+                                      isPending 
+                                        ? 'bg-amber-50/60 hover:bg-amber-100/50 border-l-4 border-l-amber-500' 
+                                        : 'hover:bg-slate-50/70'
+                                    }`}
+                                  >
                                     <td className="px-4 py-3 space-y-0.5 truncate">
-                                      <span className="font-bold text-[13px] text-slate-900 block truncate" title={c.name}>{c.name}</span>
+                                      <div className="flex items-center space-x-1.5 truncate">
+                                        <span className="font-bold text-[13px] text-slate-900 truncate" title={c.name}>{c.name}</span>
+                                        {isPending && (
+                                          <span className="px-1.5 py-0.5 rounded bg-amber-500 text-white font-black text-[9px] uppercase tracking-wider shrink-0 shadow-2xs">
+                                            NEW
+                                          </span>
+                                        )}
+                                      </div>
                                       <div className="flex items-center space-x-1.5 truncate">
                                         {!isPending ? (
                                           <span className="font-mono text-[10px] text-slate-400 font-bold shrink-0">#{c.accountNumber}</span>
                                         ) : (
-                                          <span className="font-mono text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded border border-amber-200 shrink-0">
-                                            Pending Issuance
+                                          <span className="font-mono text-[10px] font-bold text-amber-800 bg-amber-200/80 px-1.5 py-0.5 rounded border border-amber-300 shrink-0 inline-flex items-center gap-1">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-amber-600 animate-pulse" />
+                                            No ID Issued
                                           </span>
                                         )}
-                                        <span className={`inline-block text-[9px] font-black uppercase px-1.5 py-0.2 rounded border shrink-0 ${
+                                        <span className={`inline-flex items-center gap-1 text-[10px] font-black uppercase px-2 py-0.5 rounded-md border shrink-0 shadow-2xs ${
                                           c.consumerType === 'Commercial'
-                                            ? 'bg-purple-100/70 text-purple-700 border-purple-200'
-                                            : 'bg-blue-100/70 text-blue-700 border-blue-200'
+                                            ? 'bg-purple-100 text-purple-900 border-purple-300'
+                                            : 'bg-emerald-100 text-emerald-900 border-emerald-300'
                                         }`}>
-                                          {c.consumerType || 'Residential'}
+                                          {c.consumerType === 'Commercial' ? (
+                                            <Building className="h-2.5 w-2.5 text-purple-700 shrink-0" />
+                                          ) : (
+                                            <Home className="h-2.5 w-2.5 text-emerald-700 shrink-0" />
+                                          )}
+                                          <span>{c.consumerType || 'Residential'}</span>
                                         </span>
                                       </div>
                                     </td>
@@ -3795,25 +3817,55 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
             return (
               <div className="space-y-6 animate-fade-in" id="readers-tab">
-                {/* Header & Main Controls */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <h3 className="text-base sm:text-lg font-black text-slate-950 uppercase tracking-wider font-sans">
-                      Meter Reading Staff Registry
-                    </h3>
-                    <p className="text-xs text-slate-500 font-medium mt-0.5">
-                      Manage municipal field inspectors, register handheld terminal accounts, or terminate field staff access.
-                    </p>
-                  </div>
-                  
+                {/* Readers & Routes Sub-Navigation */}
+                <div className="flex space-x-2 border-b border-slate-200 pb-3">
                   <button
-                    onClick={() => setShowAddReader(!showAddReader)}
-                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition flex items-center space-x-2 shrink-0 shadow-sm active:scale-95 cursor-pointer"
+                    type="button"
+                    onClick={() => setReadersSubTab('officers')}
+                    className={`px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer flex items-center space-x-2 ${
+                      readersSubTab === 'officers'
+                        ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-400/20'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                    }`}
                   >
-                    <Plus className="h-4 w-4" />
-                    <span>Enroll Field Officer</span>
+                    <UserCheck className="h-4 w-4" />
+                    <span>Field Staff Officers ({readers.length})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setReadersSubTab('routes')}
+                    className={`px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer flex items-center space-x-2 ${
+                      readersSubTab === 'routes'
+                        ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-400/20'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <MapPin className="h-4 w-4" />
+                    <span>Zone Route Allocations ({routes.length})</span>
                   </button>
                 </div>
+
+                {readersSubTab === 'officers' && (
+                  <>
+                    {/* Header & Main Controls */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div>
+                        <h3 className="text-base sm:text-lg font-black text-slate-950 uppercase tracking-wider font-sans">
+                          Meter Reading Staff Registry
+                        </h3>
+                        <p className="text-xs text-slate-500 font-medium mt-0.5">
+                          Manage municipal field inspectors, register handheld terminal accounts, or terminate field staff access.
+                        </p>
+                      </div>
+                      
+                      <button
+                        onClick={() => setShowAddReader(!showAddReader)}
+                        className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition flex items-center space-x-2 shrink-0 shadow-sm active:scale-95 cursor-pointer"
+                      >
+                        <Plus className="h-4 w-4" />
+                        <span>Enroll Field Officer</span>
+                      </button>
+                    </div>
 
                 {/* Status Summary & Quick Stats Chips */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -4091,6 +4143,91 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     );
                   })}
                 </div>
+              </>
+            )}
+
+            {readersSubTab === 'routes' && (
+              <div className="space-y-6 animate-fade-in" id="readers-routes-tab">
+                <div className="bg-white border border-slate-150 rounded-3xl p-6 sm:p-8 space-y-4 shadow-sm">
+                  <div>
+                    <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-widest leading-none">Geographic Service Route assignments</h3>
+                    <p className="text-xs text-slate-500 mt-1.5">Assign designated zones directly to registered reader handheld mobile applications.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
+                    {routes.map((rt, rtIdx) => (
+                      <div key={`route-card-${rt.id || ''}-${rtIdx}`} className="bg-slate-50 border border-slate-150 rounded-2xl p-6 space-y-4">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h4 className="text-base font-extrabold text-slate-900">{rt.routeName}</h4>
+                            <p className="text-xs text-slate-500">{rt.description}</p>
+                          </div>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                            rt.status === 'completed' 
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' 
+                              : rt.status === 'in_progress' 
+                              ? 'bg-blue-50 text-blue-700 border border-blue-100' 
+                              : 'bg-slate-100 text-slate-500 border border-slate-200'
+                          }`}>
+                            {rt.status.replace('_', ' ')}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between items-center text-xs">
+                          <div>
+                            <span className="text-slate-400">Consumers in zone:</span>
+                            <span className="font-bold text-slate-800 ml-1.5">{rt.totalConsumers} connections</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Assigned Reader Option:</span>
+                            <span className="font-extrabold text-blue-700 ml-1.5">{rt.assignedReaderName}</span>
+                          </div>
+                        </div>
+
+                        <div className="pt-4 border-t border-slate-200/50 flex justify-end">
+                          {editingRouteId === rt.id ? (
+                            <div className="flex items-center space-x-2 w-full">
+                              <select
+                                value={assignedReaderId}
+                                onChange={(e) => setAssignedReaderId(e.target.value)}
+                                className="bg-white border border-slate-200 rounded-lg py-1.5 px-3 text-xs w-full font-bold text-slate-700"
+                              >
+                                <option value="">Choose Reader Staff...</option>
+                                {readers.map((r, rIdx) => (
+                                  <option key={`route-reader-opt-${r.id || ''}-${r.employeeId || ''}-${rIdx}`} value={r.id}>{r.name}</option>
+                                ))}
+                              </select>
+                              <button
+                                onClick={() => handleSaveRouteAssignment(rt.id)}
+                                className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold shrink-0 hover:bg-blue-700"
+                              >
+                                Save Assignment
+                              </button>
+                              <button
+                                onClick={() => setEditingRouteId(null)}
+                                className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-xs font-bold shrink-0 hover:bg-slate-300"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                setEditingRouteId(rt.id);
+                                setAssignedReaderId(rt.assignedReaderId);
+                              }}
+                              className="px-4 py-2 bg-white border border-slate-250 text-slate-700 hover:text-blue-600 text-xs font-bold rounded-lg transition"
+                            >
+                              Reassign Route Zone
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
               </div>
             );
           })()}
@@ -4808,144 +4945,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             </div>
           )}
 
-          {/* 6. ROUTE ASSIGNMENT ACTIONS MODULE */}
-          {activeTab === 'routes' && (
-            <div className="space-y-6 animate-fade-in" id="routes-tab">
-              <div className="bg-white border border-slate-150 rounded-3xl p-6 sm:p-8 space-y-4 shadow-sm">
-                <div>
-                  <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-widest leading-none">Geographic Service Route assignments</h3>
-                  <p className="text-xs text-slate-505 mt-1.5">Assign designated zones directly to registered reader handheld mobile applications.</p>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
-                  {routes.map((rt, rtIdx) => (
-                    <div key={`route-card-${rt.id || ''}-${rtIdx}`} className="bg-slate-50 border border-slate-150 rounded-2xl p-6 space-y-4">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h4 className="text-base font-extrabold text-slate-900">{rt.routeName}</h4>
-                          <p className="text-xs text-slate-500">{rt.description}</p>
-                        </div>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                          rt.status === 'completed' 
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' 
-                            : rt.status === 'in_progress' 
-                            ? 'bg-blue-50 text-blue-700 border border-blue-100' 
-                            : 'bg-slate-100 text-slate-500 border border-slate-200'
-                        }`}>
-                          {rt.status.replace('_', ' ')}
-                        </span>
-                      </div>
-
-                      <div className="flex justify-between items-center text-xs">
-                        <div>
-                          <span className="text-slate-400">Consumers in zone:</span>
-                          <span className="font-bold text-slate-800 ml-1.5">{rt.totalConsumers} connections</span>
-                        </div>
-                        <div>
-                          <span className="text-slate-400">Assigned Reader Option:</span>
-                          <span className="font-extrabold text-blue-700 ml-1.5">{rt.assignedReaderName}</span>
-                        </div>
-                      </div>
-
-                      <div className="pt-4 border-t border-slate-200/50 flex justify-end">
-                        {editingRouteId === rt.id ? (
-                          <div className="flex items-center space-x-2 w-full">
-                            <select
-                              value={assignedReaderId}
-                              onChange={(e) => setAssignedReaderId(e.target.value)}
-                              className="bg-white border border-slate-200 rounded-lg py-1.5 px-3 text-xs w-full font-bold text-slate-700"
-                            >
-                              <option value="">Choose Reader Staff...</option>
-                              {readers.map((r, rIdx) => (
-                                <option key={`route-reader-opt-${r.id || ''}-${r.employeeId || ''}-${rIdx}`} value={r.id}>{r.name}</option>
-                              ))}
-                            </select>
-                            <button
-                              onClick={() => handleSaveRouteAssignment(rt.id)}
-                              className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold shrink-0 hover:bg-blue-700"
-                            >
-                              Save Assignment
-                            </button>
-                            <button
-                              onClick={() => setEditingRouteId(null)}
-                              className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-xs font-bold shrink-0 hover:bg-slate-300"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => {
-                              setEditingRouteId(rt.id);
-                              setAssignedReaderId(rt.assignedReaderId);
-                            }}
-                            className="px-4 py-2 bg-white border border-slate-250 text-slate-700 hover:text-blue-600 text-xs font-bold rounded-lg transition"
-                          >
-                            Reassign Route Zone
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 7. REPORTS AND ANALYTICS MODULE */}
-          {activeTab === 'reports' && (
-            <div className="space-y-6 animate-fade-in" id="reports-tab">
-              <div className="bg-white border border-slate-150 rounded-3xl p-6 sm:p-8 space-y-6 shadow-sm">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-4">
-                  <div>
-                    <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-widest">Reports, Export & Operational Analytics</h3>
-                    <p className="text-xs text-slate-505 mt-1">Review district water supply indicators and download data tables.</p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      alert("TWD Reports cleared! Initiated CSV spreadsheet download of 6 connections water history.");
-                    }}
-                    className="px-5 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider transition flex items-center space-x-2"
-                  >
-                    <FileSpreadsheet className="h-4.5 w-4.5" />
-                    <span>Export Ledger Report (CSV)</span>
-                  </button>
-                </div>
-
-                {/* Simulated Ledger metrics */}
-                <div className="space-y-4">
-                  <h4 className="text-xs font-black uppercase text-slate-400 tracking-wider">Historical Water consumption readings for billing cycles</h4>
-                  <div className="border border-slate-150 rounded-none overflow-hidden">
-                    <table className="min-w-full text-xs text-left">
-                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-100">
-                        <tr>
-                          <th className="px-6 py-3">Account</th>
-                          <th className="px-6 py-3">Client Name</th>
-                          <th className="px-6 py-3">Route location</th>
-                          <th className="px-6 py-3">Prev Index</th>
-                          <th className="px-6 py-3">Current Index</th>
-                          <th className="px-6 py-3 font-mono">Simulated Consumption</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-slate-755 font-medium">
-                        {readings.map((r, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50">
-                            <td className="px-6 py-3 font-mono font-bold text-slate-900">{r.accountNumber}</td>
-                            <td className="px-6 py-3 font-bold text-slate-800">{r.consumerName}</td>
-                            <td className="px-6 py-3">{r.route}</td>
-                            <td className="px-6 py-3 font-mono text-slate-400">{r.previousReading} m³</td>
-                            <td className="px-6 py-3 font-mono text-slate-700 font-bold">{r.currentReading} m³</td>
-                            <td className="px-6 py-3 font-mono font-black text-blue-600">{r.consumption} m³</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* 8. PUBLIC ANNOUNCEMENTS BILLBOARD */}
           {activeTab === 'announcements' && (
             <div className="space-y-6 animate-fade-in" id="announcements-tab">
@@ -5051,43 +5050,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     </div>
                   </div>
                 ))}
-              </div>
-            </div>
-          )}
-
-          {/* 9. SECURITY AUDIT TRAIL REGISTER */}
-          {activeTab === 'audit' && (
-            <div className="space-y-6 animate-fade-in" id="audit-tab">
-              <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-sm">
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-xs text-left">
-                    <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-150">
-                      <tr>
-                        <th className="px-6 py-4">Timestamp</th>
-                        <th className="px-6 py-4">User Operator coordinates</th>
-                        <th className="px-6 py-4 font-mono">Logged Action event</th>
-                        <th className="px-6 py-4">Audit Details summary</th>
-                        <th className="px-6 py-3 text-right">Operational IP</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                      {auditLogs.map((log, lIdx) => (
-                        <tr key={`log-row-${log.id || ''}-${lIdx}`} className="hover:bg-slate-50/50">
-                          <td className="px-6 py-4.5 font-mono text-slate-500 text-[11px] leading-relaxed">
-                            {new Date(log.timestamp).toLocaleString()}
-                          </td>
-                          <td className="px-6 py-4.5 space-y-0.5">
-                            <p className="font-extrabold text-slate-850">{log.userName}</p>
-                            <p className="text-[10px] text-slate-450 uppercase tracking-widest leading-none">Role: {log.userRole}</p>
-                          </td>
-                          <td className="px-6 py-4.5 font-bold font-mono text-blue-600">{log.action}</td>
-                          <td className="px-6 py-4.5 text-slate-650 max-w-sm font-sans text-xs leading-normal">{log.details}</td>
-                          <td className="px-6 py-4.5 text-right font-mono text-slate-400 text-[11px]">{log.ipAddress}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
               </div>
             </div>
           )}
@@ -7395,20 +7357,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             </form>
           </div>
         </div>
-      )}
-
-      {/* OFFICIAL WATER BILLING NOTICE STATEMENT MODAL */}
-      {selectedNoticeReading && selectedNoticeConsumer && (
-        <BillDetails
-          isModal={true}
-          isOpen={true}
-          reading={selectedNoticeReading}
-          consumer={selectedNoticeConsumer}
-          onClose={() => {
-            setSelectedNoticeReading(null);
-            setSelectedNoticeConsumer(null);
-          }}
-        />
       )}
 
     </div>

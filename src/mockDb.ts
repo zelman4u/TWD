@@ -75,7 +75,7 @@ const INITIAL_USERS: User[] = [
     email: 'acero@gmail.com',
     name: 'Bruce Acero',
     role: 'consumer',
-    status: 'active',
+    status: 'pending_approval',
     password: 'Password123!',
     registrationDate: '2026-08-25',
   }
@@ -83,7 +83,7 @@ const INITIAL_USERS: User[] = [
 
 const INITIAL_CONSUMERS: Consumer[] = [
   {
-    accountNumber: 'BRG-01-3117',
+    accountNumber: '',
     name: 'Bruce Acero',
     address: 'PUROK 3, POBLACION',
     barangay: 'Poblacion',
@@ -91,16 +91,16 @@ const INITIAL_CONSUMERS: Consumer[] = [
     sitioZone: 'Purok 3',
     contactNumber: '+63 917 888 2345',
     email: 'acero@gmail.com',
-    meterNumber: '150309988',
-    meterBrand: 'EVER',
-    status: 'active',
+    meterNumber: '',
+    status: 'pending_approval',
     isRegistered: true,
     registrationDate: '2026-08-25',
+    createdAt: 1724630400000,
     consumerType: 'Residential',
     meterSize: '1/2"',
     householdInfo: '4 members',
-    outstandingBalance: 120.92,
-    rfidTag: 'MT-88373',
+    outstandingBalance: 0,
+    rfidTag: '',
     sequenceNo: 138,
     linkedUserId: 'user-acero',
   },
@@ -313,36 +313,6 @@ const INITIAL_READINGS: MeterReading[] = [
     penaltyAmount: 13.30,
     amountAfterDueDate: 148.76,
     paymentStatus: 'unpaid',
-  },
-  {
-    id: 'R-BRG-01-3117-202608',
-    accountNumber: 'BRG-01-3117',
-    consumerName: 'Bruce Acero',
-    meterNumber: '150309988',
-    meterBrand: 'EVER',
-    sequenceNo: 138,
-    address: 'PUROK 3, POBLACION',
-    addressZone: 'Purok 3',
-    route: 'Poblacion Zone 3 Route',
-    previousReading: 0,
-    currentReading: 15,
-    consumption: 15,
-    readingDate: '2026-08-25',
-    meterReaderDate: '2026-08-25',
-    status: 'pending',
-    meterReaderName: 'MARCO POLO',
-    imageUrl: 'https://images.unsplash.com/photo-1584467735815-f778f274e296?w=600&auto=format&fit=crop&q=80',
-    billingPeriod: 'August 2026',
-    dueDate: 'September 15, 2026',
-    classification: 'Residential',
-    billAmount: 118.50,
-    franchiseTax: 2.42,
-    arrears: 0.00,
-    totalAmount: 120.92,
-    penaltyAmount: 11.85,
-    amountAfterDueDate: 132.77,
-    paymentStatus: 'unpaid',
-    notes: '8.5028° N, 124.7738° E • Field Meter Read (Poblacion Zone 3 Route)'
   }
 ];
 const INITIAL_ROUTES: RouteAssignment[] = [];
@@ -481,17 +451,16 @@ function getStored<T>(key: string, initial: T): T {
       if (hasMockConsumers) {
         cons = cons.filter(c => c.accountNumber !== '1001-A' && c.accountNumber !== '1002-B' && c.accountNumber !== '1003-C');
       }
-      // Ensure authentic example consumers exist including Bruce Acero
+      // Ensure authentic example consumers exist and new accounts start without IDs
       let changed = hasMockConsumers;
       cons.forEach(c => {
         if (c.email && c.email.toLowerCase() === 'acero@gmail.com') {
-          if (c.name !== 'Bruce Acero' || c.accountNumber !== 'BRG-01-3117' || c.rfidTag !== 'MT-88373') {
-            c.name = 'Bruce Acero';
-            c.accountNumber = 'BRG-01-3117';
-            c.rfidTag = 'MT-88373';
-            c.meterNumber = '150309988';
-            c.meterBrand = 'EVER';
-            c.status = 'active';
+          if (c.accountNumber === 'BRG-01-3117' || c.meterNumber === '150309988' || c.rfidTag === 'MT-88373') {
+            c.accountNumber = '';
+            c.meterNumber = '';
+            c.rfidTag = '';
+            c.status = 'pending_approval';
+            c.outstandingBalance = 0;
             changed = true;
           }
         }
@@ -503,7 +472,7 @@ function getStored<T>(key: string, initial: T): T {
           (ic.linkedUserId && c.linkedUserId && c.linkedUserId === ic.linkedUserId)
         );
         if (!exists) {
-          cons.push(ic);
+          cons.unshift(ic);
           changed = true;
         }
       });

@@ -43,6 +43,7 @@ export interface Consumer {
   status: 'active' | 'inactive' | 'archived' | 'blocked' | 'pending_approval';
   isRegistered: boolean;
   registrationDate?: string;
+  createdAt?: number;
   linkedUserId?: string;
   consumerType?: 'Residential' | 'Commercial';
   meterSize?: string;

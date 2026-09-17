@@ -140,16 +140,18 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         contactNumber: contactNumber.trim(),
         email: email.trim(),
         meterNumber: '',
+        rfidTag: '',
         status: 'pending_approval',
         isRegistered: true,
         registrationDate: new Date().toISOString().split('T')[0],
+        createdAt: Date.now(),
         linkedUserId: newUserId,
         consumerType: consumerType,
         outstandingBalance: 0
       };
 
-      mockDb.saveUsers([...users, newUser]);
-      mockDb.saveConsumers([...consumers, newConsumer]);
+      mockDb.saveUsers([newUser, ...users]);
+      mockDb.saveConsumers([newConsumer, ...consumers]);
 
       // Direct instant write to Firestore collections
       syncDocToFirestore(COLLECTIONS.USERS, newUserId, newUser);
