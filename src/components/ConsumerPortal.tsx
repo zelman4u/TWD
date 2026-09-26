@@ -59,7 +59,8 @@ import {
   ZoomIn,
   Download,
   AlertOctagon,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Award
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotification } from '../types';
@@ -68,6 +69,7 @@ import DataLoadingIndicator from './common/DataLoadingIndicator';
 import { OverdueBillBanner } from './consumer/OverdueBillBanner';
 import { DynamicDueAlert } from './consumer/DynamicDueAlert';
 import { UploadReceiptModal } from './consumer/UploadReceiptModal';
+import { MonthlyUsageReportModal } from './consumer/MonthlyUsageReportModal';
 import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
 import { useToast } from '../context/ToastContext';
@@ -168,6 +170,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Bill Details Modal States
   const [billDetailsReading, setBillDetailsReading] = useState<MeterReading | null>(null);
   const [isBillDetailsOpen, setIsBillDetailsOpen] = useState(false);
+
+  // Monthly Usage & Household Benchmark Report Modal State
+  const [isUsageReportModalOpen, setIsUsageReportModalOpen] = useState(false);
 
   // Track previous readings to detect admin payment modifications
   const prevReadingsRef = useRef<MeterReading[]>([]);
@@ -2542,13 +2547,52 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             
             {/* Header & Usage Summary Statistics */}
             <div className="bg-white border border-slate-200/80 rounded-3xl p-6 sm:p-8 shadow-xs space-y-6">
-              <div>
-                <h3 className="text-base font-black text-slate-900 uppercase tracking-wider">
-                  Meter Reading History & Usage Analytics
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Complete timeline of physical meter inspections conducted by authorized Tagoloan Water District field readers.
-                </p>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-base font-black text-slate-900 uppercase tracking-wider">
+                    Meter Reading History & Usage Analytics
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Complete timeline of physical meter inspections conducted by authorized Tagoloan Water District field readers.
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setIsUsageReportModalOpen(true)}
+                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center space-x-2 transition shadow-md shadow-blue-600/20 cursor-pointer self-start sm:self-auto shrink-0"
+                >
+                  <FileText className="h-4 w-4" />
+                  <span>Download Usage Report (PDF)</span>
+                </button>
+              </div>
+
+              {/* Household Consumption vs District Average Benchmark Feature Banner */}
+              <div className="bg-gradient-to-r from-blue-950 via-indigo-950 to-slate-900 rounded-2xl p-5 text-white shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-blue-800/40">
+                <div className="flex items-start space-x-3.5">
+                  <div className="p-2.5 bg-blue-500/20 text-blue-400 rounded-xl border border-blue-500/30 shrink-0">
+                    <Award className="h-5 w-5" />
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center space-x-2">
+                      <h4 className="text-xs font-black uppercase tracking-wider text-white">
+                        Monthly Usage vs. Average Household Benchmark Report
+                      </h4>
+                      <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded">
+                        PDF Available
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-blue-100/90 max-w-2xl leading-relaxed">
+                      Generate an official downloadable PDF report summarizing your monthly consumption against the Tagoloan municipal average household usage. Includes efficiency rating, tariff breakdown, and official document signatures.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsUsageReportModalOpen(true)}
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-400 text-white font-black text-xs uppercase tracking-wider rounded-xl flex items-center space-x-1.5 transition shadow-sm cursor-pointer shrink-0"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>Generate PDF Report</span>
+                </button>
               </div>
 
               {/* Summary Stats Grid */}
@@ -3252,6 +3296,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             loadConsumerInfo(true);
           }}
           calculateCostOf={calculateCostOf}
+        />
+      )}
+
+      {/* CONSUMER MONTHLY USAGE & HOUSEHOLD BENCHMARK REPORT MODAL */}
+      {consumerRecord && (
+        <MonthlyUsageReportModal
+          isOpen={isUsageReportModalOpen}
+          consumer={consumerRecord}
+          readings={readings}
+          allHistoryReadings={allHistoryReadings}
+          onClose={() => setIsUsageReportModalOpen(false)}
         />
       )}
 

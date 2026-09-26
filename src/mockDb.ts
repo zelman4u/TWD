@@ -622,17 +622,6 @@ export const mockDb = {
   saveUsers: (users: User[]): void => {
     setStored(KEYS.USERS, users);
     syncBatchToFirestore(COLLECTIONS.USERS, users, 'id');
-    // Also individually ensure each user is in Firestore
-    users.forEach(u => {
-      if (u.id) {
-        syncDocToFirestore(COLLECTIONS.USERS, u.id, u);
-      }
-      if (u.email) {
-        // Also index by email-based ID for direct lookup
-        const emailDocId = `email_${u.email.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-        syncDocToFirestore(COLLECTIONS.USERS, emailDocId, u);
-      }
-    });
   },
   saveConsumers: (consumers: Consumer[]): void => {
     // Deduplicate consumers: if an active record with issued accountNumber exists, drop stale pending placeholders for same user/email/name
@@ -651,15 +640,6 @@ export const mockDb = {
 
     setStored(KEYS.CONSUMERS, deduplicated);
     syncBatchToFirestore(COLLECTIONS.CONSUMERS, deduplicated, 'accountNumber');
-    // Ensure every pending or active consumer is synced to Firestore
-    deduplicated.forEach(c => {
-      const docId = (c.accountNumber && !c.accountNumber.startsWith('PENDING')) 
-        ? c.accountNumber 
-        : (c.linkedUserId || (c.email ? `email_${c.email.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}` : '') || (c as any).id);
-      if (docId) {
-        syncDocToFirestore(COLLECTIONS.CONSUMERS, docId, c);
-      }
-    });
   },
   saveReaders: (readers: MeterReader[]): void => {
     const seen = new Set<string>();
@@ -677,14 +657,6 @@ export const mockDb = {
     });
     setStored(KEYS.READERS, deduplicated);
     syncBatchToFirestore(COLLECTIONS.READERS, deduplicated, 'id');
-    deduplicated.forEach(r => {
-      if (r.id) {
-        syncDocToFirestore(COLLECTIONS.READERS, r.id, r);
-      }
-      if (r.employeeId && r.employeeId !== r.id) {
-        syncDocToFirestore(COLLECTIONS.READERS, r.employeeId, r);
-      }
-    });
   },
   deleteReader: (readerId: string, employeeId?: string, email?: string, username?: string, name?: string): void => {
     // 1. Mark identifiers in blacklist

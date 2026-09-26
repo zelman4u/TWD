@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Disable HMR before any imports to prevent Vite from configuring HMR on unexposed ports
+process.env.DISABLE_HMR = "true";
+
 import express from "express";
 import path from "path";
 import { createServer as createHttpServer } from "http";
@@ -27,8 +30,67 @@ function getGeminiAI(): GoogleGenAI | null {
   return genAIClient;
 }
 
-// Set up WebSocket server
-const wss = new WebSocketServer({ server: httpServer });
+// Set up WebSocket server with dedicated upgrade listener to prevent clashing with Vite HMR
+const wss = new WebSocketServer({ noServer: true });
+
+httpServer.on("upgrade", (request, socket, head) => {
+  // Guard against socket errors during handshake
+  socket.on("error", () => {
+    // Gracefully ignore socket handshake errors to prevent log noise
+  });
+
+  const host = request.headers.host || "localhost:3000";
+  let pathname = "/";
+  try {
+    const parsed = new URL(request.url || "/", `http://${host}`);
+    pathname = parsed.pathname;
+  } catch {
+    pathname = request.url?.split("?")[0] || "/";
+  }
+
+  // Normalize path by stripping trailing slashes
+  const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+
+  // Check if this is a Vite HMR client handshake
+  const secProtocol = request.headers["sec-websocket-protocol"];
+  const isViteHmr = secProtocol === "vite-hmr" || normalizedPath.includes("vite-hmr") || pathname.includes("@vite");
+
+  if (isViteHmr) {
+    socket.destroy();
+    return;
+  }
+
+  // Route utility websocket connections strictly on dedicated application paths
+  const isOurWsRoute =
+    normalizedPath === "/ws" ||
+    normalizedPath === "/api/ws" ||
+    normalizedPath === "/realtime" ||
+    normalizedPath === "/socket" ||
+    normalizedPath.startsWith("/ws/");
+
+  if (isOurWsRoute) {
+    try {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
+    } catch {
+      try { socket.destroy(); } catch {}
+    }
+  } else {
+    socket.destroy();
+  }
+});
+
+// Dedicated HTTP fallback for /ws probe / health check requests
+app.get(["/ws", "/api/ws"], (req, res) => {
+  res.json({
+    status: "online",
+    service: "Tagoloan District Utility WebSocket Broker",
+    websocket: true,
+    activeConnections: clients.size,
+    timestamp: Date.now()
+  });
+});
 
 // Express JSON and URL-encoded body parsing for Mobile App API
 app.use(express.json({ limit: "25mb" }));
@@ -61,6 +123,7 @@ interface MobileReader {
   zone: string;
   contactNumber: string;
   employmentStatus: "active" | "pending" | "inactive";
+  status?: string;
   registeredAt: string;
   approvedAt?: string;
   assignedRoutes: string[];
@@ -88,7 +151,7 @@ interface MobileConsumerSync {
   lastReadingDate: string;
   meterSize?: string;
   consumerType: string;
-  status: "active" | "disconnected" | "maintenance" | "pending_approval" | "pending" | "inactive";
+  status: "active" | "disconnected" | "maintenance" | "pending_approval" | "pending" | "inactive" | "Disconnection Notice";
   contactNumber?: string;
   email?: string;
   rfidTag?: string;
@@ -673,6 +736,89 @@ app.delete(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
   });
 });
 
+// 3.05 Admin Updates Meter Reader (PATCH / PUT /api/staff/:id, /api/readers/:id)
+app.patch(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
+  const { id } = req.params;
+  const cleanId = decodeURIComponent(id || "").trim().toLowerCase();
+  const updates = req.body || {};
+
+  const readerIndex = registeredStaff.findIndex(
+    s => s.id?.toLowerCase() === cleanId ||
+         s.username?.toLowerCase() === cleanId ||
+         (updates.employeeId && s.id?.toLowerCase() === updates.employeeId.toLowerCase())
+  );
+
+  if (readerIndex === -1) {
+    return res.status(404).json({ success: false, message: "Meter reader not found." });
+  }
+
+  const existing = registeredStaff[readerIndex];
+  const updatedReader = {
+    ...existing,
+    ...updates,
+    employmentStatus: updates.employmentStatus || updates.status || existing.employmentStatus || "active",
+    status: updates.employmentStatus || updates.status || existing.status || "active",
+    assignedRoutes: updates.assignedRoutes || existing.assignedRoutes || []
+  };
+
+  registeredStaff[readerIndex] = updatedReader;
+
+  broadcast("staff:status_updated", {
+    readerId: id,
+    employmentStatus: updatedReader.employmentStatus,
+    status: updatedReader.status,
+    reader: updatedReader,
+    message: `Meter reader status updated: ${updatedReader.name} is now ${updatedReader.employmentStatus}.`
+  });
+
+  res.json({
+    success: true,
+    message: "Meter reader profile updated successfully.",
+    reader: updatedReader
+  });
+});
+
+app.put(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
+  const { id } = req.params;
+  const cleanId = decodeURIComponent(id || "").trim().toLowerCase();
+  const updates = req.body || {};
+
+  const readerIndex = registeredStaff.findIndex(
+    s => s.id?.toLowerCase() === cleanId ||
+         s.username?.toLowerCase() === cleanId ||
+         (updates.employeeId && s.id?.toLowerCase() === updates.employeeId.toLowerCase())
+  );
+
+  if (readerIndex === -1) {
+    return res.status(404).json({ success: false, message: "Meter reader not found." });
+  }
+
+  const existing = registeredStaff[readerIndex];
+  const updatedReader = {
+    ...existing,
+    ...updates,
+    employmentStatus: updates.employmentStatus || updates.status || existing.employmentStatus || "active",
+    status: updates.employmentStatus || updates.status || existing.status || "active",
+    assignedRoutes: updates.assignedRoutes || existing.assignedRoutes || []
+  };
+
+  registeredStaff[readerIndex] = updatedReader;
+
+  broadcast("staff:status_updated", {
+    readerId: id,
+    employmentStatus: updatedReader.employmentStatus,
+    status: updatedReader.status,
+    reader: updatedReader,
+    message: `Meter reader updated: ${updatedReader.name}.`
+  });
+
+  res.json({
+    success: true,
+    message: "Meter reader profile updated successfully.",
+    reader: updatedReader
+  });
+});
+
 // 3.1 Consumer Registry Endpoint for Mobile App & Web (GET /api/consumers, GET /api/sync/pull, GET /api/sync/consumers)
 // Filters consumers strictly by the meter reader's assigned coverage areas if reader context is present
 app.get(["/api/consumers", "/api/sync/pull", "/api/sync/consumers"], (req, res) => {
@@ -814,6 +960,43 @@ app.post("/api/consumers/register", (req, res) => {
     const cleanEmail = (email || "").trim().toLowerCase();
     const userId = linkedUserId || `user-${Date.now()}`;
 
+    // Normalize and validate 11-digit mobile phone number
+    let cleanPhone = (contactNumber || "").replace(/\D/g, "");
+    if (cleanPhone.startsWith("63") && cleanPhone.length === 12) {
+      cleanPhone = "0" + cleanPhone.slice(2);
+    }
+    if (cleanPhone.length === 10 && cleanPhone.startsWith("9")) {
+      cleanPhone = "0" + cleanPhone;
+    }
+
+    if (cleanPhone.length !== 11 || !cleanPhone.startsWith("09")) {
+      return res.status(400).json({
+        success: false,
+        message: "Mobile number must be exactly 11 digits starting with 09 (e.g. 09171234567)."
+      });
+    }
+
+    // Prohibit duplicate phone numbers across registered accounts
+    const duplicatePhone = syncedConsumers.find(c => {
+      let existingNorm = (c.contactNumber || "").replace(/\D/g, "");
+      if (existingNorm.startsWith("63") && existingNorm.length === 12) {
+        existingNorm = "0" + existingNorm.slice(2);
+      }
+      if (existingNorm.length === 10 && existingNorm.startsWith("9")) {
+        existingNorm = "0" + existingNorm;
+      }
+      const isSamePerson = (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) ||
+                           (c.linkedUserId && c.linkedUserId === userId);
+      return !isSamePerson && existingNorm === cleanPhone;
+    });
+
+    if (duplicatePhone) {
+      return res.status(409).json({
+        success: false,
+        message: `The mobile number ${cleanPhone} is already connected to an existing account (${duplicatePhone.name}). Duplicate phone numbers are strictly prohibited.`
+      });
+    }
+
     // Check if consumer already registered by email
     const existingIdx = syncedConsumers.findIndex(
       c => (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) ||
@@ -832,7 +1015,7 @@ app.post("/api/consumers/register", (req, res) => {
       lastReadingDate: new Date().toISOString().split("T")[0],
       consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
       status: "pending_approval",
-      contactNumber: contactNumber || "",
+      contactNumber: cleanPhone,
       email: cleanEmail,
       rfidTag: "",
       registrationDate: new Date().toISOString().split("T")[0],
@@ -903,9 +1086,94 @@ app.post("/api/consumers", (req, res) => {
       });
     }
 
-    const cleanAcc = (accountNumber || "").trim();
+    const cleanAcc = (accountNumber || "").trim().toUpperCase();
     const cleanEmail = (email || "").trim().toLowerCase();
     const cleanName = String(name).trim();
+    const cleanRfid = (rfidTag || "").trim().toUpperCase();
+    const cleanMeter = (meterNumber || "").trim().toUpperCase();
+
+    // Normalize phone number if present
+    let cleanPhone = (contactNumber || "").replace(/\D/g, "");
+    if (cleanPhone.startsWith("63") && cleanPhone.length === 12) {
+      cleanPhone = "0" + cleanPhone.slice(2);
+    }
+    if (cleanPhone.length === 10 && cleanPhone.startsWith("9")) {
+      cleanPhone = "0" + cleanPhone;
+    }
+
+    const isCurrentTarget = (c: MobileConsumerSync) => {
+      if (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) return true;
+      if (linkedUserId && c.linkedUserId && c.linkedUserId === linkedUserId) return true;
+      if (cleanAcc && c.accountNumber && c.accountNumber.toUpperCase() === cleanAcc) return true;
+      return false;
+    };
+
+    // 1. Strict Duplicate Account Number Check
+    if (cleanAcc && !cleanAcc.startsWith("PENDING") && cleanAcc !== "PENDING ADMIN ISSUANCE") {
+      const duplicateAcc = syncedConsumers.find(c =>
+        !isCurrentTarget(c) &&
+        c.accountNumber &&
+        c.accountNumber.toUpperCase() === cleanAcc &&
+        !c.accountNumber.toUpperCase().startsWith("PENDING")
+      );
+      if (duplicateAcc) {
+        return res.status(409).json({
+          success: false,
+          message: `Account Number #${cleanAcc} is already assigned to "${duplicateAcc.name}". Duplicate account numbers are strictly prohibited.`
+        });
+      }
+    }
+
+    // 2. Strict Duplicate RFID Tag Number Check
+    if (cleanRfid && !cleanRfid.startsWith("PENDING")) {
+      const duplicateTag = syncedConsumers.find(c =>
+        !isCurrentTarget(c) &&
+        c.rfidTag &&
+        c.rfidTag.toUpperCase() === cleanRfid
+      );
+      if (duplicateTag) {
+        return res.status(409).json({
+          success: false,
+          message: `RFID Tag "${cleanRfid}" is already assigned to "${duplicateTag.name}". Duplicate tag numbers are strictly prohibited.`
+        });
+      }
+    }
+
+    // 3. Strict Duplicate Meter Tag Number Check
+    if (cleanMeter && !cleanMeter.startsWith("PENDING")) {
+      const duplicateMeter = syncedConsumers.find(c =>
+        !isCurrentTarget(c) &&
+        c.meterNumber &&
+        c.meterNumber.toUpperCase() === cleanMeter
+      );
+      if (duplicateMeter) {
+        return res.status(409).json({
+          success: false,
+          message: `Meter Tag #${cleanMeter} is already registered to "${duplicateMeter.name}". Duplicate tag numbers are strictly prohibited.`
+        });
+      }
+    }
+
+    // 4. Strict Duplicate Phone Number Check (if phone provided and 11 digits)
+    if (cleanPhone && cleanPhone.length === 11) {
+      const duplicatePhone = syncedConsumers.find(c => {
+        if (isCurrentTarget(c)) return false;
+        let existingNorm = (c.contactNumber || "").replace(/\D/g, "");
+        if (existingNorm.startsWith("63") && existingNorm.length === 12) {
+          existingNorm = "0" + existingNorm.slice(2);
+        }
+        if (existingNorm.length === 10 && existingNorm.startsWith("9")) {
+          existingNorm = "0" + existingNorm;
+        }
+        return existingNorm === cleanPhone;
+      });
+      if (duplicatePhone) {
+        return res.status(409).json({
+          success: false,
+          message: `The mobile number ${cleanPhone} is already connected to an existing account (${duplicatePhone.name}). Duplicate phone numbers are strictly prohibited.`
+        });
+      }
+    }
 
     const record: MobileConsumerSync = {
       accountNumber: cleanAcc,
@@ -914,14 +1182,14 @@ app.post("/api/consumers", (req, res) => {
       barangay: barangay || "Poblacion",
       barangayId: barangayId,
       sitioZone: sitioZone || "Zone 1",
-      meterNumber: meterNumber || (cleanAcc ? `MT-${cleanAcc}` : ""),
+      meterNumber: cleanMeter || (cleanAcc ? `MT-${cleanAcc}` : ""),
       previousReading: Number(previousReading) || 0,
       lastReadingDate: lastReadingDate || new Date().toISOString().split("T")[0],
       consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
       status: status || (cleanAcc && !cleanAcc.toUpperCase().startsWith("PENDING") ? "active" : "pending_approval"),
-      contactNumber: contactNumber || "",
+      contactNumber: cleanPhone || contactNumber || "",
       email: cleanEmail,
-      rfidTag: rfidTag || "",
+      rfidTag: cleanRfid || "",
       registrationDate: registrationDate || new Date().toISOString().split("T")[0],
       linkedUserId: linkedUserId,
       householdInfo: householdInfo,
@@ -1347,16 +1615,31 @@ wss.on("connection", (ws) => {
   clients.add(ws);
   console.log("WebSocket client connected. Active connections:", clients.size);
 
+  // Guard against socket-level client errors (e.g. abrupt disconnects, proxy cuts)
+  ws.on("error", (err) => {
+    console.warn("[WS Server Client Error]:", err.message);
+  });
+
   // Send initial welcome event
   ws.send(JSON.stringify({ 
     type: "system:connected", 
-    message: "Connected to Tagoloan District Utility Broker" 
+    message: "Connected to Tagoloan District Utility Broker",
+    timestamp: Date.now()
   }));
 
   ws.on("message", (rawMessage) => {
     try {
       const data = JSON.parse(rawMessage.toString());
 
+      // 1. Application-level heartbeat ping/pong
+      if (data.type === "ping") {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
+        }
+        return;
+      }
+
+      // 2. Interactive simulated payment workflow
       if (data.type === "payment:start") {
         const { readingId, accountNumber, amount, paymentMethod, billingPeriod } = data.payload;
 
@@ -1446,6 +1729,21 @@ wss.on("connection", (ws) => {
             }
           }
         }, 4000);
+        return;
+      }
+
+      // 3. Relay any other real-time broadcast events from clients to all other peers
+      if (data.type) {
+        const relayMsg = JSON.stringify(data);
+        for (const client of clients) {
+          if (client !== ws && client.readyState === WebSocket.OPEN) {
+            try {
+              client.send(relayMsg);
+            } catch (broadcastErr) {
+              console.warn("[WS Server] Relay error:", broadcastErr);
+            }
+          }
+        }
       }
     } catch (err) {
       console.error("Failed to parse websocket message:", err);
@@ -1457,6 +1755,157 @@ wss.on("connection", (ws) => {
     console.log("WebSocket client disconnected. Remaining connections:", clients.size);
   });
 });
+
+// ============================================================================
+// BACKGROUND SERVICE: AUTOMATED 3-MONTH GRACE PERIOD & DISCONNECTION SCANNER
+// Scans account statuses every 60s and flags accounts exceeding 90 days grace period
+// ============================================================================
+interface ServerGracePeriodScanResult {
+  timestamp: string;
+  totalScanned: number;
+  updatedToDisconnection: number;
+  disconnectionNoticeTotal: number;
+  details: Array<{
+    accountNumber: string;
+    name: string;
+    status: string;
+    daysOverdue: number;
+    reason: string;
+  }>;
+}
+
+let serverLastScanResult: ServerGracePeriodScanResult | null = null;
+let serverTotalScanCycles = 0;
+
+function runServerGracePeriodScan(): ServerGracePeriodScanResult {
+  const now = Date.now();
+  let updatedCount = 0;
+  const details: ServerGracePeriodScanResult["details"] = [];
+
+  syncedConsumers.forEach((consumer) => {
+    // Only evaluate accounts with issued account numbers that aren't pending or inactive
+    if (!consumer.accountNumber || consumer.accountNumber.toUpperCase().startsWith("PENDING") || consumer.status === "pending_approval" || consumer.status === "inactive") {
+      return;
+    }
+
+    // Determine days since last reading / billing date
+    let lastDateObj: Date;
+    if (consumer.lastReadingDate) {
+      lastDateObj = new Date(consumer.lastReadingDate);
+      if (isNaN(lastDateObj.getTime())) {
+        lastDateObj = new Date("2024-10-15");
+      }
+    } else {
+      lastDateObj = new Date("2024-10-15");
+    }
+
+    // Bill due date standard: 15 days after reading date
+    const dueDate = new Date(lastDateObj.getTime() + 15 * 24 * 60 * 60 * 1000);
+    const daysOverdue = Math.max(0, Math.floor((now - dueDate.getTime()) / (1000 * 60 * 60 * 24)));
+
+    // Standard 3-month payment grace period = 90 days past due
+    const isExceeded = daysOverdue >= 90;
+
+    if (isExceeded) {
+      if (consumer.status !== "Disconnection Notice") {
+        consumer.status = "Disconnection Notice";
+        updatedCount++;
+        details.push({
+          accountNumber: consumer.accountNumber,
+          name: consumer.name,
+          status: "Disconnection Notice",
+          daysOverdue,
+          reason: `Exceeded 3-month grace period (${daysOverdue} days overdue)`
+        });
+      }
+    }
+  });
+
+  const disconnectionNoticeTotal = syncedConsumers.filter(c => c.status === "Disconnection Notice").length;
+
+  serverLastScanResult = {
+    timestamp: new Date().toISOString(),
+    totalScanned: syncedConsumers.length,
+    updatedToDisconnection: updatedCount,
+    disconnectionNoticeTotal,
+    details
+  };
+  serverTotalScanCycles++;
+
+  // Broadcast update to all active WebSocket clients if any account status changed
+  if (updatedCount > 0) {
+    const broadcastMsg = JSON.stringify({
+      type: "service:grace_period_scan_complete",
+      updatedCount,
+      disconnectionNoticeTotal,
+      timestamp: serverLastScanResult.timestamp
+    });
+    for (const client of clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.send(broadcastMsg);
+        } catch {}
+      }
+    }
+  }
+
+  return serverLastScanResult;
+}
+
+// Run initial scan at boot time
+setTimeout(() => {
+  try {
+    runServerGracePeriodScan();
+  } catch (e) {
+    console.error("[Background Service Error]: Initial scan failed", e);
+  }
+}, 3000);
+
+// Run continuous background scan every 60 seconds
+const gracePeriodInterval = setInterval(() => {
+  try {
+    runServerGracePeriodScan();
+  } catch (e) {
+    console.error("[Background Service Error]: Interval scan failed", e);
+  }
+}, 60000);
+
+// API Endpoints for Grace Period Background Service
+app.get(["/api/services/scan-grace-period", "/api/services/scan-grace-period/status"], (req, res) => {
+  res.json({
+    success: true,
+    service: "GracePeriodScannerBackgroundService",
+    status: "active",
+    intervalMs: 60000,
+    totalScanCycles: serverTotalScanCycles,
+    lastScanResult: serverLastScanResult,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post(["/api/services/scan-grace-period", "/api/services/scan-grace-period/run"], (req, res) => {
+  const result = runServerGracePeriodScan();
+  res.json({
+    success: true,
+    message: `Background scan executed. ${result.updatedToDisconnection} account(s) updated to Disconnection Notice.`,
+    result
+  });
+});
+
+// Periodic ping keepalive every 20 seconds so cloud reverse proxies (e.g. Cloud Run, Nginx) do not drop idle WebSocket sessions
+const pingInterval = setInterval(() => {
+  for (const client of clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.ping();
+        // Also send application-level heartbeat JSON data frame
+        client.send(JSON.stringify({ type: "system:heartbeat", timestamp: Date.now() }));
+      } catch {
+        // ignore socket errors during ping
+      }
+    }
+  }
+}, 20000);
 
 // Serve barangays, routes, and status
 app.get(["/api/barangays", "/api/routes", "/api/areas"], (req, res) => {
@@ -1501,7 +1950,10 @@ async function setupVite() {
   if (process.env.NODE_ENV !== "production") {
     console.log("Running in DEVELOPMENT mode - Mounting Vite dev middleware...");
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { 
+        middlewareMode: true,
+        hmr: false
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);

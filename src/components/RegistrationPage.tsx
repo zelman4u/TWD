@@ -4,12 +4,13 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { UserCheck, AlertCircle, ArrowLeft, Waves, Briefcase, Clock, Eye, EyeOff, CheckCircle2, XCircle, Lock } from 'lucide-react';
+import { UserCheck, AlertCircle, ArrowLeft, Waves, Briefcase, Clock, Eye, EyeOff, CheckCircle2, XCircle, Lock, Phone } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Consumer, Barangay } from '../types';
 import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
 import { useLoading } from '../context/LoadingContext';
 import { useToast } from '../context/ToastContext';
+import { normalizePhoneNumber, isValid11DigitPhone, detectExistingPhoneAccount } from '../utils/phoneValidation';
 
 interface RegistrationPageProps {
   onBackToHome: () => void;
@@ -24,6 +25,12 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [contactNumber, setContactNumber] = useState('');
+  const [phoneDuplicateInfo, setPhoneDuplicateInfo] = useState<{
+    detected: boolean;
+    accountHolder?: string;
+    accountType?: string;
+    message?: string;
+  } | null>(null);
   const [barangay, setBarangay] = useState('');
   const [sitioZone, setSitioZone] = useState('');
   const [password, setPassword] = useState('');
@@ -58,6 +65,40 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
     setAvailableBarangays(list);
   }, []);
 
+  // Handle contact number input with strict 11-digit constraint & real-time duplicate detection
+  const handleContactNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawDigits = e.target.value.replace(/\D/g, '').slice(0, 11);
+    setContactNumber(rawDigits);
+    setError(null);
+
+    if (rawDigits.length === 11) {
+      if (!rawDigits.startsWith('09')) {
+        setPhoneDuplicateInfo({
+          detected: true,
+          message: 'Mobile number must start with 09 (e.g. 09171234567).'
+        });
+        return;
+      }
+
+      // Automatically detect if phone number is already connected to existing account
+      const match = detectExistingPhoneAccount(rawDigits);
+      if (match) {
+        setPhoneDuplicateInfo({
+          detected: true,
+          accountHolder: match.name,
+          accountType: match.type,
+          message: `This mobile number (${rawDigits}) is already connected to an existing account (${match.name}).`
+        });
+      } else {
+        setPhoneDuplicateInfo({
+          detected: false
+        });
+      }
+    } else {
+      setPhoneDuplicateInfo(null);
+    }
+  };
+
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -70,6 +111,25 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
 
     if (!email.trim() || !contactNumber.trim() || !password.trim()) {
       setError('Please complete all required fields.');
+      return;
+    }
+
+    // STRICT 11-DIGIT PHONE VALIDATION & DUPLICATE DETECTION
+    const cleanPhone = normalizePhoneNumber(contactNumber);
+    if (cleanPhone.length !== 11) {
+      setError(`Mobile number must contain exactly 11 digits (e.g. 09171234567). Current length: ${cleanPhone.length} digits.`);
+      return;
+    }
+
+    if (!cleanPhone.startsWith('09')) {
+      setError('Mobile number must start with 09 (e.g. 09171234567).');
+      return;
+    }
+
+    // Auto-detect duplicate phone number in existing accounts
+    const existingPhoneAccount = detectExistingPhoneAccount(cleanPhone);
+    if (existingPhoneAccount) {
+      setError(`Mobile number "${cleanPhone}" is already connected to an existing account (${existingPhoneAccount.name}). Duplicate phone numbers are strictly prohibited in the system.`);
       return;
     }
 
@@ -112,6 +172,15 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         return;
       }
 
+      // Check phone number again in database right before final write
+      const duplicatePhoneCheck = detectExistingPhoneAccount(cleanPhone);
+      if (duplicatePhoneCheck) {
+        hideLoading();
+        setError(`Mobile number "${cleanPhone}" is already registered to existing account "${duplicatePhoneCheck.name}". Duplicate phone numbers are strictly not allowed.`);
+        setIsValidating(false);
+        return;
+      }
+
       // 2. Auto-match or create Barangay in Admin Database
       const matchedBarangay = mockDb.findOrCreateBarangay(barangay);
       const fullAddress = `${sitioZone.trim()}, ${matchedBarangay.name}, Tagoloan, Misamis Oriental`;
@@ -137,7 +206,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         barangayId: matchedBarangay.id,
         barangay: matchedBarangay.name,
         sitioZone: sitioZone.trim(),
-        contactNumber: contactNumber.trim(),
+        contactNumber: cleanPhone,
         email: email.trim(),
         meterNumber: '',
         rfidTag: '',
@@ -166,7 +235,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
           name: officialName,
           fullName: officialName,
           email: email.trim(),
-          contactNumber: contactNumber.trim(),
+          contactNumber: cleanPhone,
           address: fullAddress,
           barangay: matchedBarangay.name,
           barangayId: matchedBarangay.id,
@@ -292,17 +361,63 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                     />
                   </div>
 
-                  {/* Contact Number */}
+                  {/* Contact Number (Strictly 11 digits & Auto Duplicate Detection) */}
                   <div className="space-y-1 text-left">
-                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Mobile Number <span className="text-red-400">*</span></label>
-                    <input 
-                      type="tel" 
-                      required 
-                      placeholder="e.g. 0917-123-4567"
-                      value={contactNumber}
-                      onChange={(e) => setContactNumber(e.target.value)}
-                      className="w-full bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
-                    />
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">
+                        Mobile Number (11 Digits) <span className="text-red-400">*</span>
+                      </label>
+                      <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${
+                        contactNumber.length === 11 
+                          ? phoneDuplicateInfo?.detected 
+                            ? 'bg-rose-900/60 text-rose-300 border border-rose-700/60'
+                            : 'bg-emerald-900/60 text-emerald-300 border border-emerald-700/60'
+                          : contactNumber.length > 0
+                            ? 'bg-amber-900/40 text-amber-300 border border-amber-700/40'
+                            : 'bg-slate-800 text-slate-400'
+                      }`}>
+                        {contactNumber.length}/11 digits
+                      </span>
+                    </div>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-slate-400">
+                        <Phone className="h-3.5 w-3.5" />
+                      </span>
+                      <input 
+                        type="tel" 
+                        inputMode="numeric"
+                        pattern="[0-9]{11}"
+                        maxLength={11}
+                        required 
+                        placeholder="09XXXXXXXXX (11 digits)"
+                        value={contactNumber}
+                        onChange={handleContactNumberChange}
+                        className={`w-full rounded-xl py-2 pl-9 pr-3 text-xs placeholder-slate-500 focus:outline-none transition-all font-mono font-semibold ${
+                          phoneDuplicateInfo?.detected
+                            ? 'bg-rose-950/40 border-2 border-rose-500 ring-2 ring-rose-500/20 text-rose-100'
+                            : contactNumber.length === 11
+                              ? 'bg-emerald-950/30 border-2 border-emerald-500 ring-2 ring-emerald-500/20 text-emerald-100'
+                              : 'bg-slate-950/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-slate-200'
+                        }`}
+                      />
+                    </div>
+                    {phoneDuplicateInfo?.detected ? (
+                      <div className="flex items-start space-x-1.5 p-2 bg-rose-950/80 border border-rose-500/70 rounded-lg text-rose-200 text-[10px] leading-tight mt-1 animate-fade-in">
+                        <XCircle className="h-3.5 w-3.5 text-rose-400 shrink-0 mt-0.5" />
+                        <div>
+                          <strong className="font-black text-rose-100">Duplicate Number Detected:</strong> This mobile number is already connected to existing account <span className="underline font-bold text-white">"{phoneDuplicateInfo.accountHolder || 'Registered Account'}"</span>. Duplicate phone numbers are strictly prohibited.
+                        </div>
+                      </div>
+                    ) : contactNumber.length === 11 ? (
+                      <p className="text-[10px] text-emerald-400 flex items-center gap-1 font-medium mt-1">
+                        <CheckCircle2 className="h-3 w-3 shrink-0" />
+                        <span>11-digit mobile number verified unique in district records.</span>
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        Allowed only 11 digits starting with 09 (e.g. 09171234567).
+                      </p>
+                    )}
                   </div>
 
                   {/* Email */}

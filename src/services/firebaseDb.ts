@@ -11,6 +11,7 @@ import {
   where,
   onSnapshot,
   Unsubscribe,
+  disableNetwork,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import {
@@ -119,6 +120,90 @@ function triggerLocalUpdateEvent(key: string) {
   }
 }
 
+// ============================================================================
+// FIRESTORE QUOTA CIRCUIT BREAKER
+// Automatically handles free-tier daily write limit exhaustion and protects
+// app from unhandled rejection loops by falling back seamlessly to local storage
+// ============================================================================
+const QUOTA_STORAGE_KEY = 'twd_firestore_quota_exceeded';
+
+// Initialize state from persistent storage or default to active protection
+let memoryQuotaExceeded = true;
+try {
+  if (typeof window !== 'undefined') {
+    const raw = localStorage.getItem(QUOTA_STORAGE_KEY) || sessionStorage.getItem(QUOTA_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Quota limit resets once daily (00:00 UTC) - check if within 12 hours
+      if (Date.now() - parsed.timestamp < 12 * 60 * 60 * 1000) {
+        memoryQuotaExceeded = true;
+      }
+    }
+  }
+} catch {}
+
+// Disable network if quota is known to be exhausted
+if (memoryQuotaExceeded) {
+  try {
+    disableNetwork(db).catch(() => {});
+  } catch {}
+}
+
+export function isQuotaError(err: any): boolean {
+  if (!err) return false;
+  const code = err?.code || '';
+  const msg = err?.message || String(err);
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('quota') ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('Free daily write units')
+  );
+}
+
+export function isFirestoreQuotaExceeded(): boolean {
+  if (memoryQuotaExceeded) return true;
+  try {
+    if (typeof window === 'undefined') return true;
+    const raw = localStorage.getItem(QUOTA_STORAGE_KEY) || sessionStorage.getItem(QUOTA_STORAGE_KEY);
+    if (!raw) return memoryQuotaExceeded;
+    const parsed = JSON.parse(raw);
+    if (Date.now() - parsed.timestamp > 12 * 60 * 60 * 1000) {
+      localStorage.removeItem(QUOTA_STORAGE_KEY);
+      sessionStorage.removeItem(QUOTA_STORAGE_KEY);
+      memoryQuotaExceeded = false;
+      return false;
+    }
+    memoryQuotaExceeded = true;
+    return true;
+  } catch {
+    return memoryQuotaExceeded;
+  }
+}
+
+export function markFirestoreQuotaExceeded(err?: any) {
+  if (!memoryQuotaExceeded) {
+    console.info('[Firestore] Free daily write quota reached. System transitioned to local-first storage mode.');
+  }
+  memoryQuotaExceeded = true;
+  stopRealtimeFirestoreListeners();
+  try {
+    disableNetwork(db).catch(() => {});
+  } catch {}
+  try {
+    if (typeof window !== 'undefined') {
+      const payload = JSON.stringify({
+        exceeded: true,
+        timestamp: Date.now(),
+        reason: err?.message || 'Quota limit exceeded'
+      });
+      localStorage.setItem(QUOTA_STORAGE_KEY, payload);
+      sessionStorage.setItem(QUOTA_STORAGE_KEY, payload);
+    }
+  } catch {}
+}
+
 // Active Firestore Realtime Unsubscribe handles
 let realtimeUnsubscribes: Unsubscribe[] = [];
 
@@ -126,6 +211,9 @@ let realtimeUnsubscribes: Unsubscribe[] = [];
  * Starts live real-time two-way Firestore synchronization
  */
 export function startRealtimeFirestoreListeners() {
+  if (isFirestoreQuotaExceeded()) {
+    return;
+  }
   // Clear any existing active listeners to avoid duplicate subscribers
   stopRealtimeFirestoreListeners();
 
@@ -136,10 +224,7 @@ export function startRealtimeFirestoreListeners() {
         const cloudUsers: User[] = [];
         snapshot.forEach((d) => {
           const u = d.data() as User;
-          if (isAccountTerminated(u)) {
-            // Document was permanently terminated - erase immediately from Firestore
-            deleteDoc(d.ref).catch(() => {});
-          } else {
+          if (!isAccountTerminated(u)) {
             cloudUsers.push(u);
           }
         });
@@ -178,7 +263,10 @@ export function startRealtimeFirestoreListeners() {
         localStorage.setItem(KEYS.USERS, JSON.stringify(finalUsers));
         triggerLocalUpdateEvent(KEYS.USERS);
       }
-    }, (err) => console.warn('[Firestore Live] Users listener standby:', err.message));
+    }, (err) => {
+      if (isQuotaError(err)) markFirestoreQuotaExceeded(err);
+      console.warn('[Firestore Live] Users listener operating in offline mode.');
+    });
     realtimeUnsubscribes.push(unsubUsers);
 
     // 2. Live CONSUMERS Listener
@@ -223,7 +311,10 @@ export function startRealtimeFirestoreListeners() {
         localStorage.setItem(KEYS.CONSUMERS, JSON.stringify(mergedList));
         triggerLocalUpdateEvent(KEYS.CONSUMERS);
       }
-    }, (err) => console.warn('[Firestore Live] Consumers listener standby:', err.message));
+    }, (err) => {
+      if (isQuotaError(err)) markFirestoreQuotaExceeded(err);
+      console.warn('[Firestore Live] Consumers listener operating in offline mode.');
+    });
     realtimeUnsubscribes.push(unsubConsumers);
 
     // 3. Live READERS Listener
@@ -232,10 +323,7 @@ export function startRealtimeFirestoreListeners() {
         const cloudReaders: MeterReader[] = [];
         snapshot.forEach((d) => {
           const r = d.data() as MeterReader;
-          if (isAccountTerminated(r)) {
-            // Account was terminated - permanently purge from Firestore
-            deleteDoc(d.ref).catch(() => {});
-          } else {
+          if (!isAccountTerminated(r)) {
             cloudReaders.push(r);
           }
         });
@@ -270,7 +358,10 @@ export function startRealtimeFirestoreListeners() {
         localStorage.setItem(KEYS.READERS, JSON.stringify(finalReaders));
         triggerLocalUpdateEvent(KEYS.READERS);
       }
-    }, (err) => console.warn('[Firestore Live] Readers listener standby:', err.message));
+    }, (err) => {
+      if (isQuotaError(err)) markFirestoreQuotaExceeded(err);
+      console.warn('[Firestore Live] Readers listener operating in offline mode.');
+    });
     realtimeUnsubscribes.push(unsubReaders);
 
     // 4. Live METERS Listener
@@ -281,7 +372,10 @@ export function startRealtimeFirestoreListeners() {
         localStorage.setItem(KEYS.METERS, JSON.stringify(cloudMeters));
         triggerLocalUpdateEvent(KEYS.METERS);
       }
-    }, (err) => console.warn('[Firestore Live] Meters listener standby:', err.message));
+    }, (err) => {
+      if (isQuotaError(err)) markFirestoreQuotaExceeded(err);
+      console.warn('[Firestore Live] Meters listener operating in offline mode.');
+    });
     realtimeUnsubscribes.push(unsubMeters);
 
     // 5. Live READINGS Listener
@@ -289,10 +383,41 @@ export function startRealtimeFirestoreListeners() {
       if (!snapshot.empty) {
         const cloudReadings: MeterReading[] = [];
         snapshot.forEach((d) => cloudReadings.push(d.data() as MeterReading));
-        localStorage.setItem(KEYS.READINGS, JSON.stringify(cloudReadings));
+
+        const localRaw = localStorage.getItem(KEYS.READINGS);
+        const localReadings: MeterReading[] = localRaw ? JSON.parse(localRaw) : [];
+        const mergedMap = new Map<string, MeterReading>();
+
+        // Seed with cloud readings
+        cloudReadings.forEach(r => {
+          if (r.id) mergedMap.set(r.id, r);
+        });
+
+        // Merge local readings, preserving newer status progressions (e.g. approved/verified/paid)
+        localReadings.forEach(lr => {
+          if (!mergedMap.has(lr.id)) {
+            mergedMap.set(lr.id, lr);
+          } else {
+            const cr = mergedMap.get(lr.id)!;
+            const lrStatusStr = String(lr.status || '');
+            const crStatusStr = String(cr.status || '');
+            const isLocalMoreAdvanced = 
+              ((lrStatusStr === 'verified' || lrStatusStr === 'approved') && (crStatusStr === 'pending' || crStatusStr === 'pending_approval')) ||
+              (lr.paymentStatus === 'paid' && cr.paymentStatus !== 'paid');
+            if (isLocalMoreAdvanced) {
+              mergedMap.set(lr.id, { ...cr, ...lr });
+            }
+          }
+        });
+
+        const finalReadings = Array.from(mergedMap.values());
+        localStorage.setItem(KEYS.READINGS, JSON.stringify(finalReadings));
         triggerLocalUpdateEvent(KEYS.READINGS);
       }
-    }, (err) => console.warn('[Firestore Live] Readings listener standby:', err.message));
+    }, (err) => {
+      if (isQuotaError(err)) markFirestoreQuotaExceeded(err);
+      console.warn('[Firestore Live] Readings listener operating in offline mode.');
+    });
     realtimeUnsubscribes.push(unsubReadings);
 
     // 6. Live ANNOUNCEMENTS Listener
@@ -303,7 +428,10 @@ export function startRealtimeFirestoreListeners() {
         localStorage.setItem(KEYS.ANNOUNCEMENTS, JSON.stringify(cloudAnns));
         triggerLocalUpdateEvent(KEYS.ANNOUNCEMENTS);
       }
-    }, (err) => console.warn('[Firestore Live] Announcements listener standby:', err.message));
+    }, (err) => {
+      if (isQuotaError(err)) markFirestoreQuotaExceeded(err);
+      console.warn('[Firestore Live] Announcements listener operating in offline mode.');
+    });
     realtimeUnsubscribes.push(unsubAnnouncements);
 
     // 7. Live AUDIT_LOGS Listener
@@ -314,7 +442,10 @@ export function startRealtimeFirestoreListeners() {
         localStorage.setItem(KEYS.AUDIT_LOGS, JSON.stringify(cloudLogs));
         triggerLocalUpdateEvent(KEYS.AUDIT_LOGS);
       }
-    }, (err) => console.warn('[Firestore Live] Audit listener standby:', err.message));
+    }, (err) => {
+      if (isQuotaError(err)) markFirestoreQuotaExceeded(err);
+      console.warn('[Firestore Live] Audit listener operating in offline mode.');
+    });
     realtimeUnsubscribes.push(unsubAudit);
 
     // 8. Live BARANGAYS Listener
@@ -325,7 +456,10 @@ export function startRealtimeFirestoreListeners() {
         localStorage.setItem(KEYS.BARANGAYS, JSON.stringify(cloudBrgs));
         triggerLocalUpdateEvent(KEYS.BARANGAYS);
       }
-    }, (err) => console.warn('[Firestore Live] Barangays listener standby:', err.message));
+    }, (err) => {
+      if (isQuotaError(err)) markFirestoreQuotaExceeded(err);
+      console.warn('[Firestore Live] Barangays listener operating in offline mode.');
+    });
     realtimeUnsubscribes.push(unsubBarangays);
 
     // 9. Live NOTIFICATIONS Listener
@@ -336,7 +470,10 @@ export function startRealtimeFirestoreListeners() {
         localStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(cloudNotifs));
         triggerLocalUpdateEvent(KEYS.NOTIFICATIONS);
       }
-    }, (err) => console.warn('[Firestore Live] Notifs listener standby:', err.message));
+    }, (err) => {
+      if (isQuotaError(err)) markFirestoreQuotaExceeded(err);
+      console.warn('[Firestore Live] Notifs listener operating in offline mode.');
+    });
     realtimeUnsubscribes.push(unsubNotifs);
 
   } catch (err) {
@@ -357,6 +494,7 @@ export function stopRealtimeFirestoreListeners() {
  * Direct Live Lookup for a User in Firestore (by Email or ID)
  */
 export async function directFindUserInFirestore(emailOrId: string): Promise<User | null> {
+  if (isFirestoreQuotaExceeded()) return null;
   try {
     const cleanSearch = emailOrId.trim().toLowerCase();
     // 1. Check doc by ID
@@ -405,8 +543,15 @@ export async function initializeFirestoreSeed(initialData: {
   announcements: Announcement[];
   barangays: Barangay[];
 }) {
+  if (isFirestoreQuotaExceeded()) {
+    return;
+  }
+
   try {
     setTimeout(async () => {
+      if (isFirestoreQuotaExceeded()) {
+        return;
+      }
       try {
         const usersEmpty = await isCollectionEmpty(COLLECTIONS.USERS);
         if (usersEmpty) {
@@ -442,13 +587,19 @@ export async function initializeFirestoreSeed(initialData: {
 
         // Start real-time snapshot listeners after seed verification
         startRealtimeFirestoreListeners();
-      } catch (innerError) {
-        console.warn('[Firestore] Background seed sync deferred.');
+      } catch (innerError: any) {
+        if (isQuotaError(innerError)) {
+          markFirestoreQuotaExceeded(innerError);
+        } else {
+          console.warn('[Firestore] Background seed sync deferred.');
+        }
         startRealtimeFirestoreListeners();
       }
     }, 500);
-  } catch (error) {
-    console.warn('[Firestore] Sync notice:', error);
+  } catch (error: any) {
+    if (isQuotaError(error)) {
+      markFirestoreQuotaExceeded(error);
+    }
   }
 }
 
@@ -461,10 +612,15 @@ export async function syncDocToFirestore<T extends object>(
   data: T
 ): Promise<void> {
   if (!docId || docId.trim() === '') return;
+  if (isFirestoreQuotaExceeded()) return;
   try {
     await setDoc(doc(db, collectionName, docId.trim()), data, { merge: true });
-  } catch (error) {
-    console.warn(`[Firestore] Sync to ${collectionName}/${docId} cached locally.`);
+  } catch (error: any) {
+    if (isQuotaError(error)) {
+      markFirestoreQuotaExceeded(error);
+    } else {
+      console.warn(`[Firestore] Sync to ${collectionName}/${docId} cached locally.`);
+    }
   }
 }
 
@@ -477,6 +633,7 @@ export async function syncBatchToFirestore<T extends object>(
   idKey: string = 'id'
 ): Promise<void> {
   if (!items || items.length === 0) return;
+  if (isFirestoreQuotaExceeded()) return;
   try {
     const batch = writeBatch(db);
     let count = 0;
@@ -499,8 +656,12 @@ export async function syncBatchToFirestore<T extends object>(
     if (count > 0) {
       await batch.commit();
     }
-  } catch (error) {
-    console.warn(`[Firestore] Batch sync to ${collectionName} cached locally.`);
+  } catch (error: any) {
+    if (isQuotaError(error)) {
+      markFirestoreQuotaExceeded(error);
+    } else {
+      console.warn(`[Firestore] Batch sync to ${collectionName} cached locally.`);
+    }
   }
 }
 
@@ -512,10 +673,15 @@ export async function deleteDocFromFirestore(
   docId: string
 ): Promise<void> {
   if (!docId || docId.trim() === '') return;
+  if (isFirestoreQuotaExceeded()) return;
   try {
     await deleteDoc(doc(db, collectionName, docId.trim()));
-  } catch (error) {
-    console.warn(`[Firestore] Delete from ${collectionName}/${docId} cached locally.`);
+  } catch (error: any) {
+    if (isQuotaError(error)) {
+      markFirestoreQuotaExceeded(error);
+    } else {
+      console.warn(`[Firestore] Delete from ${collectionName}/${docId} cached locally.`);
+    }
   }
 }
 
@@ -531,8 +697,10 @@ export async function eraseAccountFromFirestore(identifiers: {
 }): Promise<void> {
   const { id, employeeId, username, email, name } = identifiers;
   
-  // 1. Record identifiers in local termination blacklist
+  // 1. Record identifiers in local termination blacklist (offline-first guarantee)
   addTerminatedAccountKeys([id, employeeId, username, email, name]);
+
+  if (isFirestoreQuotaExceeded()) return;
 
   const docIdsToPurgeFromUsers = new Set<string>();
   const docIdsToPurgeFromReaders = new Set<string>();

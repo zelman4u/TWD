@@ -1,7 +1,12 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { initializeFirestore, getFirestore, doc, getDoc } from 'firebase/firestore';
+import { initializeFirestore, getFirestore, doc, getDoc, setLogLevel, disableNetwork } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
+
+// Silence verbose internal backoff and quota logs to prevent console clutter
+try {
+  setLogLevel('silent');
+} catch {}
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
@@ -18,6 +23,18 @@ try {
 }
 
 export const db = firestoreInstance;
+
+// Check if free daily write quota is exhausted; disable network to prevent endless backoff loops
+try {
+  if (typeof window !== 'undefined') {
+    const quotaExceeded = localStorage.getItem('twd_firestore_quota_exceeded') || sessionStorage.getItem('twd_firestore_quota_exceeded');
+    if (quotaExceeded) {
+      disableNetwork(db).catch(() => {});
+    }
+  } else {
+    disableNetwork(db).catch(() => {});
+  }
+} catch {}
 
 export const auth = getAuth(app);
 

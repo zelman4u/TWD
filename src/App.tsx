@@ -14,6 +14,7 @@ import { mockDb } from './mockDb';
 import { User } from './types';
 import { LoadingProvider, useLoading } from './context/LoadingContext';
 import { ToastProvider, useToast } from './context/ToastContext';
+import { startGracePeriodScanner, stopGracePeriodScanner } from './services/gracePeriodScannerService';
 
 const pageMotionVariants = {
   initial: { opacity: 0, y: 10, scale: 0.996 },
@@ -80,6 +81,9 @@ function AppContent() {
 
     initializeApp();
 
+    // Start background service to scan account statuses for 3-month grace period compliance
+    startGracePeriodScanner(60000);
+
     // Listen for database updates (e.g. admin issuing IDs or updating status)
     const handleDbSync = () => {
       const liveCurrent = mockDb.getCurrentUser();
@@ -98,6 +102,7 @@ function AppContent() {
     window.addEventListener('storage', handleDbSync);
 
     return () => {
+      stopGracePeriodScanner();
       window.removeEventListener('twd_database_updated', handleDbSync);
       window.removeEventListener('storage', handleDbSync);
     };

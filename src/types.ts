@@ -40,7 +40,10 @@ export interface Consumer {
   email: string;
   meterNumber: string;
   meterBrand?: string;
-  status: 'active' | 'inactive' | 'archived' | 'blocked' | 'pending_approval';
+  status: 'active' | 'inactive' | 'archived' | 'blocked' | 'pending_approval' | 'Disconnection Notice' | 'disconnection_notice';
+  disconnectionNoticeDate?: string;
+  gracePeriodOverdueDays?: number;
+  unpaidCyclesCount?: number;
   isRegistered: boolean;
   registrationDate?: string;
   createdAt?: number;

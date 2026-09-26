@@ -29,7 +29,7 @@
         "contactNumber": { "type": "string", "description": "Contact phone number" },
         "email": { "type": "string", "description": "Email address" },
         "meterNumber": { "type": "string", "description": "Physical meter serial identifier" },
-        "status": { "type": "string", "enum": ["active", "disconnected", "pending", "temporary_cutoff"], "description": "Connection status" },
+        "status": { "type": "string", "enum": ["active", "disconnected", "pending", "temporary_cutoff", "Disconnection Notice"], "description": "Connection status" },
         "isRegistered": { "type": "boolean", "description": "Whether consumer has created an online account" },
         "registrationDate": { "type": "string", "description": "Date registered" },
         "linkedUserId": { "type": "string", "description": "Linked user profile ID" },
