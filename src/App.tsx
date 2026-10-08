@@ -156,7 +156,7 @@ function AppContent() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 selection:bg-blue-605 selection:text-white relative overflow-x-hidden">
+    <div className="min-h-screen bg-slate-950 text-slate-200 selection:bg-blue-800 selection:text-slate-100 relative overflow-x-hidden">
       {isAppInitializing ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-md animate-fade-in">
           <div className="flex flex-col items-center justify-center text-center p-8 max-w-sm mx-auto">

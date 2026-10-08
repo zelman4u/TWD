@@ -5,6 +5,12 @@
 
 import { User, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerNotification, Barangay } from './types';
 import { 
+  WaterTariffConfig, 
+  getActiveTariffConfig, 
+  saveActiveTariffConfig, 
+  DEFAULT_TARIFF_CONFIG 
+} from './utils/tariffCalculator';
+import { 
   initializeFirestoreSeed, 
   syncBatchToFirestore, 
   syncDocToFirestore, 
@@ -46,6 +52,7 @@ const KEYS = {
   NOTIFICATIONS: `${STORAGE_PREFIX}notifications`,
   CURRENT_USER: `${STORAGE_PREFIX}current_user`,
   BARANGAYS: `${STORAGE_PREFIX}barangays`,
+  TARIFF_CONFIG: `${STORAGE_PREFIX}tariff_config`,
 };
 
 // Initial Clean Seed Data - Tagoloan Municipal Barangays
@@ -911,6 +918,16 @@ export const mockDb = {
     mockDb.saveAuditLogs(logs);
   },
 
+  getTariffConfig: (): WaterTariffConfig => {
+    return getActiveTariffConfig();
+  },
+
+  saveTariffConfig: (config: WaterTariffConfig): void => {
+    saveActiveTariffConfig(config);
+    setStored(KEYS.TARIFF_CONFIG, config);
+    syncDocToFirestore(COLLECTIONS.SETTINGS, 'tariff_config', config as unknown as Record<string, unknown>);
+  },
+
   initFirestore: (): void => {
     initializeFirestoreSeed({
       users: INITIAL_USERS,
@@ -936,6 +953,7 @@ export const mockDb = {
     localStorage.removeItem(KEYS.CURRENT_USER);
     localStorage.removeItem(KEYS.BARANGAYS);
     localStorage.removeItem(KEYS.NOTIFICATIONS);
+    localStorage.removeItem(KEYS.TARIFF_CONFIG);
   }
 };
 

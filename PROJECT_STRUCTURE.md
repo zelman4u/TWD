@@ -7,78 +7,46 @@ This document serves as the master map for all files, directories, and subsystem
 ## Directory Structure Map
 
 ```text
+├── README.md                         # Master overview & instant error tracing reference
 ├── PROJECT_STRUCTURE.md              # [Master Guide] System layout, data flows, and troubleshooting guide
-├── package.json                      # Dependencies and scripts (dev, build, start, lint)
-├── tsconfig.json                     # TypeScript compiler configuration
-├── vite.config.ts                    # Vite client build configuration
-├── server.ts                         # Node.js Express full-stack API + WebSocket hub + Server background scanner
-├── firebase-applet-config.json       # Applet Firebase credentials
-├── firebase-blueprint.json           # Firestore schema blueprint and entity validation models
-├── firestore.rules                   # Production Firestore security and access-control rules
+├── package.json                      # Root workspace scripts and dependencies
+├── server.ts                         # Server entry point running Express & Vite middleware
 │
-├── src/
-│   ├── main.tsx                      # React root mounting and initialization
-│   ├── App.tsx                       # Main application router and session supervisor
-│   ├── firebase.ts                   # Firebase SDK initialization (Auth & Firestore)
-│   ├── mockDb.ts                     # Local-first reactive persistence engine with Firestore sync
-│   ├── types.ts                      # Central TypeScript interfaces (User, Consumer, Meter, Reading, etc.)
-│   ├── index.css                     # Tailwind CSS entry point
-│   │
-│   ├── constants/                    # [Single-Source-of-Truth Constants]
-│   │   └── index.ts                  # District profile, billing thresholds, collection keys, storage keys
-│   │
-│   ├── context/                      # [Application State Contexts]
-│   │   ├── LoadingContext.tsx        # Global full-screen loading overlay context
-│   │   └── ToastContext.tsx          # Non-blocking animated toast notifications
-│   │
-│   ├── services/                     # [Data & Infrastructure Services]
-│   │   ├── index.ts                  # Central barrel export for all services
-│   │   ├── apiClient.ts              # REST client for backend Express API endpoints
-│   │   ├── firebaseDb.ts             # Firestore read/write sync, listeners & Quota Circuit Breaker
-│   │   ├── gracePeriodScannerService.ts # 3-Month payment grace period automated scanner & disconnection engine
-│   │   └── realtimeSocket.ts         # WebSocket client for real-time field telemetry and instant push alerts
-│   │
-│   ├── utils/                        # [Pure Calculation & Validation Utilities]
-│   │   ├── index.ts                  # Central barrel export for all utilities
-│   │   ├── tariffCalculator.ts       # Tiered water tariff computation (Residential vs Commercial)
-│   │   ├── identifierValidation.ts   # Uniqueness checks (Account #, RFID Tag, Meter Serial Tag)
-│   │   ├── phoneValidation.ts        # Philippine mobile number sanitization (09 / +63)
-│   │   └── analytics.ts              # Statistical rollups (trends, payment distributions, barangay totals)
-│   │
-│   └── components/                   # [Presentation & Feature Components]
-│       ├── LandingPage.tsx           # Public water district portal & announcement homepage
-│       ├── UnifiedLogin.tsx          # Dual-role authentication gate (Admin & Consumer accounts)
-│       ├── RegistrationPage.tsx      # Public new service connection application form
-│       ├── AdminPortal.tsx           # Master administrative dashboard (13 sub-modules)
-│       ├── ConsumerPortal.tsx        # Consumer self-service billing, telemetry, and payments portal
-│       │
-│       ├── admin/                    # [Admin-Specific Sub-Components]
-│       │   ├── index.ts              # Barrel export for admin components
-│       │   ├── GracePeriodScannerCard.tsx # 3-Month grace period background service monitor card
-│       │   ├── OfficialReportsGenerator.tsx # PDF & CSV billing report export engine
-│       │   └── RecordsArchiveView.tsx# Read-only historical ledger & permanent audit log viewer
-│       │
-│       ├── consumer/                 # [Consumer-Specific Sub-Components]
-│       │   ├── index.ts              # Barrel export for consumer components
-│       │   ├── BillDetails.tsx       # Printable statement breakdown & QR code generator
-│       │   ├── DynamicDueAlert.tsx   # Urgent due date warnings & late-surcharge notices
-│       │   ├── OverdueBillBanner.tsx # Critical 3-month disconnection notice order banner
-│       │   ├── UploadReceiptModal.tsx# Bank transfer / over-the-counter receipt uploader
-│       │   └── MonthlyUsageReportModal.tsx # Historical consumption comparison chart modal
-│       │
-│       ├── common/                   # [Universal Shared UI Components]
-│       │   ├── index.ts              # Barrel export for common components
-│       │   ├── DataLoadingIndicator.tsx # Syncing & data-fetching pulse indicators
-│       │   ├── DistrictProfileSection.tsx # Official TWD district contact & operating info card
-│       │   ├── GlobalLoadingSpinner.tsx # High-contrast backdrop spinner
-│       │   └── SkeletonLoader.tsx    # Shimmer loaders for tables, cards, and dashboards
-│       │
-│       └── charts/                   # [Telemetry & Visual Analytics]
-│           ├── index.ts              # Barrel export for charts
-│           ├── AdminAnalyticsSection.tsx # Executive overview KPI metrics and chart switcher
-│           ├── BarangayConsumptionChart.tsx # Volume vs collection by barangay service zone
-│           ├── PaymentDistributionChart.tsx # Paid vs Unpaid receivables distribution pie chart
-│           └── WaterConsumptionTrendChart.tsx # Monthly water production vs billed consumption
+├── frontend/                         # [FRONTEND LAYER: React 19 + Vite + Tailwind CSS]
+│   ├── public/                       # Static public assets
+│   ├── package.json                  # Frontend package definition
+│   ├── README.md                     # Frontend architecture documentation
+│   └── src/                          # Presentation components, contexts, services, utilities
+│       ├── main.tsx                  # React root mount
+│       ├── App.tsx                   # Master session supervisor & route gates
+│       ├── components/               # Admin, Consumer, Common, Charts modules
+│       ├── context/                  # Global state (Toast, Loading)
+│       ├── services/                 # API client, Firestore, Grace period scanner, WebSockets
+│       ├── utils/                    # Tariff math, identifier checks, phone sanitization
+│       └── constants/                # Official district constants & tariff brackets
+│
+├── backend/                          # [BACKEND LAYER: Node.js + Express REST API]
+│   ├── config/                       # Environment, constants, thresholds
+│   ├── controllers/                  # Auth, Consumer, Reading, Billing, Report handlers
+│   ├── models/                       # Consumer, Reading, Bill, Staff models
+│   ├── routes/                       # REST endpoint definitions & master router
+│   ├── middlewares/                  # Auth token, validation, error handler
+│   ├── services/                     # Stepped tariff service, 90-day grace period service
+│   ├── utils/                        # Structured logger, response helper
+│   ├── server.ts                     # Backend app module
+│   ├── package.json                  # Backend package definition
+│   └── README.md                     # Backend architecture documentation
+│
+├── database/                         # [DATABASE LAYER: Relational SQL + Firestore]
+│   ├── schema/                       # Relational schema (schema.sql) & NoSQL blueprints
+│   ├── rules/                        # Production firestore.rules
+│   ├── seeds/                        # Municipal seed data (barangays, tariff brackets)
+│   ├── connection.ts                 # Storage health & Quota Circuit Breaker
+│   └── README.md                     # Database documentation & ERD overview
+│
+└── docs/                             # [DOCUMENTATION & JUSTIFICATION]
+    ├── ARCHITECTURE_JUSTIFICATION.md # Full justification: Why separated full-stack is better
+    └── API_WORKFLOWS.md              # Telemetry and grace-period sequence flows
 ```
 
 ---

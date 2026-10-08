@@ -31,29 +31,27 @@ interface DistrictProfileSectionProps {
 
 export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({ 
   id = "profile",
-  isDarkTheme = false 
+  isDarkTheme = true 
 }) => {
   const [isOrgTreeExpanded, setIsOrgTreeExpanded] = useState(true);
 
   return (
     <section 
       id={id} 
-      className={`py-20 transition-colors ${
-        isDarkTheme ? 'bg-slate-950 text-slate-100 border-t border-slate-900' : 'bg-white text-slate-900 border-t border-slate-100'
-      }`}
+      className="py-20 bg-slate-950 text-slate-100 border-t border-slate-900 transition-colors"
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-16">
         
         {/* Section Header */}
         <div className="text-center space-y-4 max-w-3xl mx-auto">
-          <div className="inline-flex items-center space-x-2 px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-widest bg-blue-500/10 text-blue-700 border border-blue-500/20">
+          <div className="inline-flex items-center space-x-2 px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-widest bg-blue-500/15 text-blue-300 border border-blue-500/30">
             <Building2 className="h-4 w-4" />
             <span>Official Institutional Profile & Mandate</span>
           </div>
-          <h2 className={`text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight ${isDarkTheme ? 'text-white' : 'text-slate-950'}`}>
+          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-slate-100">
             Tagoloan Water District
           </h2>
-          <p className={`text-sm sm:text-base font-semibold leading-relaxed ${isDarkTheme ? 'text-slate-200' : 'text-slate-700'}`}>
+          <p className="text-sm sm:text-base font-semibold leading-relaxed text-slate-300">
             Province of Misamis Oriental • Government Owned and Controlled Corporation (GOCC)
           </p>
         </div>
@@ -194,82 +192,76 @@ export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           
           {/* VISION CARD */}
-          <div className="bg-white border-2 border-blue-600 rounded-3xl p-8 sm:p-10 shadow-lg relative overflow-hidden flex flex-col justify-between">
+          <div className="bg-slate-900 border-2 border-blue-500/50 rounded-3xl p-8 sm:p-10 shadow-xl relative overflow-hidden flex flex-col justify-between text-slate-100">
             <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-full blur-2xl pointer-events-none"></div>
             
             <div>
               <div className="flex items-center space-x-4 mb-6">
-                <div className="h-14 w-14 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-lg shadow-blue-600/30 shrink-0">
+                <div className="h-14 w-14 rounded-2xl bg-blue-600/30 border border-blue-400/40 text-blue-300 flex items-center justify-center shadow-lg shrink-0">
                   <Compass className="h-7 w-7 stroke-[2.5]" />
                 </div>
                 <div>
-                  <span className="text-xs font-black tracking-widest uppercase text-blue-700 block">Direction & Aspiration</span>
-                  <h3 className="text-2xl sm:text-3xl font-black text-slate-950 tracking-tight">Our Vision</h3>
+                  <span className="text-xs font-black tracking-widest uppercase text-blue-400 block">Direction & Aspiration</span>
+                  <h3 className="text-2xl sm:text-3xl font-black text-slate-100 tracking-tight">Our Vision</h3>
                 </div>
               </div>
 
-              <div className="relative bg-blue-50/70 border-l-4 border-blue-600 p-5 sm:p-6 rounded-r-2xl shadow-inner mb-6">
-                <p className="text-slate-950 text-base sm:text-lg lg:text-xl font-bold leading-relaxed tracking-normal">
+              <div className="relative bg-slate-950/80 border-l-4 border-blue-500 p-5 sm:p-6 rounded-r-2xl shadow-inner mb-6">
+                <p className="text-slate-200 text-base sm:text-lg lg:text-xl font-bold leading-relaxed tracking-normal">
                   “To become a premier local water district providing sufficient and potable water that conforms to the standards of quality, and be the beacon of public service in terms of efficient and effective performance.”
                 </p>
               </div>
             </div>
 
-            <div className="pt-4 border-t-2 border-slate-100 flex flex-wrap gap-2 text-xs sm:text-sm font-black text-blue-900">
-              <span className="px-3 py-1.5 bg-blue-100/90 text-blue-950 rounded-xl border border-blue-200">Premier Local Water District</span>
-              <span className="px-3 py-1.5 bg-blue-100/90 text-blue-950 rounded-xl border border-blue-200">Potable Quality Standards</span>
-              <span className="px-3 py-1.5 bg-blue-100/90 text-blue-950 rounded-xl border border-blue-200">Beacon of Public Service</span>
+            <div className="pt-4 border-t border-slate-800 flex flex-wrap gap-2 text-xs sm:text-sm font-bold text-blue-300">
+              <span className="px-3 py-1.5 bg-blue-950/80 text-blue-300 rounded-xl border border-blue-800/60">Premier Local Water District</span>
+              <span className="px-3 py-1.5 bg-blue-950/80 text-blue-300 rounded-xl border border-blue-800/60">Potable Quality Standards</span>
+              <span className="px-3 py-1.5 bg-blue-950/80 text-blue-300 rounded-xl border border-blue-800/60">Beacon of Public Service</span>
             </div>
           </div>
 
           {/* MISSION CARD */}
-          <div className="bg-white border-2 border-emerald-600 rounded-3xl p-8 sm:p-10 shadow-lg relative overflow-hidden flex flex-col justify-between">
+          <div className="bg-slate-900 border-2 border-emerald-500/50 rounded-3xl p-8 sm:p-10 shadow-xl relative overflow-hidden flex flex-col justify-between text-slate-100">
             <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none"></div>
             
             <div>
               <div className="flex items-center space-x-4 mb-6">
-                <div className="h-14 w-14 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-lg shadow-emerald-600/30 shrink-0">
+                <div className="h-14 w-14 rounded-2xl bg-emerald-600/30 border border-emerald-400/40 text-emerald-300 flex items-center justify-center shadow-lg shrink-0">
                   <Target className="h-7 w-7 stroke-[2.5]" />
                 </div>
                 <div>
-                  <span className="text-xs font-black tracking-widest uppercase text-emerald-700 block">Commitment & Mandate</span>
-                  <h3 className="text-2xl sm:text-3xl font-black text-slate-950 tracking-tight">Our Mission</h3>
+                  <span className="text-xs font-black tracking-widest uppercase text-emerald-400 block">Commitment & Mandate</span>
+                  <h3 className="text-2xl sm:text-3xl font-black text-slate-100 tracking-tight">Our Mission</h3>
                 </div>
               </div>
 
-              <div className="relative bg-emerald-50/70 border-l-4 border-emerald-600 p-5 sm:p-6 rounded-r-2xl shadow-inner mb-6">
-                <p className="text-slate-950 text-base sm:text-lg lg:text-xl font-bold leading-relaxed tracking-normal">
+              <div className="relative bg-slate-950/80 border-l-4 border-emerald-500 p-5 sm:p-6 rounded-r-2xl shadow-inner mb-6">
+                <p className="text-slate-200 text-base sm:text-lg lg:text-xl font-bold leading-relaxed tracking-normal">
                   “To supply adequate and safe water and to keep apace with industrial and social progress while recognizing the need to preserve the natural environment to sustain development.”
                 </p>
               </div>
             </div>
 
-            <div className="pt-4 border-t-2 border-slate-100 flex flex-wrap gap-2 text-xs sm:text-sm font-black text-emerald-900">
-              <span className="px-3 py-1.5 bg-emerald-100/90 text-emerald-950 rounded-xl border border-emerald-200">Adequate & Safe Water</span>
-              <span className="px-3 py-1.5 bg-emerald-100/90 text-emerald-950 rounded-xl border border-emerald-200">Industrial & Social Progress</span>
-              <span className="px-3 py-1.5 bg-emerald-100/90 text-emerald-950 rounded-xl border border-emerald-200">Environmental Preservation</span>
+            <div className="pt-4 border-t border-slate-800 flex flex-wrap gap-2 text-xs sm:text-sm font-bold text-emerald-300">
+              <span className="px-3 py-1.5 bg-emerald-950/80 text-emerald-300 rounded-xl border border-emerald-800/60">Adequate & Safe Water</span>
+              <span className="px-3 py-1.5 bg-emerald-950/80 text-emerald-300 rounded-xl border border-emerald-800/60">Industrial & Social Progress</span>
+              <span className="px-3 py-1.5 bg-emerald-950/80 text-emerald-300 rounded-xl border border-emerald-800/60">Environmental Preservation</span>
             </div>
           </div>
 
         </div>
 
         {/* 3. Core Values: The "T - W - D" Pillars */}
-        <div className={`border-2 rounded-3xl p-6 sm:p-10 space-y-8 shadow-md transition-colors ${
-          isDarkTheme ? 'bg-slate-900/90 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-950'
-        }`}>
+        <div className="border-2 rounded-3xl p-6 sm:p-10 space-y-8 shadow-md transition-colors bg-slate-900/90 border-slate-800 text-slate-100">
           <div className="text-center space-y-3 max-w-2xl mx-auto">
             <div className="inline-flex items-center space-x-2 px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-widest bg-blue-600 text-white shadow-sm">
               <Award className="h-4 w-4" />
               <span>Core Corporate Values</span>
             </div>
-            <h3 className={`text-2xl sm:text-3xl lg:text-4xl font-black tracking-tight ${
-              isDarkTheme ? 'text-white' : 'text-slate-950'
-            }`}>
+            <h3 className="text-2xl sm:text-3xl lg:text-4xl font-black tracking-tight text-slate-100">
               The Living Pillars of T – W – D
             </h3>
-            <p className={`text-sm sm:text-base font-semibold leading-relaxed ${
-              isDarkTheme ? 'text-slate-200' : 'text-slate-700'
-            }`}>
+            <p className="text-sm sm:text-base font-semibold leading-relaxed text-slate-300">
               Guiding our personnel and management in delivering dependable, honest, and prompt public service to the residents of Tagoloan.
             </p>
           </div>
@@ -277,40 +269,30 @@ export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             
             {/* T Pillar */}
-            <div className={`border-2 rounded-2xl p-6 sm:p-7 shadow-lg transition duration-200 hover:-translate-y-1 flex flex-col justify-between ${
-              isDarkTheme 
-                ? 'bg-slate-950 border-blue-500/80 shadow-blue-950/40 text-white' 
-                : 'bg-white border-blue-600 shadow-blue-100 text-slate-950'
-            }`}>
+            <div className="border-2 rounded-2xl p-6 sm:p-7 shadow-lg transition duration-200 hover:-translate-y-1 flex flex-col justify-between bg-slate-950 border-blue-500/80 shadow-blue-950/40 text-slate-100">
               <div className="space-y-4">
                 <div className="flex items-center space-x-4">
                   <span className="h-14 w-14 rounded-2xl bg-blue-600 text-white font-black text-3xl flex items-center justify-center shadow-lg shadow-blue-600/30 shrink-0">
                     T
                   </span>
                   <div>
-                    <span className="text-xs font-black text-blue-600 uppercase tracking-widest block">Performance Standard</span>
-                    <h4 className={`text-lg sm:text-xl font-black uppercase tracking-tight ${isDarkTheme ? 'text-white' : 'text-slate-950'}`}>
+                    <span className="text-xs font-black text-blue-400 uppercase tracking-widest block">Performance Standard</span>
+                    <h4 className="text-lg sm:text-xl font-black uppercase tracking-tight text-slate-100">
                       Trustworthy & Efficient
                     </h4>
                   </div>
                 </div>
 
-                <div className={`p-4 rounded-xl border-l-4 border-blue-600 shadow-inner ${
-                  isDarkTheme ? 'bg-slate-900/90 border-slate-800' : 'bg-blue-50/80 border-blue-200'
-                }`}>
-                  <p className={`text-base sm:text-lg font-bold leading-relaxed ${
-                    isDarkTheme ? 'text-slate-100' : 'text-slate-950'
-                  }`}>
-                    <span className="text-blue-600 font-extrabold underline decoration-blue-400">To commitment</span> to efficient and trustworthy performance in carrying out our role as water provider.
+                <div className="p-4 rounded-xl border-l-4 border-blue-500 shadow-inner bg-slate-900/90 border-slate-850">
+                  <p className="text-base sm:text-lg font-bold leading-relaxed text-slate-200">
+                    <span className="text-blue-400 font-extrabold underline decoration-blue-500">To commitment</span> to efficient and trustworthy performance in carrying out our role as water provider.
                   </p>
                 </div>
               </div>
 
-              <div className={`mt-6 pt-4 border-t-2 flex items-center justify-between text-xs font-black ${
-                isDarkTheme ? 'border-slate-800 text-blue-400' : 'border-slate-100 text-blue-800'
-              }`}>
+              <div className="mt-6 pt-4 border-t-2 flex items-center justify-between text-xs font-black border-slate-800 text-blue-400">
                 <span className="flex items-center gap-1.5">
-                  <Sparkles className="h-4 w-4 text-blue-600" />
+                  <Sparkles className="h-4 w-4 text-blue-400" />
                   <span>Operational Excellence</span>
                 </span>
                 <span className="px-2.5 py-1 rounded-md bg-blue-500/10 border border-blue-500/20 uppercase tracking-wider text-[10px]">
@@ -320,40 +302,30 @@ export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({
             </div>
 
             {/* W Pillar */}
-            <div className={`border-2 rounded-2xl p-6 sm:p-7 shadow-lg transition duration-200 hover:-translate-y-1 flex flex-col justify-between ${
-              isDarkTheme 
-                ? 'bg-slate-950 border-sky-500/80 shadow-sky-950/40 text-white' 
-                : 'bg-white border-sky-600 shadow-sky-100 text-slate-950'
-            }`}>
+            <div className="border-2 rounded-2xl p-6 sm:p-7 shadow-lg transition duration-200 hover:-translate-y-1 flex flex-col justify-between bg-slate-950 border-sky-500/80 shadow-sky-950/40 text-slate-100">
               <div className="space-y-4">
                 <div className="flex items-center space-x-4">
                   <span className="h-14 w-14 rounded-2xl bg-sky-600 text-white font-black text-3xl flex items-center justify-center shadow-lg shadow-sky-600/30 shrink-0">
                     W
                   </span>
                   <div>
-                    <span className="text-xs font-black text-sky-600 uppercase tracking-widest block">Consumer Centered</span>
-                    <h4 className={`text-lg sm:text-xl font-black uppercase tracking-tight ${isDarkTheme ? 'text-white' : 'text-slate-950'}`}>
+                    <span className="text-xs font-black text-sky-400 uppercase tracking-widest block">Consumer Centered</span>
+                    <h4 className="text-lg sm:text-xl font-black uppercase tracking-tight text-slate-100">
                       Willingly Serving
                     </h4>
                   </div>
                 </div>
 
-                <div className={`p-4 rounded-xl border-l-4 border-sky-600 shadow-inner ${
-                  isDarkTheme ? 'bg-slate-900/90 border-slate-800' : 'bg-sky-50/80 border-sky-200'
-                }`}>
-                  <p className={`text-base sm:text-lg font-bold leading-relaxed ${
-                    isDarkTheme ? 'text-slate-100' : 'text-slate-950'
-                  }`}>
-                    <span className="text-sky-600 font-extrabold underline decoration-sky-400">Willingly cater</span> to the needs and concerns of the consumers by providing appropriate assistance, addressing such without delay and doing so in accordance to the service standards that we live by.
+                <div className="p-4 rounded-xl border-l-4 border-sky-500 shadow-inner bg-slate-900/90 border-slate-850">
+                  <p className="text-base sm:text-lg font-bold leading-relaxed text-slate-200">
+                    <span className="text-sky-400 font-extrabold underline decoration-sky-500">Willingly cater</span> to the needs and concerns of the consumers by providing appropriate assistance, addressing such without delay and doing so in accordance to the service standards that we live by.
                   </p>
                 </div>
               </div>
 
-              <div className={`mt-6 pt-4 border-t-2 flex items-center justify-between text-xs font-black ${
-                isDarkTheme ? 'border-slate-800 text-sky-400' : 'border-slate-100 text-sky-800'
-              }`}>
+              <div className="mt-6 pt-4 border-t-2 flex items-center justify-between text-xs font-black border-slate-800 text-sky-400">
                 <span className="flex items-center gap-1.5">
-                  <Sparkles className="h-4 w-4 text-sky-600" />
+                  <Sparkles className="h-4 w-4 text-sky-400" />
                   <span>Prompt Response</span>
                 </span>
                 <span className="px-2.5 py-1 rounded-md bg-sky-500/10 border border-sky-500/20 uppercase tracking-wider text-[10px]">
@@ -363,40 +335,30 @@ export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({
             </div>
 
             {/* D Pillar */}
-            <div className={`border-2 rounded-2xl p-6 sm:p-7 shadow-lg transition duration-200 hover:-translate-y-1 flex flex-col justify-between ${
-              isDarkTheme 
-                ? 'bg-slate-950 border-indigo-500/80 shadow-indigo-950/40 text-white' 
-                : 'bg-white border-indigo-600 shadow-indigo-100 text-slate-950'
-            }`}>
+            <div className="border-2 rounded-2xl p-6 sm:p-7 shadow-lg transition duration-200 hover:-translate-y-1 flex flex-col justify-between bg-slate-950 border-indigo-500/80 shadow-indigo-950/40 text-slate-100">
               <div className="space-y-4">
                 <div className="flex items-center space-x-4">
                   <span className="h-14 w-14 rounded-2xl bg-indigo-600 text-white font-black text-3xl flex items-center justify-center shadow-lg shadow-indigo-600/30 shrink-0">
                     D
                   </span>
                   <div>
-                    <span className="text-xs font-black text-indigo-600 uppercase tracking-widest block">Civil Servant Ethics</span>
-                    <h4 className={`text-lg sm:text-xl font-black uppercase tracking-tight ${isDarkTheme ? 'text-white' : 'text-slate-950'}`}>
+                    <span className="text-xs font-black text-indigo-400 uppercase tracking-widest block">Civil Servant Ethics</span>
+                    <h4 className="text-lg sm:text-xl font-black uppercase tracking-tight text-slate-100">
                       Dedicated Service
                     </h4>
                   </div>
                 </div>
 
-                <div className={`p-4 rounded-xl border-l-4 border-indigo-600 shadow-inner ${
-                  isDarkTheme ? 'bg-slate-900/90 border-slate-800' : 'bg-indigo-50/80 border-indigo-200'
-                }`}>
-                  <p className={`text-base sm:text-lg font-bold leading-relaxed ${
-                    isDarkTheme ? 'text-slate-100' : 'text-slate-950'
-                  }`}>
-                    <span className="text-indigo-600 font-extrabold underline decoration-indigo-400">Dedicate ourselves</span> to true public service in the proper implementation of policies and guidelines, while conducting ourselves in a manner consistent with that expected of civil servant.
+                <div className="p-4 rounded-xl border-l-4 border-indigo-500 shadow-inner bg-slate-900/90 border-slate-850">
+                  <p className="text-base sm:text-lg font-bold leading-relaxed text-slate-200">
+                    <span className="text-indigo-400 font-extrabold underline decoration-indigo-500">Dedicate ourselves</span> to true public service in the proper implementation of policies and guidelines, while conducting ourselves in a manner consistent with that expected of civil servant.
                   </p>
                 </div>
               </div>
 
-              <div className={`mt-6 pt-4 border-t-2 flex items-center justify-between text-xs font-black ${
-                isDarkTheme ? 'border-slate-800 text-indigo-400' : 'border-slate-100 text-indigo-800'
-              }`}>
+              <div className="mt-6 pt-4 border-t-2 flex items-center justify-between text-xs font-black border-slate-800 text-indigo-400">
                 <span className="flex items-center gap-1.5">
-                  <Sparkles className="h-4 w-4 text-indigo-600" />
+                  <Sparkles className="h-4 w-4 text-indigo-400" />
                   <span>Integrity & Public Service</span>
                 </span>
                 <span className="px-2.5 py-1 rounded-md bg-indigo-500/10 border border-indigo-500/20 uppercase tracking-wider text-[10px]">
@@ -410,23 +372,23 @@ export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({
 
         {/* 4. Tagoloan Water District Organizational Structure & Staffing Pattern */}
         <div className="space-y-8" id="org-structure">
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-slate-200 pb-4">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-slate-800 pb-4">
             <div>
-              <div className="inline-flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-blue-600">
+              <div className="inline-flex items-center space-x-2 text-xs font-black uppercase tracking-widest text-blue-400">
                 <Network className="h-4 w-4" />
                 <span>Tagoloan Water District • Misamis Oriental</span>
               </div>
-              <h3 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight mt-1">
+              <h3 className="text-2xl sm:text-3xl font-black text-slate-100 tracking-tight mt-1">
                 Organizational Structure & Staffing Pattern
               </h3>
-              <p className="text-xs sm:text-sm text-slate-500 mt-1">
+              <p className="text-xs sm:text-sm text-slate-400 mt-1">
                 Category “D” LWD-MaCRO Staffing Framework approved under Civil Service Commission and DBM standards.
               </p>
             </div>
 
             <button
               onClick={() => setIsOrgTreeExpanded(!isOrgTreeExpanded)}
-              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition flex items-center space-x-1.5 self-start sm:self-auto cursor-pointer"
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs rounded-xl transition flex items-center space-x-1.5 self-start sm:self-auto cursor-pointer"
             >
               <span>{isOrgTreeExpanded ? 'Collapse Flowchart' : 'Expand Flowchart'}</span>
               {isOrgTreeExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}

@@ -63,7 +63,8 @@ import {
   Receipt,
   Home,
   AlertOctagon,
-  Zap
+  Zap,
+  Sparkles
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog } from '../types';
@@ -78,13 +79,13 @@ import DataLoadingIndicator from './common/DataLoadingIndicator';
 import AdminAnalyticsSection from './charts/AdminAnalyticsSection';
 import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
-import { OfficialReportsGenerator, RecordsArchiveView, GracePeriodScannerCard } from './admin';
+import { OfficialReportsGenerator, RecordsArchiveView, GracePeriodScannerCard, TariffRateManager } from './admin';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
 import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
 import { initRealtimeSocket, sendRealtimeMessage } from '../services/realtimeSocket';
 import { apiClient } from '../services/apiClient';
-import { calculateWaterTariff } from '../utils/tariffCalculator';
+import { calculateWaterTariff, calculateFranchiseTax, getActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
 import { 
   checkDuplicateAccountNumber, 
   checkDuplicateRfidTag, 
@@ -263,6 +264,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [correctionValue, setCorrectionValue] = useState<number>(0);
   const [rejectingReadingId, setRejectingReadingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('');
+
+  // 10. Staff Module Sub-Navigation & Dynamic Tariff State
+  const [staffSubTab, setStaffSubTab] = useState<'users' | 'tariff'>('users');
+  const [activeTariff, setActiveTariff] = useState<WaterTariffConfig>(() => getActiveTariffConfig());
 
   // CSV Export helper
   const exportToCsv = (filename: string, headers: string[], rows: (string | number | undefined)[][]) => {
@@ -650,10 +655,23 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       } else if (data.type === 'service:grace_period_scan_complete') {
         loadAllDataFromStore(false);
         setScannerStatus(getScannerStatus());
+      } else if (data.type === 'tariff:updated') {
+        setActiveTariff(getActiveTariffConfig());
+        loadAllDataFromStore(false);
       }
     });
 
-    // 6. Subscribe to automated grace period background scanner
+    // 6. Subscribe to local tariff update events
+    const handleTariffUpdated = (e: any) => {
+      if (e?.detail) {
+        setActiveTariff(e.detail);
+      } else {
+        setActiveTariff(getActiveTariffConfig());
+      }
+    };
+    window.addEventListener('twd_tariff_updated', handleTariffUpdated);
+
+    // 7. Subscribe to automated grace period background scanner
     const unsubscribeScanner = subscribeToScanner((status) => {
       setScannerStatus(status);
     });
@@ -661,6 +679,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     return () => {
       window.removeEventListener('twd_database_updated', handleDbUpdate);
       window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('twd_tariff_updated', handleTariffUpdated);
       clearInterval(pollTimer);
       clearInterval(clockInterval);
       cleanupWs();
@@ -2094,6 +2113,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     const isAbnormal = resolvedConsumption >= 50;
 
+    const currentTariff = getActiveTariffConfig();
+    const basicBill = calculateWaterTariff(resolvedConsumption, con.consumerType || 'Residential', currentTariff);
+    const franchiseTax = calculateFranchiseTax(basicBill, currentTariff);
+    const totalBill = Math.round((basicBill + franchiseTax) * 100) / 100;
+
     const newRead: MeterReading = {
       id: `manual-R-${manualAccount}-${Date.now().toString().slice(-4)}`,
       meterNumber: con.meterNumber || 'MT-GEN',
@@ -2105,6 +2129,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       consumption: resolvedConsumption,
       readingDate: new Date().toISOString().split('T')[0],
       status: isAbnormal ? 'flagged_abnormal' : 'pending',
+      paymentStatus: 'unpaid',
+      billAmount: basicBill,
+      franchiseTax,
+      totalAmount: totalBill,
+      remainingBalance: totalBill,
+      paidAmount: 0,
       meterReaderName: 'Office Manual Clerk Entry',
       imageUrl: 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop',
       notes: `${manualNotes || 'Manual office clerk entry.'}${isRollover ? ' (METER ROLLOVERS REGISTERED: SYSTEM AUTOMATICALLY COMPUTED TRANSITION)' : ''}`,
@@ -4922,8 +4952,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                 <div className="flex items-center space-x-2.5">
                   <button 
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('staff');
+                      setStaffSubTab('tariff');
+                    }}
+                    className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center space-x-2 shadow-xs cursor-pointer"
+                    title="Set or change water rate price hikes on meter readings"
+                  >
+                    <TrendingUp className="h-4 w-4 text-emerald-400" />
+                    <span>Adjust Reading Price Hike</span>
+                  </button>
+
+                  <button 
                     onClick={() => setShowManualReadingForm(!showManualReadingForm)}
-                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center space-x-2 shadow-xs"
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center space-x-2 shadow-xs cursor-pointer"
                   >
                     <Plus className="h-4 w-4" />
                     <span>{showManualReadingForm ? 'Hide Intake Form' : 'Record Manual Intake'}</span>
@@ -6327,172 +6370,261 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* 10. STAFF MODULE */}
           {activeTab === 'staff' && (
             <div className="space-y-6 animate-fade-in" id="staff-tab">
-              <div className="flex justify-between items-center">
-                <div>
-                  <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-wider">Admin Staff & System Permissions</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">Manage administrative portal users and role access levels.</p>
+              {/* Staff Module Sub-Navigation */}
+              <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-slate-200">
+                <div className="flex space-x-2 overflow-x-auto scrollbar-none">
+                  <button
+                    type="button"
+                    onClick={() => setStaffSubTab('users')}
+                    className={`px-4 py-2.5 rounded-none text-xs font-black uppercase tracking-wider transition flex items-center space-x-2 border cursor-pointer ${
+                      staffSubTab === 'users'
+                        ? 'bg-slate-900 text-white border-slate-900 shadow'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <Users className="h-4 w-4 shrink-0 text-blue-400" />
+                    <span>Staff Directory & Access Roles</span>
+                    <span className="bg-slate-800 text-slate-300 font-mono text-[10px] px-1.5 py-0.5 rounded-sm">
+                      {staffList.length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setStaffSubTab('tariff')}
+                    className={`px-4 py-2.5 rounded-none text-xs font-black uppercase tracking-wider transition flex items-center space-x-2 border cursor-pointer ${
+                      staffSubTab === 'tariff'
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-md ring-2 ring-blue-400/30'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <TrendingUp className="h-4 w-4 shrink-0 text-emerald-300" />
+                    <span>Water Tariff Rates & Price Hike Manager</span>
+                    <span className="bg-emerald-400 text-slate-950 font-black text-[9px] px-1.5 py-0.5 rounded-none uppercase">
+                      LWUA Rate Engine
+                    </span>
+                  </button>
                 </div>
-                <button
-                  onClick={() => setShowAddStaff(!showAddStaff)}
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider transition flex items-center space-x-2"
-                >
-                  <Plus className="h-4.5 w-4.5" />
-                  <span>Enroll Staff User</span>
-                </button>
+
+                {staffSubTab === 'users' && (
+                  <button
+                    onClick={() => setShowAddStaff(!showAddStaff)}
+                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider transition flex items-center space-x-2 cursor-pointer shadow-xs"
+                  >
+                    <Plus className="h-4.5 w-4.5" />
+                    <span>Enroll Staff User</span>
+                  </button>
+                )}
               </div>
 
-              {/* Add Staff Form */}
-              {showAddStaff && (
-                <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-xl">
-                  <h4 className="text-xs font-black uppercase text-slate-900">Enroll New Administrative Staff</h4>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Full Name</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Maria Clara"
-                        value={newStaff.name}
-                        onChange={(e) => setNewStaff({ ...newStaff, name: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                      />
+              {/* VIEW 1: STAFF DIRECTORY */}
+              {staffSubTab === 'users' && (
+                <div className="space-y-6">
+                  {/* Quick Tariff Summary Banner */}
+                  <div className="bg-gradient-to-r from-blue-900 via-indigo-950 to-slate-900 text-white p-5 rounded-3xl border border-blue-800/80 shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="flex items-center space-x-3.5">
+                      <div className="p-3 bg-blue-500/20 rounded-2xl border border-blue-400/40 text-blue-300 shrink-0">
+                        <Sparkles className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-md border border-emerald-400/40">
+                            Active Tariff: {activeTariff.resolutionNumber}
+                          </span>
+                          <span className="text-[11px] text-slate-300 font-mono">
+                            Effective: {activeTariff.effectiveDate}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-200 mt-1 font-medium">
+                          Residential Lifeline (1-10 m³): <strong className="text-emerald-400 font-mono">₱{activeTariff.residential.baseMinCharge.toFixed(2)}</strong> • Commercial Lifeline (1-10 m³): <strong className="text-blue-400 font-mono">₱{activeTariff.commercial.baseMinCharge.toFixed(2)}</strong>
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Email Address</label>
-                      <input
-                        type="email"
-                        placeholder="e.g. m.clara@tagoloanwater.gov.ph"
-                        value={newStaff.email}
-                        onChange={(e) => setNewStaff({ ...newStaff, email: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Assigned Role</label>
-                      <select
-                        value={newStaff.role}
-                        onChange={(e) => setNewStaff({ ...newStaff, role: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs font-bold text-slate-700"
-                      >
-                        <option value="Administrator">Administrator (Full Access)</option>
-                        <option value="Supervisor">Supervisor (Approvals & Operations)</option>
-                        <option value="Cashier">Cashier (Process Payments)</option>
-                        <option value="Billing Officer">Billing Officer (Ledger & Reports)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Department</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Treasury & Finance"
-                        value={newStaff.department}
-                        onChange={(e) => setNewStaff({ ...newStaff, department: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                      />
-                    </div>
+
+                    <button
+                      onClick={() => setStaffSubTab('tariff')}
+                      className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition flex items-center space-x-2 shadow-md cursor-pointer shrink-0"
+                    >
+                      <TrendingUp className="h-4 w-4" />
+                      <span>Adjust Rates / Set Price Hike</span>
+                    </button>
                   </div>
-                  <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
-                    <button
-                      onClick={() => setShowAddStaff(false)}
-                      className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (!newStaff.name || !newStaff.email) {
-                          alert("Please fill in staff name and email.");
-                          return;
-                        }
-                        const created = {
-                          id: `ST-${Math.floor(100 + Math.random() * 900)}`,
-                          name: newStaff.name,
-                          email: newStaff.email,
-                          role: newStaff.role,
-                          department: newStaff.department || 'General Admin',
-                          status: 'active'
-                        };
-                        setStaffList(prev => [...prev, created]);
-                        
-                        // Persist staff user to database
-                        const currentUsers = mockDb.getUsers();
-                        const roleStr = (created.role || '').toLowerCase();
-                        currentUsers.push({
-                          id: created.id,
-                          name: created.name,
-                          email: created.email,
-                          role: roleStr === 'administrator' ? 'admin' : (roleStr === 'cashier' ? 'cashier' : 'staff'),
-                          status: 'active',
-                          password: 'TwdStaff2025!'
-                        });
-                        mockDb.saveUsers(currentUsers);
-                        
-                        setShowAddStaff(false);
-                        mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Enrolled Admin Staff', `Created staff account for ${newStaff.name} (${newStaff.role})`);
-                        alert(`Staff user ${newStaff.name} successfully enrolled!`);
-                      }}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold"
-                    >
-                      Save Staff User
-                    </button>
+
+                  <div>
+                    <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-wider">Admin Staff & System Permissions</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">Manage administrative portal users and role access levels.</p>
+                  </div>
+
+                  {/* Add Staff Form */}
+                  {showAddStaff && (
+                    <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-xl">
+                      <h4 className="text-xs font-black uppercase text-slate-900">Enroll New Administrative Staff</h4>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Full Name</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Maria Clara"
+                            value={newStaff.name}
+                            onChange={(e) => setNewStaff({ ...newStaff, name: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Email Address</label>
+                          <input
+                            type="email"
+                            placeholder="e.g. m.clara@tagoloanwater.gov.ph"
+                            value={newStaff.email}
+                            onChange={(e) => setNewStaff({ ...newStaff, email: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Assigned Role</label>
+                          <select
+                            value={newStaff.role}
+                            onChange={(e) => setNewStaff({ ...newStaff, role: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs font-bold text-slate-700"
+                          >
+                            <option value="Administrator">Administrator (Full Access)</option>
+                            <option value="Supervisor">Supervisor (Approvals & Operations)</option>
+                            <option value="Cashier">Cashier (Process Payments)</option>
+                            <option value="Billing Officer">Billing Officer (Ledger & Reports)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Department</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Treasury & Finance"
+                            value={newStaff.department}
+                            onChange={(e) => setNewStaff({ ...newStaff, department: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                        <button
+                          onClick={() => setShowAddStaff(false)}
+                          className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (!newStaff.name || !newStaff.email) {
+                              alert("Please fill in staff name and email.");
+                              return;
+                            }
+                            const created = {
+                              id: `ST-${Math.floor(100 + Math.random() * 900)}`,
+                              name: newStaff.name,
+                              email: newStaff.email,
+                              role: newStaff.role,
+                              department: newStaff.department || 'General Admin',
+                              status: 'active'
+                            };
+                            setStaffList(prev => [...prev, created]);
+                            
+                            // Persist staff user to database
+                            const currentUsers = mockDb.getUsers();
+                            const roleStr = (created.role || '').toLowerCase();
+                            currentUsers.push({
+                              id: created.id,
+                              name: created.name,
+                              email: created.email,
+                              role: roleStr === 'administrator' ? 'admin' : (roleStr === 'cashier' ? 'cashier' : 'staff'),
+                              status: 'active',
+                              password: 'TwdStaff2025!'
+                            });
+                            mockDb.saveUsers(currentUsers);
+                            
+                            setShowAddStaff(false);
+                            mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Enrolled Admin Staff', `Created staff account for ${newStaff.name} (${newStaff.role})`);
+                            alert(`Staff user ${newStaff.name} successfully enrolled!`);
+                          }}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold"
+                        >
+                          Save Staff User
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Staff List Table */}
+                  <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-sm">
+                    <table className="min-w-full text-xs text-left">
+                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-200">
+                        <tr>
+                          <th className="px-6 py-4">Staff ID</th>
+                          <th className="px-6 py-4">Name & Email</th>
+                          <th className="px-6 py-4">Role Title</th>
+                          <th className="px-6 py-4">Department</th>
+                          <th className="px-6 py-4">Status</th>
+                          <th className="px-6 py-4 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-medium">
+                        {staffList.map((st, sIdx) => (
+                          <tr key={`staff-user-${st.id || ''}-${st.email || ''}-${sIdx}`} className="hover:bg-slate-50">
+                            <td className="px-6 py-4 font-mono font-bold text-slate-900">{st.id}</td>
+                            <td className="px-6 py-4">
+                              <span className="font-extrabold text-slate-900 block">{st.name}</span>
+                              <span className="text-slate-500 text-[10px] font-mono">{st.email}</span>
+                            </td>
+                            <td className="px-6 py-4 font-bold text-blue-700">{st.role}</td>
+                            <td className="px-6 py-4 text-slate-600">{st.department}</td>
+                            <td className="px-6 py-4">
+                              <span className="bg-emerald-100 text-emerald-800 font-bold px-2.5 py-1 rounded-full text-[10px] uppercase">
+                                {st.status}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-right space-x-2">
+                              <button
+                                onClick={() => setEditingStaffModal({ ...st })}
+                                className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 text-blue-700 font-bold text-[10px] uppercase rounded-lg transition"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => {
+                                  alert(`Password reset notification initiated for ${st.email}`);
+                                }}
+                                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] uppercase rounded-lg transition"
+                              >
+                                Reset Pwd
+                              </button>
+                              <button
+                                onClick={() => handleDeleteStaff(st)}
+                                className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[10px] uppercase rounded-lg transition"
+                              >
+                                Terminate
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               )}
 
-              {/* Staff List Table */}
-              <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-sm">
-                <table className="min-w-full text-xs text-left">
-                  <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-200">
-                    <tr>
-                      <th className="px-6 py-4">Staff ID</th>
-                      <th className="px-6 py-4">Name & Email</th>
-                      <th className="px-6 py-4">Role Title</th>
-                      <th className="px-6 py-4">Department</th>
-                      <th className="px-6 py-4">Status</th>
-                      <th className="px-6 py-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 font-medium">
-                    {staffList.map((st, sIdx) => (
-                      <tr key={`staff-user-${st.id || ''}-${st.email || ''}-${sIdx}`} className="hover:bg-slate-50">
-                        <td className="px-6 py-4 font-mono font-bold text-slate-900">{st.id}</td>
-                        <td className="px-6 py-4">
-                          <span className="font-extrabold text-slate-900 block">{st.name}</span>
-                          <span className="text-slate-500 text-[10px] font-mono">{st.email}</span>
-                        </td>
-                        <td className="px-6 py-4 font-bold text-blue-700">{st.role}</td>
-                        <td className="px-6 py-4 text-slate-600">{st.department}</td>
-                        <td className="px-6 py-4">
-                          <span className="bg-emerald-100 text-emerald-800 font-bold px-2.5 py-1 rounded-full text-[10px] uppercase">
-                            {st.status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right space-x-2">
-                          <button
-                            onClick={() => setEditingStaffModal({ ...st })}
-                            className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 text-blue-700 font-bold text-[10px] uppercase rounded-lg transition"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => {
-                              alert(`Password reset notification initiated for ${st.email}`);
-                            }}
-                            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] uppercase rounded-lg transition"
-                          >
-                            Reset Pwd
-                          </button>
-                          <button
-                            onClick={() => handleDeleteStaff(st)}
-                            className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[10px] uppercase rounded-lg transition"
-                          >
-                            Terminate
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {/* VIEW 2: TARIFF RATES & PRICE HIKE MANAGER */}
+              {staffSubTab === 'tariff' && (
+                <TariffRateManager
+                  currentUser={currentUser}
+                  consumers={consumers}
+                  setConsumers={setConsumers}
+                  readings={readings}
+                  setReadings={setReadings}
+                  setAnnouncements={setAnnouncements}
+                  onTariffApplied={(newConfig) => {
+                    setActiveTariff(newConfig);
+                    loadAllDataFromStore(false);
+                  }}
+                />
+              )}
             </div>
           )}
 
@@ -6730,7 +6862,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
               {/* Official District Profile, Mission, Vision, Core Values & Staffing Structure */}
               <div className="pt-4">
-                <DistrictProfileSection id="admin-district-profile" />
+                <DistrictProfileSection id="admin-district-profile" isDarkTheme={true} />
               </div>
             </div>
           )}

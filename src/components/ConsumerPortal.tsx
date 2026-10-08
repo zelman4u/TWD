@@ -74,7 +74,7 @@ import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
-import { calculateWaterTariff } from '../utils/tariffCalculator';
+import { calculateWaterTariff, getActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
 
 interface ConsumerPortalProps {
   currentUser: UserType;
@@ -173,6 +173,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
   // Monthly Usage & Household Benchmark Report Modal State
   const [isUsageReportModalOpen, setIsUsageReportModalOpen] = useState(false);
+
+  // Dynamic Tariff Schedule State & Modal
+  const [activeTariff, setActiveTariff] = useState<WaterTariffConfig>(() => getActiveTariffConfig());
+  const [showTariffScheduleModal, setShowTariffScheduleModal] = useState(false);
 
   // Track previous readings to detect admin payment modifications
   const prevReadingsRef = useRef<MeterReading[]>([]);
@@ -470,7 +474,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     };
     window.addEventListener('storage', handleStorage);
 
-    // 3. Fallback automated polling every 5 seconds
+    // 3. Tariff rate update listener for instant price hike propagation
+    const handleTariffUpdated = (e: any) => {
+      setActiveTariff(getActiveTariffConfig());
+      loadConsumerInfo(true);
+    };
+    window.addEventListener('twd_tariff_updated', handleTariffUpdated);
+
+    // 4. Fallback automated polling every 5 seconds
     const interval = setInterval(() => {
       loadConsumerInfo(true);
     }, 5000);
@@ -478,6 +489,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     return () => {
       window.removeEventListener('twd_database_updated', handleDbUpdate);
       window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('twd_tariff_updated', handleTariffUpdated);
       clearInterval(interval);
       if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
       if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
@@ -1391,6 +1403,43 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 calculateCostOf={calculateCostOf}
               />
             )}
+
+            {/* OFFICIAL WATER TARIFF UPDATE & PRICE HIKE ADVISORY BANNER */}
+            <div className="bg-gradient-to-r from-blue-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-5 sm:p-6 border border-blue-800/80 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-fade-in" id="consumer-tariff-advisory-banner">
+              <div className="flex items-start sm:items-center space-x-3.5">
+                <div className="p-3 bg-blue-500/20 rounded-2xl border border-blue-400/40 text-blue-300 shrink-0">
+                  <Sparkles className="h-5 w-5" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-md border border-emerald-400/40">
+                      Approved Tariff Schedule: {activeTariff.resolutionNumber}
+                    </span>
+                    <span className="text-[11px] text-slate-300 font-mono">
+                      Effective: {activeTariff.effectiveDate}
+                    </span>
+                  </div>
+                  <h4 className="text-sm font-black text-white">
+                    Official Notice of Water Tariff Adjustment
+                  </h4>
+                  <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+                    Tagoloan Water District has updated its basic water service rates under Board Resolution {activeTariff.resolutionNumber}. 
+                    {consumerRecord?.consumerType === 'Commercial' ? ' Commercial' : ' Domestic / Residential'} baseline minimum (1 – 10 m³) is set at{' '}
+                    <strong className="text-emerald-400 font-mono">
+                      ₱{(consumerRecord?.consumerType === 'Commercial' ? activeTariff.commercial.baseMinCharge : activeTariff.residential.baseMinCharge).toFixed(2)}
+                    </strong>. All meter readings and billed consumption reflect this approved schedule.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setShowTariffScheduleModal(true)}
+                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition flex items-center space-x-2 shadow-md cursor-pointer shrink-0 self-end md:self-center"
+              >
+                <FileText className="h-4 w-4" />
+                <span>View Rate Schedule</span>
+              </button>
+            </div>
             
             {/* SPOTLIGHT: METER READING & BILL ISSUED NOTIFICATION FOCUS CARD */}
             {spotlightReading && (
@@ -3120,7 +3169,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             {/* Official District Mandate, Vision, Mission, Core Values & Staffing Structure */}
             <div className="pt-6">
-              <DistrictProfileSection id="consumer-district-profile" />
+              <DistrictProfileSection id="consumer-district-profile" isDarkTheme={true} />
             </div>
 
           </div>
@@ -3371,6 +3420,150 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl cursor-pointer transition"
               >
                 Close Viewer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Official Tariff Schedule & Price Hike Modal */}
+      {showTariffScheduleModal && (
+        <div 
+          className="fixed inset-0 z-[120] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fade-in"
+          onClick={() => setShowTariffScheduleModal(false)}
+        >
+          <div 
+            className="bg-slate-900 rounded-3xl max-w-xl w-full border border-slate-800 shadow-2xl p-6 sm:p-8 space-y-6 text-slate-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-3 bg-blue-950 text-blue-400 rounded-2xl border border-blue-800/80 shrink-0">
+                  <FileText className="h-6 w-6" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-[10px] font-black uppercase text-blue-300 bg-blue-950 border border-blue-800 px-2 py-0.5 rounded">
+                      Official Schedule
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      {activeTariff.resolutionNumber}
+                    </span>
+                  </div>
+                  <h3 className="text-base font-extrabold text-white mt-0.5">
+                    Water Tariff Rates & Price Adjustment Schedule
+                  </h3>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowTariffScheduleModal(false)}
+                className="text-slate-400 hover:text-slate-200 font-bold text-sm cursor-pointer p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3.5 bg-slate-950 border border-blue-900/60 rounded-2xl text-xs text-slate-200 leading-relaxed">
+              <strong className="text-blue-300">Official Advisory:</strong> {activeTariff.memoNotes || 'Tagoloan Water District operational tariff schedule adjustment implemented under Presidential Decree No. 198 and LWUA regulatory guidelines.'}
+              <div className="mt-1 text-[11px] text-blue-400 font-medium">
+                Effective Implementation Date: <strong className="text-white">{activeTariff.effectiveDate}</strong>
+              </div>
+            </div>
+
+            {/* Rates Table */}
+            <div className="space-y-4">
+              <h4 className="text-xs font-black uppercase tracking-wider text-white">
+                Active Rate Brackets for {consumerRecord?.consumerType === 'Commercial' ? 'Commercial Connections' : 'Domestic / Residential Connections'}
+              </h4>
+
+              <div className="border border-slate-800 rounded-2xl overflow-hidden shadow-2xs">
+                <table className="min-w-full text-xs text-left">
+                  <thead className="bg-slate-950 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-800">
+                    <tr>
+                      <th className="py-2.5 px-4">Consumption Tier</th>
+                      <th className="py-2.5 px-4">Volume Range</th>
+                      <th className="py-2.5 px-4 text-right">Approved Rate (₱)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800 font-medium text-slate-200">
+                    {consumerRecord?.consumerType === 'Commercial' ? (
+                      <>
+                        <tr className="bg-blue-950/40">
+                          <td className="py-2.5 px-4 font-bold text-white">Lifeline Minimum Base</td>
+                          <td className="py-2.5 px-4 text-slate-400 font-mono">1 – 10 m³</td>
+                          <td className="py-2.5 px-4 text-right font-mono font-bold text-blue-400">₱{activeTariff.commercial.baseMinCharge.toFixed(2)} (Flat)</td>
+                        </tr>
+                        <tr className="hover:bg-slate-850">
+                          <td className="py-2.5 px-4">Tier 1: Incremental</td>
+                          <td className="py-2.5 px-4 text-slate-400 font-mono">11 – 20 m³</td>
+                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.commercial.tier1_rate.toFixed(2)} / m³</td>
+                        </tr>
+                        <tr className="hover:bg-slate-850">
+                          <td className="py-2.5 px-4">Tier 2: Commercial</td>
+                          <td className="py-2.5 px-4 text-slate-400 font-mono">21 – 30 m³</td>
+                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.commercial.tier2_rate.toFixed(2)} / m³</td>
+                        </tr>
+                        <tr className="hover:bg-slate-850">
+                          <td className="py-2.5 px-4">Tier 3: Commercial</td>
+                          <td className="py-2.5 px-4 text-slate-400 font-mono">31 – 40 m³</td>
+                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.commercial.tier3_rate.toFixed(2)} / m³</td>
+                        </tr>
+                        <tr className="hover:bg-slate-850">
+                          <td className="py-2.5 px-4">Tier 4: High Commercial</td>
+                          <td className="py-2.5 px-4 text-slate-400 font-mono">41 – 50 m³</td>
+                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.commercial.tier4_rate.toFixed(2)} / m³</td>
+                        </tr>
+                        <tr className="hover:bg-slate-850">
+                          <td className="py-2.5 px-4">Tier 5: Industrial / Max</td>
+                          <td className="py-2.5 px-4 text-slate-400 font-mono">51+ m³</td>
+                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.commercial.tier5_rate.toFixed(2)} / m³</td>
+                        </tr>
+                      </>
+                    ) : (
+                      <>
+                        <tr className="bg-emerald-950/40">
+                          <td className="py-2.5 px-4 font-bold text-white">Lifeline Minimum Base</td>
+                          <td className="py-2.5 px-4 text-slate-400 font-mono">1 – 10 m³</td>
+                          <td className="py-2.5 px-4 text-right font-mono font-bold text-emerald-400">₱{activeTariff.residential.baseMinCharge.toFixed(2)} (Flat)</td>
+                        </tr>
+                        <tr className="hover:bg-slate-850">
+                          <td className="py-2.5 px-4">Tier 1: Incremental</td>
+                          <td className="py-2.5 px-4 text-slate-400 font-mono">11 – 20 m³</td>
+                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.residential.tier1_rate.toFixed(2)} / m³</td>
+                        </tr>
+                        <tr className="hover:bg-slate-850">
+                          <td className="py-2.5 px-4">Tier 2: Standard Domestic</td>
+                          <td className="py-2.5 px-4 text-slate-400 font-mono">21 – 30 m³</td>
+                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.residential.tier2_rate.toFixed(2)} / m³</td>
+                        </tr>
+                        <tr className="hover:bg-slate-850">
+                          <td className="py-2.5 px-4">Tier 3: Moderate Domestic</td>
+                          <td className="py-2.5 px-4 text-slate-400 font-mono">31 – 40 m³</td>
+                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.residential.tier3_rate.toFixed(2)} / m³</td>
+                        </tr>
+                        <tr className="hover:bg-slate-850">
+                          <td className="py-2.5 px-4">Tier 4: Heavy Consumption</td>
+                          <td className="py-2.5 px-4 text-slate-400 font-mono">41+ m³</td>
+                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.residential.tier4_rate.toFixed(2)} / m³</td>
+                        </tr>
+                      </>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 font-mono">
+                <span>Statutory Franchise Tax: <strong className="text-slate-200">{(activeTariff.franchiseTaxRate * 100).toFixed(0)}%</strong></span>
+                <span>Late Payment Surcharge: <strong className="text-slate-200">{(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}%</strong></span>
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end border-t border-slate-800">
+              <button
+                onClick={() => setShowTariffScheduleModal(false)}
+                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl cursor-pointer transition shadow-md"
+              >
+                Acknowledge & Close
               </button>
             </div>
           </div>

@@ -27,6 +27,94 @@
  *    • Example: ₱135.46 + ₱13.30 = ₱148.76
  */
 
+export interface WaterTariffConfig {
+  version: number;
+  updatedAt: string;
+  updatedBy: string;
+  effectiveDate: string;
+  resolutionNumber: string;
+  memoNotes: string;
+  residential: {
+    baseMinCharge: number; // 1-10 m³
+    tier1_rate: number;    // 11-20 m³
+    tier2_rate: number;    // 21-30 m³
+    tier3_rate: number;    // 31-40 m³
+    tier4_rate: number;    // 41+ m³
+  };
+  commercial: {
+    baseMinCharge: number; // 1-10 m³
+    tier1_rate: number;    // 11-20 m³
+    tier2_rate: number;    // 21-30 m³
+    tier3_rate: number;    // 31-40 m³
+    tier4_rate: number;    // 41-50 m³
+    tier5_rate: number;    // 51+ m³
+  };
+  franchiseTaxRate: number; // e.g. 0.02 (2%)
+  latePaymentSurchargeRate: number; // e.g. 0.10 (10%)
+}
+
+export const DEFAULT_TARIFF_CONFIG: WaterTariffConfig = {
+  version: 1,
+  updatedAt: '2024-10-01T00:00:00.000Z',
+  updatedBy: 'Tagoloan Water District Board',
+  effectiveDate: 'October 1, 2024',
+  resolutionNumber: 'TWD-LWUA-2024-001',
+  memoNotes: 'Standard Tagoloan Water District Tariff Schedule under PD 198 and LWUA guidelines.',
+  residential: {
+    baseMinCharge: 75.00,
+    tier1_rate: 8.25,
+    tier2_rate: 9.75,
+    tier3_rate: 11.50,
+    tier4_rate: 13.50,
+  },
+  commercial: {
+    baseMinCharge: 150.00,
+    tier1_rate: 16.50,
+    tier2_rate: 20.00,
+    tier3_rate: 24.00,
+    tier4_rate: 28.00,
+    tier5_rate: 23.50,
+  },
+  franchiseTaxRate: 0.02,
+  latePaymentSurchargeRate: 0.10,
+};
+
+export const TARIFF_STORAGE_KEY = 'twd_live_v4_tariff_config';
+
+let memoryTariffConfig: WaterTariffConfig = { ...DEFAULT_TARIFF_CONFIG };
+
+export function getActiveTariffConfig(): WaterTariffConfig {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const stored = localStorage.getItem(TARIFF_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed.residential && parsed.commercial) {
+          memoryTariffConfig = parsed;
+          return parsed;
+        }
+      }
+    } catch {}
+  }
+  return memoryTariffConfig;
+}
+
+export function saveActiveTariffConfig(config: WaterTariffConfig): void {
+  memoryTariffConfig = config;
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      localStorage.setItem(TARIFF_STORAGE_KEY, JSON.stringify(config));
+      window.dispatchEvent(new CustomEvent('twd_tariff_updated', { detail: config }));
+      window.dispatchEvent(new CustomEvent('twd_database_updated'));
+    } catch {}
+  }
+}
+
+export function resetToDefaultTariffConfig(): WaterTariffConfig {
+  saveActiveTariffConfig(DEFAULT_TARIFF_CONFIG);
+  return DEFAULT_TARIFF_CONFIG;
+}
+
 export interface TariffTierBreakdown {
   tierNumber: number;
   name: string;
@@ -65,10 +153,12 @@ export interface OfficialBillingNoticeData {
 
 /**
  * Calculates basic water charge (Bill Amt.) based on usage and classification.
+ * Dynamically uses the active Tagoloan Water District tariff configuration.
  */
 export function calculateWaterTariff(
   usage: number,
-  classification: 'Residential' | 'Commercial' | 'RES' | 'COMM' = 'Residential'
+  classification: 'Residential' | 'Commercial' | 'RES' | 'COMM' = 'Residential',
+  customTariff?: WaterTariffConfig
 ): number {
   const consumption = Math.max(0, Number(usage) || 0);
 
@@ -76,89 +166,94 @@ export function calculateWaterTariff(
     return 0;
   }
 
+  const tariff = customTariff || getActiveTariffConfig();
   const isComm = classification === 'Commercial' || classification === 'COMM';
 
   if (!isComm) {
     // RESIDENTIAL (RES)
-    // 1-10 m³: Minimum ₱75.00
-    if (consumption <= 10) return 75.00;
+    const res = tariff.residential;
+    if (consumption <= 10) return res.baseMinCharge;
 
-    let total = 75.00;
+    let total = res.baseMinCharge;
     let remaining = consumption - 10;
 
-    // 11 - 20 m³ @ ₱8.25
+    // 11 - 20 m³
     const block1 = Math.min(remaining, 10);
-    total += block1 * 8.25;
+    total += block1 * res.tier1_rate;
     remaining -= block1;
     if (remaining <= 0) return Math.round(total * 100) / 100;
 
-    // 21 - 30 m³ @ ₱9.75
+    // 21 - 30 m³
     const block2 = Math.min(remaining, 10);
-    total += block2 * 9.75;
+    total += block2 * res.tier2_rate;
     remaining -= block2;
     if (remaining <= 0) return Math.round(total * 100) / 100;
 
-    // 31 - 40 m³ @ ₱11.50
+    // 31 - 40 m³
     const block3 = Math.min(remaining, 10);
-    total += block3 * 11.50;
+    total += block3 * res.tier3_rate;
     remaining -= block3;
     if (remaining <= 0) return Math.round(total * 100) / 100;
 
-    // 41+ m³ @ ₱13.50
-    total += remaining * 13.50;
+    // 41+ m³
+    total += remaining * res.tier4_rate;
     return Math.round(total * 100) / 100;
   } else {
     // COMMERCIAL (COMM)
-    // 1-10 m³: Minimum ₱150.00
-    if (consumption <= 10) return 150.00;
+    const comm = tariff.commercial;
+    if (consumption <= 10) return comm.baseMinCharge;
 
-    let total = 150.00;
+    let total = comm.baseMinCharge;
     let remaining = consumption - 10;
 
-    // 11 - 20 m³ @ ₱16.50
+    // 11 - 20 m³
     const block1 = Math.min(remaining, 10);
-    total += block1 * 16.50;
+    total += block1 * comm.tier1_rate;
     remaining -= block1;
     if (remaining <= 0) return Math.round(total * 100) / 100;
 
-    // 21 - 30 m³ @ ₱20.00
+    // 21 - 30 m³
     const block2 = Math.min(remaining, 10);
-    total += block2 * 20.00;
+    total += block2 * comm.tier2_rate;
     remaining -= block2;
     if (remaining <= 0) return Math.round(total * 100) / 100;
 
-    // 31 - 40 m³ @ ₱24.00
+    // 31 - 40 m³
     const block3 = Math.min(remaining, 10);
-    total += block3 * 24.00;
+    total += block3 * comm.tier3_rate;
     remaining -= block3;
     if (remaining <= 0) return Math.round(total * 100) / 100;
 
-    // 41 - 50 m³ @ ₱28.00
+    // 41 - 50 m³
     const block4 = Math.min(remaining, 10);
-    total += block4 * 28.00;
+    total += block4 * comm.tier4_rate;
     remaining -= block4;
     if (remaining <= 0) return Math.round(total * 100) / 100;
 
-    // 51 - 65+ m³ @ ₱23.50
-    total += remaining * 23.50;
+    // 51+ m³
+    total += remaining * comm.tier5_rate;
     return Math.round(total * 100) / 100;
   }
 }
 
 /**
- * Calculates 2% Franchise Tax: round((Bill Amt × 0.02) / 0.98, 2)
+ * Calculates 2% Franchise Tax: round((Bill Amt × rate) / (1 - rate), 2)
  */
-export function calculateFranchiseTax(billAmount: number): number {
+export function calculateFranchiseTax(billAmount: number, customTariff?: WaterTariffConfig): number {
   if (billAmount <= 0) return 0;
-  return Math.round(((billAmount * 0.02) / 0.98) * 100) / 100;
+  const tariff = customTariff || getActiveTariffConfig();
+  const rate = tariff.franchiseTaxRate ?? 0.02;
+  return Math.round(((billAmount * rate) / (1 - rate)) * 100) / 100;
 }
 
 /**
- * Calculates 10% Late Payment Surcharge on basic Bill Amount
+ * Calculates Late Payment Surcharge on basic Bill Amount (default 10%)
  */
-export function calculateLatePenalty(billAmount: number): number {
+export function calculateLatePenalty(billAmount: number, customTariff?: WaterTariffConfig): number {
   if (billAmount <= 0) return 0;
-  return Math.round(billAmount * 0.10 * 100) / 100;
+  const tariff = customTariff || getActiveTariffConfig();
+  const rate = tariff.latePaymentSurchargeRate ?? 0.10;
+  return Math.round(billAmount * rate * 100) / 100;
 }
 
 /**
@@ -227,14 +322,20 @@ export function calculateOfficialBillingNotice(params: {
  */
 export function getTariffBreakdown(
   usage: number,
-  classification: 'Residential' | 'Commercial' | 'RES' | 'COMM' = 'Residential'
+  classification: 'Residential' | 'Commercial' | 'RES' | 'COMM' = 'Residential',
+  customTariff?: WaterTariffConfig
 ) {
   const consumption = Math.max(0, Number(usage) || 0);
   const isComm = classification === 'Commercial' || classification === 'COMM';
+  const tariff = customTariff || getActiveTariffConfig();
   const tiers: TariffTierBreakdown[] = [];
 
-  const baseCharge = isComm ? 150.00 : 75.00;
-  const tier1Rate = isComm ? 16.50 : 8.25;
+  const baseCharge = isComm ? tariff.commercial.baseMinCharge : tariff.residential.baseMinCharge;
+  const tier1Rate = isComm ? tariff.commercial.tier1_rate : tariff.residential.tier1_rate;
+  const tier2Rate = isComm ? tariff.commercial.tier2_rate : tariff.residential.tier2_rate;
+  const tier3Rate = isComm ? tariff.commercial.tier3_rate : tariff.residential.tier3_rate;
+  const tier4Rate = isComm ? tariff.commercial.tier4_rate : tariff.residential.tier4_rate;
+  const tier5Rate = isComm ? tariff.commercial.tier5_rate : 0;
 
   tiers.push({
     tierNumber: 1,
@@ -261,8 +362,64 @@ export function getTariffBreakdown(
     });
   }
 
-  const billAmount = calculateWaterTariff(consumption, classification);
-  const franchiseTax = calculateFranchiseTax(billAmount);
+  if (consumption > 20) {
+    const v2 = Math.min(consumption - 20, 10);
+    tiers.push({
+      tierNumber: 3,
+      name: 'Tier 3 (21-30 m³)',
+      range: '21 – 30 m³',
+      volumeUsed: v2,
+      ratePerM3: tier2Rate,
+      isFixed: false,
+      subtotal: v2 * tier2Rate,
+      isActive: true,
+    });
+  }
+
+  if (consumption > 30) {
+    const v3 = Math.min(consumption - 30, isComm ? 10 : 99999);
+    tiers.push({
+      tierNumber: 4,
+      name: isComm ? 'Tier 4 (31-40 m³)' : 'Tier 4 (31+ m³)',
+      range: isComm ? '31 – 40 m³' : '31+ m³',
+      volumeUsed: v3,
+      ratePerM3: tier3Rate,
+      isFixed: false,
+      subtotal: v3 * tier3Rate,
+      isActive: true,
+    });
+  }
+
+  if (isComm && consumption > 40) {
+    const v4 = Math.min(consumption - 40, 10);
+    tiers.push({
+      tierNumber: 5,
+      name: 'Tier 5 (41-50 m³)',
+      range: '41 – 50 m³',
+      volumeUsed: v4,
+      ratePerM3: tier4Rate,
+      isFixed: false,
+      subtotal: v4 * tier4Rate,
+      isActive: true,
+    });
+  }
+
+  if (isComm && consumption > 50) {
+    const v5 = consumption - 50;
+    tiers.push({
+      tierNumber: 6,
+      name: 'Tier 6 (51+ m³)',
+      range: '51+ m³',
+      volumeUsed: v5,
+      ratePerM3: tier5Rate,
+      isFixed: false,
+      subtotal: v5 * tier5Rate,
+      isActive: true,
+    });
+  }
+
+  const billAmount = calculateWaterTariff(consumption, classification, tariff);
+  const franchiseTax = calculateFranchiseTax(billAmount, tariff);
 
   return {
     consumption,
@@ -271,6 +428,6 @@ export function getTariffBreakdown(
     totalBill: billAmount,
     franchiseTax,
     tiers,
-    explanation: `Tagoloan Water District ${isComm ? 'COMM' : 'RES'} Tariff: Net consumption of ${consumption} m³ assessed at ₱${billAmount.toFixed(2)} basic bill + ₱${franchiseTax.toFixed(2)} franchise tax (2%).`,
+    explanation: `Tagoloan Water District ${isComm ? 'COMM' : 'RES'} Tariff (${tariff.resolutionNumber}): Net consumption of ${consumption} m³ assessed at ₱${billAmount.toFixed(2)} basic bill + ₱${franchiseTax.toFixed(2)} franchise tax (${(tariff.franchiseTaxRate * 100).toFixed(0)}%).`,
   };
 }

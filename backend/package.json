@@ -1,0 +1,13 @@
+{
+  "name": "twd-backend",
+  "version": "1.0.0",
+  "description": "Tagoloan Water District REST API & Telemetry Backend Service",
+  "main": "server.ts",
+  "scripts": {
+    "start": "tsx server.ts",
+    "test": "node --test tests/**/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

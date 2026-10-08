@@ -28,7 +28,13 @@ import {
   Download
 } from 'lucide-react';
 import { Consumer, MeterReading } from '../../types';
-import { calculateWaterTariff, calculateFranchiseTax, calculateLatePenalty, getTariffBreakdown } from '../../utils/tariffCalculator';
+import { 
+  calculateWaterTariff, 
+  calculateFranchiseTax, 
+  calculateLatePenalty, 
+  getTariffBreakdown,
+  getActiveTariffConfig 
+} from '../../utils/tariffCalculator';
 
 export interface BillDetailsProps {
   reading: MeterReading | null;
@@ -642,10 +648,12 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
               <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex justify-between items-center">
                 <div>
                   <span className="font-bold text-slate-900 block">2. Incremental Consumption (11 – 20 m³)</span>
-                  <span className="text-[11px] text-slate-500">Billed at {breakdown.consumerType === 'Commercial' ? '₱16.50/m³' : '₱8.25/m³'}</span>
+                  <span className="text-[11px] text-slate-500">
+                    Billed at ₱{(breakdown.consumerType === 'Commercial' ? getActiveTariffConfig().commercial.tier1_rate : getActiveTariffConfig().residential.tier1_rate).toFixed(2)}/m³
+                  </span>
                 </div>
                 <span className="font-mono font-bold text-slate-900">
-                  {breakdown.consumption > 10 ? `₱${(Math.min(breakdown.consumption - 10, 10) * (breakdown.consumerType === 'Commercial' ? 16.50 : 8.25)).toFixed(2)}` : '₱0.00'}
+                  {breakdown.consumption > 10 ? `₱${(Math.min(breakdown.consumption - 10, 10) * (breakdown.consumerType === 'Commercial' ? getActiveTariffConfig().commercial.tier1_rate : getActiveTariffConfig().residential.tier1_rate)).toFixed(2)}` : '₱0.00'}
                 </span>
               </div>
 

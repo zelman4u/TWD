@@ -10,3 +10,4 @@
 export * from './GracePeriodScannerCard';
 export * from './OfficialReportsGenerator';
 export * from './RecordsArchiveView';
+export * from './TariffRateManager';

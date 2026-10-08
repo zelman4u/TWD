@@ -39,6 +39,7 @@ export const COLLECTIONS = {
   AUDIT_LOGS: 'audit_logs',
   NOTIFICATIONS: 'notifications',
   BARANGAYS: 'barangays',
+  SETTINGS: 'settings',
 };
 
 // Storage prefix used by mockDb
@@ -56,6 +57,7 @@ export const KEYS = {
   AUDIT_LOGS: `${STORAGE_PREFIX}audit_logs`,
   NOTIFICATIONS: `${STORAGE_PREFIX}notifications`,
   BARANGAYS: `${STORAGE_PREFIX}barangays`,
+  TARIFF_CONFIG: `${STORAGE_PREFIX}tariff_config`,
   TERMINATED: TERMINATED_ACCOUNTS_KEY,
 };
 
