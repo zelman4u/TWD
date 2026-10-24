@@ -740,6 +740,73 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       .catch(() => {
         // Fallback to mockDb
       });
+
+    // 5. Fetch Mobile App Submitted Readings from Backend API (/api/readings)
+    fetch('/api/readings')
+      .then(res => res.json())
+      .then(data => {
+        const apiReadings: any[] = data?.readings || data?.data || [];
+        if (Array.isArray(apiReadings) && apiReadings.length > 0) {
+          const currentLocal = mockDb.getReadings();
+          const currentConsumers = mockDb.getConsumers();
+          let hasReadingChanges = false;
+
+          apiReadings.forEach(ar => {
+            if (!ar || !ar.id) return;
+            const matchedConsumer = currentConsumers.find(c =>
+              (ar.accountNumber && c.accountNumber === ar.accountNumber) ||
+              (ar.meterNumber && c.meterNumber === ar.meterNumber)
+            );
+            const consumptionVal = Math.max(0, Number(ar.consumption ?? (Number(ar.currentReading || 0) - Number(ar.previousReading || 0))));
+            const mappedStatus: MeterReading['status'] =
+              ar.status === 'approved' || ar.status === 'verified'
+                ? 'verified'
+                : consumptionVal >= 50
+                  ? 'flagged_abnormal'
+                  : 'pending';
+
+            const existsIdx = currentLocal.findIndex(lr => lr.id === ar.id);
+            if (existsIdx < 0) {
+              const photo = ar.photoUrl || ar.imageUrl || ar.meterImageUrl || '';
+              const newReadingRecord: MeterReading = {
+                id: ar.id,
+                accountNumber: ar.accountNumber || matchedConsumer?.accountNumber || 'UNKNOWN',
+                consumerName: ar.consumerName || matchedConsumer?.name || 'Consumer',
+                address: matchedConsumer?.address || '',
+                addressZone: matchedConsumer?.sitioZone || '',
+                meterNumber: ar.meterNumber || matchedConsumer?.meterNumber || '',
+                meterBrand: matchedConsumer?.meterBrand || 'EVER',
+                classification: matchedConsumer?.consumerType === 'Commercial' ? 'Commercial' : 'Residential',
+                previousReading: Number(ar.previousReading || 0),
+                currentReading: Number(ar.currentReading || 0),
+                consumption: consumptionVal,
+                readingDate: ar.readingDate || new Date().toISOString().split('T')[0],
+                billingPeriod: ar.billingPeriod || new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+                meterReaderName: ar.readerName || ar.meterReaderName || 'Field Meter Officer',
+                route: ar.route || matchedConsumer?.barangay || 'Poblacion',
+                status: mappedStatus,
+                paymentStatus: 'unpaid',
+                imageUrl: photo,
+                meterImageUrl: photo,
+                gpsLocation: ar.coordinates
+                  ? `${ar.coordinates.latitude}, ${ar.coordinates.longitude}`
+                  : (ar.gpsLocation || ''),
+                notes: ar.notes || ''
+              };
+              currentLocal.unshift(newReadingRecord);
+              hasReadingChanges = true;
+            }
+          });
+
+          if (hasReadingChanges) {
+            mockDb.saveReadings([...currentLocal]);
+            setReadings([...currentLocal]);
+          }
+        }
+      })
+      .catch(() => {
+        // Fallback gracefully if running purely client-side
+      });
   };
 
   useEffect(() => {
@@ -787,10 +854,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         loadAllDataFromStore(false);
       } else if (data.type === 'READER_TERMINATED' || data.type === 'staff:terminated') {
         loadAllDataFromStore(false);
-      } else if (data.type === 'NEW_READING_SUBMITTED' || data.type === 'readings:new' || data.type === 'READINGS_BATCH_SYNCED') {
+      } else if (
+        data.type === 'READING_SUBMITTED_FOR_APPROVAL' ||
+        data.type === 'reading:submitted' ||
+        data.type === 'NEW_READING_SUBMITTED' ||
+        data.type === 'readings:new' ||
+        data.type === 'READINGS_BATCH_SYNCED'
+      ) {
         toast.info('Field Readings Received', data.payload?.message || 'Incoming meter reading queued for review.');
         loadAllDataFromStore(false);
-      } else if (data.type === 'CONSUMER_REGISTERED' || data.type === 'READER_APPROVED_ACTIVE' || data.type === 'staff:status_updated') {
+      } else if (
+        data.type === 'CONSUMER_REGISTERED' ||
+        data.type === 'consumer:registered' ||
+        data.type === 'CONSUMER_UPDATED' ||
+        data.type === 'READER_APPROVED_ACTIVE' ||
+        data.type === 'staff:status_updated'
+      ) {
         loadAllDataFromStore(false);
       } else if (data.type === 'service:grace_period_scan_complete') {
         loadAllDataFromStore(false);
@@ -798,13 +877,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       } else if (data.type === 'tariff:updated') {
         setActiveTariff(getActiveTariffConfig());
         loadAllDataFromStore(false);
-      } else if (data.type === 'CONSUMER_REPORT_CREATED') {
+      } else if (data.type === 'CONSUMER_REPORT_CREATED' || data.type === 'consumer:report:created') {
         toast.warning(
           'New Consumer Concern Filed',
           data.payload?.message || `${data.payload?.consumerName || 'A consumer'} submitted report #${data.payload?.reportId || ''}`
         );
         loadAllDataFromStore(false);
-      } else if (data.type === 'CONSUMER_REPORT_REPLY' || data.type === 'CONSUMER_REPORT_UPDATED') {
+      } else if (
+        data.type === 'CONSUMER_REPORT_REPLY' ||
+        data.type === 'CONSUMER_REPLIED_TO_REPORT' ||
+        data.type === 'ADMIN_REPLIED_TO_REPORT' ||
+        data.type === 'REPORT_STATUS_CHANGED' ||
+        data.type === 'CONSUMER_REPORT_UPDATED'
+      ) {
         loadAllDataFromStore(false);
       }
     });
@@ -2339,6 +2424,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         billingPeriod: vRead.billingPeriod,
         remainingBalance: billCost
       });
+
+      // Notify backend API so server updates consumer.previousReading for Mobile App's next sync pull
+      fetch(`/api/readings/${encodeURIComponent(vRead.id)}/approve`, { method: 'POST' }).catch(() => {});
     }
 
     mockDb.addAuditLog(
@@ -2382,7 +2470,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveReadings(updatedReadings);
     setReadings(updatedReadings);
 
-    // Direct Firestore sync
+    // Direct Firestore & Backend API sync
     readingsToApprove.forEach(reading => {
       const totalCalculatedBill = readingBills.get(reading.id) ?? calculateCostOf(reading.consumption, reading.classification);
       syncDocToFirestore(COLLECTIONS.READINGS, reading.id, {
@@ -2394,6 +2482,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         totalAmount: totalCalculatedBill,
         paidAmount: 0
       });
+      fetch(`/api/readings/${encodeURIComponent(reading.id)}/approve`, { method: 'POST' }).catch(() => {});
     });
 
     // Recalculate consumer arrears for affected consumers

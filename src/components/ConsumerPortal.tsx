@@ -566,7 +566,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
     // 4. Dedicated Live WebSocket Stream for immediate notifications & report updates
     const cleanupWs = initRealtimeSocket((data) => {
-      if (data.type === 'CONSUMER_REPORT_REPLY') {
+      if (data.type === 'CONSUMER_REPORT_REPLY' || data.type === 'ADMIN_REPLIED_TO_REPORT') {
         const payload = data.payload;
         if (payload?.accountNumber && consumerRecordRef.current?.accountNumber === payload.accountNumber) {
           toast.info(
@@ -575,7 +575,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           );
         }
         loadConsumerInfo(true);
-      } else if (data.type === 'CONSUMER_REPORT_UPDATED' || data.type === 'CONSUMER_REPORT_CREATED') {
+      } else if (
+        data.type === 'CONSUMER_REPORT_UPDATED' ||
+        data.type === 'REPORT_STATUS_CHANGED' ||
+        data.type === 'CONSUMER_REPORT_CREATED' ||
+        data.type === 'READING_APPROVED_BILL_ISSUED' ||
+        data.type === 'bill:issued' ||
+        data.type === 'CONSUMER_UPDATED'
+      ) {
         loadConsumerInfo(true);
       }
     });
