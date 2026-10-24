@@ -92,7 +92,7 @@ export default function BarangayConsumptionChart({ data }: BarangayConsumptionCh
           </div>
           <div>
             <h3 className="text-base font-extrabold text-slate-900 tracking-tight">Barangay Zonal Consumption Distribution</h3>
-            <p className="text-xs text-slate-500">Comparative intake across Tagoloan municipal water supply routes</p>
+            <p className="text-xs text-slate-500">Comparative water consumption across Tagoloan municipal supply routes</p>
           </div>
         </div>
 
@@ -126,7 +126,7 @@ export default function BarangayConsumptionChart({ data }: BarangayConsumptionCh
               className="bg-transparent border-0 font-bold focus:ring-0 text-xs text-slate-800 cursor-pointer outline-hidden"
             >
               <option value="volume">Sort by Total Volume</option>
-              <option value="average">Sort by Avg Intake</option>
+              <option value="average">Sort by Avg Consumption</option>
               <option value="collection">Sort by Collection %</option>
             </select>
           </div>

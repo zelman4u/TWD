@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Building,
   Building2, 
@@ -22,6 +22,7 @@ import {
   ArrowUpDown
 } from 'lucide-react';
 import { Consumer, WaterMeter, MeterReading, AuditLog } from '../../types';
+import { TablePagination } from '../common/TablePagination';
 
 interface RecordsArchiveViewProps {
   recordsTab: 'consumers' | 'meters' | 'readings' | 'bills' | 'payments' | 'audit';
@@ -55,6 +56,12 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
   handleDeleteReading,
   exportToCsv
 }) => {
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [recordsTab, searchQuery, classificationFilter]);
+
   const q = searchQuery.toLowerCase().trim();
 
   // Metrics for Cards
@@ -342,387 +349,480 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
       </div>
 
       {/* 3. ARCHIVE DATA PRESENTATION */}
-      <div className="bg-white border border-slate-200 overflow-hidden shadow-2xs">
+      <div className="bg-slate-900 border border-slate-800 overflow-hidden shadow-xl">
         {/* SUBTAB A: CONSUMERS ARCHIVE */}
-        {recordsTab === 'consumers' && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-xs text-left border-collapse">
-              <thead className="bg-slate-50 text-slate-700 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-200">
-                <tr>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Account #</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Consumer Name</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Barangay / Address</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Assigned Meter #</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100 text-center">Classification</th>
-                  <th className="px-5 py-3.5 text-center">Connection Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                {filteredConsumers.map((c, cIdx) => (
-                  <tr key={`rec-cons-${c.accountNumber || c.meterNumber || cIdx}-${cIdx}`} className="hover:bg-slate-50/80 transition">
-                    <td className="px-5 py-3 font-mono font-bold text-blue-700 border-r border-slate-100">
-                      {c.accountNumber}
-                    </td>
-                    <td className="px-5 py-3 border-r border-slate-100">
-                      <div className="font-bold text-slate-900">{c.name}</div>
-                      {c.businessName && (
-                        <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                          DBA: {c.businessName}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-5 py-3 border-r border-slate-100">
-                      <div className="flex items-center space-x-1 text-slate-700">
-                        <MapPin className="h-3 w-3 text-slate-400 shrink-0" />
-                        <span className="truncate max-w-[220px]">{c.address}</span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 font-mono font-bold text-slate-800 border-r border-slate-100">
-                      {c.meterNumber || 'Pending Serial'}
-                    </td>
-                    <td className="px-5 py-3 border-r border-slate-100 text-center">
-                      <div className="inline-flex flex-col items-center">
-                        <span className={`inline-flex items-center justify-center gap-1.5 min-w-[108px] px-2.5 py-1 text-[10px] font-black uppercase rounded border shadow-2xs ${
-                          c.consumerType === 'Commercial'
-                            ? 'bg-purple-50 text-purple-900 border-purple-300'
-                            : 'bg-emerald-50 text-emerald-900 border-emerald-300'
-                        }`}>
-                          {c.consumerType === 'Commercial' ? (
-                            <Building className="h-3 w-3 text-purple-700 shrink-0" />
+        {recordsTab === 'consumers' && (() => {
+          const paginatedConsumers = filteredConsumers.slice((currentPage - 1) * 10, currentPage * 10);
+          return (
+            <div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs text-left border-collapse">
+                  <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-800">
+                    <tr>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Account #</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Consumer Name</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Barangay / Address</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Assigned Meter #</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 text-center">Classification</th>
+                      <th className="px-5 py-3.5 text-center">Connection Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
+                    {paginatedConsumers.map((c, cIdx) => {
+                      const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || c.status === 'pending_approval';
+                      return (
+                      <tr key={`rec-cons-${c.accountNumber || c.meterNumber || cIdx}-${cIdx}`} className={`transition ${isPending ? 'bg-amber-950/20 hover:bg-amber-950/40 border-l-2 border-l-amber-500' : 'hover:bg-slate-800/60'}`}>
+                        <td className="px-5 py-3 font-mono font-bold border-r border-slate-800/80">
+                          {isPending ? (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40 text-[11px] font-bold">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                              <span>Pending ID</span>
+                            </span>
                           ) : (
-                            <Home className="h-3 w-3 text-emerald-700 shrink-0" />
+                            <span className="text-sky-400">{c.accountNumber}</span>
                           )}
-                          <span>{c.consumerType || 'Residential'}</span>
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 text-center">
-                      <span className={`px-2 py-0.5 text-[10px] font-extrabold uppercase border ${
-                        c.status === 'active'
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                          : c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice'
-                          ? 'bg-rose-600 text-white border-rose-700 shadow-2xs font-black animate-pulse'
-                          : 'bg-rose-50 text-rose-800 border-rose-300'
-                      }`}>
-                        {c.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-                {filteredConsumers.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
-                      <Database className="h-6 w-6 mx-auto mb-2 text-slate-300" />
-                      No archived consumers match the search query.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+                        </td>
+                        <td className="px-5 py-3 border-r border-slate-800/80">
+                          <div className="flex items-center space-x-1.5">
+                            <span className="font-bold text-white">{c.name}</span>
+                            {isPending && (
+                              <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px] font-black uppercase">
+                                NEW
+                              </span>
+                            )}
+                          </div>
+                          {c.businessName && (
+                            <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                              DBA: {c.businessName}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-5 py-3 border-r border-slate-800/80">
+                          <div className="flex items-center space-x-1 text-slate-300">
+                            <MapPin className="h-3 w-3 text-slate-400 shrink-0" />
+                            <span className="truncate max-w-[220px]">{c.address}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3 font-mono font-bold text-slate-200 border-r border-slate-800/80">
+                          {c.meterNumber && c.meterNumber !== 'Pending' ? c.meterNumber : (
+                            <span className="text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/80 text-[10px]">Pending Meter</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3 border-r border-slate-800/80 text-center">
+                          <div className="inline-flex flex-col items-center">
+                            <span className={`inline-flex items-center justify-center gap-1.5 min-w-[108px] px-2.5 py-1 text-[10px] font-black uppercase rounded border shadow-2xs ${
+                              c.consumerType === 'Commercial'
+                                ? 'bg-purple-950/80 text-purple-300 border-purple-800/80'
+                                : 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
+                            }`}>
+                              {c.consumerType === 'Commercial' ? (
+                                <Building className="h-3 w-3 text-purple-400 shrink-0" />
+                              ) : (
+                                <Home className="h-3 w-3 text-emerald-400 shrink-0" />
+                              )}
+                              <span>{c.consumerType || 'Residential'}</span>
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3 text-center">
+                          <span className={`px-2 py-0.5 text-[10px] font-extrabold uppercase border rounded ${
+                            isPending
+                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/40 font-black'
+                              : c.status === 'active'
+                              ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
+                              : c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice'
+                              ? 'bg-rose-950/80 text-rose-300 border-rose-800/80 shadow-2xs font-black animate-pulse'
+                              : 'bg-rose-950/80 text-rose-300 border-rose-800/80'
+                          }`}>
+                            {isPending ? 'PENDING ID' : c.status}
+                          </span>
+                        </td>
+                      </tr>
+                      );
+                    })}
+                    {filteredConsumers.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
+                          <Database className="h-6 w-6 mx-auto mb-2 text-slate-500" />
+                          No archived consumers match the search query.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <TablePagination
+                currentPage={currentPage}
+                totalItems={filteredConsumers.length}
+                pageSize={10}
+                onPageChange={setCurrentPage}
+                itemName="consumer records"
+              />
+            </div>
+          );
+        })()}
 
         {/* SUBTAB B: METERS INVENTORY */}
-        {recordsTab === 'meters' && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-xs text-left border-collapse">
-              <thead className="bg-slate-50 text-slate-700 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-200">
-                <tr>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Meter Serial Number</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Manufacturer / Brand</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Commissioning Date</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Assigned Account</th>
-                  <th className="px-5 py-3.5 text-center">Operational State</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                {filteredMeters.map((m, mIdx) => (
-                  <tr key={`rec-meter-${m.meterNumber || m.id || mIdx}-${mIdx}`} className="hover:bg-slate-50/80 transition">
-                    <td className="px-5 py-3 font-mono font-bold text-slate-900 border-r border-slate-100">
-                      {m.meterNumber}
-                    </td>
-                    <td className="px-5 py-3 font-bold text-slate-800 border-r border-slate-100">
-                      {m.brand}
-                    </td>
-                    <td className="px-5 py-3 font-mono text-slate-600 border-r border-slate-100">
-                      {m.installationDate}
-                    </td>
-                    <td className="px-5 py-3 font-mono font-bold text-blue-700 border-r border-slate-100">
-                      {m.linkedAccountNumber || <span className="text-slate-400 font-normal">Unassigned</span>}
-                    </td>
-                    <td className="px-5 py-3 text-center">
-                      <span className={`px-2 py-0.5 text-[10px] font-extrabold uppercase border ${
-                        m.status === 'active'
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                          : m.status === 'maintenance'
-                          ? 'bg-amber-50 text-amber-800 border-amber-300'
-                          : 'bg-rose-50 text-rose-800 border-rose-300'
-                      }`}>
-                        {m.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-                {filteredMeters.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
-                      <Gauge className="h-6 w-6 mx-auto mb-2 text-slate-300" />
-                      No meters found matching your filter criteria.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {recordsTab === 'meters' && (() => {
+          const paginatedMeters = filteredMeters.slice((currentPage - 1) * 10, currentPage * 10);
+          return (
+            <div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs text-left border-collapse">
+                  <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-800">
+                    <tr>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Meter Serial Number</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Manufacturer / Brand</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Commissioning Date</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Assigned Account</th>
+                      <th className="px-5 py-3.5 text-center">Operational State</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
+                    {paginatedMeters.map((m, mIdx) => (
+                      <tr key={`rec-meter-${m.meterNumber || m.id || mIdx}-${mIdx}`} className="hover:bg-slate-800/60 transition">
+                        <td className="px-5 py-3 font-mono font-bold text-white border-r border-slate-800/80">
+                          {m.meterNumber}
+                        </td>
+                        <td className="px-5 py-3 font-bold text-slate-200 border-r border-slate-800/80">
+                          {m.brand}
+                        </td>
+                        <td className="px-5 py-3 font-mono text-slate-400 border-r border-slate-800/80">
+                          {m.installationDate}
+                        </td>
+                        <td className="px-5 py-3 font-mono font-bold text-sky-400 border-r border-slate-800/80">
+                          {m.linkedAccountNumber || <span className="text-slate-500 font-normal">Unassigned</span>}
+                        </td>
+                        <td className="px-5 py-3 text-center">
+                          <span className={`px-2 py-0.5 text-[10px] font-extrabold uppercase border rounded ${
+                            m.status === 'active'
+                              ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
+                              : m.status === 'maintenance'
+                              ? 'bg-amber-950/80 text-amber-300 border-amber-800/80'
+                              : 'bg-rose-950/80 text-rose-300 border-rose-800/80'
+                          }`}>
+                            {m.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredMeters.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
+                          <Gauge className="h-6 w-6 mx-auto mb-2 text-slate-500" />
+                          No meters found matching your filter criteria.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <TablePagination
+                currentPage={currentPage}
+                totalItems={filteredMeters.length}
+                pageSize={10}
+                onPageChange={setCurrentPage}
+                itemName="water meters"
+              />
+            </div>
+          );
+        })()}
 
         {/* SUBTAB C: READINGS TRAIL */}
-        {recordsTab === 'readings' && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left border-collapse min-w-[900px]">
-              <thead className="bg-slate-50 text-slate-700 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-200">
-                <tr>
-                  <th className="px-4 py-3.5 border-r border-slate-100">Reading ID</th>
-                  <th className="px-4 py-3.5 border-r border-slate-100 min-w-[200px]">Consumer Account</th>
-                  <th className="px-4 py-3.5 border-r border-slate-100 text-center">Index (Prev → Curr)</th>
-                  <th className="px-4 py-3.5 border-r border-slate-100 text-right">Volume (m³)</th>
-                  <th className="px-4 py-3.5 border-r border-slate-100">Reading Timestamp</th>
-                  <th className="px-4 py-3.5 border-r border-slate-100">Field Reader</th>
-                  <th className="px-4 py-3.5 text-center border-r border-slate-100">Audit Status</th>
-                  <th className="px-4 py-3.5 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                {filteredReadings.map((r, rIdx) => (
-                  <tr key={`rec-reading-${r.id || r.accountNumber || rIdx}-${rIdx}`} className="hover:bg-slate-50/80 transition">
-                    <td className="px-4 py-3 font-mono font-bold text-slate-600 border-r border-slate-100">
-                      {r.id}
-                    </td>
-                    <td className="px-4 py-3 border-r border-slate-100">
-                      <span className="font-bold font-mono text-blue-700 block text-xs">{r.accountNumber}</span>
-                      <span className="text-slate-900 font-bold">{r.consumerName}</span>
-                    </td>
-                    <td className="px-4 py-3 font-mono text-slate-700 text-center border-r border-slate-100">
-                      {r.previousReading} → <strong className="text-slate-950 font-bold">{r.currentReading}</strong>
-                    </td>
-                    <td className="px-4 py-3 font-mono font-black text-blue-700 text-right border-r border-slate-100">
-                      {r.consumption} m³
-                    </td>
-                    <td className="px-4 py-3 text-slate-600 font-mono text-[11px] border-r border-slate-100">
-                      {r.readingDate}
-                    </td>
-                    <td className="px-4 py-3 font-bold text-slate-800 border-r border-slate-100">
-                      {r.meterReaderName || 'Field Reader'}
-                    </td>
-                    <td className="px-4 py-3 text-center border-r border-slate-100">
-                      <span className={`px-2 py-0.5 text-[10px] font-extrabold uppercase border ${
-                        r.status === 'verified'
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                          : r.status === 'pending'
-                          ? 'bg-amber-50 text-amber-800 border-amber-300'
-                          : 'bg-rose-50 text-rose-800 border-rose-300'
-                      }`}>
-                        {r.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        {r.status !== 'verified' ? (
-                          <button
-                            type="button"
-                            onClick={() => handleVerifyReading(r.id, 'verified')}
-                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] uppercase transition flex items-center space-x-1 cursor-pointer"
-                          >
-                            <CheckCircle className="h-3 w-3" />
-                            <span>Verify</span>
-                          </button>
-                        ) : (
-                          <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 border border-emerald-200 flex items-center space-x-1">
-                            <Check className="h-3 w-3 text-emerald-600" />
-                            <span>Verified</span>
+        {recordsTab === 'readings' && (() => {
+          const paginatedReadings = filteredReadings.slice((currentPage - 1) * 10, currentPage * 10);
+          return (
+            <div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left border-collapse min-w-[900px]">
+                  <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-800">
+                    <tr>
+                      <th className="px-4 py-3.5 border-r border-slate-800/80">Reading ID</th>
+                      <th className="px-4 py-3.5 border-r border-slate-800/80 min-w-[200px]">Consumer Account</th>
+                      <th className="px-4 py-3.5 border-r border-slate-800/80 text-center">Index (Prev → Curr)</th>
+                      <th className="px-4 py-3.5 border-r border-slate-800/80 text-right">Volume (m³)</th>
+                      <th className="px-4 py-3.5 border-r border-slate-800/80">Reading Timestamp</th>
+                      <th className="px-4 py-3.5 border-r border-slate-800/80">Field Reader</th>
+                      <th className="px-4 py-3.5 text-center border-r border-slate-800/80">Audit Status</th>
+                      <th className="px-4 py-3.5 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
+                    {paginatedReadings.map((r, rIdx) => (
+                      <tr key={`rec-reading-${r.id || r.accountNumber || rIdx}-${rIdx}`} className="hover:bg-slate-800/60 transition">
+                        <td className="px-4 py-3 font-mono font-bold text-slate-400 border-r border-slate-800/80">
+                          {r.id}
+                        </td>
+                        <td className="px-4 py-3 border-r border-slate-800/80">
+                          <span className="font-bold font-mono text-sky-400 block text-xs">{r.accountNumber}</span>
+                          <span className="text-white font-bold">{r.consumerName}</span>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-slate-300 text-center border-r border-slate-800/80">
+                          {r.previousReading} → <strong className="text-white font-bold">{r.currentReading}</strong>
+                        </td>
+                        <td className="px-4 py-3 font-mono font-black text-sky-400 text-right border-r border-slate-800/80">
+                          {r.consumption} m³
+                        </td>
+                        <td className="px-4 py-3 text-slate-400 font-mono text-[11px] border-r border-slate-800/80">
+                          {r.readingDate}
+                        </td>
+                        <td className="px-4 py-3 font-bold text-slate-300 border-r border-slate-800/80">
+                          {r.meterReaderName || 'Field Reader'}
+                        </td>
+                        <td className="px-4 py-3 text-center border-r border-slate-800/80">
+                          <span className={`px-2 py-0.5 text-[10px] font-extrabold uppercase border rounded ${
+                            r.status === 'verified'
+                              ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
+                              : r.status === 'pending'
+                              ? 'bg-amber-950/80 text-amber-300 border-amber-800/80'
+                              : 'bg-rose-950/80 text-rose-300 border-rose-800/80'
+                          }`}>
+                            {r.status}
                           </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteReading(r.id)}
-                          className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[10px] uppercase transition cursor-pointer"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {filteredReadings.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-slate-400">
-                      <Activity className="h-6 w-6 mx-auto mb-2 text-slate-300" />
-                      No archived readings found.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {r.status !== 'verified' ? (
+                              <button
+                                type="button"
+                                onClick={() => handleVerifyReading(r.id, 'verified')}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] uppercase transition flex items-center space-x-1 cursor-pointer"
+                              >
+                                <CheckCircle className="h-3 w-3" />
+                                <span>Verify</span>
+                              </button>
+                            ) : (
+                              <span className="text-[10px] text-emerald-300 font-bold bg-emerald-950/80 px-2 py-0.5 border border-emerald-800/80 flex items-center space-x-1">
+                                <Check className="h-3 w-3 text-emerald-400" />
+                                <span>Verified</span>
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteReading(r.id)}
+                              className="px-2 py-1 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 font-bold text-[10px] uppercase rounded border border-rose-800/60 transition cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredReadings.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="px-6 py-12 text-center text-slate-400">
+                          <Activity className="h-6 w-6 mx-auto mb-2 text-slate-500" />
+                          No archived readings found.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <TablePagination
+                currentPage={currentPage}
+                totalItems={filteredReadings.length}
+                pageSize={10}
+                onPageChange={setCurrentPage}
+                itemName="meter readings"
+              />
+            </div>
+          );
+        })()}
 
         {/* SUBTAB D: BILLS LEDGER */}
-        {recordsTab === 'bills' && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-xs text-left border-collapse">
-              <thead className="bg-slate-50 text-slate-700 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-200">
-                <tr>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Billing Period</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Account #</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Consumer Name</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100 text-right">Volume (m³)</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100 text-right">Assessed Amount</th>
-                  <th className="px-5 py-3.5 text-center">Settlement Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                {filteredBills.map((r, bIdx) => {
-                  const totalBill = calculateCostOf(r.consumption, r.classification);
-                  return (
-                    <tr key={`rec-bill-${r.id || r.accountNumber || bIdx}-${bIdx}`} className="hover:bg-slate-50/80 transition">
-                      <td className="px-5 py-3 font-mono font-bold text-slate-900 border-r border-slate-100">
-                        {r.billingPeriod || 'Current Period'}
-                      </td>
-                      <td className="px-5 py-3 font-mono font-bold text-blue-700 border-r border-slate-100">
-                        {r.accountNumber}
-                      </td>
-                      <td className="px-5 py-3 font-bold text-slate-900 border-r border-slate-100">
-                        {r.consumerName}
-                      </td>
-                      <td className="px-5 py-3 font-mono font-bold text-slate-800 text-right border-r border-slate-100">
-                        {r.consumption} m³
-                      </td>
-                      <td className="px-5 py-3 font-mono font-black text-slate-950 text-right border-r border-slate-100">
-                        ₱{totalBill.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      <td className="px-5 py-3 text-center">
-                        <span className={`px-2 py-0.5 text-[10px] font-extrabold uppercase border ${
-                          r.paymentStatus === 'paid'
-                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                            : 'bg-amber-50 text-amber-800 border-amber-300'
-                        }`}>
-                          {r.paymentStatus || 'unpaid'}
-                        </span>
-                      </td>
+        {recordsTab === 'bills' && (() => {
+          const paginatedBills = filteredBills.slice((currentPage - 1) * 10, currentPage * 10);
+          return (
+            <div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs text-left border-collapse">
+                  <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-800">
+                    <tr>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Billing Period</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Account #</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Consumer Name</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 text-right">Volume (m³)</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 text-right">Assessed Amount</th>
+                      <th className="px-5 py-3.5 text-center">Settlement Status</th>
                     </tr>
-                  );
-                })}
-                {filteredBills.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
-                      <Receipt className="h-6 w-6 mx-auto mb-2 text-slate-300" />
-                      No assessed bills found matching query.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
+                    {paginatedBills.map((r, bIdx) => {
+                      const totalBill = calculateCostOf(r.consumption, r.classification);
+                      return (
+                        <tr key={`rec-bill-${r.id || r.accountNumber || bIdx}-${bIdx}`} className="hover:bg-slate-800/60 transition">
+                          <td className="px-5 py-3 font-mono font-bold text-white border-r border-slate-800/80">
+                            {r.billingPeriod || 'Current Period'}
+                          </td>
+                          <td className="px-5 py-3 font-mono font-bold text-sky-400 border-r border-slate-800/80">
+                            {r.accountNumber}
+                          </td>
+                          <td className="px-5 py-3 font-bold text-white border-r border-slate-800/80">
+                            {r.consumerName}
+                          </td>
+                          <td className="px-5 py-3 font-mono font-bold text-slate-300 text-right border-r border-slate-800/80">
+                            {r.consumption} m³
+                          </td>
+                          <td className="px-5 py-3 font-mono font-black text-white text-right border-r border-slate-800/80">
+                            ₱{totalBill.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                          <td className="px-5 py-3 text-center">
+                            <span className={`px-2 py-0.5 text-[10px] font-extrabold uppercase border rounded ${
+                              r.paymentStatus === 'paid'
+                                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
+                                : 'bg-amber-950/80 text-amber-300 border-amber-800/80'
+                            }`}>
+                              {r.paymentStatus || 'unpaid'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {filteredBills.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
+                          <Receipt className="h-6 w-6 mx-auto mb-2 text-slate-500" />
+                          No assessed bills found matching query.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <TablePagination
+                currentPage={currentPage}
+                totalItems={filteredBills.length}
+                pageSize={10}
+                onPageChange={setCurrentPage}
+                itemName="water bills"
+              />
+            </div>
+          );
+        })()}
 
         {/* SUBTAB E: PAYMENT RECEIPTS LOG */}
-        {recordsTab === 'payments' && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-xs text-left border-collapse">
-              <thead className="bg-slate-50 text-slate-700 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-200">
-                <tr>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Official Receipt #</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Payment Date</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Account #</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Consumer Name</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Payment Instrument</th>
-                  <th className="px-5 py-3.5 text-right">Settled Amount</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                {filteredPayments.map((r, pIdx) => {
-                  const totalBill = r.paidAmount && r.paidAmount > 0 ? r.paidAmount : calculateCostOf(r.consumption, r.classification);
-                  return (
-                    <tr key={`rec-paid-${r.id || r.transactionId || pIdx}-${pIdx}`} className="hover:bg-slate-50/80 transition">
-                      <td className="px-5 py-3 font-mono font-bold text-emerald-700 border-r border-slate-100">
-                        {r.transactionId || `OR-${20260000 + pIdx}`}
-                      </td>
-                      <td className="px-5 py-3 text-slate-700 font-mono border-r border-slate-100">
-                        {r.paymentDate || r.readingDate}
-                      </td>
-                      <td className="px-5 py-3 font-mono font-bold text-blue-700 border-r border-slate-100">
-                        {r.accountNumber}
-                      </td>
-                      <td className="px-5 py-3 font-bold text-slate-900 border-r border-slate-100">
-                        {r.consumerName}
-                      </td>
-                      <td className="px-5 py-3 font-bold text-slate-800 border-r border-slate-100">
-                        {r.paymentMethod || 'Cash'}
-                      </td>
-                      <td className="px-5 py-3 font-mono font-black text-emerald-700 text-right">
-                        ₱{totalBill.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
+        {recordsTab === 'payments' && (() => {
+          const paginatedPayments = filteredPayments.slice((currentPage - 1) * 10, currentPage * 10);
+          return (
+            <div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs text-left border-collapse">
+                  <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-800">
+                    <tr>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Official Receipt #</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Payment Date</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Account #</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Consumer Name</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Payment Instrument</th>
+                      <th className="px-5 py-3.5 text-right">Settled Amount</th>
                     </tr>
-                  );
-                })}
-                {filteredPayments.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
-                      <CreditCard className="h-6 w-6 mx-auto mb-2 text-slate-300" />
-                      No payment receipts found matching query.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
+                    {paginatedPayments.map((r, pIdx) => {
+                      const totalBill = r.paidAmount && r.paidAmount > 0 ? r.paidAmount : calculateCostOf(r.consumption, r.classification);
+                      return (
+                        <tr key={`rec-paid-${r.id || r.transactionId || pIdx}-${pIdx}`} className="hover:bg-slate-800/60 transition">
+                          <td className="px-5 py-3 font-mono font-bold text-emerald-400 border-r border-slate-800/80">
+                            {r.transactionId || `OR-${20260000 + pIdx}`}
+                          </td>
+                          <td className="px-5 py-3 text-slate-300 font-mono border-r border-slate-800/80">
+                            {r.paymentDate || r.readingDate}
+                          </td>
+                          <td className="px-5 py-3 font-mono font-bold text-sky-400 border-r border-slate-800/80">
+                            {r.accountNumber}
+                          </td>
+                          <td className="px-5 py-3 font-bold text-white border-r border-slate-800/80">
+                            {r.consumerName}
+                          </td>
+                          <td className="px-5 py-3 font-bold text-slate-300 border-r border-slate-800/80">
+                            {r.paymentMethod || 'Cash'}
+                          </td>
+                          <td className="px-5 py-3 font-mono font-black text-emerald-400 text-right">
+                            ₱{totalBill.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {filteredPayments.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
+                          <CreditCard className="h-6 w-6 mx-auto mb-2 text-slate-500" />
+                          No payment receipts found matching query.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <TablePagination
+                currentPage={currentPage}
+                totalItems={filteredPayments.length}
+                pageSize={10}
+                onPageChange={setCurrentPage}
+                itemName="payment receipts"
+              />
+            </div>
+          );
+        })()}
 
         {/* SUBTAB F: SECURITY AUDIT */}
-        {recordsTab === 'audit' && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-xs text-left border-collapse">
-              <thead className="bg-slate-50 text-slate-700 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-200">
-                <tr>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Audit Timestamp</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">User Operator</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Action Code</th>
-                  <th className="px-5 py-3.5 border-r border-slate-100">Operation Details</th>
-                  <th className="px-5 py-3.5 text-right">Host IP</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                {filteredAuditLogs.map((log, lIdx) => (
-                  <tr key={`rec-audit-${log.id || lIdx}-${lIdx}`} className="hover:bg-slate-50/80 transition">
-                    <td className="px-5 py-3 font-mono text-slate-600 text-[11px] border-r border-slate-100">
-                      {new Date(log.timestamp).toLocaleString()}
-                    </td>
-                    <td className="px-5 py-3 font-bold text-slate-900 border-r border-slate-100">
-                      {log.userName}
-                    </td>
-                    <td className="px-5 py-3 font-mono font-bold text-blue-700 border-r border-slate-100">
-                      {log.action}
-                    </td>
-                    <td className="px-5 py-3 text-slate-700 border-r border-slate-100">
-                      {log.details}
-                    </td>
-                    <td className="px-5 py-3 text-right font-mono text-slate-400 text-[11px]">
-                      {log.ipAddress}
-                    </td>
-                  </tr>
-                ))}
-                {filteredAuditLogs.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
-                      <ShieldCheck className="h-6 w-6 mx-auto mb-2 text-slate-300" />
-                      No security audit log entries match the query.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {recordsTab === 'audit' && (() => {
+          const paginatedAuditLogs = filteredAuditLogs.slice((currentPage - 1) * 10, currentPage * 10);
+          return (
+            <div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs text-left border-collapse">
+                  <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-800">
+                    <tr>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Audit Timestamp</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">User Operator</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Action Code</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Operation Details</th>
+                      <th className="px-5 py-3.5 text-right">Host IP</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
+                    {paginatedAuditLogs.map((log, lIdx) => (
+                      <tr key={`rec-audit-${log.id || lIdx}-${lIdx}`} className="hover:bg-slate-800/60 transition">
+                        <td className="px-5 py-3 font-mono text-slate-400 text-[11px] border-r border-slate-800/80">
+                          {new Date(log.timestamp).toLocaleString()}
+                        </td>
+                        <td className="px-5 py-3 font-bold text-white border-r border-slate-800/80">
+                          {log.userName}
+                        </td>
+                        <td className="px-5 py-3 font-mono font-bold text-sky-400 border-r border-slate-800/80">
+                          {log.action}
+                        </td>
+                        <td className="px-5 py-3 text-slate-300 border-r border-slate-800/80">
+                          {log.details}
+                        </td>
+                        <td className="px-5 py-3 text-right font-mono text-slate-400 text-[11px]">
+                          {log.ipAddress}
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredAuditLogs.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
+                          <ShieldCheck className="h-6 w-6 mx-auto mb-2 text-slate-500" />
+                          No security audit log entries match the query.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <TablePagination
+                currentPage={currentPage}
+                totalItems={filteredAuditLogs.length}
+                pageSize={10}
+                onPageChange={setCurrentPage}
+                itemName="audit log entries"
+              />
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

@@ -433,20 +433,20 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
             </div>
 
             {/* Meter Reading & Consumption Box */}
-            <div className="py-3 border-b-2 border-dashed border-slate-300">
+            <div className="py-3 border-b-2 border-dashed border-slate-700">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="text-slate-500 font-bold border-b border-slate-200">
+                  <tr className="text-slate-400 font-bold border-b border-slate-700">
                     <th className="text-left pb-1">Previous Reading (Prev. Rdg.)</th>
                     <th className="text-center pb-1">Present Reading (Pres. Rdg.)</th>
                     <th className="text-right pb-1">Usage (cu.m)</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="font-mono font-bold text-sm text-slate-900">
+                  <tr className="font-mono font-bold text-sm text-slate-200">
                     <td className="py-1.5 text-left">{breakdown.previousReading.toLocaleString()}</td>
                     <td className="py-1.5 text-center">{breakdown.presentReading.toLocaleString()}</td>
-                    <td className="py-1.5 text-right font-black text-blue-700">{breakdown.consumption} m³</td>
+                    <td className="py-1.5 text-right font-black text-sky-400">{breakdown.consumption} m³</td>
                   </tr>
                 </tbody>
               </table>

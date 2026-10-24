@@ -151,6 +151,34 @@
         "type": { "type": "string", "enum": ["bill", "announcement", "warning", "general"], "description": "Notification category" }
       },
       "required": ["id", "consumerId", "title", "message", "date", "read", "type"]
+    },
+    "ConsumerReport": {
+      "title": "ConsumerReport",
+      "description": "Consumer service reports, issues, water leaks, billing complaints, and admin replies",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Report identifier" },
+        "ticketNumber": { "type": "string", "description": "Official tracking ticket code" },
+        "accountNumber": { "type": "string", "description": "Consumer account number" },
+        "consumerName": { "type": "string", "description": "Consumer name" },
+        "consumerEmail": { "type": "string", "description": "Contact email" },
+        "consumerPhone": { "type": "string", "description": "Contact phone" },
+        "barangay": { "type": "string", "description": "Barangay name" },
+        "address": { "type": "string", "description": "Location details" },
+        "meterNumber": { "type": "string", "description": "Meter serial number" },
+        "category": { "type": "string", "enum": ["leak", "low_pressure", "water_quality", "billing", "meter_issue", "illegal_connection", "other"], "description": "Report category" },
+        "title": { "type": "string", "description": "Report title / summary" },
+        "description": { "type": "string", "description": "Detailed explanation of concern" },
+        "urgency": { "type": "string", "enum": ["normal", "urgent", "emergency"], "description": "Severity level" },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "resolved", "closed"], "description": "Processing status" },
+        "createdAt": { "type": "string", "description": "ISO creation timestamp" },
+        "updatedAt": { "type": "string", "description": "ISO last update timestamp" },
+        "resolvedAt": { "type": "string", "description": "ISO resolution timestamp" },
+        "assignedStaff": { "type": "string", "description": "Assigned technician or crew" },
+        "photoUrl": { "type": "string", "description": "Optional photo proof" },
+        "replies": { "type": "array", "description": "Conversation thread between consumer and admin" }
+      },
+      "required": ["id", "ticketNumber", "accountNumber", "consumerName", "category", "title", "description", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -185,6 +213,10 @@
     "/notifications/{notificationId}": {
       "schema": "ConsumerNotification",
       "description": "Direct consumer alerts and billing reminders"
+    },
+    "/consumer_reports/{reportId}": {
+      "schema": "ConsumerReport",
+      "description": "Consumer service complaints, water incident reports, and district replies"
     }
   }
 }

@@ -269,12 +269,14 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         `Submitted application for water connection in Barangay ${matchedBarangay.name}, ${sitioZone.trim()}. Status: PENDING ADMIN ISSUANCE. Classification: ${consumerType}. Awaiting administrator account and meter tag assignment.`
       );
 
-      // Add Welcome Notification
+      // Add Welcome Notification strictly for this registered consumer account
       mockDb.addNotification({
-        accountNumber: '',
+        accountNumber: 'PENDING',
+        userId: newUserId,
+        consumerEmail: email.trim().toLowerCase(),
         title: `Registration Application Submitted`,
         message: `Your registration application for Barangay ${matchedBarangay.name}, ${sitioZone.trim()} has been submitted. The administration office will review and issue your official Account Number and Meter Tag shortly.`,
-        type: 'announcement'
+        type: 'account_issue'
       });
 
       setRegisteredSummary({

@@ -25,10 +25,13 @@ import {
   SlidersHorizontal,
   Route,
   UserCheck,
+  CheckCheck,
   Building,
   AlertTriangle,
   ExternalLink,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   UserPlus,
   MapPin,
   Camera,
@@ -64,10 +67,12 @@ import {
   Home,
   AlertOctagon,
   Zap,
-  Sparkles
+  Sparkles,
+  MessageSquare,
+  Smartphone
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
-import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog } from '../types';
+import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerReport } from '../types';
 import { 
   scanAndUpdateAccounts, 
   getScannerStatus, 
@@ -79,7 +84,8 @@ import DataLoadingIndicator from './common/DataLoadingIndicator';
 import AdminAnalyticsSection from './charts/AdminAnalyticsSection';
 import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
-import { OfficialReportsGenerator, RecordsArchiveView, GracePeriodScannerCard, TariffRateManager } from './admin';
+import { OfficialReportsGenerator, RecordsArchiveView, GracePeriodScannerCard, TariffRateManager, ConsumerReportsManager } from './admin';
+import { TablePagination } from './common/TablePagination';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
 import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
@@ -111,11 +117,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     return calculateWaterTariff(usage, classification === 'Commercial' ? 'Commercial' : 'Residential');
   };
 
-  // Navigation Module Selected - All 14 Admin Portal Modules
+  // Navigation Module Selected - All 15 Admin Portal Modules
   const [activeTab, setActiveTab] = useState<
     | 'dashboard'
     | 'records'
     | 'consumers'
+    | 'reports'
     | 'approvals'
     | 'bills'
     | 'payments'
@@ -128,6 +135,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     | 'profile'
   >('dashboard');
 
+  // Announcements Module Sub-Tab Switcher: 'bulletin' (Public Advisories) vs 'customer_service' (Customer Inquiries)
+  const [announcementsSubTab, setAnnouncementsSubTab] = useState<'bulletin' | 'customer_service'>('bulletin');
+
   // Loading and Sync states
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -136,6 +146,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   // Tab switching handler with data loading transition
   const handleTabChange = (tab: typeof activeTab) => {
+    if (tab === 'reports') {
+      setIsTabLoading(true);
+      setActiveTab('announcements');
+      setAnnouncementsSubTab('customer_service');
+      if (isMobileSidebarOpen) setIsMobileSidebarOpen(false);
+      setTimeout(() => {
+        setIsTabLoading(false);
+      }, 220);
+      return;
+    }
     if (tab === activeTab) return;
     setIsTabLoading(true);
     setActiveTab(tab);
@@ -151,6 +171,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       case 'dashboard': return { title: 'Compiling Operational Dashboard Analytics...', subtitle: 'Calculating real-time water production, billing aggregates, and field metrics' };
       case 'records': return { title: 'Querying Municipal Archive Records...', subtitle: 'Fetching unified data ledger across consumers, meters, readings, and payments' };
       case 'consumers': return { title: 'Fetching Consumer Accounts Registry...', subtitle: 'Loading active water service accounts, meter bindings, and arrears ledgers' };
+      case 'reports': return { title: 'Loading Customer Service & Inquiries Dispatch...', subtitle: 'Synchronizing water leak reports, customer service inquiries, and reply threads' };
       case 'approvals': return { title: 'Fetching Reading Approvals Queue...', subtitle: 'Querying telemetry photos, GPS tags, and anomaly flags for validation' };
       case 'bills': return { title: 'Loading Invoicing & Billing Master Ledger...', subtitle: 'Computing tiered block consumption tariffs and overdue statements' };
       case 'payments': return { title: 'Initializing Cashier & Payment Gateway...', subtitle: 'Connecting to Tagoloan revenue counter and official receipt registers' };
@@ -188,6 +209,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [routes, setRoutes] = useState<RouteAssignment[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [reports, setReports] = useState<ConsumerReport[]>([]);
 
   // Filtering & Search states for Consumer Database
   const [consumerSearch, setConsumerSearch] = useState('');
@@ -202,12 +224,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [isManualScanning, setIsManualScanning] = useState(false);
 
   // Meter Reader Filter & Search States
-  const [readerFilter, setReaderFilter] = useState<'all' | 'active' | 'pending_approval' | 'inactive'>('all');
+  const [readerFilter, setReaderFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [readerSearch, setReaderSearch] = useState('');
   
   // Modals / Add Form States
   const [showAddMeter, setShowAddMeter] = useState(false);
-  const [showAddReader, setShowAddReader] = useState(false);
   const [showAddAnnouncement, setShowAddAnnouncement] = useState(false);
 
   // Field Data Inspection States
@@ -216,15 +237,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [selectedNoticeReading, setSelectedNoticeReading] = useState<MeterReading | null>(null);
   const [selectedNoticeConsumer, setSelectedNoticeConsumer] = useState<Consumer | null>(null);
 
-  // Clerk Manual Intake States
-  const [showManualReadingForm, setShowManualReadingForm] = useState(false);
-  const [manualAccount, setManualAccount] = useState('');
-  const [manualCurrentReading, setManualCurrentReading] = useState('');
-  const [manualGps, setManualGps] = useState('');
-  const [manualBillingPeriod, setManualBillingPeriod] = useState(
-    new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-  );
-  const [manualNotes, setManualNotes] = useState('');
 
   const [newMeter, setNewMeter] = useState({
     meterNumber: 'MT-' + Math.floor(1000 + Math.random() * 9000),
@@ -234,13 +246,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     linkedAccountNumber: ''
   });
 
-  const [newReader, setNewReader] = useState({
-    name: '',
-    username: '',
-    password: '',
-    assignedRoute: 'Zone 1-4: Poblacion (Main Central)'
-  });
-  const [showNewReaderPassword, setShowNewReaderPassword] = useState(false);
   const [revealedPasswords, setRevealedPasswords] = useState<{ [readerId: string]: boolean }>({});
 
   const [newAnnouncement, setNewAnnouncement] = useState({
@@ -260,6 +265,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [approvalsSubTab, setApprovalsSubTab] = useState<'pending' | 'history'>('pending');
   const [approvalHistorySearch, setApprovalHistorySearch] = useState('');
   const [pendingApprovalSearch, setPendingApprovalSearch] = useState('');
+  const [selectedPendingReaderFilter, setSelectedPendingReaderFilter] = useState('all');
+  const [collapsedReaderGroups, setCollapsedReaderGroups] = useState<Record<string, boolean>>({});
   const [correctingReadingId, setCorrectingReadingId] = useState<string | null>(null);
   const [correctionValue, setCorrectionValue] = useState<number>(0);
   const [rejectingReadingId, setRejectingReadingId] = useState<string | null>(null);
@@ -293,6 +300,35 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   // 5. Bills Module Search & Filter
   const [billSearch, setBillSearch] = useState('');
   const [billStatusFilter, setBillStatusFilter] = useState<'all' | 'unpaid' | 'paid' | 'overdue' | 'cancelled'>('all');
+
+  // Table Pagination States (Displays 10 records per page with next/prev page navigation)
+  const [consumerPage, setConsumerPage] = useState(1);
+  const [approvalHistoryPage, setApprovalHistoryPage] = useState(1);
+  const [meterPage, setMeterPage] = useState(1);
+  const [readingsPage, setReadingsPage] = useState(1);
+  const [billPage, setBillPage] = useState(1);
+  const [staffPage, setStaffPage] = useState(1);
+  const [barangayConsumersPage, setBarangayConsumersPage] = useState(1);
+
+  useEffect(() => {
+    setConsumerPage(1);
+  }, [consumerSearch, consumerStatusFilter, consumerTypeFilter, consumerBarangayFilter, consumerSortBy]);
+
+  useEffect(() => {
+    setApprovalHistoryPage(1);
+  }, [approvalHistorySearch]);
+
+  useEffect(() => {
+    setMeterPage(1);
+  }, [meterSearch, meterStatusFilter]);
+
+  useEffect(() => {
+    setReadingsPage(1);
+  }, [readingsSearch, readingsStatusFilter]);
+
+  useEffect(() => {
+    setBillPage(1);
+  }, [billSearch, billStatusFilter]);
 
   // 6. Process Payment Counter State
   const [paymentSearch, setPaymentSearch] = useState('');
@@ -353,8 +389,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       { id: 'ST-001', name: 'Admin', email: 'admin@tagoloanwater.gov.ph', role: 'Administrator', department: 'Executive', status: 'active' }
     ];
   });
-  const [showAddStaff, setShowAddStaff] = useState(false);
-  const [newStaff, setNewStaff] = useState({ name: '', email: '', role: 'Cashier', department: 'Finance' });
   const [editingStaffModal, setEditingStaffModal] = useState<{ id: string; name: string; email: string; role: string; department: string; status: string } | null>(null);
 
   // 11. Barangays Module State
@@ -362,11 +396,61 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [showAddBarangay, setShowAddBarangay] = useState(false);
   const [newBarangay, setNewBarangay] = useState({ name: '', code: '', schedule: '', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 });
   const [editingBarangayModal, setEditingBarangayModal] = useState<Barangay | null>(null);
+  const [selectedBarangayForDetail, setSelectedBarangayForDetail] = useState<Barangay | null>(null);
+  const [expandedBarangayConsumerId, setExpandedBarangayConsumerId] = useState<string | null>(null);
+  const [isSyncingBarangays, setIsSyncingBarangays] = useState(false);
+  const [barangaySearchQuery, setBarangaySearchQuery] = useState('');
+  const [barangayZoneFilter, setBarangayZoneFilter] = useState('all');
+  const [barangayStatusFilter, setBarangayStatusFilter] = useState('all');
+  const [barangayCategoryFilter, setBarangayCategoryFilter] = useState('all');
+
+  useEffect(() => {
+    setBarangayConsumersPage(1);
+    setExpandedBarangayConsumerId(null);
+  }, [barangaySearchQuery, barangayZoneFilter, barangayStatusFilter, barangayCategoryFilter, selectedBarangayForDetail]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && selectedBarangayForDetail && !selectedConsumerModal && !editingBarangayModal) {
+        setSelectedBarangayForDetail(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedBarangayForDetail, selectedConsumerModal, editingBarangayModal]);
 
   // Additional Edit Modal States
   const [editingMeterModal, setEditingMeterModal] = useState<WaterMeter | null>(null);
   const [editingAnnouncementModal, setEditingAnnouncementModal] = useState<Announcement | null>(null);
   const [editingReaderModal, setEditingReaderModal] = useState<MeterReader | null>(null);
+
+  // In-App Confirm Dialog State (Sandboxed iFrame Safe)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    confirmVariant?: 'danger' | 'primary' | 'success';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmLabel: 'Confirm',
+    confirmVariant: 'danger',
+    onConfirm: () => {}
+  });
+
+  // In-App Bill Cancellation Modal State (Sandboxed iFrame Safe)
+  const [cancelBillModal, setCancelBillModal] = useState<{
+    isOpen: boolean;
+    bill: any | null;
+    reason: string;
+  }>({
+    isOpen: false,
+    bill: null,
+    reason: ''
+  });
 
   // 13. Profile Admin State
   const [adminProfile, setAdminProfile] = useState({
@@ -454,6 +538,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     setAnnouncements(mockDb.getAnnouncements());
     setAuditLogs(mockDb.getAuditLogs());
     setBarangayList(mockDb.getBarangays());
+    setReports(mockDb.getReports());
     const syncD = new Date();
     setLastSyncTime(
       syncD.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' +
@@ -474,27 +559,44 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           let hasChanges = false;
 
           apiReaders.forEach((ar: any) => {
-            const exists = currentLocal.find(lr => 
-              (ar.id && lr.id && lr.id.toLowerCase() === ar.id.toLowerCase()) || 
-              (ar.id && lr.employeeId && lr.employeeId.toLowerCase() === ar.id.toLowerCase()) || 
-              (ar.employeeId && lr.employeeId && lr.employeeId.toLowerCase() === ar.employeeId.toLowerCase()) ||
-              (lr.email && ar.username && lr.email.toLowerCase() === ar.username.toLowerCase()) ||
-              (lr.email && ar.email && lr.email.toLowerCase() === ar.email.toLowerCase())
-            );
+            const arUser = (ar.username || '').trim().toLowerCase();
+            const arName = (ar.name || '').trim().toLowerCase();
+            const arId = (ar.id || '').trim().toLowerCase();
+            const arEmp = (ar.employeeId || '').trim().toLowerCase();
+            const arEmail = (ar.email || '').trim().toLowerCase();
+
+            const exists = currentLocal.find(lr => {
+              const lrUser = (lr.username || '').trim().toLowerCase();
+              const lrName = (lr.name || '').trim().toLowerCase();
+              const lrId = (lr.id || '').trim().toLowerCase();
+              const lrEmp = (lr.employeeId || '').trim().toLowerCase();
+              const lrEmail = (lr.email || '').trim().toLowerCase();
+              return (
+                (arId && lrId && lrId === arId) ||
+                (arId && lrEmp && lrEmp === arId) ||
+                (arEmp && lrEmp && lrEmp === arEmp) ||
+                (arEmp && lrId && lrId === arEmp) ||
+                (arUser && lrUser && lrUser === arUser) ||
+                (arName && lrName && lrName === arName) ||
+                (arEmail && lrEmail && lrEmail === arEmail)
+              );
+            });
             const rawStatus = (ar.employmentStatus || ar.status || 'active').toLowerCase();
-            const normalizedStatus: 'active' | 'inactive' | 'pending_approval' = 
-              rawStatus === 'inactive' ? 'inactive' :
-              (rawStatus === 'pending_approval' || rawStatus === 'pending') ? 'pending_approval' : 'active';
+            const normalizedStatus: 'active' | 'inactive' = 
+              rawStatus === 'inactive' ? 'inactive' : 'active';
 
             if (!exists) {
               // Add new mobile registrant to local store
               const newReaderObj: MeterReader = {
-                id: ar.id,
+                id: ar.id || `reader-${Date.now()}`,
                 name: ar.name,
-                email: ar.username || ar.email || `${ar.id.toLowerCase()}@tagoloanwater.gov.ph`,
-                employeeId: ar.id,
+                username: ar.username || ar.name.toLowerCase().replace(/\s+/g, '_'),
+                email: ar.email || `${(ar.username || ar.name).toLowerCase().replace(/\s+/g, '_')}@tagoloanwater.gov.ph`,
+                employeeId: ar.employeeId || ar.id,
                 contactNumber: ar.contactNumber || 'N/A',
-                assignedRoutes: (ar.assignedRoutes && ar.assignedRoutes.length > 0) ? ar.assignedRoutes : [ar.zone || 'Poblacion'],
+                assignedRoutes: (ar.assignedRoutes && ar.assignedRoutes.length > 0) ? ar.assignedRoutes : [ar.zone || 'Zone 1-4: Poblacion (Main Central)'],
+                targetRoute: (ar.assignedRoutes && ar.assignedRoutes.length > 0) ? ar.assignedRoutes[0] : (ar.zone || 'Zone 1-4: Poblacion (Main Central)'),
+                zone: ar.zone || 'Zone 1-4: Poblacion (Main Central)',
                 employmentStatus: normalizedStatus,
                 completedReadings: 0,
                 pendingReadings: 0,
@@ -514,22 +616,36 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             }
           });
 
-          if (hasChanges) {
-            // Deduplicate currentLocal
-            const seen = new Set<string>();
-            const uniqueReaders: MeterReader[] = [];
-            currentLocal.forEach(r => {
-              const k = (r.id || r.employeeId || r.email || '').trim().toLowerCase();
-              if (k && !seen.has(k)) {
-                seen.add(k);
-                if (r.id) seen.add(r.id.trim().toLowerCase());
-                if (r.employeeId) seen.add(r.employeeId.trim().toLowerCase());
-                uniqueReaders.push(r);
-              }
-            });
-            mockDb.saveReaders(uniqueReaders);
-            setReaders(uniqueReaders);
-          }
+          // Multi-identifier deduplication ensures strictly 1 card per reader
+          const seen = new Set<string>();
+          const uniqueReaders: MeterReader[] = [];
+          currentLocal.forEach(r => {
+            const kId = (r.id || '').trim().toLowerCase();
+            const kEmp = (r.employeeId || '').trim().toLowerCase();
+            const kUser = (r.username || '').trim().toLowerCase();
+            const kName = (r.name || '').trim().toLowerCase();
+            const kEmail = (r.email || '').trim().toLowerCase();
+
+            if (
+              (kId && seen.has(kId)) ||
+              (kEmp && seen.has(kEmp)) ||
+              (kUser && seen.has(kUser)) ||
+              (kName && seen.has(kName)) ||
+              (kEmail && seen.has(kEmail))
+            ) {
+              return;
+            }
+
+            if (kId) seen.add(kId);
+            if (kEmp) seen.add(kEmp);
+            if (kUser) seen.add(kUser);
+            if (kName) seen.add(kName);
+            if (kEmail) seen.add(kEmail);
+            uniqueReaders.push(r);
+          });
+
+          mockDb.saveReaders(uniqueReaders);
+          setReaders(uniqueReaders);
         }
       })
       .catch(() => {
@@ -537,7 +653,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       });
 
     // 3. Fetch from Backend / Serverless API for any Consumer Registrations from Mobile or Other Devices
-    fetch('/api/consumers')
+    fetch('/api/consumers?includePending=true', {
+      headers: { 'x-portal': 'admin', 'x-role': 'admin' }
+    })
       .then(res => res.json())
       .then(data => {
         if (data && (data.consumers || data.data)) {
@@ -609,6 +727,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       .catch(() => {
         // Fallback gracefully if running purely client-side
       });
+
+    // 4. Fetch Reports from Backend API
+    fetch('/api/reports')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.reports && Array.isArray(data.reports)) {
+          setReports(data.reports);
+          mockDb.saveReports(data.reports);
+        }
+      })
+      .catch(() => {
+        // Fallback to mockDb
+      });
   };
 
   useEffect(() => {
@@ -628,10 +759,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     };
     window.addEventListener('storage', handleStorage);
 
-    // 3. Active real-time auto-polling every 2.5 seconds to catch live field mobile submissions
+    // 3. Adaptive real-time auto-polling to catch live field mobile submissions (backup to live WebSocket)
     const pollTimer = setInterval(() => {
-      loadAllDataFromStore(false);
-    }, 2500);
+      if (typeof document !== 'undefined' && !document.hidden) {
+        loadAllDataFromStore(false);
+      }
+    }, 10000);
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        loadAllDataFromStore(false);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     // 4. Live 1-second clock ticker for date and time
     const clockInterval = setInterval(() => {
@@ -643,7 +783,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // 5. Dedicated Live WebSocket Stream for instant push events
     const cleanupWs = initRealtimeSocket((data) => {
       if (data.type === 'READER_REGISTERED_ACTIVE' || data.type === 'READER_REGISTERED_PENDING' || data.type === 'staff:registered') {
-        toast.info('Meter Reader Enrolled', data.payload?.message || 'New field staff registered in Meter Readers module.');
+        toast.info('Meter Reader Registered', data.payload?.message || 'New field staff registered via mobile app.');
         loadAllDataFromStore(false);
       } else if (data.type === 'READER_TERMINATED' || data.type === 'staff:terminated') {
         loadAllDataFromStore(false);
@@ -657,6 +797,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         setScannerStatus(getScannerStatus());
       } else if (data.type === 'tariff:updated') {
         setActiveTariff(getActiveTariffConfig());
+        loadAllDataFromStore(false);
+      } else if (data.type === 'CONSUMER_REPORT_CREATED') {
+        toast.warning(
+          'New Consumer Concern Filed',
+          data.payload?.message || `${data.payload?.consumerName || 'A consumer'} submitted report #${data.payload?.reportId || ''}`
+        );
+        loadAllDataFromStore(false);
+      } else if (data.type === 'CONSUMER_REPORT_REPLY' || data.type === 'CONSUMER_REPORT_UPDATED') {
         loadAllDataFromStore(false);
       }
     });
@@ -680,6 +828,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       window.removeEventListener('twd_database_updated', handleDbUpdate);
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('twd_tariff_updated', handleTariffUpdated);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearInterval(pollTimer);
       clearInterval(clockInterval);
       cleanupWs();
@@ -788,18 +937,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   };
 
   // Action: Delete / Terminate Consumer Account (Full Erasure & Purge)
-  const handleDeleteConsumer = (c: Consumer) => {
-    const confirmDelete = window.confirm(
-      `Are you sure you want to permanently delete and erase consumer "${c.name}" (${c.accountNumber ? `Account #${c.accountNumber}` : 'Pending Application'})?\n\n` +
-      `⚠️ Full Account Termination:\n` +
-      `• Permanently removes consumer profile from database\n` +
-      `• Erases all consumer portal login credentials and user accounts\n` +
-      `• Unlinks and frees any assigned water meters\n` +
-      `• Purges record from active billing rolls\n\n` +
-      `Do you want to proceed with permanent erasure?`
-    );
-    if (!confirmDelete) return;
-
+  const executeDeleteConsumer = (c: Consumer) => {
     // Permanent erasure across mockDb, user accounts, meters, and firestore
     mockDb.deleteConsumer(c.accountNumber, c.email, c.linkedUserId, c.name);
 
@@ -830,6 +968,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
     window.dispatchEvent(new Event('twd_database_updated'));
     toast.error('Consumer Account Erased', `Consumer record for "${c.name}" has been permanently purged and erased.`);
+  };
+
+  const handleDeleteConsumer = (c: Consumer) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Permanent Account Termination',
+      message: `Are you sure you want to permanently delete and erase consumer "${c.name}" (${c.accountNumber ? `Account #${c.accountNumber}` : 'Pending Application'})?\n\nFull Account Termination:\n• Permanently removes consumer profile from database\n• Erases all consumer portal login credentials and user accounts\n• Unlinks and frees any assigned water meters\n• Purges record from active billing rolls`,
+      confirmLabel: 'Permanently Erase',
+      confirmVariant: 'danger',
+      onConfirm: () => executeDeleteConsumer(c)
+    });
   };
 
   // Action: Update Consumer Details (Edit Tab in Modal)
@@ -1075,10 +1224,29 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
       mockDb.addNotification({
         accountNumber: newAccNum,
+        consumerId: updated.id,
+        userId: updated.linkedUserId,
+        consumerEmail: updated.email,
         title: `Account Number Updated to #${newAccNum}`,
         message: `Your water service account identifier has been officially updated to #${newAccNum} by Tagoloan Water District Administration. Your physical Meter Tag (${preservedTag}) and Meter Serial (#${preservedMeterNum}) remain permanently assigned.`,
-        type: 'announcement'
+        type: 'account_issue'
       });
+
+      // Update past notifications to point to the new account number
+      mockDb.updateConsumerNotifications(
+        {
+          userId: updated.linkedUserId,
+          email: updated.email,
+          consumerId: updated.id,
+          oldAccountNumber: previousAccountNumber
+        },
+        {
+          accountNumber: newAccNum,
+          consumerId: updated.id,
+          userId: updated.linkedUserId,
+          consumerEmail: updated.email
+        }
+      );
 
       // 9. Dispatch instant UI sync events
       if (typeof window !== 'undefined') {
@@ -1277,13 +1445,32 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveReadings(updatedReadings);
     setReadings(updatedReadings);
 
-    // 5. Send Activation Announcement Notification to Consumer
+    // 5. Send Activation Notification strictly to this Consumer
     mockDb.addNotification({
       accountNumber: newAccNum,
+      consumerId: updated.id,
+      userId: updated.linkedUserId || selectedConsumerModal.linkedUserId,
+      consumerEmail: updated.email || selectedConsumerModal.email,
       title: `Official Account Number & Meter Issued!`,
       message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${newAccNum} and Meter Serial is #${newMeterNum}. Smart RFID Tag: ${updated.rfidTag}. Your full dashboard and telemetry are now active.`,
-      type: 'announcement'
+      type: 'account_issue'
     });
+
+    // 5b. Strictly update any prior unissued/pending notifications to associate with their newly issued account
+    mockDb.updateConsumerNotifications(
+      {
+        userId: updated.linkedUserId || selectedConsumerModal.linkedUserId,
+        email: updated.email || selectedConsumerModal.email,
+        consumerId: updated.id,
+        oldAccountNumber: previousAccountNumber || 'PENDING'
+      },
+      {
+        accountNumber: newAccNum,
+        consumerId: updated.id,
+        userId: updated.linkedUserId || selectedConsumerModal.linkedUserId,
+        consumerEmail: updated.email || selectedConsumerModal.email
+      }
+    );
 
     // 6. Direct Firestore sync to all possible doc IDs to overwrite stale pending docs
     if (selectedConsumerModal.linkedUserId) {
@@ -1398,7 +1585,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     );
     if (duplicateMeter || duplicateConsumer) {
       const owner = duplicateConsumer ? `assigned to consumer "${duplicateConsumer.name}"` : 'already in the water meters registry';
-      alert(`❌ Duplicate Meter Tag / Serial Detected: Meter #${meterNumTrimmed} is ${owner}. Every water meter tag is a strictly unique physical entity.`);
+      toast.error('Duplicate Meter Tag / Serial Detected', `Meter #${meterNumTrimmed} is ${owner}. Every water meter tag is a strictly unique physical entity.`);
       return;
     }
 
@@ -1434,107 +1621,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
   };
 
-  // Action: Add Meter Reader Employee
-  const handleCreateReader = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newReader.name.trim()) {
-      toast.warning('Full Name Required', 'Please provide the meter reader full name.');
-      return;
-    }
 
-    const sanitizedUsername = newReader.username.trim().toLowerCase() || newReader.name.toLowerCase().replace(/\s+/g, '_');
-    const assignedPass = newReader.password.trim() || '1234';
-    const generatedEmployeeId = `TWD-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
-
-    const created: MeterReader = {
-      id: `reader-${Date.now()}`,
-      name: newReader.name.trim(),
-      employeeId: generatedEmployeeId,
-      username: sanitizedUsername,
-      password: assignedPass,
-      pin: assignedPass,
-      contactNumber: '0917-123-4567',
-      employmentStatus: 'active',
-      assignedRoutes: [newReader.assignedRoute],
-      targetRoute: newReader.assignedRoute,
-      zone: newReader.assignedRoute,
-      completedReadings: 0,
-      pendingReadings: 0,
-      performanceRating: 5.0,
-      registrationDate: new Date().toISOString().split('T')[0]
-    };
-
-    const updated = [...readers, created];
-    mockDb.saveReaders(updated);
-    setReaders(updated);
-
-    // Sync user login account
-    const allUsers = mockDb.getUsers();
-    if (!allUsers.some(u => u.email === `${sanitizedUsername}@tagoloanwater.gov.ph` || u.id === created.id)) {
-      const newUserAccount: User = {
-        id: created.id,
-        name: created.name,
-        email: `${sanitizedUsername}@tagoloanwater.gov.ph`,
-        role: 'meter_reader',
-        employeeId: generatedEmployeeId,
-        status: 'active',
-        password: assignedPass,
-        registrationDate: new Date().toISOString().split('T')[0]
-      };
-      mockDb.saveUsers([...allUsers, newUserAccount]);
-    }
-
-    mockDb.addAuditLog(
-      currentUser.id,
-      currentUser.name,
-      'admin',
-      'Enroll Meter Reader',
-      `Enrolled field meter inspector "${created.name}" (User: @${created.username}) for route "${created.assignedRoutes.join(', ')}".`
-    );
-
-    // Sync to backend server
-    try {
-      apiClient.post('/api/readers', {
-        id: created.id,
-        name: created.name,
-        username: created.username,
-        password: created.password,
-        pin: created.pin,
-        role: 'meter_reader',
-        zone: created.zone,
-        contactNumber: created.contactNumber,
-        employmentStatus: 'active',
-        assignedRoutes: created.assignedRoutes
-      }).catch(() => {});
-      sendRealtimeMessage('staff:registered', {
-        reader: created,
-        id: created.id,
-        employeeId: created.id,
-        username: created.username,
-        name: created.name,
-        status: 'active',
-        employmentStatus: 'active'
-      });
-    } catch {}
-
-    setNewReader({
-      name: '',
-      username: '',
-      password: '',
-      assignedRoute: 'Zone 1-4: Poblacion (Main Central)'
-    });
-    setShowAddReader(false);
-    window.dispatchEvent(new Event('twd_database_updated'));
-    toast.success('Officer Enrolled', `${created.name} registered and activated successfully.`);
-  };
 
   // Action: Terminate Meter Reader Account
-  const handleTerminateReader = async (reader: MeterReader) => {
-    const confirmTerminate = window.confirm(
-      `⚠️ Terminate Account: Are you sure you want to permanently terminate the meter reader account for "${reader.name}"?\n\nThis will immediately and fully erase all mobile terminal credentials, revoke login access, and remove their inspector profile.`
-    );
-    if (!confirmTerminate) return;
-
+  const executeTerminateReader = async (reader: MeterReader) => {
     // Permanently erase across all keys, users, readers, route assignments, and Firestore
     mockDb.deleteReader(reader.id, reader.employeeId, reader.email, reader.username, reader.name);
     
@@ -1577,6 +1667,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     toast.error('Account Terminated', `${reader.name}'s meter reader account has been permanently erased.`);
   };
 
+  const handleTerminateReader = (reader: MeterReader) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Terminate Meter Reader Account',
+      message: `Are you sure you want to permanently terminate the meter reader account for "${reader.name}"?\n\nThis will immediately and fully erase all mobile terminal credentials, revoke login access, and remove their inspector profile.`,
+      confirmLabel: 'Terminate Reader',
+      confirmVariant: 'danger',
+      onConfirm: () => executeTerminateReader(reader)
+    });
+  };
+
 
   // Action: Create Broadcast Announcement
   const handleCreateAnnouncement = (e: React.FormEvent) => {
@@ -1614,13 +1715,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   };
 
   // Action: Delete Water Meter
-  const handleDeleteMeter = (m: WaterMeter) => {
-    const confirmDelete = window.confirm(
-      `Are you sure you want to delete and decommission water meter #${m.meterNumber} (${m.brand})?\n\n` +
-      `If this meter is currently assigned to a consumer, the meter link will be automatically unlinked.`
-    );
-    if (!confirmDelete) return;
-
+  const executeDeleteMeter = (m: WaterMeter) => {
     mockDb.deleteMeter(m.meterNumber);
     setMeters(prev => prev.filter(item => item.meterNumber !== m.meterNumber));
     mockDb.addAuditLog(
@@ -1633,6 +1728,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
     window.dispatchEvent(new Event('twd_database_updated'));
     toast.error('Meter Deleted', `Water meter #${m.meterNumber} has been removed from inventory.`);
+  };
+
+  const handleDeleteMeter = (m: WaterMeter) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Decommission Water Meter',
+      message: `Are you sure you want to delete and decommission water meter #${m.meterNumber} (${m.brand})?\n\nIf this meter is currently assigned to a consumer, the meter link will be automatically unlinked.`,
+      confirmLabel: 'Decommission Meter',
+      confirmVariant: 'danger',
+      onConfirm: () => executeDeleteMeter(m)
+    });
   };
 
   // Action: Update Water Meter
@@ -1659,13 +1765,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   };
 
   // Action: Delete / Terminate Staff Account
-  const handleDeleteStaff = (st: { id: string; name: string; email: string; role: string; department: string; status: string }) => {
-    const confirmDelete = window.confirm(
-      `⚠️ Terminate Staff Account: Are you sure you want to permanently erase and terminate staff member "${st.name}" (${st.email})?\n\n` +
-      `This will completely erase their system credentials, revoke all administrative access, and remove their profile.`
-    );
-    if (!confirmDelete) return;
-
+  const executeDeleteStaff = (st: { id: string; name: string; email: string; role: string; department: string; status: string }) => {
     mockDb.deleteUser(st.id, st.email, undefined, st.name);
     setStaffList(prev => prev.filter(item => item.id !== st.id && item.email !== st.email));
     
@@ -1679,6 +1779,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
     window.dispatchEvent(new Event('twd_database_updated'));
     toast.error('Staff Account Terminated', `Staff account for "${st.name}" has been permanently purged.`);
+  };
+
+  const handleDeleteStaff = (st: { id: string; name: string; email: string; role: string; department: string; status: string }) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Terminate Staff Account',
+      message: `Are you sure you want to permanently erase and terminate staff member "${st.name}" (${st.email})?\n\nThis will completely erase their system credentials, revoke all administrative access, and remove their profile.`,
+      confirmLabel: 'Terminate Staff',
+      confirmVariant: 'danger',
+      onConfirm: () => executeDeleteStaff(st)
+    });
   };
 
   // Action: Update Staff Member
@@ -1718,13 +1829,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   };
 
   // Action: Delete Barangay Zone
-  const handleDeleteBarangay = (bg: Barangay) => {
-    const confirmDelete = window.confirm(
-      `Are you sure you want to delete Barangay service zone "${bg.name}" (${bg.code})?\n\n` +
-      `This will remove the zone definition from the municipal district registry.`
-    );
-    if (!confirmDelete) return;
-
+  const executeDeleteBarangay = (bg: Barangay) => {
     mockDb.deleteBarangay(bg.id);
     setBarangayList(prev => prev.filter(item => item.id !== bg.id));
     mockDb.addAuditLog(
@@ -1737,6 +1842,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
     window.dispatchEvent(new Event('twd_database_updated'));
     toast.error('Zone Removed', `Barangay ${bg.name} has been removed.`);
+  };
+
+  const handleDeleteBarangay = (bg: Barangay) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Service Zone',
+      message: `Are you sure you want to delete Barangay service zone "${bg.name}" (${bg.code})?\n\nThis will remove the zone definition from the municipal district registry.`,
+      confirmLabel: 'Delete Zone',
+      confirmVariant: 'danger',
+      onConfirm: () => executeDeleteBarangay(bg)
+    });
   };
 
   // Action: Update Barangay Zone
@@ -1762,13 +1878,156 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     toast.success('Zone Updated', `Barangay ${editingBarangayModal.name} updated successfully.`);
   };
 
-  // Action: Delete Announcement
-  const handleDeleteAnnouncement = (ann: Announcement) => {
-    const confirmDelete = window.confirm(
-      `Are you sure you want to delete announcement "${ann.title}"?`
-    );
-    if (!confirmDelete) return;
+  // Action: Synchronize All Consumers to their Assigned Barangay & Zone
+  const handleSyncConsumersAndBarangays = () => {
+    setIsSyncingBarangays(true);
+    try {
+      let syncCount = 0;
+      const updated = consumers.map(c => {
+        let changed = false;
+        let bName = c.barangay ? c.barangay.trim() : '';
+        let bId = c.barangayId ? c.barangayId.trim() : '';
+        let sZone = c.sitioZone ? c.sitioZone.trim() : '';
 
+        // Match against known barangays
+        const bLower = (bName + ' ' + (c.address || '')).toLowerCase();
+        let matchedBg = barangayList.find(b => b.id.toLowerCase() === bId.toLowerCase());
+
+        if (!matchedBg) {
+          if (bLower.includes('natumolan') || bLower.includes('natumulan')) {
+            matchedBg = barangayList.find(b => b.name === 'Natumolan');
+          } else if (bLower.includes('baluarte')) {
+            matchedBg = barangayList.find(b => b.name === 'Baluarte');
+          } else if ((bLower.includes('sta') && bLower.includes('ana')) || bLower.includes('santa ana')) {
+            matchedBg = barangayList.find(b => b.name === 'Sta. Ana');
+          } else if ((bLower.includes('sta') && bLower.includes('cruz')) || bLower.includes('santa cruz')) {
+            matchedBg = barangayList.find(b => b.name === 'Sta. Cruz');
+          } else if (bLower.includes('mohon')) {
+            matchedBg = barangayList.find(b => b.name === 'Mohon');
+          } else if (bLower.includes('gracia')) {
+            matchedBg = barangayList.find(b => b.name === 'Gracia');
+          } else if (bLower.includes('casinglot')) {
+            matchedBg = barangayList.find(b => b.name === 'Casinglot');
+          } else if (bLower.includes('sugbongcogon') || bLower.includes('subongcogon')) {
+            matchedBg = barangayList.find(b => b.name === 'Sugbongcogon');
+          } else {
+            matchedBg = barangayList.find(b => b.name === 'Poblacion') || barangayList[0];
+          }
+        }
+
+        if (matchedBg) {
+          if (c.barangay !== matchedBg.name) {
+            bName = matchedBg.name;
+            changed = true;
+          }
+          if (c.barangayId !== matchedBg.id) {
+            bId = matchedBg.id;
+            changed = true;
+          }
+          if (!sZone) {
+            if (matchedBg.code === 'PB-01') sZone = 'Zone 1';
+            else if (matchedBg.code === 'NT-02') sZone = 'Zone 5';
+            else if (matchedBg.code === 'BL-03') sZone = 'Zone 9';
+            else if (matchedBg.code === 'SA-04') sZone = 'Zone 13';
+            else if (matchedBg.code === 'SC-05') sZone = 'Zone 17';
+            else if (matchedBg.code === 'MH-06') sZone = 'Zone 11';
+            else if (matchedBg.code === 'GR-07') sZone = 'Zone 25';
+            else if (matchedBg.code === 'CS-08') sZone = 'Zone 21';
+            else if (matchedBg.code === 'SG-09') sZone = 'Zone 33';
+            else sZone = 'Central Zone';
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          syncCount++;
+          return {
+            ...c,
+            barangay: bName,
+            barangayId: bId,
+            sitioZone: sZone
+          };
+        }
+        return c;
+      });
+
+      if (syncCount > 0) {
+        mockDb.saveConsumers(updated);
+        setConsumers(updated);
+        mockDb.addAuditLog(
+          currentUser.id,
+          currentUser.name,
+          'admin',
+          'Sync Consumer Barangays & Zones',
+          `Synchronized ${syncCount} consumer records to official Barangay & Zone parameters.`
+        );
+        toast.success(
+          'Barangay & Zone Sync Complete',
+          `Successfully synchronized ${syncCount} consumer records to their designated municipal Barangays and Sitios.`
+        );
+      } else {
+        toast.info(
+          '100% Synchronized',
+          `All ${consumers.length} consumers are already synchronized with their municipal Barangay and Zone records.`
+        );
+      }
+    } catch (err: any) {
+      toast.error('Sync Error', 'Failed to synchronize consumer records.');
+    } finally {
+      setIsSyncingBarangays(false);
+    }
+  };
+
+  // Robust synchronization & mapping of consumers to their Barangay and Zone
+  const getConsumersForBarangay = (bg: Barangay) => {
+    const bgName = (bg.name || '').trim().toLowerCase();
+    const bgId = (bg.id || '').trim().toLowerCase();
+    const bgCode = (bg.code || '').trim().toLowerCase();
+
+    return consumers.filter(c => {
+      // 1. Direct Barangay ID match
+      if (c.barangayId && c.barangayId.trim().toLowerCase() === bgId) return true;
+
+      // 2. Exact or normalized barangay name match
+      const cBarangay = (c.barangay || '').trim().toLowerCase();
+      if (cBarangay) {
+        if (cBarangay === bgName) return true;
+        if (cBarangay.includes(bgName) || bgName.includes(cBarangay)) return true;
+        const cleanC = cBarangay.replace(/\./g, '').replace(/santa/g, 'sta');
+        const cleanBg = bgName.replace(/\./g, '').replace(/santa/g, 'sta');
+        if (cleanC === cleanBg) return true;
+      }
+
+      // 3. Address match
+      const cAddr = (c.address || '').trim().toLowerCase();
+      if (cAddr) {
+        if (cAddr.includes(bgName)) return true;
+        if (bgCode && cAddr.includes(bgCode)) return true;
+        const cleanAddr = cAddr.replace(/\./g, '').replace(/santa/g, 'sta');
+        const cleanBg = bgName.replace(/\./g, '').replace(/santa/g, 'sta');
+        if (cleanAddr.includes(cleanBg)) return true;
+      }
+
+      // 4. Fallback check for Poblacion if no other barangay matches
+      if (bg.code === 'PB-01') {
+        const matchesOther = barangayList.some(other => {
+          if (other.id === bg.id) return false;
+          const otherName = (other.name || '').trim().toLowerCase();
+          const otherCode = (other.code || '').trim().toLowerCase();
+          const cleanOther = otherName.replace(/\./g, '').replace(/santa/g, 'sta');
+          return (c.barangayId && c.barangayId.trim().toLowerCase() === other.id.trim().toLowerCase()) ||
+                 (cBarangay && (cBarangay === otherName || cBarangay.replace(/\./g, '').replace(/santa/g, 'sta') === cleanOther)) ||
+                 (cAddr && (cAddr.includes(otherName) || (otherCode && cAddr.includes(otherCode))));
+        });
+        if (!matchesOther) return true;
+      }
+
+      return false;
+    });
+  };
+
+  // Action: Delete Announcement
+  const executeDeleteAnnouncement = (ann: Announcement) => {
     mockDb.deleteAnnouncement(ann.id);
     setAnnouncements(prev => prev.filter(item => item.id !== ann.id));
     mockDb.addAuditLog(
@@ -1781,6 +2040,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
     window.dispatchEvent(new Event('twd_database_updated'));
     toast.error('Announcement Deleted', `Bulletin "${ann.title}" removed.`);
+  };
+
+  const handleDeleteAnnouncement = (ann: Announcement) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Public Bulletin',
+      message: `Are you sure you want to delete announcement "${ann.title}"?`,
+      confirmLabel: 'Delete Announcement',
+      confirmVariant: 'danger',
+      onConfirm: () => executeDeleteAnnouncement(ann)
+    });
   };
 
   // Action: Update Announcement
@@ -1807,13 +2077,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   };
 
   // Action: Delete / Void Meter Reading
-  const handleDeleteReading = (readingId: string) => {
-    const confirmDelete = window.confirm(
-      `Are you sure you want to void and delete meter reading transaction #${readingId}?\n\n` +
-      `This will remove the reading entry from the system registry.`
-    );
-    if (!confirmDelete) return;
-
+  const executeDeleteReading = (readingId: string) => {
     mockDb.deleteReading(readingId);
     setReadings(prev => prev.filter(r => r.id !== readingId));
     mockDb.addAuditLog(
@@ -1826,6 +2090,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
     window.dispatchEvent(new Event('twd_database_updated'));
     toast.error('Reading Deleted', `Reading #${readingId} has been deleted.`);
+  };
+
+  const handleDeleteReading = (readingId: string) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Void Meter Reading',
+      message: `Are you sure you want to void and delete meter reading transaction #${readingId}?\n\nThis will permanently remove the reading entry from the system registry.`,
+      confirmLabel: 'Void Reading',
+      confirmVariant: 'danger',
+      onConfirm: () => executeDeleteReading(readingId)
+    });
   };
 
   // Action: Quick Approve Meter Reader Officer
@@ -2051,8 +2326,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       mockDb.saveConsumers(updatedConsumers);
       setConsumers(updatedConsumers);
 
+      const matchedConsumer = consumers.find(c => c.accountNumber === vRead.accountNumber);
       mockDb.addNotification({
         accountNumber: vRead.accountNumber,
+        consumerId: matchedConsumer?.id,
+        userId: matchedConsumer?.linkedUserId,
+        consumerEmail: matchedConsumer?.email,
         title: `Water Bill Issued - ${vRead.billingPeriod || 'New Statement'}`,
         message: `Your water billing statement for ${vRead.billingPeriod} has been computed and issued with ${vRead.consumption} m³ total consumption (₱${billCost.toFixed(2)}). Due date: ${vRead.dueDate || '20th of Month'}. Settle online or in-office.`,
         type: 'billing',
@@ -2072,97 +2351,129 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
   };
 
-  // Action: Create Manual Reading from Office Clerk Intake Desk
-  const handleCreateManualReading = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!manualAccount || !manualCurrentReading) {
-      alert("Please select a consumer account and enter the current index displayed on the face of the meter!");
-      return;
-    }
 
-    const con = consumers.find(c => c.accountNumber === manualAccount);
-    if (!con) {
-      alert("Selected consumer account not found!");
-      return;
-    }
+  // Action: Approve Single Reading or Entire Reader Submission Batch
+  const handleApproveReadingBatch = (readingsToApprove: MeterReading[], readerNameLabel?: string) => {
+    if (!readingsToApprove || readingsToApprove.length === 0) return;
 
-    // Resolve Previous Reading: find latest entry for this account
-    const conReads = readings.filter(r => r.accountNumber === manualAccount);
-    let previousReading = 0;
-    if (conReads.length > 0) {
-      const sorted = [...conReads].sort((a, b) => new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime());
-      previousReading = sorted[0].currentReading;
-    }
+    const targetIds = new Set(readingsToApprove.map(r => r.id));
+    const readingBills = new Map<string, number>();
 
-    const currentVal = parseInt(manualCurrentReading, 10);
-    if (isNaN(currentVal) || currentVal < 0) {
-      alert("Please enter a valid whole number for current reading representing accumulated cubic meters (m³).");
-      return;
-    }
+    readingsToApprove.forEach(r => {
+      readingBills.set(r.id, calculateCostOf(r.consumption, r.classification));
+    });
 
-    // Rollover check
-    let resolvedConsumption = 0;
-    let isRollover = false;
-    if (currentVal >= previousReading) {
-      resolvedConsumption = currentVal - previousReading;
+    const updatedReadings = readings.map(r => {
+      if (targetIds.has(r.id)) {
+        const totalCalculatedBill = readingBills.get(r.id) ?? calculateCostOf(r.consumption, r.classification);
+        return {
+          ...r,
+          status: 'verified' as const,
+          paymentStatus: 'unpaid' as const,
+          remainingBalance: totalCalculatedBill,
+          billAmount: totalCalculatedBill,
+          totalAmount: totalCalculatedBill,
+          paidAmount: 0
+        };
+      }
+      return r;
+    });
+
+    mockDb.saveReadings(updatedReadings);
+    setReadings(updatedReadings);
+
+    // Direct Firestore sync
+    readingsToApprove.forEach(reading => {
+      const totalCalculatedBill = readingBills.get(reading.id) ?? calculateCostOf(reading.consumption, reading.classification);
+      syncDocToFirestore(COLLECTIONS.READINGS, reading.id, {
+        ...reading,
+        status: 'verified',
+        paymentStatus: 'unpaid',
+        remainingBalance: totalCalculatedBill,
+        billAmount: totalCalculatedBill,
+        totalAmount: totalCalculatedBill,
+        paidAmount: 0
+      });
+    });
+
+    // Recalculate consumer arrears for affected consumers
+    const affectedAccounts = new Set(readingsToApprove.map(r => (r.accountNumber || '').trim().toLowerCase()).filter(Boolean));
+    const affectedNames = new Set(readingsToApprove.map(r => (r.consumerName || '').trim().toLowerCase()).filter(Boolean));
+
+    const updatedConsumers = consumers.map(c => {
+      const cAcct = (c.accountNumber || '').trim().toLowerCase();
+      const cName = (c.name || '').trim().toLowerCase();
+
+      if (affectedAccounts.has(cAcct) || affectedNames.has(cName)) {
+        const consumerUnpaid = updatedReadings.filter(
+          r => ((r.accountNumber && r.accountNumber.trim().toLowerCase() === cAcct) ||
+                (r.consumerName && r.consumerName.trim().toLowerCase() === cName)) &&
+               r.status === 'verified' &&
+               r.paymentStatus !== 'paid'
+        );
+        const newArrears = consumerUnpaid.reduce((sum, r) => {
+          const gross = calculateCostOf(r.consumption, r.classification);
+          const paid = r.paidAmount || 0;
+          return sum + Math.max(0, gross - paid);
+        }, 0);
+        return { ...c, outstandingBalance: newArrears };
+      }
+      return c;
+    });
+
+    mockDb.saveConsumers(updatedConsumers);
+    setConsumers(updatedConsumers);
+
+    // Dispatch Smart Notifications
+    readingsToApprove.forEach(reading => {
+      const totalCalculatedBill = readingBills.get(reading.id) ?? calculateCostOf(reading.consumption, reading.classification);
+      const matchedConsumer = consumers.find(c => c.accountNumber === reading.accountNumber);
+      mockDb.addNotification({
+        accountNumber: reading.accountNumber,
+        consumerId: matchedConsumer?.id,
+        userId: matchedConsumer?.linkedUserId,
+        consumerEmail: matchedConsumer?.email,
+        title: `Water Bill Issued - ${reading.billingPeriod || 'New Statement'}`,
+        message: `Your water billing statement for ${reading.billingPeriod} has been verified and issued with ${reading.consumption} m³ total consumption (₱${totalCalculatedBill.toFixed(2)}). Due date: ${reading.dueDate || '20th of Month'}. Settle online or in-office.`,
+        type: 'billing',
+        readingId: reading.id,
+        billingPeriod: reading.billingPeriod,
+        remainingBalance: totalCalculatedBill
+      });
+    });
+
+    // Audit logs & Toast
+    if (readingsToApprove.length === 1) {
+      const reading = readingsToApprove[0];
+      const totalCalculatedBill = readingBills.get(reading.id) ?? calculateCostOf(reading.consumption, reading.classification);
+      mockDb.addAuditLog(
+        currentUser.id,
+        currentUser.name,
+        'admin',
+        'Approved Reading & Generated Bill',
+        `Approved reading #${reading.id} for ${reading.consumerName} (Account #${reading.accountNumber}, Reader: ${reading.meterReaderName}, Period: ${reading.billingPeriod}, ${reading.previousReading} → ${reading.currentReading} m³ = ${reading.consumption} m³). Auto-generated bill ₱${totalCalculatedBill.toFixed(2)} published to Consumer Portal.`
+      );
+      toast.success(
+        'Reading Approved & Bill Issued',
+        `Verified reading for ${reading.consumerName} (${reading.consumption} m³ by ${reading.meterReaderName || 'Field Reader'}). Monthly bill of ₱${totalCalculatedBill.toFixed(2)} for ${reading.billingPeriod} published.`,
+        5000
+      );
     } else {
-      isRollover = true;
-      const maxValue = previousReading > 99999 ? 999999 : 99999;
-      resolvedConsumption = (maxValue - previousReading) + currentVal;
+      const totalBatchBill = Array.from(readingBills.values()).reduce((sum, val) => sum + val, 0);
+      const totalBatchConsumption = readingsToApprove.reduce((sum, r) => sum + (r.consumption || 0), 0);
+      mockDb.addAuditLog(
+        currentUser.id,
+        currentUser.name,
+        'admin',
+        'Batch Approved Reader Readings',
+        `Batch approved ${readingsToApprove.length} field readings submitted by ${readerNameLabel || 'Meter Reader'} totaling ${totalBatchConsumption} m³ and ₱${totalBatchBill.toFixed(2)} in bills.`
+      );
+      toast.success(
+        'Batch Approved Successfully',
+        `Approved all ${readingsToApprove.length} readings submitted by ${readerNameLabel || 'Field Reader'} (${totalBatchConsumption} m³, Total: ₱${totalBatchBill.toFixed(2)}). All statements and notifications issued.`,
+        5000
+      );
     }
-
-    const isAbnormal = resolvedConsumption >= 50;
-
-    const currentTariff = getActiveTariffConfig();
-    const basicBill = calculateWaterTariff(resolvedConsumption, con.consumerType || 'Residential', currentTariff);
-    const franchiseTax = calculateFranchiseTax(basicBill, currentTariff);
-    const totalBill = Math.round((basicBill + franchiseTax) * 100) / 100;
-
-    const newRead: MeterReading = {
-      id: `manual-R-${manualAccount}-${Date.now().toString().slice(-4)}`,
-      meterNumber: con.meterNumber || 'MT-GEN',
-      accountNumber: manualAccount,
-      consumerName: con.name,
-      route: con.barangay || 'Poblacion',
-      previousReading,
-      currentReading: currentVal,
-      consumption: resolvedConsumption,
-      readingDate: new Date().toISOString().split('T')[0],
-      status: isAbnormal ? 'flagged_abnormal' : 'pending',
-      paymentStatus: 'unpaid',
-      billAmount: basicBill,
-      franchiseTax,
-      totalAmount: totalBill,
-      remainingBalance: totalBill,
-      paidAmount: 0,
-      meterReaderName: 'Office Manual Clerk Entry',
-      imageUrl: 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop',
-      notes: `${manualNotes || 'Manual office clerk entry.'}${isRollover ? ' (METER ROLLOVERS REGISTERED: SYSTEM AUTOMATICALLY COMPUTED TRANSITION)' : ''}`,
-      billingPeriod: manualBillingPeriod,
-      classification: con.consumerType || 'Residential',
-      gpsLocation: manualGps,
-      meterImageUrl: 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop'
-    };
-
-    const updated = [newRead, ...readings];
-    mockDb.saveReadings(updated);
-    setReadings(updated);
-
-    mockDb.addAuditLog(
-      currentUser.id,
-      currentUser.name,
-      'admin',
-      'Record Manual Reading',
-      `Manual entry recorded for account #${manualAccount} (Current: ${currentVal}, Previous: ${previousReading}, Consumption: ${resolvedConsumption} m³).`
-    );
-
-    // reset fields
-    setManualCurrentReading('');
-    setManualNotes('');
-    setShowManualReadingForm(false);
-    loadAllDataFromStore();
-
-    alert(`Index Entry Recorded Successfully!\n\nCurrent registered whole number: ${currentVal} m³.\nRetrieved Previous Reading: ${previousReading} m³.\nAutomatically calculated consumption: ${resolvedConsumption} m³${isRollover ? ' (Dynamic rollover calculations active!)' : ''}`);
   };
 
   // Filtered and sorted consumers list logic
@@ -2259,8 +2570,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const completedReadingsCount = readings.filter(r => r.status === 'verified').length;
   const pendingReadingsCount = readings.filter(r => r.status === 'pending').length;
   const flaggedAbnormalCount = readings.filter(r => r.status === 'flagged_abnormal').length;
-  const activeTechnicians = readers.filter(r => r.employmentStatus === 'active' || (!r.employmentStatus && (r as any).status !== 'inactive' && (r as any).status !== 'pending_approval')).length;
-  const pendingTechnicians = readers.filter(r => r.employmentStatus === 'pending_approval' || (r as any).status === 'pending_approval').length;
+  const pendingReportsCount = reports.filter(r => r.status === 'pending' || r.hasUnreadConsumerUpdate).length;
+  const activeTechnicians = readers.filter(r => r.employmentStatus !== 'inactive' && (r as any).status !== 'inactive').length;
   const routesCoveredCount = routes.filter(rt => rt.assignedReaderId || rt.assignedReaderName).length;
 
   const renderSidebarContent = (isMobile = false) => (
@@ -2449,16 +2760,23 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             <span>Barangays</span>
           </button>
 
-          {/* Announcements Module */}
+          {/* Announcements & Customer Service Module */}
           <button
             id="admin-nav-announcements"
             onClick={() => handleTabChange('announcements')}
-            className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'announcements' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
           >
-            <BookOpen className="h-4 w-4 shrink-0 text-yellow-400" />
-            <span>Announcements</span>
+            <div className="flex items-center space-x-3">
+              <BookOpen className="h-4 w-4 shrink-0 text-yellow-400" />
+              <span>Announcements & Customer Service</span>
+            </div>
+            {pendingReportsCount > 0 && (
+              <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full animate-pulse shadow-sm">
+                {pendingReportsCount}
+              </span>
+            )}
           </button>
 
           {/* Profile Module */}
@@ -2532,15 +2850,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 {activeTab === 'dashboard' && 'Operational Dashboard'}
                 {activeTab === 'records' && 'Records Central Archive (Read-Only)'}
                 {activeTab === 'consumers' && 'Consumers Account Management'}
+                {activeTab === 'reports' && 'Customer Service & Consumer Inquiries'}
                 {activeTab === 'approvals' && 'Reading Approvals & Auto-Billing Verification Queue'}
                 {activeTab === 'bills' && 'Bills & Invoicing Ledger Management'}
                 {activeTab === 'payments' && 'Process Payments & Cashier Receipt Counter'}
-                {activeTab === 'readings' && 'Meter Readings Intake & Field Telemetry'}
+                {activeTab === 'readings' && 'Meter Readings & Field Telemetry'}
                 {activeTab === 'meters' && 'Water Meters Master Inventory'}
                 {activeTab === 'readers' && 'Meter Readers Field Staff Registry'}
                 {activeTab === 'staff' && 'Admin User Staff & Permissions'}
                 {activeTab === 'barangays' && 'Barangays & Service Area Zones'}
-                {activeTab === 'announcements' && 'Public Advisories & Announcements'}
+                {activeTab === 'announcements' && (
+                  announcementsSubTab === 'customer_service'
+                    ? 'Customer Service & Consumer Inquiries'
+                    : 'Public Advisories & Bulletin Announcements'
+                )}
                 {activeTab === 'profile' && 'Administrator Profile & Settings'}
               </h2>
               <p className="text-[10px] sm:text-[11px] text-slate-500 truncate">Tagoloan Water District Municipal Digitalization Desk</p>
@@ -2609,87 +2932,117 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             <div className="space-y-8 animate-fade-in" id="dashboard-tab">
               
               {/* Statistical Value Banners - Connected directly to functional modules */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 
                 <button
                   type="button"
                   onClick={() => handleTabChange('consumers')}
-                  className="bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md rounded-2xl p-6 shadow-sm flex items-center justify-between text-left transition-all cursor-pointer group"
+                  className="bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md rounded-2xl p-5 shadow-sm flex items-center justify-between text-left transition-all cursor-pointer group"
                   title="View Consumers Directory"
                 >
-                  <div className="flex items-center space-x-4 min-w-0">
-                    <div className="h-12 w-12 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center font-bold shrink-0 group-hover:scale-105 group-hover:bg-blue-600 group-hover:text-white transition">
-                      <Users className="h-6 w-6" />
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <div className="h-11 w-11 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center font-bold shrink-0 group-hover:scale-105 group-hover:bg-blue-600 group-hover:text-white transition">
+                      <Users className="h-5 w-5" />
                     </div>
                     <div className="min-w-0">
-                      <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-none">Total Connections</h4>
-                      <p className="text-2xl font-black text-slate-900 mt-1">{totalConsumersWeight}</p>
-                      <p className="text-[9px] text-slate-500 mt-0.5 truncate">{registeredWebUsers} Users Online registered</p>
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none">Connections</h4>
+                      <p className="text-xl font-black text-slate-900 mt-1">{totalConsumersWeight}</p>
+                      <p className="text-[9px] text-slate-500 mt-0.5 truncate">{registeredWebUsers} Registered</p>
                     </div>
                   </div>
-                  <ChevronRight className="h-4 w-4 text-slate-300 group-hover:text-blue-600 group-hover:translate-x-0.5 transition shrink-0" />
+                  <ChevronRight className="h-3.5 w-3.5 text-slate-300 group-hover:text-blue-600 group-hover:translate-x-0.5 transition shrink-0" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleTabChange('announcements');
+                    setAnnouncementsSubTab('customer_service');
+                  }}
+                  className={`bg-white border hover:shadow-md rounded-2xl p-5 shadow-sm flex items-center justify-between text-left transition-all cursor-pointer group ${
+                    pendingReportsCount > 0 ? 'border-rose-300 ring-1 ring-rose-300/40 bg-rose-50/20' : 'border-slate-200 hover:border-rose-400'
+                  }`}
+                  title="View Customer Service & Inquiries"
+                >
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <div className={`h-11 w-11 rounded-xl border flex items-center justify-center font-bold shrink-0 group-hover:scale-105 transition ${
+                      pendingReportsCount > 0
+                        ? 'bg-rose-100 text-rose-700 border-rose-200 animate-pulse'
+                        : 'bg-rose-50 text-rose-600 border-rose-100 group-hover:bg-rose-600 group-hover:text-white'
+                    }`}>
+                      <MessageSquare className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none">Customer Service</h4>
+                      <p className="text-xl font-black text-rose-600 mt-1">{reports.length}</p>
+                      <p className="text-[9px] text-rose-700 font-bold mt-0.5 truncate">
+                        {pendingReportsCount > 0 ? `${pendingReportsCount} Require Reply` : 'All Resolved'}
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-3.5 w-3.5 text-slate-300 group-hover:text-rose-600 group-hover:translate-x-0.5 transition shrink-0" />
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleTabChange('readings')}
-                  className="bg-white border border-slate-200 hover:border-amber-400 hover:shadow-md rounded-2xl p-6 shadow-sm flex items-center justify-between text-left transition-all cursor-pointer group"
+                  className="bg-white border border-slate-200 hover:border-amber-400 hover:shadow-md rounded-2xl p-5 shadow-sm flex items-center justify-between text-left transition-all cursor-pointer group"
                   title="View Completed Meter Readings"
                 >
-                  <div className="flex items-center space-x-4 min-w-0">
-                    <div className="h-12 w-12 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center font-bold shrink-0 group-hover:scale-105 group-hover:bg-amber-600 group-hover:text-white transition">
-                      <Droplet className="h-6 w-6" />
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <div className="h-11 w-11 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center font-bold shrink-0 group-hover:scale-105 group-hover:bg-amber-600 group-hover:text-white transition">
+                      <Droplet className="h-5 w-5" />
                     </div>
                     <div className="min-w-0">
-                      <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-none">Completed Reads</h4>
-                      <p className="text-2xl font-black text-slate-900 mt-1">{completedReadingsCount}</p>
-                      <p className="text-[9px] text-slate-500 mt-0.5 truncate">{pendingReadingsCount} Submitted Pending Review</p>
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none">Completed Reads</h4>
+                      <p className="text-xl font-black text-slate-900 mt-1">{completedReadingsCount}</p>
+                      <p className="text-[9px] text-slate-500 mt-0.5 truncate">{pendingReadingsCount} Submitted</p>
                     </div>
                   </div>
-                  <ChevronRight className="h-4 w-4 text-slate-300 group-hover:text-amber-600 group-hover:translate-x-0.5 transition shrink-0" />
+                  <ChevronRight className="h-3.5 w-3.5 text-slate-300 group-hover:text-amber-600 group-hover:translate-x-0.5 transition shrink-0" />
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleTabChange('approvals')}
-                  className="bg-white border border-slate-200 hover:border-rose-400 hover:shadow-md rounded-2xl p-6 shadow-sm flex items-center justify-between text-left transition-all cursor-pointer group"
+                  className="bg-white border border-slate-200 hover:border-rose-400 hover:shadow-md rounded-2xl p-5 shadow-sm flex items-center justify-between text-left transition-all cursor-pointer group"
                   title="View Flagged Abnormal Readings"
                 >
-                  <div className="flex items-center space-x-4 min-w-0">
-                    <div className="h-12 w-12 rounded-xl bg-rose-50 text-rose-600 border border-rose-100 flex items-center justify-center font-bold shrink-0 group-hover:scale-105 group-hover:bg-rose-600 group-hover:text-white transition">
-                      <AlertTriangle className="h-6 w-6" />
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <div className="h-11 w-11 rounded-xl bg-rose-50 text-rose-600 border border-rose-100 flex items-center justify-center font-bold shrink-0 group-hover:scale-105 group-hover:bg-rose-600 group-hover:text-white transition">
+                      <AlertTriangle className="h-5 w-5" />
                     </div>
                     <div className="min-w-0">
-                      <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-none">Flagged Abnormal</h4>
-                      <p className="text-2xl font-black text-rose-600 mt-1">{flaggedAbnormalCount}</p>
-                      <p className="text-[9px] text-slate-500 mt-0.5 truncate">Water Leak Suspected Warning</p>
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none">Flagged Abnormal</h4>
+                      <p className="text-xl font-black text-rose-600 mt-1">{flaggedAbnormalCount}</p>
+                      <p className="text-[9px] text-slate-500 mt-0.5 truncate">Leak Suspected</p>
                     </div>
                   </div>
-                  <ChevronRight className="h-4 w-4 text-slate-300 group-hover:text-rose-600 group-hover:translate-x-0.5 transition shrink-0" />
+                  <ChevronRight className="h-3.5 w-3.5 text-slate-300 group-hover:text-rose-600 group-hover:translate-x-0.5 transition shrink-0" />
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleTabChange('readers')}
-                  className="bg-white border border-slate-200 hover:border-teal-400 hover:shadow-md rounded-2xl p-6 shadow-sm flex items-center justify-between text-left transition-all cursor-pointer group"
+                  className="bg-white border border-slate-200 hover:border-teal-400 hover:shadow-md rounded-2xl p-5 shadow-sm flex items-center justify-between text-left transition-all cursor-pointer group"
                   title="Open Meter Readers Module"
                 >
-                  <div className="flex items-center space-x-4 min-w-0">
-                    <div className="h-12 w-12 rounded-xl bg-teal-50 text-teal-600 border border-teal-100 flex items-center justify-center font-bold shrink-0 group-hover:scale-105 group-hover:bg-teal-600 group-hover:text-white transition">
-                      <UserCheck className="h-6 w-6" />
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <div className="h-11 w-11 rounded-xl bg-teal-50 text-teal-600 border border-teal-100 flex items-center justify-center font-bold shrink-0 group-hover:scale-105 group-hover:bg-teal-600 group-hover:text-white transition">
+                      <UserCheck className="h-5 w-5" />
                     </div>
                     <div className="min-w-0">
-                      <div className="flex items-center space-x-1.5">
-                        <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-none">Active Reader Staff</h4>
+                      <div className="flex items-center space-x-1">
+                        <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none">Reader Staff</h4>
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                       </div>
-                      <p className="text-2xl font-black text-slate-900 mt-1">{activeTechnicians}</p>
+                      <p className="text-xl font-black text-slate-900 mt-1">{activeTechnicians}</p>
                       <p className="text-[9px] text-slate-500 mt-0.5 truncate">
-                        Covering {routesCoveredCount} of {routes.length} Water routes
+                        {routesCoveredCount} of {routes.length} Routes
                       </p>
                     </div>
                   </div>
-                  <ChevronRight className="h-4 w-4 text-slate-300 group-hover:text-teal-600 group-hover:translate-x-0.5 transition shrink-0" />
+                  <ChevronRight className="h-3.5 w-3.5 text-slate-300 group-hover:text-teal-600 group-hover:translate-x-0.5 transition shrink-0" />
                 </button>
               </div>
 
@@ -2829,34 +3182,34 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* 4. APPROVALS MODULE */}
           {activeTab === 'approvals' && (
             <div className="space-y-6 animate-fade-in" id="approvals-tab">
-              {/* Clean, Professional Header */}
-              <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
+              {/* Dark, Eye-Friendly Header */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
                 <div>
-                  <h3 className="text-base font-bold text-slate-900 tracking-tight">Meter Reading Approvals</h3>
-                  <p className="text-xs text-slate-500 mt-0.5 max-w-2xl">
+                  <h3 className="text-base sm:text-lg font-black text-white tracking-tight font-sans">Meter Reading Approvals</h3>
+                  <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
                     Review and verify field meter readings submitted by meter readers. Approving a reading generates the monthly billing statement and updates the consumer portal.
                   </p>
                 </div>
                 <div className="flex items-center space-x-3 shrink-0">
-                  <div className="bg-slate-50 border border-slate-200 px-4 py-2 rounded-lg text-center">
-                    <span className="text-xl font-bold text-slate-900 block leading-tight font-mono">{readings.filter(r => r.status === 'pending').length}</span>
-                    <span className="text-[11px] text-slate-500 font-medium">Pending Approvals</span>
+                  <div className="bg-slate-950 border border-slate-800 px-4 py-2.5 rounded-xl text-center shadow-inner">
+                    <span className="text-xl sm:text-2xl font-black text-amber-400 block leading-tight font-mono">{readings.filter(r => r.status === 'pending').length}</span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Pending Approvals</span>
                   </div>
                 </div>
               </div>
 
               {/* Sub-tab Navigation */}
-              <div className="flex border-b border-slate-200 space-x-6">
+              <div className="flex border-b border-slate-800 space-x-6">
                 <button
                   onClick={() => setApprovalsSubTab('pending')}
                   className={`pb-3 text-xs font-bold transition border-b-2 flex items-center space-x-2 cursor-pointer ${
                     approvalsSubTab === 'pending'
-                      ? 'border-blue-600 text-blue-600'
-                      : 'border-transparent text-slate-500 hover:text-slate-700'
+                      ? 'border-blue-500 text-blue-400'
+                      : 'border-transparent text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   <span>Pending Verification</span>
-                  <span className="bg-amber-100 text-amber-800 text-[11px] font-semibold px-2 py-0.5 rounded-full font-mono">
+                  <span className="bg-amber-950/80 text-amber-300 border border-amber-800/80 text-[11px] font-semibold px-2 py-0.5 rounded-full font-mono">
                     {readings.filter(r => r.status === 'pending').length}
                   </span>
                 </button>
@@ -2865,12 +3218,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   onClick={() => setApprovalsSubTab('history')}
                   className={`pb-3 text-xs font-bold transition border-b-2 flex items-center space-x-2 cursor-pointer ${
                     approvalsSubTab === 'history'
-                      ? 'border-blue-600 text-blue-600'
-                      : 'border-transparent text-slate-500 hover:text-slate-700'
+                      ? 'border-blue-500 text-blue-400'
+                      : 'border-transparent text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   <span>Approval History</span>
-                  <span className="bg-slate-100 text-slate-600 text-[11px] font-semibold px-2 py-0.5 rounded-full font-mono">
+                  <span className="bg-slate-800 text-slate-300 border border-slate-750 text-[11px] font-semibold px-2 py-0.5 rounded-full font-mono">
                     {readings.filter(r => r.status !== 'pending').length}
                   </span>
                 </button>
@@ -2879,29 +3232,130 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {/* PENDING APPROVALS SUB-TAB */}
               {approvalsSubTab === 'pending' && (
                 <>
-                  {/* Search and summary bar for pending items */}
-                  <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
-                    <div className="relative flex-1 sm:max-w-md">
-                      <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400" />
-                      <input
-                        type="text"
-                        placeholder="Search by consumer name, account #, or meter reader..."
-                        value={pendingApprovalSearch}
-                        onChange={(e) => setPendingApprovalSearch(e.target.value)}
-                        className="w-full bg-white border border-slate-200 rounded-lg py-2 pl-10 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 shadow-2xs font-normal"
-                      />
-                    </div>
-                  </div>
+                  {/* Search, Reader Filter, and Summary bar for pending items */}
+                  {(() => {
+                    const pendingList = readings.filter(r => r.status === 'pending');
+                    const distinctReaders: string[] = Array.from(
+                      new Set<string>(
+                        pendingList.map(r => (r.meterReaderName && r.meterReaderName.trim()) ? r.meterReaderName.trim() : 'Field Reader')
+                      )
+                    ).sort();
+
+                    return (
+                      <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-1">
+                          <div className="relative flex-1 sm:max-w-md">
+                            <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
+                            <input
+                              type="text"
+                              placeholder="Search by consumer name, account #, meter reader, or route..."
+                              value={pendingApprovalSearch}
+                              onChange={(e) => setPendingApprovalSearch(e.target.value)}
+                              className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2.5 pl-10 pr-3.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-blue-500 shadow-inner font-medium"
+                            />
+                          </div>
+
+                          {/* Filter by Reader Dropdown */}
+                          <div className="relative sm:w-64 shrink-0">
+                            <select
+                              value={selectedPendingReaderFilter}
+                              onChange={(e) => setSelectedPendingReaderFilter(e.target.value)}
+                              className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2.5 pl-3.5 pr-8 text-xs text-slate-200 focus:outline-none focus:border-blue-500 shadow-inner font-medium cursor-pointer"
+                            >
+                              <option value="all">All Readers ({pendingList.length} readings)</option>
+                              {distinctReaders.map((reader) => {
+                                const countForReader = pendingList.filter(
+                                  x => ((x.meterReaderName && x.meterReaderName.trim()) ? x.meterReaderName.trim() : 'Field Reader') === reader
+                                ).length;
+                                return (
+                                  <option key={`reader-opt-${reader}`} value={reader}>
+                                    {reader} ({countForReader} pending)
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Batch Action Controls */}
+                        {pendingList.length > 0 && (
+                          <div className="flex items-center space-x-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const allCollapsed = distinctReaders.every(r => collapsedReaderGroups[r]);
+                                const next: Record<string, boolean> = {};
+                                distinctReaders.forEach(r => {
+                                  next[r] = !allCollapsed;
+                                });
+                                setCollapsedReaderGroups(next);
+                              }}
+                              className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white font-bold rounded-xl text-xs transition flex items-center space-x-1.5 cursor-pointer border border-slate-700 shadow-xs"
+                            >
+                              <span>{distinctReaders.every(r => collapsedReaderGroups[r]) ? 'Expand All Readers' : 'Collapse All'}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const q = (pendingApprovalSearch || '').toLowerCase().trim();
+                                const cleanQ = q.replace(/^#/, '').trim();
+                                const filtered = pendingList.filter(r => {
+                                  const rName = (r.meterReaderName && r.meterReaderName.trim()) ? r.meterReaderName.trim() : 'Field Reader';
+                                  if (selectedPendingReaderFilter !== 'all' && rName !== selectedPendingReaderFilter) return false;
+                                  if (!q) return true;
+                                  const acct = (r.accountNumber || '').toLowerCase();
+                                  const name = (r.consumerName || '').toLowerCase();
+                                  const reader = rName.toLowerCase();
+                                  const meter = (r.meterNumber || '').toLowerCase();
+                                  const period = (r.billingPeriod || '').toLowerCase();
+                                  const route = (r.route || '').toLowerCase();
+                                  return (
+                                    name.includes(q) ||
+                                    reader.includes(q) ||
+                                    acct.includes(q) ||
+                                    acct.includes(cleanQ) ||
+                                    `#${acct}`.includes(q) ||
+                                    meter.includes(q) ||
+                                    period.includes(q) ||
+                                    route.includes(q)
+                                  );
+                                });
+                                if (filtered.length > 0) {
+                                  setConfirmDialog({
+                                    isOpen: true,
+                                    title: 'Batch Approve Readings',
+                                    message: `Approve all ${filtered.length} pending readings across all matching readers? This will finalize them for consumer billing statements.`,
+                                    confirmLabel: `Approve All (${filtered.length})`,
+                                    confirmVariant: 'success',
+                                    onConfirm: () => handleApproveReadingBatch(filtered, 'All Field Readers')
+                                  });
+                                }
+                              }}
+                              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition shadow-md flex items-center space-x-1.5 cursor-pointer border border-emerald-500/40"
+                            >
+                              <CheckCheck className="h-4 w-4" />
+                              <span>Approve All Matching ({pendingList.length})</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {(() => {
                     const pendingList = readings.filter(r => r.status === 'pending');
                     const q = (pendingApprovalSearch || '').toLowerCase().trim();
                     const cleanQ = q.replace(/^#/, '').trim();
                     const filteredPending = pendingList.filter(r => {
+                      const rName = (r.meterReaderName && r.meterReaderName.trim()) ? r.meterReaderName.trim() : 'Field Reader';
+                      if (selectedPendingReaderFilter !== 'all' && rName !== selectedPendingReaderFilter) {
+                        return false;
+                      }
                       if (!q) return true;
                       const acct = (r.accountNumber || '').toLowerCase();
                       const name = (r.consumerName || '').toLowerCase();
-                      const reader = (r.meterReaderName || '').toLowerCase();
+                      const reader = rName.toLowerCase();
                       const meter = (r.meterNumber || '').toLowerCase();
                       const period = (r.billingPeriod || '').toLowerCase();
                       const route = (r.route || '').toLowerCase();
@@ -2919,217 +3373,264 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                     if (filteredPending.length === 0) {
                       return (
-                        <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-2">
-                          <CheckCircle className="h-10 w-10 text-slate-400 mx-auto" />
-                          <h4 className="text-sm font-bold text-slate-800">
+                        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-3 shadow-xl">
+                          <CheckCircle className="h-12 w-12 text-slate-600 mx-auto" />
+                          <h4 className="text-base font-bold text-white">
                             {pendingList.length === 0 ? 'No Pending Readings' : 'No Matching Readings'}
                           </h4>
-                          <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                          <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
                             {pendingList.length === 0
                               ? 'All field readings have been reviewed and approved.'
-                              : 'No pending readings match your search query.'}
+                              : 'No pending readings match your filter criteria or search query.'}
                           </p>
                         </div>
                       );
                     }
 
+                    // Group readings by meter reader so readings sent by the same reader are NOT separated
+                    const readerGroupsMap = new Map<string, MeterReading[]>();
+                    filteredPending.forEach(r => {
+                      const rName = (r.meterReaderName && r.meterReaderName.trim()) ? r.meterReaderName.trim() : 'Field Reader';
+                      if (!readerGroupsMap.has(rName)) {
+                        readerGroupsMap.set(rName, []);
+                      }
+                      readerGroupsMap.get(rName)!.push(r);
+                    });
+
+                    const readerGroups = Array.from(readerGroupsMap.entries()).map(([readerName, groupReadings]) => {
+                      const totalConsumption = groupReadings.reduce((sum, r) => sum + (Number(r.consumption) || 0), 0);
+                      const totalBill = groupReadings.reduce((sum, r) => sum + calculateCostOf(r.consumption, r.classification), 0);
+                      const routes = Array.from(new Set(groupReadings.map(r => r.route).filter(Boolean)));
+                      const latestDate = groupReadings.map(r => r.readingDate || r.meterReaderDate || '').filter(Boolean).sort().reverse()[0] || 'Today';
+                      return {
+                        readerName,
+                        readings: groupReadings,
+                        totalConsumption,
+                        totalBill,
+                        routes,
+                        latestDate,
+                      };
+                    });
+
                     return (
-                      <div className="space-y-3">
-                        {filteredPending.map((reading, pIdx) => {
-                          const totalCalculatedBill = calculateCostOf(reading.consumption, reading.classification);
+                      <div className="space-y-6">
+                        {readerGroups.map((group, gIdx) => {
+                          const isCollapsed = !!collapsedReaderGroups[group.readerName];
 
                           return (
                             <div 
-                              key={`pending-read-${reading.id || ''}-${reading.accountNumber || ''}-${pIdx}`} 
-                              className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs hover:border-slate-300 transition space-y-4"
+                              key={`reader-group-${group.readerName}-${gIdx}`}
+                              className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden transition-all hover:border-slate-700/80"
                             >
-                              {/* Header: Account Number (Bold & High Contrast), Consumer Info, Route, and Coverage */}
-                              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-slate-100">
-                                <div className="space-y-1.5">
-                                  <div className="flex items-center gap-2.5 flex-wrap">
-                                    {/* High-visibility, crisp Account Number Badge */}
-                                    <div className="inline-flex items-center gap-1.5 bg-slate-900 text-white px-2.5 py-1 rounded-md shadow-2xs">
-                                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Account</span>
-                                      <span className="font-mono text-sm font-black text-amber-300 tracking-wide">
-                                        {reading.accountNumber ? (reading.accountNumber.startsWith('#') ? reading.accountNumber : `#${reading.accountNumber}`) : 'Pending Account'}
+                              {/* READER BATCH HEADER: Groups all readings sent by this same reader together */}
+                              <div className="bg-slate-950/80 border-b border-slate-800/80 p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                <div className="flex items-start sm:items-center space-x-3.5">
+                                  <div className="w-11 h-11 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shadow-md shrink-0 border border-blue-500/30">
+                                    <UserCheck className="h-5 w-5" />
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <h4 className="text-base font-black text-white tracking-tight">
+                                        {group.readerName}
+                                      </h4>
+                                      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider bg-blue-950/80 text-blue-300 px-2.5 py-0.5 rounded-md border border-blue-800/80">
+                                        Field Officer Batch
                                       </span>
                                     </div>
-
-                                    {/* Consumer Full Name */}
-                                    <h4 className="text-base font-bold text-slate-900">{reading.consumerName}</h4>
-
-                                    {/* Classification Tag - Ultra-clear, high-contrast, prominent badges */}
-                                    {reading.classification?.toLowerCase().includes('comm') ? (
-                                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-black uppercase tracking-wider bg-purple-100 text-purple-950 border-2 border-purple-400 shadow-2xs">
-                                        <Building className="h-3.5 w-3.5 text-purple-700 shrink-0" />
-                                        <span>COMMERCIAL</span>
+                                    <div className="flex items-center gap-2 text-xs text-slate-400 mt-1 flex-wrap">
+                                      <span className="flex items-center gap-1">
+                                        <MapPin className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                                        <span>{group.routes.join(', ') || 'Tagoloan Municipal Routes'}</span>
                                       </span>
-                                    ) : (
-                                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-black uppercase tracking-wider bg-emerald-100 text-emerald-950 border-2 border-emerald-400 shadow-2xs">
-                                        <Home className="h-3.5 w-3.5 text-emerald-700 shrink-0" />
-                                        <span>{reading.classification ? reading.classification.toUpperCase() : 'RESIDENTIAL'}</span>
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  <div className="flex items-center space-x-3 text-xs text-slate-500 flex-wrap">
-                                    <span className="flex items-center gap-1">
-                                      <MapPin className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                                      <span>{reading.route || 'Poblacion Zone 3 Route'}</span>
-                                    </span>
-                                    <span>•</span>
-                                    <span>Meter No: <strong className="font-mono text-slate-700 font-semibold">{reading.meterNumber}</strong> {reading.meterBrand ? `(${reading.meterBrand})` : ''}</span>
-                                  </div>
-                                </div>
-
-                                <div className="text-left sm:text-right text-xs text-slate-500 shrink-0">
-                                  <span className="block text-[11px] text-slate-400">Coverage Period</span>
-                                  <span className="font-semibold text-slate-800">{reading.billingPeriod || 'Current Period'}</span>
-                                  <span className="block text-[11px] text-slate-400 mt-0.5">Read Date: {reading.readingDate || reading.meterReaderDate || 'Today'}</span>
-                                </div>
-                              </div>
-
-                              {/* Reading Metrics: Previous, Present, Consumption, Bill */}
-                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 border border-slate-100 rounded-lg p-3.5">
-                                <div>
-                                  <span className="text-[11px] font-medium text-slate-500 block">Previous Index</span>
-                                  <div className="mt-0.5 flex items-baseline space-x-1">
-                                    <span className="text-base font-mono font-bold text-slate-700">{reading.previousReading}</span>
-                                    <span className="text-xs text-slate-400">m³</span>
-                                  </div>
-                                </div>
-
-                                <div>
-                                  <span className="text-[11px] font-medium text-slate-500 block">Present Index</span>
-                                  <div className="mt-0.5 flex items-baseline space-x-1">
-                                    <span className="text-base font-mono font-bold text-blue-700">{reading.currentReading}</span>
-                                    <span className="text-xs text-blue-600">m³</span>
-                                  </div>
-                                </div>
-
-                                <div>
-                                  <span className="text-[11px] font-medium text-slate-500 block">Consumption</span>
-                                  <div className="mt-0.5 flex items-baseline space-x-1">
-                                    <span className="text-base font-mono font-bold text-emerald-700">+{reading.consumption}</span>
-                                    <span className="text-xs text-emerald-600">m³</span>
-                                  </div>
-                                </div>
-
-                                <div>
-                                  <span className="text-[11px] font-medium text-slate-500 block">Calculated Bill</span>
-                                  <div className="mt-0.5 flex items-baseline space-x-1">
-                                    <span className="text-base font-mono font-bold text-slate-900">₱{totalCalculatedBill.toFixed(2)}</span>
-                                  </div>
-                                  <span className={`text-[10px] font-bold block mt-0.5 ${
-                                    reading.classification?.toLowerCase().includes('comm') ? 'text-purple-700' : 'text-emerald-700'
-                                  }`}>
-                                    {reading.classification?.toLowerCase().includes('comm') ? 'Commercial Tariff' : 'Residential Tariff'}
-                                  </span>
-                                </div>
-                              </div>
-
-                              {/* Verification Details & Actions */}
-                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-                                <div className="flex items-center space-x-3 text-xs text-slate-500 flex-wrap">
-                                  <span>Reader: <strong className="text-slate-700 font-semibold">{reading.meterReaderName || 'Field Reader'}</strong></span>
-                                  {reading.notes && (
-                                    <>
                                       <span>•</span>
-                                      <span className="text-slate-500 max-w-xs truncate">{reading.notes}</span>
-                                    </>
-                                  )}
+                                      <span>Date: <strong className="text-slate-300 font-semibold">{group.latestDate}</strong></span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Aggregate Batch Stats & Batch Approval Actions */}
+                                <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
+                                  {/* Readings Count */}
+                                  <div className="bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl text-center shadow-inner">
+                                    <span className="text-[10px] uppercase font-bold text-slate-500 block leading-tight">Batch Size</span>
+                                    <span className="text-xs font-black text-slate-200 font-mono">{group.readings.length} Readings</span>
+                                  </div>
+
+                                  {/* Total Volume */}
+                                  <div className="bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl text-center shadow-inner">
+                                    <span className="text-[10px] uppercase font-bold text-slate-500 block leading-tight">Total Volume</span>
+                                    <span className="text-xs font-black text-emerald-400 font-mono">{group.totalConsumption} m³</span>
+                                  </div>
+
+                                  {/* Total Billing */}
+                                  <div className="bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-xl text-center shadow-inner">
+                                    <span className="text-[10px] uppercase font-bold text-slate-500 block leading-tight">Batch Billing</span>
+                                    <span className="text-xs font-black text-amber-300 font-mono">₱{group.totalBill.toFixed(2)}</span>
+                                  </div>
+
+                                  {/* Approve All For This Reader Button */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApproveReadingBatch(group.readings, group.readerName)}
+                                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition shadow-md flex items-center space-x-1.5 cursor-pointer border border-emerald-500/40"
+                                    title={`Approve all ${group.readings.length} readings submitted by ${group.readerName}`}
+                                  >
+                                    <CheckCircle className="h-4 w-4" />
+                                    <span>Approve All ({group.readings.length})</span>
+                                  </button>
+
+                                  {/* Toggle Collapse/Expand */}
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      setSelectedPhotoUrl(reading.imageUrl || 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop');
-                                      setSelectedPhotoAccount(reading.accountNumber);
+                                      setCollapsedReaderGroups(prev => ({
+                                        ...prev,
+                                        [group.readerName]: !prev[group.readerName]
+                                      }));
                                     }}
-                                    className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium cursor-pointer"
+                                    className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-bold transition border border-slate-700 cursor-pointer"
+                                    title={isCollapsed ? 'Expand Readings' : 'Collapse Readings'}
                                   >
-                                    <Camera className="h-3.5 w-3.5" />
-                                    <span>View Dial Photo</span>
-                                  </button>
-                                </div>
-
-                                <div className="flex items-center space-x-2 shrink-0">
-                                  <button
-                                    onClick={() => {
-                                      const updated = readings.map(r => r.id === reading.id ? { 
-                                        ...r, 
-                                        status: 'verified' as const, 
-                                        paymentStatus: 'unpaid' as const, 
-                                        remainingBalance: totalCalculatedBill, 
-                                        billAmount: totalCalculatedBill,
-                                        totalAmount: totalCalculatedBill,
-                                        paidAmount: 0 
-                                      } : r);
-                                      mockDb.saveReadings(updated);
-                                      setReadings(updated);
-
-                                      // Direct Firestore sync
-                                      syncDocToFirestore(COLLECTIONS.READINGS, reading.id, {
-                                        ...reading,
-                                        status: 'verified',
-                                        paymentStatus: 'unpaid',
-                                        remainingBalance: totalCalculatedBill,
-                                        billAmount: totalCalculatedBill,
-                                        totalAmount: totalCalculatedBill,
-                                        paidAmount: 0
-                                      });
-
-                                      // Recalculate consumer arrears
-                                      const consumerUnpaid = updated.filter(
-                                        r => (r.accountNumber === reading.accountNumber || (reading.consumerName && r.consumerName === reading.consumerName)) && 
-                                             r.status === 'verified' && 
-                                             r.paymentStatus !== 'paid'
-                                      );
-                                      const newArrears = consumerUnpaid.reduce((sum, r) => {
-                                        const gross = calculateCostOf(r.consumption, r.classification);
-                                        const paid = r.paidAmount || 0;
-                                        return sum + Math.max(0, gross - paid);
-                                      }, 0);
-
-                                      const updatedConsumers = consumers.map(c => 
-                                        (c.accountNumber && c.accountNumber === reading.accountNumber) ||
-                                        (c.name && reading.consumerName && c.name.trim().toLowerCase() === reading.consumerName.trim().toLowerCase())
-                                          ? { ...c, outstandingBalance: newArrears }
-                                          : c
-                                      );
-                                      mockDb.saveConsumers(updatedConsumers);
-                                      setConsumers(updatedConsumers);
-
-                                      // Dispatch Smart Notification to Consumer Portal
-                                      mockDb.addNotification({
-                                        accountNumber: reading.accountNumber,
-                                        title: `Water Bill Issued - ${reading.billingPeriod || 'New Statement'}`,
-                                        message: `Your water billing statement for ${reading.billingPeriod} has been verified and issued with ${reading.consumption} m³ total consumption (₱${totalCalculatedBill.toFixed(2)}). Due date: ${reading.dueDate || '20th of Month'}. Settle online or in-office.`,
-                                        type: 'billing',
-                                        readingId: reading.id,
-                                        billingPeriod: reading.billingPeriod,
-                                        remainingBalance: totalCalculatedBill
-                                      });
-
-                                      mockDb.addAuditLog(
-                                        currentUser.id, 
-                                        currentUser.name, 
-                                        'admin', 
-                                        'Approved Reading & Generated Bill', 
-                                        `Approved reading #${reading.id} for ${reading.consumerName} (Account #${reading.accountNumber}, Reader: ${reading.meterReaderName}, Period: ${reading.billingPeriod}, ${reading.previousReading} → ${reading.currentReading} m³ = ${reading.consumption} m³). Auto-generated bill ₱${totalCalculatedBill.toFixed(2)} published to Consumer Portal.`
-                                      );
-
-                                      toast.success(
-                                        'Reading Approved & Bill Issued',
-                                        `Verified reading for ${reading.consumerName} (${reading.consumption} m³ by ${reading.meterReaderName || 'Field Reader'}). Monthly bill of ₱${totalCalculatedBill.toFixed(2)} for ${reading.billingPeriod} published.`,
-                                        5000
-                                      );
-                                    }}
-                                    className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-xs transition shadow-xs flex items-center justify-center space-x-1.5 cursor-pointer"
-                                  >
-                                    <CheckCircle className="h-4 w-4" />
-                                    <span>Approve & Issue Bill</span>
+                                    {isCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
                                   </button>
                                 </div>
                               </div>
+
+                              {/* LIST OF READINGS SUBMITTED BY THIS READER */}
+                              {!isCollapsed && (
+                                <div className="p-4 sm:p-5 space-y-3.5 bg-slate-950/40">
+                                  {group.readings.map((reading, pIdx) => {
+                                    const totalCalculatedBill = calculateCostOf(reading.consumption, reading.classification);
+
+                                    return (
+                                      <div 
+                                        key={`reader-${group.readerName}-read-${reading.id || ''}-${reading.accountNumber || ''}-${pIdx}`} 
+                                        className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-md hover:border-blue-500/60 transition space-y-4"
+                                      >
+                                        {/* Header: Account Number, Consumer Info, Route, and Coverage */}
+                                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-slate-800/80">
+                                          <div className="space-y-1.5">
+                                            <div className="flex items-center gap-2.5 flex-wrap">
+                                              {/* High-visibility Account Number Badge */}
+                                              <div className="inline-flex items-center gap-1.5 bg-slate-950 text-white px-2.5 py-1 rounded-md border border-slate-800 shadow-2xs">
+                                                <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Account</span>
+                                                <span className="font-mono text-sm font-black text-amber-300 tracking-wide">
+                                                  {reading.accountNumber ? (reading.accountNumber.startsWith('#') ? reading.accountNumber : `#${reading.accountNumber}`) : 'Pending Account'}
+                                                </span>
+                                              </div>
+
+                                              {/* Consumer Full Name */}
+                                              <h4 className="text-base font-bold text-white">{reading.consumerName}</h4>
+
+                                              {/* Classification Tag */}
+                                              {reading.classification?.toLowerCase().includes('comm') ? (
+                                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-black uppercase tracking-wider bg-purple-950/80 text-purple-300 border border-purple-800/80 shadow-2xs">
+                                                  <Building className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                                                  <span>COMMERCIAL</span>
+                                                </span>
+                                              ) : (
+                                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-black uppercase tracking-wider bg-emerald-950/80 text-emerald-300 border border-emerald-800/80 shadow-2xs">
+                                                  <Home className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                                                  <span>{reading.classification ? reading.classification.toUpperCase() : 'RESIDENTIAL'}</span>
+                                                </span>
+                                              )}
+                                            </div>
+
+                                            <div className="flex items-center space-x-3 text-xs text-slate-400 flex-wrap">
+                                              <span className="flex items-center gap-1">
+                                                <MapPin className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                                                <span>{reading.route || 'Poblacion Zone 3 Route'}</span>
+                                              </span>
+                                              <span>•</span>
+                                              <span>Meter No: <strong className="font-mono text-slate-200 font-semibold">{reading.meterNumber}</strong> {reading.meterBrand ? `(${reading.meterBrand})` : ''}</span>
+                                            </div>
+                                          </div>
+
+                                          <div className="text-left sm:text-right text-xs text-slate-400 shrink-0">
+                                            <span className="block text-[11px] text-slate-500">Coverage Period</span>
+                                            <span className="font-semibold text-slate-200">{reading.billingPeriod || 'Current Period'}</span>
+                                            <span className="block text-[11px] text-slate-500 mt-0.5">Read Date: {reading.readingDate || reading.meterReaderDate || 'Today'}</span>
+                                          </div>
+                                        </div>
+
+                                        {/* Reading Metrics: Previous, Present, Consumption, Bill */}
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950 border border-slate-800/90 rounded-xl p-3.5 shadow-inner">
+                                          <div>
+                                            <span className="text-[11px] font-medium text-slate-400 block">Previous Index</span>
+                                            <div className="mt-0.5 flex items-baseline space-x-1">
+                                              <span className="text-base font-mono font-bold text-slate-300">{reading.previousReading}</span>
+                                              <span className="text-xs text-slate-500">m³</span>
+                                            </div>
+                                          </div>
+
+                                          <div>
+                                            <span className="text-[11px] font-medium text-slate-400 block">Present Index</span>
+                                            <div className="mt-0.5 flex items-baseline space-x-1">
+                                              <span className="text-base font-mono font-bold text-blue-400">{reading.currentReading}</span>
+                                              <span className="text-xs text-blue-500">m³</span>
+                                            </div>
+                                          </div>
+
+                                          <div>
+                                            <span className="text-[11px] font-medium text-slate-400 block">Consumption</span>
+                                            <div className="mt-0.5 flex items-baseline space-x-1">
+                                              <span className="text-base font-mono font-bold text-emerald-400">+{reading.consumption}</span>
+                                              <span className="text-xs text-emerald-500">m³</span>
+                                            </div>
+                                          </div>
+
+                                          <div>
+                                            <span className="text-[11px] font-medium text-slate-400 block">Calculated Bill</span>
+                                            <div className="mt-0.5 flex items-baseline space-x-1">
+                                              <span className="text-base font-mono font-black text-amber-300">₱{totalCalculatedBill.toFixed(2)}</span>
+                                            </div>
+                                            <span className={`text-[10px] font-bold block mt-0.5 ${
+                                              reading.classification?.toLowerCase().includes('comm') ? 'text-purple-400' : 'text-emerald-400'
+                                            }`}>
+                                              {reading.classification?.toLowerCase().includes('comm') ? 'Commercial Tariff' : 'Residential Tariff'}
+                                            </span>
+                                          </div>
+                                        </div>
+
+                                        {/* Verification Details & Actions */}
+                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                                          <div className="flex items-center space-x-3 text-xs text-slate-400 flex-wrap">
+                                            <span>Reader: <strong className="text-slate-200 font-semibold">{reading.meterReaderName || group.readerName}</strong></span>
+                                            {reading.notes && (
+                                              <>
+                                                <span>•</span>
+                                                <span className="text-slate-400 max-w-xs truncate">{reading.notes}</span>
+                                              </>
+                                            )}
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setSelectedPhotoUrl(reading.imageUrl || 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop');
+                                                setSelectedPhotoAccount(reading.accountNumber);
+                                              }}
+                                              className="inline-flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 font-medium cursor-pointer"
+                                            >
+                                              <Camera className="h-3.5 w-3.5" />
+                                              <span>View Dial Photo</span>
+                                            </button>
+                                          </div>
+
+                                          <div className="flex items-center space-x-2 shrink-0">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleApproveReadingBatch([reading])}
+                                              className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs transition shadow-md flex items-center justify-center space-x-1.5 cursor-pointer border border-emerald-500/30"
+                                            >
+                                              <CheckCircle className="h-4 w-4" />
+                                              <span>Approve & Issue Bill</span>
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -3144,13 +3645,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <div className="space-y-4">
                   <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
                     <div className="relative flex-1 sm:max-w-md">
-                      <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
+                      <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
                       <input
                         type="text"
                         placeholder="Search history by account #, consumer name, meter ID, or notes..."
                         value={approvalHistorySearch}
                         onChange={(e) => setApprovalHistorySearch(e.target.value)}
-                        className="w-full bg-white border border-slate-200 rounded-xl py-2.5 pl-10 pr-3.5 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 shadow-2xs font-medium"
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2.5 pl-10 pr-3.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-blue-500 shadow-inner font-medium"
                       />
                     </div>
 
@@ -3170,148 +3671,156 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     </button>
                   </div>
 
-                  <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-sm">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs text-left border-collapse">
-                        <thead className="bg-slate-50 text-slate-600 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
-                          <tr>
-                            <th className="px-3.5 py-3 whitespace-nowrap">Tx ID</th>
-                            <th className="px-3.5 py-3 whitespace-nowrap">Read Date</th>
-                            <th className="px-3.5 py-3 whitespace-nowrap">Billing Period</th>
-                            <th className="px-3.5 py-3 min-w-[140px]">Account & Consumer</th>
-                            <th className="px-3.5 py-3 whitespace-nowrap">Meter No.</th>
-                            <th className="px-3.5 py-3 whitespace-nowrap">Indices (Prev → Curr)</th>
-                            <th className="px-3.5 py-3 whitespace-nowrap">Usage & Bill</th>
-                            <th className="px-3.5 py-3 whitespace-nowrap">Status</th>
-                            <th className="px-3.5 py-3 min-w-[160px]">Audit Notes & Reader</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {(() => {
-                            const q = (approvalHistorySearch || '').toLowerCase().trim();
-                            const cleanQ = q.replace(/^#/, '').trim();
-                            const filteredHistory = readings
-                              .filter(r => r.status !== 'pending')
-                              .filter(r => {
-                                if (!q) return true;
-                                const acct = (r.accountNumber || '').toLowerCase();
-                                const name = (r.consumerName || '').toLowerCase();
-                                const meter = (r.meterNumber || '').toLowerCase();
-                                const date = (r.readingDate || '').toLowerCase();
-                                const notes = (r.notes || '').toLowerCase();
-                                return (
-                                  acct.includes(q) ||
-                                  acct.includes(cleanQ) ||
-                                  `#${acct}`.includes(q) ||
-                                  name.includes(q) ||
-                                  meter.includes(q) ||
-                                  date.includes(q) ||
-                                  notes.includes(q)
-                                );
-                              });
+                  {(() => {
+                    const q = (approvalHistorySearch || '').toLowerCase().trim();
+                    const cleanQ = q.replace(/^#/, '').trim();
+                    const filteredHistory = readings
+                      .filter(r => r.status !== 'pending')
+                      .filter(r => {
+                        if (!q) return true;
+                        const acct = (r.accountNumber || '').toLowerCase();
+                        const name = (r.consumerName || '').toLowerCase();
+                        const meter = (r.meterNumber || '').toLowerCase();
+                        const date = (r.readingDate || '').toLowerCase();
+                        const notes = (r.notes || '').toLowerCase();
+                        return (
+                          acct.includes(q) ||
+                          acct.includes(cleanQ) ||
+                          `#${acct}`.includes(q) ||
+                          name.includes(q) ||
+                          meter.includes(q) ||
+                          date.includes(q) ||
+                          notes.includes(q)
+                        );
+                      });
+                    const paginatedHistory = filteredHistory.slice((approvalHistoryPage - 1) * 10, approvalHistoryPage * 10);
 
-                            if (filteredHistory.length === 0) {
-                              return (
+                    return (
+                      <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs text-left border-collapse">
+                            <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[10px] tracking-wider border-b border-slate-800">
+                              <tr>
+                                <th className="px-3.5 py-3 whitespace-nowrap">Tx ID</th>
+                                <th className="px-3.5 py-3 whitespace-nowrap">Read Date</th>
+                                <th className="px-3.5 py-3 whitespace-nowrap">Billing Period</th>
+                                <th className="px-3.5 py-3 min-w-[140px]">Account & Consumer</th>
+                                <th className="px-3.5 py-3 whitespace-nowrap">Meter No.</th>
+                                <th className="px-3.5 py-3 whitespace-nowrap">Indices (Prev → Curr)</th>
+                                <th className="px-3.5 py-3 whitespace-nowrap">Usage & Bill</th>
+                                <th className="px-3.5 py-3 whitespace-nowrap">Status</th>
+                                <th className="px-3.5 py-3 min-w-[160px]">Audit Notes & Reader</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/80 text-slate-200 bg-slate-900">
+                              {filteredHistory.length === 0 ? (
                                 <tr>
                                   <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
                                     <div className="space-y-1">
-                                      <p className="text-xs font-bold text-slate-600">No approval history found</p>
-                                      <p className="text-[11px]">No verified or rejected meter reading transactions match your filter.</p>
+                                      <p className="text-xs font-bold text-slate-300">No approval history found</p>
+                                      <p className="text-[11px] text-slate-500">No verified or rejected meter reading transactions match your filter.</p>
                                     </div>
                                   </td>
                                 </tr>
-                              );
-                            }
-
-                            return filteredHistory.map((r, hIdx) => {
-                              const totalBill = calculateCostOf(r.consumption, r.classification);
+                              ) : (
+                                paginatedHistory.map((r, hIdx) => {
+                                  const totalBill = calculateCostOf(r.consumption, r.classification);
                               const isCorrected = r.notes && r.notes.includes('CORRECTED');
                               const isRejected = r.status === ('rejected' as any) || (r.notes && r.notes.includes('REJECTED'));
 
                               return (
-                                <tr key={`hist-read-${r.id || ''}-${r.accountNumber || ''}-${hIdx}`} className="hover:bg-slate-50/80 transition">
-                                  <td className="px-3.5 py-3 font-mono font-bold text-slate-500 text-[11px] whitespace-nowrap">
+                                <tr key={`hist-read-${r.id || ''}-${r.accountNumber || ''}-${hIdx}`} className="hover:bg-slate-800/60 transition">
+                                  <td className="px-3.5 py-3 font-mono font-bold text-slate-400 text-[11px] whitespace-nowrap">
                                     {r.id}
                                   </td>
                                   <td className="px-3.5 py-3 whitespace-nowrap">
-                                    <span className="inline-flex items-center gap-1 font-bold text-slate-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-[11px]">
+                                    <span className="inline-flex items-center gap-1 font-bold text-amber-300 bg-amber-950/60 border border-amber-800/70 px-2 py-0.5 rounded text-[11px]">
                                       📅 {r.readingDate || r.meterReaderDate || 'Recent'}
                                     </span>
                                   </td>
-                                  <td className="px-3.5 py-3 font-bold text-slate-800 whitespace-nowrap">
+                                  <td className="px-3.5 py-3 font-bold text-slate-200 whitespace-nowrap">
                                     {r.billingPeriod || 'Current Period'}
                                   </td>
                                   <td className="px-3.5 py-3 space-y-1 min-w-[140px]">
-                                    <span className="font-bold text-slate-900 block leading-tight">{r.consumerName}</span>
+                                    <span className="font-bold text-white block leading-tight">{r.consumerName}</span>
                                     <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className="font-mono text-blue-700 text-xs font-black bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200 inline-block">
+                                      <span className="font-mono text-sky-400 text-xs font-black bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 inline-block">
                                         {r.accountNumber ? (r.accountNumber.startsWith('#') ? r.accountNumber : `#${r.accountNumber}`) : 'Pending Acct'}
                                       </span>
                                       {r.classification?.toLowerCase().includes('comm') ? (
-                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-100 text-purple-900 border border-purple-300">
-                                          <Building className="h-2.5 w-2.5 text-purple-700 shrink-0" />
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-950/80 text-purple-300 border border-purple-800/80">
+                                          <Building className="h-2.5 w-2.5 text-purple-400 shrink-0" />
                                           <span>COMMERCIAL</span>
                                         </span>
                                       ) : (
-                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-900 border border-emerald-300">
-                                          <Home className="h-2.5 w-2.5 text-emerald-700 shrink-0" />
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-emerald-950/80 text-emerald-300 border border-emerald-800/80">
+                                          <Home className="h-2.5 w-2.5 text-emerald-400 shrink-0" />
                                           <span>RESIDENTIAL</span>
                                         </span>
                                       )}
                                     </div>
                                   </td>
-                                  <td className="px-3.5 py-3 font-mono text-slate-700 font-bold whitespace-nowrap">
+                                  <td className="px-3.5 py-3 font-mono text-slate-200 font-bold whitespace-nowrap">
                                     {r.meterNumber}
                                   </td>
                                   <td className="px-3.5 py-3 font-mono whitespace-nowrap">
-                                    <span className="text-slate-500">{r.previousReading}</span>
-                                    <span className="text-slate-400 mx-1">→</span>
-                                    <span className="font-bold text-slate-900">{r.currentReading} m³</span>
+                                    <span className="text-slate-400">{r.previousReading}</span>
+                                    <span className="text-slate-500 mx-1">→</span>
+                                    <span className="font-bold text-white">{r.currentReading} m³</span>
                                   </td>
                                   <td className="px-3.5 py-3 space-y-0.5 whitespace-nowrap">
-                                    <span className="font-mono font-bold text-emerald-600 block">{r.consumption} m³</span>
-                                    <span className="font-mono font-black text-slate-900 text-xs">₱{totalBill.toFixed(2)}</span>
+                                    <span className="font-mono font-bold text-emerald-400 block">{r.consumption} m³</span>
+                                    <span className="font-mono font-black text-white text-xs">₱{totalBill.toFixed(2)}</span>
                                   </td>
                                   <td className="px-3.5 py-3 whitespace-nowrap">
                                     <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
                                       isRejected
-                                        ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                        ? 'bg-rose-950/80 text-rose-300 border border-rose-800/80'
                                         : isCorrected
-                                        ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                        ? 'bg-amber-950/80 text-amber-300 border border-amber-800/80'
                                         : r.status === 'verified'
-                                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                        : 'bg-rose-100 text-rose-800 border border-rose-200'
+                                        ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/80'
+                                        : 'bg-rose-950/80 text-rose-300 border border-rose-800/80'
                                     }`}>
                                       {isRejected ? 'REJECTED' : isCorrected ? 'CORRECTED' : r.status.toUpperCase()}
                                     </span>
                                   </td>
                                   <td className="px-3.5 py-3 max-w-xs space-y-1 min-w-[180px]">
                                     {r.notes ? (
-                                      <div className="bg-slate-50 border border-slate-200/90 rounded-lg p-1.5 text-xs text-slate-900 font-medium">
+                                      <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-1.5 text-xs text-slate-200 font-medium">
                                         {r.notes.includes('°') ? (
                                           <div>
-                                            <span className="font-mono font-black text-slate-950 text-[11px] block text-rose-700">📍 {r.notes.split('•')[0].trim()}</span>
-                                            <span className="text-[11px] text-slate-700 font-bold block">{r.notes.split('•').slice(1).join('•').trim() || r.notes}</span>
+                                            <span className="font-mono font-black text-rose-400 text-[11px] block">📍 {r.notes.split('•')[0].trim()}</span>
+                                            <span className="text-[11px] text-slate-300 font-bold block">{r.notes.split('•').slice(1).join('•').trim() || r.notes}</span>
                                           </div>
                                         ) : (
-                                          <p className="text-[11px] text-slate-800 font-semibold">{r.notes}</p>
+                                          <p className="text-[11px] text-slate-300 font-semibold">{r.notes}</p>
                                         )}
                                       </div>
                                     ) : (
                                       <span className="text-[11px] text-slate-500 font-medium">Verified & Auto-Billed</span>
                                     )}
-                                    <p className="text-[11px] text-slate-600 font-medium">
-                                      Reader: <strong className="text-slate-900 font-bold">{r.meterReaderName || 'Field Reader'}</strong>
+                                    <p className="text-[11px] text-slate-400 font-medium">
+                                      Reader: <strong className="text-slate-200 font-bold">{r.meterReaderName || 'Field Reader'}</strong>
                                     </p>
                                   </td>
                                 </tr>
                               );
-                            });
-                          })()}
+                            })
+                          )}
                         </tbody>
                       </table>
                     </div>
+                    <TablePagination
+                      currentPage={approvalHistoryPage}
+                      totalItems={filteredHistory.length}
+                      pageSize={10}
+                      onPageChange={setApprovalHistoryPage}
+                      itemName="approval records"
+                    />
                   </div>
+                );
+              })()}
                 </div>
               )}
             </div>
@@ -3541,13 +4050,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         onClick={() => setConsumerStatusFilter('pending_approval')}
                         className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition shrink-0 flex items-center space-x-2 ${
                           consumerStatusFilter === 'pending_approval'
-                            ? 'bg-amber-700 text-white shadow-md'
-                            : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                            ? 'bg-amber-600 text-white shadow-md ring-2 ring-amber-400'
+                            : 'bg-amber-950/20 text-amber-500 hover:bg-amber-950/30 border border-amber-800/50'
                         }`}
                       >
                         <span>⏳ Pending ID Issuance</span>
                         <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-black ${
-                          consumerStatusFilter === 'pending_approval' ? 'bg-amber-900 text-white' : 'bg-slate-100 text-slate-700 border border-slate-200'
+                          consumerStatusFilter === 'pending_approval' ? 'bg-amber-800 text-white' : 'bg-amber-900/40 text-amber-400 border border-amber-700/50'
                         }`}>
                           {pendingCount}
                         </span>
@@ -3779,15 +4288,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       </div>
                     </div>
 
-                    {/* Consumers Grid/Table or Empty State */}
+                    {/* Consumers Grid/Table or Empty State - Eye-Friendly Dark Navy Slate Theme */}
                     {filteredConsumers.length === 0 ? (
-                      <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center space-y-4 shadow-xs">
-                        <div className="h-16 w-16 bg-slate-100 text-slate-400 rounded-3xl flex items-center justify-center mx-auto">
+                      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-4 shadow-xl">
+                        <div className="h-16 w-16 bg-slate-800 text-slate-400 rounded-2xl flex items-center justify-center mx-auto border border-slate-700">
                           <Search className="h-8 w-8 text-slate-400" />
                         </div>
                         <div className="space-y-1 max-w-md mx-auto">
-                          <h4 className="text-base font-extrabold text-slate-800">No Consumers Found</h4>
-                          <p className="text-xs text-slate-500">
+                          <h4 className="text-base font-extrabold text-white">No Consumers Found</h4>
+                          <p className="text-xs text-slate-400">
                             {hasActiveFilters 
                               ? `No consumer records match your current search "${consumerSearch || 'all'}" with the selected filters.`
                               : "No registered water consumers found in the master database."}
@@ -3796,7 +4305,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         {hasActiveFilters && (
                           <button
                             onClick={clearAllConsumerFilters}
-                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition inline-flex items-center space-x-1.5 cursor-pointer shadow-sm"
+                            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition inline-flex items-center space-x-1.5 cursor-pointer shadow-sm"
                           >
                             <RotateCcw className="h-3.5 w-3.5" />
                             <span>Clear All Filters</span>
@@ -3804,10 +4313,34 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         )}
                       </div>
                     ) : (
-                      <div className="bg-white border border-slate-200/80 rounded-none overflow-hidden shadow-xs">
+                      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl text-slate-100">
+                        {/* Table Header Bar */}
+                        <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+                          <div className="flex items-center space-x-2.5">
+                            <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-xs"></div>
+                            <span className="font-extrabold text-white uppercase tracking-wider text-[11px]">
+                              Consumers Master Ledger
+                            </span>
+                            <span className="text-slate-400 text-[10px] hidden sm:inline">
+                              • High-Contrast Eye-Friendly Mode
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-mono font-bold text-slate-300 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800">
+                              Showing {filteredConsumers.length} of {consumers.length}
+                            </span>
+                            {pendingCount > 0 && (
+                              <span className="text-[11px] font-bold text-amber-300 bg-amber-950/70 border border-amber-800/80 px-2.5 py-1 rounded-lg flex items-center gap-1.5 shadow-2xs">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                                <span>{pendingCount} Pending ID Issuance</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
                         <div className="w-full overflow-x-auto">
                           <table className="w-full text-xs text-left min-w-[1100px]">
-                            <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-150">
+                            <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[10px] tracking-wider border-b border-slate-800">
                               <tr>
                                 <th className="px-4 py-3.5 whitespace-nowrap min-w-[190px]">Consumer Details</th>
                                 <th className="px-3 py-3.5 whitespace-nowrap min-w-[170px]">Official Account #</th>
@@ -3819,8 +4352,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 <th className="px-4 py-3.5 text-right whitespace-nowrap min-w-[140px]">Actions</th>
                               </tr>
                             </thead>
-                            <tbody className="divide-y divide-slate-100 text-slate-700">
-                              {filteredConsumers.map((c, cIdx) => {
+                            <tbody className="divide-y divide-slate-800/80 text-slate-200">
+                              {(() => {
+                                const paginatedConsumers = filteredConsumers.slice((consumerPage - 1) * 10, consumerPage * 10);
+                                return paginatedConsumers.map((c, cIdx) => {
                                 const addrParts = c.address.split(',').map(p => p.trim());
                                 const barangayDisplay = c.barangay || (addrParts.length >= 2 ? addrParts[1] : c.address);
                                 const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || c.status === 'pending_approval';
@@ -3833,35 +4368,35 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 return (
                                   <tr 
                                     key={`cons-row-${c.accountNumber || c.email || c.name || cIdx}-${cIdx}`} 
-                                    className={`transition ${
+                                    className={`transition-colors ${
                                       isDupAccount || isDupMeter || isDupRfid || isDupPhone
-                                        ? 'bg-rose-50/70 hover:bg-rose-100/60 border-l-4 border-l-rose-500'
+                                        ? 'bg-rose-950/40 hover:bg-rose-900/50 border-l-4 border-l-rose-500'
                                         : isPending 
-                                          ? 'bg-amber-50/20 hover:bg-amber-50/40 border-l-3 border-l-amber-400/70' 
-                                          : 'hover:bg-slate-50/70'
+                                          ? 'bg-amber-950/25 hover:bg-amber-950/45 border-l-4 border-l-amber-500' 
+                                          : 'bg-slate-900/90 hover:bg-slate-850'
                                     }`}
                                   >
                                     {/* 1. Consumer Details */}
-                                    <td className="px-4 py-3 space-y-1">
+                                    <td className="px-4 py-3.5 space-y-1">
                                       <div className="flex items-center space-x-1.5">
-                                        <span className="font-bold text-[13px] text-slate-900 truncate max-w-[180px]" title={c.name}>{c.name}</span>
+                                        <span className="font-bold text-[13px] text-white truncate max-w-[180px]" title={c.name}>{c.name}</span>
                                         {isPending && (
-                                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300/80 font-bold text-[9px] uppercase tracking-wider shrink-0">
+                                          <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-black text-[9px] uppercase tracking-wider shrink-0 shadow-2xs">
                                             NEW
                                           </span>
                                         )}
                                       </div>
-                                      <div className="font-mono text-[10px] text-slate-500 truncate max-w-[180px]" title={c.email}>
+                                      <div className="font-mono text-[10px] text-slate-400 truncate max-w-[180px]" title={c.email}>
                                         {c.email}
                                       </div>
                                     </td>
 
                                     {/* 2. Official Account # (Strictly Unique) */}
-                                    <td className="px-3 py-3 whitespace-nowrap">
+                                    <td className="px-3 py-3.5 whitespace-nowrap">
                                       {!isPending ? (
                                         <div className="space-y-1">
                                           <span 
-                                            className="font-mono font-bold text-xs text-white bg-slate-900 hover:bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-950 inline-flex items-center gap-1.5 shadow-xs select-all transition-colors cursor-copy" 
+                                            className="font-mono font-bold text-xs text-white bg-slate-950 hover:bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-700 inline-flex items-center gap-1.5 shadow-xs select-all transition-colors cursor-copy" 
                                             title={`Official Account #: ${c.accountNumber}`}
                                           >
                                             <span className="text-sky-400 font-black text-[11px]">#</span>
@@ -3875,20 +4410,26 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           )}
                                         </div>
                                       ) : (
-                                        <span className="font-semibold text-slate-700 bg-slate-100 hover:bg-slate-150 px-2.5 py-1 rounded-lg border border-slate-300/80 shrink-0 inline-flex items-center gap-1.5 text-[11px]">
-                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500/80 shrink-0" />
-                                          <span className="text-slate-600 font-semibold">Pending ID Issuance</span>
-                                        </span>
+                                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-300 shadow-xs">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                                          <span className="font-bold text-amber-200 text-[11px] tracking-wide">Pending ID Issuance</span>
+                                        </div>
                                       )}
                                     </td>
 
                                     {/* 3. Tag Numbers (Meter Tag & RFID Tag - Strictly Unique) */}
-                                    <td className="px-3 py-3 whitespace-nowrap">
-                                      <div className="space-y-1">
-                                        <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold text-slate-800">
-                                          <Gauge className="h-3.5 w-3.5 text-blue-600 shrink-0" />
-                                          <span className="text-slate-400 font-medium text-[10px]">Meter Tag:</span>
-                                          <span className="font-black text-slate-900">{c.meterNumber || 'Pending'}</span>
+                                    <td className="px-3 py-3.5 whitespace-nowrap">
+                                      <div className="space-y-1.5">
+                                        <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold">
+                                          <Gauge className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                                          <span className="text-slate-400 font-medium text-[10px]">Meter:</span>
+                                          {c.meterNumber && c.meterNumber !== 'Pending' && c.meterNumber !== 'UNASSIGNED' ? (
+                                            <span className="font-black text-slate-100">{c.meterNumber}</span>
+                                          ) : (
+                                            <span className="font-bold text-amber-300/90 bg-amber-950/40 px-1.5 py-0.5 rounded border border-amber-800/60 text-[10px]">
+                                              Pending Tag
+                                            </span>
+                                          )}
                                         </div>
                                         {isDupMeter && (
                                           <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-600 text-white text-[8px] font-black w-fit">
@@ -3897,10 +4438,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           </div>
                                         )}
 
-                                        <div className="flex items-center gap-1.5 text-[10px] font-mono font-semibold text-slate-700">
-                                          <Tag className="h-3.5 w-3.5 text-purple-600 shrink-0" />
-                                          <span className="text-slate-400 font-medium text-[9px]">RFID Tag:</span>
-                                          <span className="font-bold text-purple-900 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200">{c.rfidTag || 'Pending'}</span>
+                                        <div className="flex items-center gap-1.5 text-[10px] font-mono font-semibold">
+                                          <Tag className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                                          <span className="text-slate-400 font-medium text-[9px]">RFID:</span>
+                                          {c.rfidTag && c.rfidTag !== 'Pending' && c.rfidTag !== 'UNASSIGNED' ? (
+                                            <span className="font-bold text-purple-300 bg-purple-950/60 px-1.5 py-0.5 rounded border border-purple-700/60">{c.rfidTag}</span>
+                                          ) : (
+                                            <span className="font-bold text-purple-300/90 bg-purple-950/40 px-1.5 py-0.5 rounded border border-purple-800/60 text-[9px]">
+                                              Pending RFID
+                                            </span>
+                                          )}
                                         </div>
                                         {isDupRfid && (
                                           <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-600 text-white text-[8px] font-black w-fit">
@@ -3912,22 +4459,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     </td>
 
                                     {/* 4. Classification */}
-                                    <td className="px-3 py-3 text-center whitespace-nowrap">
+                                    <td className="px-3 py-3.5 text-center whitespace-nowrap">
                                       <div className="inline-flex flex-col items-center justify-center">
                                         <span className={`inline-flex items-center justify-center gap-1.5 text-[10px] font-black uppercase px-2.5 py-1 rounded-md border shadow-2xs min-w-[104px] ${
                                           c.consumerType === 'Commercial'
-                                            ? 'bg-purple-100 text-purple-900 border-purple-300'
-                                            : 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                            ? 'bg-purple-950/60 text-purple-200 border-purple-700/70'
+                                            : 'bg-emerald-950/60 text-emerald-200 border-emerald-700/70'
                                         }`}>
                                           {c.consumerType === 'Commercial' ? (
-                                            <Building className="h-3 w-3 text-purple-700 shrink-0" />
+                                            <Building className="h-3 w-3 text-purple-400 shrink-0" />
                                           ) : (
-                                            <Home className="h-3 w-3 text-emerald-700 shrink-0" />
+                                            <Home className="h-3 w-3 text-emerald-400 shrink-0" />
                                           )}
                                           <span>{c.consumerType || 'Residential'}</span>
                                         </span>
                                         {c.consumerType === 'Commercial' && c.businessName && (
-                                          <span className="text-[10px] text-slate-500 font-medium truncate max-w-[120px] mt-0.5" title={c.businessName}>
+                                          <span className="text-[10px] text-slate-400 font-medium truncate max-w-[120px] mt-0.5" title={c.businessName}>
                                             {c.businessName}
                                           </span>
                                         )}
@@ -3935,8 +4482,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     </td>
 
                                     {/* 5. Phone (11 Digits) */}
-                                    <td className="px-3 py-3 whitespace-nowrap">
-                                      <div className="font-mono text-[11px] text-slate-700 font-bold flex items-center gap-1">
+                                    <td className="px-3 py-3.5 whitespace-nowrap">
+                                      <div className="font-mono text-[11px] text-slate-200 font-bold flex items-center gap-1">
                                         <Phone className="h-3 w-3 text-slate-400 shrink-0" />
                                         <span>{c.contactNumber}</span>
                                       </div>
@@ -3949,32 +4496,30 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     </td>
 
                                     {/* 6. Barangay & Sitio */}
-                                    <td className="px-3 py-3" title={`${barangayDisplay} ${c.sitioZone || ''}`}>
-                                      <span className="font-semibold text-slate-900 truncate block max-w-[180px]">
+                                    <td className="px-3 py-3.5" title={`${barangayDisplay} ${c.sitioZone || ''}`}>
+                                      <span className="font-semibold text-white truncate block max-w-[180px]">
                                         {barangayDisplay}
                                       </span>
                                       {c.sitioZone && (
-                                        <span className="text-[10px] text-slate-500 block truncate max-w-[180px] mt-0.5 font-medium">
+                                        <span className="text-[10px] text-slate-400 block truncate max-w-[180px] mt-0.5 font-medium">
                                           {c.sitioZone}
                                         </span>
                                       )}
                                     </td>
 
                                     {/* 7. Status */}
-                                    <td className="px-3 py-3 text-center whitespace-nowrap">
+                                    <td className="px-3 py-3.5 text-center whitespace-nowrap">
                                       <div className="flex flex-col items-center justify-center space-y-1">
                                         <span className={`inline-block px-2.5 py-0.5 rounded text-[9px] font-black uppercase border shrink-0 ${
                                           isPending
-                                            ? 'bg-amber-50 text-amber-800 border-amber-200/90'
+                                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-xs'
                                             : c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice'
                                             ? 'bg-rose-700 text-white border-rose-800 shadow-xs ring-1 ring-rose-500 font-black animate-pulse'
                                             : c.status === 'blocked'
-                                            ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                            ? 'bg-rose-950/60 text-rose-300 border-rose-800/60'
                                             : c.status === 'active'
-                                            ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                            : c.status === 'inactive'
-                                            ? 'bg-slate-100 text-slate-700 border-slate-200'
-                                            : 'bg-slate-100 text-slate-700 border-slate-200'
+                                            ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800/60'
+                                            : 'bg-slate-800 text-slate-300 border-slate-700'
                                         }`}>
                                           {c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice'
                                             ? 'DISCONNECTION NOTICE'
@@ -3983,23 +4528,23 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                             : c.status.toUpperCase()}
                                         </span>
                                         {(c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice') && (
-                                          <span className="text-[8px] font-black text-rose-600 block uppercase tracking-tight">
+                                          <span className="text-[8px] font-black text-rose-400 block uppercase tracking-tight">
                                             {c.gracePeriodOverdueDays ? `${c.gracePeriodOverdueDays}d Overdue` : '90+ Days Overdue'}
                                           </span>
                                         )}
-                                        <span className={`text-[9px] font-bold shrink-0 ${c.isRegistered ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                        <span className={`text-[9px] font-bold shrink-0 ${c.isRegistered ? 'text-emerald-400' : 'text-slate-400'}`}>
                                           {c.isRegistered ? '• Registered' : '• Offline'}
                                         </span>
                                       </div>
                                     </td>
 
                                     {/* 8. Actions */}
-                                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                                    <td className="px-4 py-3.5 text-right whitespace-nowrap">
                                       <div className="flex items-center justify-end space-x-1.5 shrink-0">
                                         {isPending ? (
                                           <button 
                                             onClick={() => handleOpenConsumerModal(c, 'issue_ids')}
-                                            className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer shrink-0"
+                                            className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-sm cursor-pointer shrink-0"
                                             title="Issue Official Account Number, Meter & RFID Tag"
                                           >
                                             <ShieldCheck className="h-3.5 w-3.5 text-white" />
@@ -4008,7 +4553,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                         ) : (
                                           <button 
                                             onClick={() => handleOpenConsumerModal(c, 'view')}
-                                            className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer shrink-0"
+                                            className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-sm cursor-pointer shrink-0"
                                             title="View Consumer Details"
                                           >
                                             <Eye className="h-3.5 w-3.5 text-white" />
@@ -4018,20 +4563,28 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                                         <button 
                                           onClick={() => handleDeleteConsumer(c)}
-                                          className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-2xs cursor-pointer border border-rose-700 shrink-0"
+                                          className="px-2.5 py-1.5 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition border border-rose-500/30 cursor-pointer shrink-0"
                                           title={`Delete Consumer Record`}
                                         >
-                                          <Trash2 className="h-3.5 w-3.5 text-white" />
-                                          <span className="text-white font-bold">Delete</span>
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                          <span className="font-bold">Delete</span>
                                         </button>
                                       </div>
                                     </td>
                                   </tr>
                                 );
-                              })}
+                              });
+                            })()}
                             </tbody>
                           </table>
                         </div>
+                        <TablePagination
+                          currentPage={consumerPage}
+                          totalItems={filteredConsumers.length}
+                          pageSize={10}
+                          onPageChange={setConsumerPage}
+                          itemName="consumer accounts"
+                        />
                       </div>
                     )}
                   </>
@@ -4042,36 +4595,64 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
           {/* 3. METER READER MANAGEMENT MODULE */}
           {activeTab === 'readers' && (() => {
-            const filteredStaff = readers.filter(r => {
-              const currentStatus = r.employmentStatus || ((r as any).status === 'inactive' ? 'inactive' : ((r as any).status === 'pending_approval' ? 'pending_approval' : 'active'));
-              if (readerFilter !== 'all' && currentStatus !== readerFilter) {
-                return false;
-              }
-              if (readerSearch.trim()) {
-                const q = readerSearch.toLowerCase();
-                const matchesName = r.name?.toLowerCase().includes(q);
-                const matchesId = (r.employeeId || r.id)?.toLowerCase().includes(q);
-                const matchesEmail = r.email?.toLowerCase().includes(q);
-                const matchesPhone = r.contactNumber?.toLowerCase().includes(q);
-                const matchesRoute = r.assignedRoutes?.some(route => route.toLowerCase().includes(q));
-                return matchesName || matchesId || matchesEmail || matchesPhone || matchesRoute;
-              }
-              return true;
-            });
+            const filteredStaff = (() => {
+              const seen = new Set<string>();
+              return readers
+                .filter(r => {
+                  const currentStatus = r.employmentStatus || ((r as any).status === 'inactive' ? 'inactive' : 'active');
+                  if (readerFilter !== 'all' && currentStatus !== readerFilter) {
+                    return false;
+                  }
+                  if (readerSearch.trim()) {
+                    const q = readerSearch.toLowerCase();
+                    const matchesName = r.name?.toLowerCase().includes(q);
+                    const matchesId = (r.employeeId || r.id)?.toLowerCase().includes(q);
+                    const matchesEmail = r.email?.toLowerCase().includes(q);
+                    const matchesPhone = r.contactNumber?.toLowerCase().includes(q);
+                    const matchesRoute = r.assignedRoutes?.some(route => route.toLowerCase().includes(q));
+                    return matchesName || matchesId || matchesEmail || matchesPhone || matchesRoute;
+                  }
+                  return true;
+                })
+                .filter(r => {
+                  const kId = (r.id || '').trim().toLowerCase();
+                  const kEmp = (r.employeeId || '').trim().toLowerCase();
+                  const kUser = (r.username || '').trim().toLowerCase();
+                  const kName = (r.name || '').trim().toLowerCase();
+                  const kEmail = (r.email || '').trim().toLowerCase();
+
+                  if (
+                    (kId && seen.has(kId)) ||
+                    (kEmp && seen.has(kEmp)) ||
+                    (kUser && seen.has(kUser)) ||
+                    (kName && seen.has(kName)) ||
+                    (kEmail && seen.has(kEmail))
+                  ) {
+                    return false;
+                  }
+
+                  if (kId) seen.add(kId);
+                  if (kEmp) seen.add(kEmp);
+                  if (kUser) seen.add(kUser);
+                  if (kName) seen.add(kName);
+                  if (kEmail) seen.add(kEmail);
+                  return true;
+                });
+            })();
 
             const uniqueRoutesCount = new Set(readers.flatMap(r => r.assignedRoutes || ['Zone 1-4: Poblacion (Main Central)'])).size;
 
             return (
               <div className="space-y-6 animate-fade-in" id="readers-tab">
                 {/* Readers & Routes Sub-Navigation */}
-                <div className="flex space-x-2 border-b border-slate-200 pb-3">
+                <div className="flex space-x-2 border-b border-slate-800 pb-3">
                   <button
                     type="button"
                     onClick={() => setReadersSubTab('officers')}
                     className={`px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer flex items-center space-x-2 ${
                       readersSubTab === 'officers'
-                        ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-400/20'
-                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                        ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-500/30'
+                        : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800 hover:text-white'
                     }`}
                   >
                     <UserCheck className="h-4 w-4" />
@@ -4082,8 +4663,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     onClick={() => setReadersSubTab('routes')}
                     className={`px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer flex items-center space-x-2 ${
                       readersSubTab === 'routes'
-                        ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-400/20'
-                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                        ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-500/30'
+                        : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800 hover:text-white'
                     }`}
                   >
                     <MapPin className="h-4 w-4" />
@@ -4096,58 +4677,55 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     {/* Header & Main Controls */}
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
-                        <h3 className="text-base sm:text-lg font-black text-slate-950 uppercase tracking-wider font-sans">
+                        <h3 className="text-base sm:text-lg font-black text-white uppercase tracking-wider font-sans">
                           Meter Reading Staff Registry
                         </h3>
-                        <p className="text-xs text-slate-500 font-medium mt-0.5">
-                          Manage municipal field inspectors, view active mobile terminals, approve pending staff, or reallocate routes.
+                        <p className="text-xs text-slate-400 font-medium mt-0.5">
+                          Manage municipal field inspectors, view active mobile terminals, and maintain assigned inspection zones.
                         </p>
                       </div>
                       
-                      <button
-                        onClick={() => setShowAddReader(!showAddReader)}
-                        className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition flex items-center space-x-2 shrink-0 shadow-sm active:scale-95 cursor-pointer"
-                      >
-                        <Plus className="h-4 w-4" />
-                        <span>Enroll Field Officer</span>
-                      </button>
+                      <div className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 border border-sky-800/60 rounded-xl text-xs text-sky-300 font-bold shrink-0">
+                        <Smartphone className="h-4 w-4 text-sky-400" />
+                        <span>Mobile Self-Registration Only</span>
+                      </div>
                     </div>
 
                 {/* Status Summary & Quick Stats Chips */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="p-3.5 rounded-2xl border bg-white border-slate-200 shadow-xs">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">Total Enrolled</span>
-                    <span className="text-xl sm:text-2xl font-black text-slate-900">{readers.length}</span>
-                    <span className="text-[10px] text-slate-400 block mt-0.5">All registered staff</span>
+                  <div className="p-3.5 rounded-2xl border bg-slate-900 border-slate-800 shadow-md">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Total Registered</span>
+                    <span className="text-xl sm:text-2xl font-black text-white">{readers.length}</span>
+                    <span className="text-[10px] text-slate-500 block mt-0.5">Mobile field officers</span>
                   </div>
 
-                  <div className="p-3.5 rounded-2xl border bg-emerald-50 border-emerald-300 ring-2 ring-emerald-500/20 shadow-xs">
+                  <div className="p-3.5 rounded-2xl border bg-emerald-950/40 border-emerald-800/60 ring-1 ring-emerald-500/20 shadow-md">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 block">Active Terminals</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 block">Active Terminals</span>
                       <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
                     </div>
-                    <span className="text-xl sm:text-2xl font-black text-emerald-900">{activeTechnicians}</span>
-                    <span className="text-[10px] text-emerald-600 block mt-0.5">Field duty authorized</span>
+                    <span className="text-xl sm:text-2xl font-black text-emerald-300">{activeTechnicians}</span>
+                    <span className="text-[10px] text-emerald-400/80 block mt-0.5">Field duty authorized</span>
                   </div>
 
-                  <div className="p-3.5 rounded-2xl border bg-amber-50 border-amber-200 shadow-xs">
+                  <div className="p-3.5 rounded-2xl border bg-blue-950/40 border-blue-800/60 shadow-md">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 block">Pending Review</span>
-                      <Clock className="h-3.5 w-3.5 text-amber-600" />
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-blue-400 block">Mobile Access</span>
+                      <Zap className="h-3.5 w-3.5 text-blue-400" />
                     </div>
-                    <span className="text-xl sm:text-2xl font-black text-amber-900">{pendingTechnicians}</span>
-                    <span className="text-[10px] text-amber-600 block mt-0.5">Awaiting admin approval</span>
+                    <span className="text-xl sm:text-2xl font-black text-blue-300">Auto-Active</span>
+                    <span className="text-[10px] text-blue-400/80 block mt-0.5">Instant mobile access</span>
                   </div>
 
-                  <div className="p-3.5 rounded-2xl border bg-blue-50 border-blue-200 shadow-xs">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-blue-700 block">Coverage Zones</span>
-                    <span className="text-xl sm:text-2xl font-black text-blue-900">{uniqueRoutesCount || 1}</span>
-                    <span className="text-[10px] text-blue-600 block mt-0.5">Assigned water routes</span>
+                  <div className="p-3.5 rounded-2xl border bg-indigo-950/40 border-indigo-800/60 shadow-md">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-400 block">Coverage Zones</span>
+                    <span className="text-xl sm:text-2xl font-black text-indigo-300">{uniqueRoutesCount || 1}</span>
+                    <span className="text-[10px] text-indigo-400/80 block mt-0.5">Assigned water routes</span>
                   </div>
                 </div>
 
                 {/* Filter and Search Controls */}
-                <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-xs space-y-3">
+                <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-xl space-y-3">
                   <div className="flex flex-col sm:flex-row items-center gap-3">
                     <div className="relative flex-1 w-full">
                       <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -4156,14 +4734,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         placeholder="Search officer name, employee ID, route, email, or phone..."
                         value={readerSearch}
                         onChange={(e) => setReaderSearch(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                       />
                     </div>
 
                     {readerSearch && (
                       <button
                         onClick={() => setReaderSearch('')}
-                        className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer shrink-0"
+                        className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer shrink-0"
                       >
                         Clear Search
                       </button>
@@ -4171,14 +4749,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   </div>
 
                   {/* Filter Pills */}
-                  <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100">
+                  <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800">
                     <button
                       type="button"
                       onClick={() => setReaderFilter('all')}
                       className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
                         readerFilter === 'all'
-                          ? 'bg-slate-900 text-white shadow-xs'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          ? 'bg-slate-800 text-white shadow-xs border border-slate-700'
+                          : 'bg-slate-950 text-slate-400 border border-slate-800 hover:bg-slate-800 hover:text-slate-200'
                       }`}
                     >
                       All Officers ({readers.length})
@@ -4189,152 +4767,61 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1.5 ${
                         readerFilter === 'active'
                           ? 'bg-emerald-600 text-white shadow-xs'
-                          : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                          : 'bg-emerald-950/40 text-emerald-400 border border-emerald-900/60 hover:bg-emerald-900/40'
                       }`}
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
                       <span>Active Duty ({activeTechnicians})</span>
                     </button>
-                    {pendingTechnicians > 0 && (
+                    {readers.length > activeTechnicians && (
                       <button
                         type="button"
-                        onClick={() => setReaderFilter('pending_approval')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1.5 ${
-                          readerFilter === 'pending_approval'
-                            ? 'bg-amber-600 text-white shadow-xs'
-                            : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                        onClick={() => setReaderFilter('inactive')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                          readerFilter === 'inactive'
+                            ? 'bg-slate-700 text-white shadow-xs'
+                            : 'bg-slate-950 text-slate-400 border border-slate-800 hover:bg-slate-800 hover:text-slate-200'
                         }`}
                       >
-                        <Clock className="w-3 h-3" />
-                        <span>Pending Approval ({pendingTechnicians})</span>
+                        Inactive ({readers.length - activeTechnicians})
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => setReaderFilter('inactive')}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-                        readerFilter === 'inactive'
-                          ? 'bg-slate-700 text-white shadow-xs'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      Inactive ({readers.length - activeTechnicians - pendingTechnicians})
-                    </button>
                   </div>
                 </div>
 
-                {/* Add Meter Reader Form */}
-                {showAddReader && (
-                  <form onSubmit={handleCreateReader} className="bg-white border-2 border-blue-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-2xl animate-fade-in">
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                      <div>
-                        <h4 className="text-sm font-black uppercase text-slate-900">Enroll Mobile Meter Reader</h4>
-                        <p className="text-xs text-slate-500">Register field inspector credentials matching mobile terminal sync parameters.</p>
-                      </div>
-                      <button 
-                        type="button" 
-                        onClick={() => setShowAddReader(false)}
-                        className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
+                {/* Notice: Field Officers Register via Mobile App Only */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-md">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-sky-950/80 border border-sky-800/80 rounded-xl text-sky-400 shrink-0">
+                      <Smartphone className="h-5 w-5" />
                     </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Full Name *</label>
-                        <input 
-                          type="text" 
-                          required
-                          placeholder="Full name"
-                          value={newReader.name}
-                          onChange={(e) => setNewReader({ ...newReader, name: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-medium text-slate-800 focus:bg-white focus:border-blue-500 outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Username *</label>
-                        <input 
-                          type="text" 
-                          required
-                          placeholder="Username"
-                          value={newReader.username}
-                          onChange={(e) => setNewReader({ ...newReader, username: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-mono font-medium text-slate-800 focus:bg-white focus:border-blue-500 outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Password *</label>
-                        <div className="relative">
-                          <input 
-                            type={showNewReaderPassword ? "text" : "password"} 
-                            required
-                            placeholder="Password"
-                            value={newReader.password}
-                            onChange={(e) => setNewReader({ ...newReader, password: e.target.value })}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 pl-3 pr-10 text-xs font-mono font-medium text-slate-800 focus:bg-white focus:border-blue-500 outline-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowNewReaderPassword(!showNewReaderPassword)}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
-                          >
-                            {showNewReaderPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                          </button>
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Target Route / Barangay Assignment</label>
-                        <select 
-                          value={newReader.assignedRoute}
-                          onChange={(e) => setNewReader({ ...newReader, assignedRoute: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-bold text-slate-700 focus:bg-white focus:border-blue-500 outline-none cursor-pointer"
-                        >
-                          <option value="Zone 1-4: Poblacion (Main Central)">Zone 1-4: Poblacion (Main Central)</option>
-                          <option value="Zone 5-8: Natumolan District">Zone 5-8: Natumolan District</option>
-                          <option value="Zone 9-12: Baluarte Perimeter">Zone 9-12: Baluarte Perimeter</option>
-                          <option value="Zone 13-16: Sta. Ana Coverage">Zone 13-16: Sta. Ana Coverage</option>
-                          <option value="Zone 17-20: Sta. Cruz Valley">Zone 17-20: Sta. Cruz Valley</option>
-                          <option value="Zone 21-24: Casinglot Coastal">Zone 21-24: Casinglot Coastal</option>
-                          <option value="Zone 25-28: Gracia Sector">Zone 25-28: Gracia Sector</option>
-                          <option value="Zone 29-32: Mohon Foothill">Zone 29-32: Mohon Foothill</option>
-                          <option value="Zone 33-36: Sugbongcogon">Zone 33-36: Sugbongcogon</option>
-                        </select>
-                      </div>
+                    <div>
+                      <h4 className="font-bold text-white text-sm">Mobile Self-Registration Active</h4>
+                      <p className="text-slate-400 text-xs mt-0.5">
+                        Field meter readers register directly through the Mobile Reader application. Newly registered officers automatically appear in this registry where administrators can manage duty status, verify terminals, and reallocate coverage zones.
+                      </p>
                     </div>
-
-                    <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
-                      <button 
-                        type="button" 
-                        onClick={() => setShowAddReader(false)} 
-                        className="px-4 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 transition cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                      <button 
-                        type="submit" 
-                        className="px-5 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition shadow-sm cursor-pointer"
-                      >
-                        Enroll Officer
-                      </button>
-                    </div>
-                  </form>
-                )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 px-3 py-1.5 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-emerald-400 font-mono font-bold">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Live Sync Ready
+                  </div>
+                </div>
 
                 {/* Empty State */}
                 {filteredStaff.length === 0 && (
-                  <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center space-y-3">
-                    <div className="h-12 w-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center font-bold text-xl">
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-3 shadow-xl">
+                    <div className="h-12 w-12 rounded-full bg-slate-800 text-slate-400 mx-auto flex items-center justify-center font-bold text-xl">
                       🔍
                     </div>
-                    <h4 className="text-base font-bold text-slate-800">No Meter Readers Found</h4>
-                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    <h4 className="text-base font-bold text-white">No Meter Readers Found</h4>
+                    <p className="text-xs text-slate-400 max-w-sm mx-auto">
                       {readerSearch ? `No staff records matching "${readerSearch}". Try a different keyword or clear search.` : 'No meter readers recorded.'}
                     </p>
                     {readerSearch && (
                       <button
                         onClick={() => setReaderSearch('')}
-                        className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 transition cursor-pointer"
+                        className="px-4 py-2 bg-slate-800 text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-700 transition cursor-pointer border border-slate-700"
                       >
                         Clear Search
                       </button>
@@ -4358,103 +4845,83 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     return (
                       <div 
                         key={`reader-unified-card-${r.id || ''}-${r.username || ''}-${rIdx}`} 
-                        className="bg-white rounded-2xl p-5 shadow-xs border border-slate-200 hover:border-blue-300 hover:shadow-md transition-all flex flex-col justify-between space-y-4 relative"
+                        className="bg-slate-900 rounded-2xl p-5 shadow-xl border border-slate-800 hover:border-blue-500/50 hover:shadow-2xl transition-all flex flex-col justify-between space-y-4 relative"
                       >
                         {/* Card Header: Avatar, Name & Dynamic Status Pill */}
                         <div className="space-y-4">
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-center space-x-3 min-w-0">
-                              <div className={`h-11 w-11 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 shadow-xs text-white ${
-                                currentStatus === 'active' 
-                                  ? 'bg-blue-600' 
-                                  : currentStatus === 'pending_approval' 
-                                    ? 'bg-amber-600' 
-                                    : 'bg-slate-600'
-                              }`}>
+                              <div className="h-11 w-11 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 shadow-xs text-white bg-blue-600">
                                 {initials}
                               </div>
                               <div className="min-w-0">
-                                <h4 className="text-sm sm:text-base font-black text-slate-900 truncate">
+                                <h4 className="text-sm sm:text-base font-black text-white truncate">
                                   {r.name}
                                 </h4>
-                                <p className="text-[11px] text-blue-600 font-mono font-bold truncate">
+                                <p className="text-[11px] text-blue-400 font-mono font-bold truncate">
                                   @{r.username || r.name.toLowerCase().replace(/\s+/g, '_')}
                                 </p>
                               </div>
                             </div>
 
-                            {/* Dynamic Status Pill */}
-                            {currentStatus === 'active' && (
-                              <span className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wider shrink-0 border bg-emerald-50 text-emerald-700 border-emerald-200 flex items-center space-x-1.5 shadow-2xs">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                                <span>Active Duty</span>
-                              </span>
-                            )}
-                            {currentStatus === 'pending_approval' && (
-                              <span className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wider shrink-0 border bg-amber-50 text-amber-800 border-amber-200 flex items-center space-x-1 shadow-2xs">
-                                <Clock className="h-3 w-3 inline text-amber-600 mr-0.5" />
-                                <span>Pending Approval</span>
-                              </span>
-                            )}
-                            {currentStatus === 'inactive' && (
-                              <span className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wider shrink-0 border bg-slate-100 text-slate-700 border-slate-200 flex items-center space-x-1.5 shadow-2xs">
-                                <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
-                                <span>Inactive</span>
-                              </span>
-                            )}
+                            {/* Status Pill: Uniform Active Duty */}
+                            <span className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wider shrink-0 border bg-emerald-950/60 text-emerald-300 border-emerald-800/80 flex items-center space-x-1.5 shadow-2xs">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                              <span>Active Duty</span>
+                            </span>
                           </div>
 
                           {/* Mobile Meter Reader Info Details Card */}
-                          <div className="space-y-2.5 text-xs bg-slate-50 border border-slate-150 p-4 rounded-xl">
+                          <div className="space-y-2.5 text-xs bg-slate-950 border border-slate-800/80 p-4 rounded-xl">
                             {/* Employee Badge ID */}
-                            <div className="flex items-center justify-between text-slate-600 pb-2 border-b border-slate-200/60">
-                              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Badge / ID</span>
-                              <span className="font-mono font-bold text-slate-800 text-xs truncate max-w-[170px]">
+                            <div className="flex items-center justify-between text-slate-300 pb-2 border-b border-slate-800/80">
+                              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Badge / ID</span>
+                              <span className="font-mono font-bold text-slate-200 text-xs truncate max-w-[170px]">
                                 {r.employeeId || r.id}
                               </span>
                             </div>
 
                             {/* Full Name */}
-                            <div className="flex items-center justify-between text-slate-600 pb-2 border-b border-slate-200/60">
-                              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Full Name</span>
-                              <span className="font-bold text-slate-900 text-xs truncate max-w-[170px]">
+                            <div className="flex items-center justify-between text-slate-300 pb-2 border-b border-slate-800/80">
+                              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Full Name</span>
+                              <span className="font-bold text-white text-xs truncate max-w-[170px]">
                                 {r.name}
                               </span>
                             </div>
 
                             {/* Contact Number */}
-                            <div className="flex items-center justify-between text-slate-600 pb-2 border-b border-slate-200/60">
-                              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Contact</span>
-                              <span className="font-mono text-slate-700 text-xs truncate max-w-[170px]">
+                            <div className="flex items-center justify-between text-slate-300 pb-2 border-b border-slate-800/80">
+                              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Contact</span>
+                              <span className="font-mono text-slate-300 text-xs truncate max-w-[170px]">
                                 {r.contactNumber || 'N/A'}
                               </span>
                             </div>
 
                             {/* Username */}
-                            <div className="flex items-center justify-between text-slate-600 pb-2 border-b border-slate-200/60">
-                              <div className="flex items-center space-x-1.5 text-slate-500">
+                            <div className="flex items-center justify-between text-slate-300 pb-2 border-b border-slate-800/80">
+                              <div className="flex items-center space-x-1.5 text-slate-400">
                                 <UserCheck className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                                 <span className="text-[11px] font-bold uppercase tracking-wider">Username</span>
                               </div>
-                              <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded text-xs">
+                              <span className="font-mono font-bold text-blue-300 bg-blue-950/70 border border-blue-900/60 px-2 py-0.5 rounded text-xs">
                                 {r.username || r.name.toLowerCase().replace(/\s+/g, '_')}
                               </span>
                             </div>
 
                             {/* Password */}
-                            <div className="flex items-center justify-between text-slate-600 pb-2 border-b border-slate-200/60">
-                              <div className="flex items-center space-x-1.5 text-slate-500">
+                            <div className="flex items-center justify-between text-slate-300 pb-2 border-b border-slate-800/80">
+                              <div className="flex items-center space-x-1.5 text-slate-400">
                                 <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                                 <span className="text-[11px] font-bold uppercase tracking-wider">Password</span>
                               </div>
                               <div className="flex items-center space-x-1.5">
-                                <span className="font-mono font-bold text-slate-800 bg-white px-2 py-0.5 rounded border border-slate-200 text-xs">
+                                <span className="font-mono font-bold text-slate-200 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 text-xs">
                                   {isPasswordRevealed ? displayedPassword : '••••••••'}
                                 </span>
                                 <button
                                   type="button"
                                   onClick={() => setRevealedPasswords(prev => ({ ...prev, [readerKey]: !prev[readerKey] }))}
-                                  className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded transition cursor-pointer"
+                                  className="p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition cursor-pointer"
                                   title={isPasswordRevealed ? "Hide Password" : "Show Password"}
                                 >
                                   {isPasswordRevealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -4464,65 +4931,27 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                             {/* Target Route / Barangay Assignment */}
                             <div className="pt-1">
-                              <div className="flex items-center space-x-1 text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                                <MapPin className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                              <div className="flex items-center space-x-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                                <MapPin className="h-3.5 w-3.5 text-blue-400 shrink-0" />
                                 <span>Target Route / Barangay Assignment</span>
                               </div>
-                              <div className="p-2 bg-blue-50/80 rounded-lg border border-blue-200/70 text-blue-800 font-bold text-xs">
-                                {targetRouteDisplay}
+                              <div className="p-2.5 bg-blue-950/60 rounded-lg border border-blue-800/70 text-blue-300 font-bold text-xs flex items-center justify-between">
+                                <span>{targetRouteDisplay}</span>
+                                <span className="text-[10px] text-blue-400/80 bg-blue-900/50 px-1.5 py-0.5 rounded font-mono border border-blue-800/50">Route Zone</span>
                               </div>
                             </div>
                           </div>
                         </div>
 
-                        {/* Card Action Footer: Quick Approve, Edit, Toggle, and Terminate */}
-                        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
-                          {currentStatus === 'pending_approval' ? (
-                            <button
-                              type="button"
-                              onClick={() => handleQuickApproveReader(r)}
-                              className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs rounded-xl transition shadow-xs flex items-center justify-center space-x-1.5 cursor-pointer"
-                              title={`Approve & Activate ${r.name}`}
-                            >
-                              <Check className="h-3.5 w-3.5 text-white" />
-                              <span>Approve</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleToggleReaderStatus(r)}
-                              className={`py-2 px-2.5 text-xs font-bold rounded-xl border transition shadow-2xs flex items-center justify-center space-x-1 cursor-pointer ${
-                                currentStatus === 'active'
-                                  ? 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-                                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
-                              }`}
-                              title={currentStatus === 'active' ? "Set as Inactive" : "Set as Active"}
-                            >
-                              <span>{currentStatus === 'active' ? 'Deactivate' : 'Activate'}</span>
-                            </button>
-                          )}
-
-                          <button
-                            type="button"
-                            onClick={() => setEditingReaderModal({ 
-                              ...r, 
-                              employmentStatus: currentStatus as any,
-                              targetRoute: targetRouteDisplay
-                            })}
-                            className="flex-1 py-2 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 transition shadow-2xs flex items-center justify-center space-x-1.5 cursor-pointer"
-                            title={`Edit ${r.name}`}
-                          >
-                            <Edit2 className="h-3.5 w-3.5 text-blue-600" />
-                            <span>Edit</span>
-                          </button>
-
+                        {/* Card Action Footer: Single Uniform Terminate Button Only */}
+                        <div className="pt-3 border-t border-slate-800 flex items-center">
                           <button
                             type="button"
                             onClick={() => handleTerminateReader(r)}
-                            className="py-2 px-3 bg-rose-50 hover:bg-rose-600 active:scale-95 text-rose-700 hover:text-white font-bold text-xs rounded-xl border border-rose-200 hover:border-rose-600 transition shadow-2xs flex items-center justify-center space-x-1.5 cursor-pointer group"
+                            className="w-full py-2.5 px-4 bg-rose-950/40 hover:bg-rose-600 active:scale-95 text-rose-300 hover:text-white font-bold text-xs rounded-xl border border-rose-900/60 hover:border-rose-600 transition shadow-2xs flex items-center justify-center space-x-2 cursor-pointer group"
                             title={`Terminate ${r.name}`}
                           >
-                            <UserX className="h-3.5 w-3.5 text-rose-600 group-hover:text-white transition" />
+                            <UserX className="h-4 w-4 text-rose-400 group-hover:text-white transition" />
                             <span>Terminate</span>
                           </button>
                         </div>
@@ -4535,26 +4964,26 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
             {readersSubTab === 'routes' && (
               <div className="space-y-6 animate-fade-in" id="readers-routes-tab">
-                <div className="bg-white border border-slate-150 rounded-3xl p-6 sm:p-8 space-y-4 shadow-sm">
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-4 shadow-xl">
                   <div>
-                    <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-widest leading-none">Geographic Service Route assignments</h3>
-                    <p className="text-xs text-slate-500 mt-1.5">Assign designated zones directly to registered reader handheld mobile applications.</p>
+                    <h3 className="text-sm font-extrabold text-white uppercase tracking-widest leading-none">Geographic Service Route assignments</h3>
+                    <p className="text-xs text-slate-400 mt-1.5">Assign designated zones directly to registered reader handheld mobile applications.</p>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
                     {routes.map((rt, rtIdx) => (
-                      <div key={`route-card-${rt.id || ''}-${rtIdx}`} className="bg-slate-50 border border-slate-150 rounded-2xl p-6 space-y-4">
+                      <div key={`route-card-${rt.id || ''}-${rtIdx}`} className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-lg">
                         <div className="flex justify-between items-start">
                           <div>
-                            <h4 className="text-base font-extrabold text-slate-900">{rt.routeName}</h4>
-                            <p className="text-xs text-slate-500">{rt.description}</p>
+                            <h4 className="text-base font-extrabold text-white">{rt.routeName}</h4>
+                            <p className="text-xs text-slate-400">{rt.description}</p>
                           </div>
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                             rt.status === 'completed' 
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' 
+                              ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/60' 
                               : rt.status === 'in_progress' 
-                              ? 'bg-blue-50 text-blue-700 border border-blue-100' 
-                              : 'bg-slate-100 text-slate-500 border border-slate-200'
+                              ? 'bg-blue-950/60 text-blue-300 border border-blue-800/60' 
+                              : 'bg-slate-800 text-slate-300 border border-slate-700'
                           }`}>
                             {rt.status.replace('_', ' ')}
                           </span>
@@ -4563,21 +4992,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         <div className="flex justify-between items-center text-xs">
                           <div>
                             <span className="text-slate-400">Consumers in zone:</span>
-                            <span className="font-bold text-slate-800 ml-1.5">{rt.totalConsumers} connections</span>
+                            <span className="font-bold text-slate-200 ml-1.5">{rt.totalConsumers} connections</span>
                           </div>
                           <div>
                             <span className="text-slate-400">Assigned Reader Option:</span>
-                            <span className="font-extrabold text-blue-700 ml-1.5">{rt.assignedReaderName}</span>
+                            <span className="font-extrabold text-blue-400 ml-1.5">{rt.assignedReaderName}</span>
                           </div>
                         </div>
 
-                        <div className="pt-4 border-t border-slate-200/50 flex justify-end">
+                        <div className="pt-4 border-t border-slate-800 flex justify-end">
                           {editingRouteId === rt.id ? (
                             <div className="flex items-center space-x-2 w-full">
                               <select
                                 value={assignedReaderId}
                                 onChange={(e) => setAssignedReaderId(e.target.value)}
-                                className="bg-white border border-slate-200 rounded-lg py-1.5 px-3 text-xs w-full font-bold text-slate-700"
+                                className="bg-slate-900 border border-slate-700 rounded-lg py-1.5 px-3 text-xs w-full font-bold text-slate-100 focus:outline-none focus:border-blue-500 cursor-pointer"
                               >
                                 <option value="">Choose Reader Staff...</option>
                                 {readers.map((r, rIdx) => (
@@ -4586,13 +5015,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               </select>
                               <button
                                 onClick={() => handleSaveRouteAssignment(rt.id)}
-                                className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold shrink-0 hover:bg-blue-700"
+                                className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold shrink-0 hover:bg-blue-700 cursor-pointer"
                               >
                                 Save Assignment
                               </button>
                               <button
                                 onClick={() => setEditingRouteId(null)}
-                                className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-xs font-bold shrink-0 hover:bg-slate-300"
+                                className="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg text-xs font-bold shrink-0 hover:bg-slate-700 cursor-pointer"
                               >
                                 Cancel
                               </button>
@@ -4603,7 +5032,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 setEditingRouteId(rt.id);
                                 setAssignedReaderId(rt.assignedReaderId);
                               }}
-                              className="px-4 py-2 bg-white border border-slate-250 text-slate-700 hover:text-blue-600 text-xs font-bold rounded-lg transition"
+                              className="px-4 py-2 bg-slate-800 border border-slate-700 text-slate-200 hover:text-blue-400 hover:border-blue-500/50 text-xs font-bold rounded-lg transition cursor-pointer"
                             >
                               Reassign Route Zone
                             </button>
@@ -4624,14 +5053,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {activeTab === 'meters' && (
             <div className="space-y-6 animate-fade-in" id="meters-tab">
               {/* Header */}
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex items-center space-x-3.5">
-                  <div className="p-3 bg-blue-50 text-blue-600 rounded-2xl border border-blue-100">
+                  <div className="p-3 bg-blue-950/60 text-blue-400 rounded-2xl border border-blue-800/70">
                     <Gauge className="h-6 w-6" />
                   </div>
                   <div>
-                    <h3 className="text-base font-extrabold text-slate-900 tracking-tight">Mechanical Water Meter Catalog & Hardware Inventory</h3>
-                    <p className="text-xs text-slate-500 mt-0.5">Track serial numbers, hardware brands, installation telemetry, and linked consumer accounts</p>
+                    <h3 className="text-base sm:text-lg font-black text-white uppercase tracking-wider font-sans">Mechanical Water Meter Catalog & Hardware Inventory</h3>
+                    <p className="text-xs text-slate-400 font-medium mt-0.5">Track serial numbers, hardware brands, installation telemetry, and linked consumer accounts</p>
                   </div>
                 </div>
 
@@ -4649,53 +5078,53 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
               {/* Add Meter Form */}
               {showAddMeter && (
-                <form onSubmit={handleCreateMeter} className="bg-white border border-slate-200 p-6 rounded-3xl shadow-md space-y-4 max-w-3xl animate-slide-down">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                    <h4 className="text-sm font-bold uppercase text-slate-900 flex items-center gap-2">
-                      <Plus className="w-4 h-4 text-blue-600" />
+                <form onSubmit={handleCreateMeter} className="bg-slate-900 border border-blue-500/40 p-6 rounded-3xl shadow-2xl space-y-4 max-w-3xl animate-slide-down">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <h4 className="text-sm font-bold uppercase text-white flex items-center gap-2">
+                      <Plus className="w-4 h-4 text-blue-400" />
                       Register New Water Meter Hardware
                     </h4>
                     <span className="text-[11px] text-slate-400 font-medium">Step 1 of 1</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Meter Serial Number *</label>
+                      <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Meter Serial Number *</label>
                       <input 
                         type="text" 
                         required
                         placeholder="e.g. MT-8844"
                         value={newMeter.meterNumber}
                         onChange={(e) => setNewMeter({ ...newMeter, meterNumber: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Manufacturer / Brand *</label>
+                      <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Manufacturer / Brand *</label>
                       <input 
                         type="text" 
                         required
                         placeholder="e.g. NBI WaterTech / Kent"
                         value={newMeter.brand}
                         onChange={(e) => setNewMeter({ ...newMeter, brand: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Linked Account Number</label>
+                      <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Linked Account Number</label>
                       <input 
                         type="text" 
                         placeholder="e.g. 1001-A (optional)"
                         value={newMeter.linkedAccountNumber}
                         onChange={(e) => setNewMeter({ ...newMeter, linkedAccountNumber: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                       />
                     </div>
                   </div>
-                  <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
+                  <div className="flex justify-end space-x-2 pt-3 border-t border-slate-800">
                     <button 
                       type="button" 
                       onClick={() => setShowAddMeter(false)} 
-                      className="px-4 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 transition cursor-pointer"
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-xs font-bold text-slate-300 transition cursor-pointer"
                     >
                       Cancel
                     </button>
@@ -4716,12 +5145,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   onClick={() => setMeterStatusFilter('all')}
                   className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
                     meterStatusFilter === 'all'
-                      ? 'bg-blue-50 border-blue-300 ring-2 ring-blue-500/20 shadow-xs'
-                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                      ? 'bg-slate-800 border-blue-500 ring-2 ring-blue-500/20 shadow-md'
+                      : 'bg-slate-900 border-slate-800 hover:bg-slate-800/80'
                   }`}
                 >
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">Total Meters</span>
-                  <span className="text-xl sm:text-2xl font-black text-slate-900">{meters.length}</span>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Total Meters</span>
+                  <span className="text-xl sm:text-2xl font-black text-white">{meters.length}</span>
                 </button>
 
                 <button
@@ -4729,12 +5158,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   onClick={() => setMeterStatusFilter('active')}
                   className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
                     meterStatusFilter === 'active'
-                      ? 'bg-emerald-50 border-emerald-300 ring-2 ring-emerald-500/20 shadow-xs'
-                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                      ? 'bg-emerald-950/80 border-emerald-500 ring-2 ring-emerald-500/20 shadow-md'
+                      : 'bg-emerald-950/40 border-emerald-900/60 hover:bg-emerald-900/50'
                   }`}
                 >
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 block">Active & Deployed</span>
-                  <span className="text-xl sm:text-2xl font-black text-emerald-900">{meters.filter(m => m.status === 'active').length}</span>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 block">Active & Deployed</span>
+                  <span className="text-xl sm:text-2xl font-black text-emerald-300">{meters.filter(m => m.status === 'active').length}</span>
                 </button>
 
                 <button
@@ -4742,12 +5171,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   onClick={() => setMeterStatusFilter('damaged')}
                   className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
                     meterStatusFilter === 'damaged'
-                      ? 'bg-rose-50 border-rose-300 ring-2 ring-rose-500/20 shadow-xs'
-                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                      ? 'bg-rose-950/80 border-rose-500 ring-2 ring-rose-500/20 shadow-md'
+                      : 'bg-rose-950/40 border-rose-900/60 hover:bg-rose-900/50'
                   }`}
                 >
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700 block">Damaged / Faulty</span>
-                  <span className="text-xl sm:text-2xl font-black text-rose-900">{meters.filter(m => m.status === 'damaged').length}</span>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-rose-400 block">Damaged / Faulty</span>
+                  <span className="text-xl sm:text-2xl font-black text-rose-300">{meters.filter(m => m.status === 'damaged').length}</span>
                 </button>
 
                 <button
@@ -4755,17 +5184,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   onClick={() => setMeterStatusFilter('maintenance')}
                   className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
                     meterStatusFilter === 'maintenance' || meterStatusFilter === 'inactive'
-                      ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-500/20 shadow-xs'
-                      : 'bg-white border-slate-200 hover:bg-slate-50'
+                      ? 'bg-amber-950/80 border-amber-500 ring-2 ring-amber-500/20 shadow-md'
+                      : 'bg-amber-950/40 border-amber-900/60 hover:bg-amber-900/50'
                   }`}
                 >
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 block">Under Maintenance</span>
-                  <span className="text-xl sm:text-2xl font-black text-amber-900">{meters.filter(m => m.status === 'maintenance' || m.status === 'inactive').length}</span>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400 block">Under Maintenance</span>
+                  <span className="text-xl sm:text-2xl font-black text-amber-300">{meters.filter(m => m.status === 'maintenance' || m.status === 'inactive').length}</span>
                 </button>
               </div>
 
               {/* Search and Filters Bar */}
-              <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-xs flex flex-col sm:flex-row items-center gap-3">
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center gap-3">
                 <div className="relative flex-1 w-full">
                   <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                   <input
@@ -4773,7 +5202,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     placeholder="Search by meter serial, brand manufacturer, or linked account #..."
                     value={meterSearch}
                     onChange={(e) => setMeterSearch(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   />
                 </div>
 
@@ -4781,7 +5210,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   <select
                     value={meterStatusFilter}
                     onChange={(e) => setMeterStatusFilter(e.target.value as any)}
-                    className="bg-slate-50 border border-slate-200 text-slate-700 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer w-full sm:w-auto"
+                    className="bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer w-full sm:w-auto"
                   >
                     <option value="all">All Meter Statuses</option>
                     <option value="active">Active Only</option>
@@ -4797,7 +5226,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         setMeterSearch('');
                         setMeterStatusFilter('all');
                       }}
-                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer whitespace-nowrap shrink-0"
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer whitespace-nowrap shrink-0 border border-slate-700"
                     >
                       Clear
                     </button>
@@ -4806,131 +5235,144 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               </div>
 
               {/* Meter list table */}
-              <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-xs">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-left border-collapse">
-                    <thead className="bg-slate-50 text-slate-700 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200">
-                      <tr>
-                        <th className="px-4 py-3.5 whitespace-nowrap">Meter Serial</th>
-                        <th className="px-4 py-3.5 min-w-[170px]">Brand / Manufacturer</th>
-                        <th className="px-4 py-3.5 whitespace-nowrap">Installation Date</th>
-                        <th className="px-4 py-3.5 min-w-[180px]">Linked Consumer Account</th>
-                        <th className="px-4 py-3.5 whitespace-nowrap text-center">Operational Status</th>
-                        <th className="px-4 py-3.5 whitespace-nowrap text-right min-w-[140px]">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                      {meters
-                        .filter((m) => {
-                          if (meterStatusFilter !== 'all') {
-                            if (meterStatusFilter === 'maintenance' && m.status !== 'maintenance' && m.status !== 'inactive') return false;
-                            if (meterStatusFilter !== 'maintenance' && m.status !== meterStatusFilter) return false;
-                          }
-                          if (meterSearch.trim()) {
-                            const q = meterSearch.toLowerCase().trim();
-                            const matchNum = (m.meterNumber || '').toLowerCase().includes(q);
-                            const matchBrand = (m.brand || '').toLowerCase().includes(q);
-                            const matchAcc = (m.linkedAccountNumber || '').toLowerCase().includes(q);
-                            return matchNum || matchBrand || matchAcc;
-                          }
-                          return true;
-                        })
-                        .map((m, mIdx) => {
-                          const linkedConsumer = consumers.find(c => c.accountNumber === m.linkedAccountNumber);
-                          return (
-                            <tr key={`meter-inv-${m.meterNumber || mIdx}-${mIdx}`} className="hover:bg-slate-50/80 transition-colors">
-                              {/* Serial */}
-                              <td className="px-4 py-3.5 whitespace-nowrap">
-                                <div className="flex items-center gap-1.5 font-mono text-slate-900 font-black text-xs">
-                                  <Tag className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                                  <span>{m.meterNumber}</span>
-                                </div>
-                              </td>
+              {(() => {
+                const filteredMetersList = meters.filter((m) => {
+                  if (meterStatusFilter !== 'all') {
+                    if (meterStatusFilter === 'maintenance' && m.status !== 'maintenance' && m.status !== 'inactive') return false;
+                    if (meterStatusFilter !== 'maintenance' && m.status !== meterStatusFilter) return false;
+                  }
+                  if (meterSearch.trim()) {
+                    const q = meterSearch.toLowerCase().trim();
+                    const matchNum = (m.meterNumber || '').toLowerCase().includes(q);
+                    const matchBrand = (m.brand || '').toLowerCase().includes(q);
+                    const matchAcc = (m.linkedAccountNumber || '').toLowerCase().includes(q);
+                    return matchNum || matchBrand || matchAcc;
+                  }
+                  return true;
+                });
+                const paginatedMeters = filteredMetersList.slice((meterPage - 1) * 10, meterPage * 10);
 
-                              {/* Brand */}
-                              <td className="px-4 py-3.5">
-                                <span className="font-bold text-slate-900 text-xs block">{m.brand}</span>
-                                <span className="text-[10px] text-slate-400">Mechanical Meter</span>
-                              </td>
-
-                              {/* Date */}
-                              <td className="px-4 py-3.5 font-sans text-slate-600 whitespace-nowrap text-xs">
-                                {m.installationDate || 'N/A'}
-                              </td>
-
-                              {/* Linked Consumer */}
-                              <td className="px-4 py-3.5">
-                                {m.linkedAccountNumber ? (
-                                  <div className="flex flex-col gap-0.5">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="font-mono font-bold text-blue-600 text-xs">#{m.linkedAccountNumber}</span>
-                                      {linkedConsumer?.consumerType && (
-                                        <span className="px-1.5 py-0.2 bg-slate-100 text-slate-600 rounded text-[9px] font-sans">
-                                          {linkedConsumer.consumerType}
-                                        </span>
-                                      )}
-                                    </div>
-                                    <span className="text-slate-900 font-semibold text-[11px] truncate max-w-[180px]" title={linkedConsumer?.name}>
-                                      {linkedConsumer?.name || 'Consumer Assigned'}
-                                    </span>
-                                  </div>
-                                ) : (
-                                  <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md inline-block">
-                                    UNASSIGNED
-                                  </span>
-                                )}
-                              </td>
-
-                              {/* Status */}
-                              <td className="px-4 py-3.5 whitespace-nowrap text-center">
-                                <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border shadow-2xs inline-block ${
-                                  m.status === 'active' 
-                                    ? 'bg-emerald-100 text-emerald-900 border-emerald-300' 
-                                    : m.status === 'damaged' 
-                                    ? 'bg-rose-100 text-rose-900 border-rose-300 animate-pulse' 
-                                    : 'bg-amber-100 text-amber-900 border-amber-300'
-                                }`}>
-                                  {m.status.toUpperCase()}
-                                </span>
-                              </td>
-
-                              {/* Actions */}
-                              <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                                <div className="flex items-center justify-end gap-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => setEditingMeterModal({ ...m })}
-                                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-blue-50 text-blue-700 hover:text-blue-800 border border-slate-200 hover:border-blue-200 rounded-lg text-xs font-bold transition cursor-pointer inline-flex items-center gap-1 shrink-0"
-                                    title="Edit Meter Parameters"
-                                  >
-                                    <Edit3 className="w-3.5 h-3.5" />
-                                    <span>Edit</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteMeter(m)}
-                                    className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200 rounded-lg text-xs font-bold transition cursor-pointer inline-flex items-center gap-1 shrink-0"
-                                    title="Deregister Meter"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                    <span>Delete</span>
-                                  </button>
-                                </div>
+                return (
+                  <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left border-collapse">
+                        <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[11px] tracking-wider border-b border-slate-800">
+                          <tr>
+                            <th className="px-4 py-3.5 whitespace-nowrap">Meter Serial</th>
+                            <th className="px-4 py-3.5 min-w-[170px]">Brand / Manufacturer</th>
+                            <th className="px-4 py-3.5 whitespace-nowrap">Installation Date</th>
+                            <th className="px-4 py-3.5 min-w-[180px]">Linked Consumer Account</th>
+                            <th className="px-4 py-3.5 whitespace-nowrap text-center">Operational Status</th>
+                            <th className="px-4 py-3.5 whitespace-nowrap text-right min-w-[140px]">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
+                          {filteredMetersList.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} className="px-6 py-12 text-center text-slate-500 text-xs">
+                                No water meters found matching your filter criteria.
                               </td>
                             </tr>
-                          );
-                        })}
-                      {meters.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="px-6 py-12 text-center text-slate-400 text-xs">
-                            No water meters registered in inventory.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                          ) : (
+                            paginatedMeters.map((m, mIdx) => {
+                              const linkedConsumer = consumers.find(c => c.accountNumber === m.linkedAccountNumber);
+                              return (
+                                <tr key={`meter-inv-${m.meterNumber || mIdx}-${mIdx}`} className="hover:bg-slate-800/60 transition-colors">
+                                  {/* Serial */}
+                                  <td className="px-4 py-3.5 whitespace-nowrap">
+                                    <div className="flex items-center gap-1.5 font-mono text-white font-black text-xs">
+                                      <Tag className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                      <span>{m.meterNumber}</span>
+                                    </div>
+                                  </td>
+
+                                  {/* Brand */}
+                                  <td className="px-4 py-3.5">
+                                    <span className="font-bold text-slate-200 text-xs block">{m.brand}</span>
+                                    <span className="text-[10px] text-slate-400">Mechanical Meter</span>
+                                  </td>
+
+                                  {/* Date */}
+                                  <td className="px-4 py-3.5 font-sans text-slate-400 whitespace-nowrap text-xs">
+                                    {m.installationDate || 'N/A'}
+                                  </td>
+
+                                  {/* Linked Consumer */}
+                                  <td className="px-4 py-3.5">
+                                    {m.linkedAccountNumber ? (
+                                      <div className="flex flex-col gap-0.5">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="font-mono font-bold text-sky-400 text-xs">#{m.linkedAccountNumber}</span>
+                                          {linkedConsumer?.consumerType && (
+                                            <span className="px-1.5 py-0.2 bg-slate-800 text-slate-300 rounded text-[9px] font-sans border border-slate-700">
+                                              {linkedConsumer.consumerType}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <span className="text-white font-semibold text-[11px] truncate max-w-[180px]" title={linkedConsumer?.name}>
+                                          {linkedConsumer?.name || 'Consumer Assigned'}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <span className="text-[10px] font-bold text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 inline-block">
+                                        UNASSIGNED
+                                      </span>
+                                    )}
+                                  </td>
+
+                                  {/* Status */}
+                                  <td className="px-4 py-3.5 whitespace-nowrap text-center">
+                                    <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border shadow-2xs inline-block ${
+                                      m.status === 'active' 
+                                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80' 
+                                        : m.status === 'damaged' 
+                                        ? 'bg-rose-950/80 text-rose-300 border-rose-800/80 animate-pulse' 
+                                        : 'bg-amber-950/80 text-amber-300 border-amber-800/80'
+                                    }`}>
+                                      {m.status.toUpperCase()}
+                                    </span>
+                                  </td>
+
+                                  {/* Actions */}
+                                  <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditingMeterModal({ ...m })}
+                                        className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 rounded-lg text-xs font-bold transition cursor-pointer inline-flex items-center gap-1 shrink-0"
+                                        title="Edit Meter Parameters"
+                                      >
+                                        <Edit3 className="w-3.5 h-3.5" />
+                                        <span>Edit</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteMeter(m)}
+                                        className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/60 rounded-lg text-xs font-bold transition cursor-pointer inline-flex items-center gap-1 shrink-0"
+                                        title="Deregister Meter"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                        <span>Delete</span>
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <TablePagination
+                      currentPage={meterPage}
+                      totalItems={filteredMetersList.length}
+                      pageSize={10}
+                      onPageChange={setMeterPage}
+                      itemName="water meters"
+                    />
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -4938,7 +5380,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {activeTab === 'readings' && (
             <div className="space-y-6 animate-fade-in" id="readings-tab">
               
-              {/* Readings Control & Intake Header */}
+              {/* Readings Control Header */}
               <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex items-center space-x-3.5">
                   <div className="p-3 bg-blue-50 text-blue-600 rounded-2xl border border-blue-100">
@@ -4946,7 +5388,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   </div>
                   <div>
                     <h3 className="text-base font-extrabold text-slate-900 tracking-tight">Field Meter Readings & Telemetry Desk</h3>
-                    <p className="text-xs text-slate-500 mt-0.5">Real-time inspection of field readings submitted via mobile handset or clerk desk</p>
+                    <p className="text-xs text-slate-500 mt-0.5">Real-time inspection and telemetry of field meter readings submitted by mobile inspectors</p>
                   </div>
                 </div>
 
@@ -4963,99 +5405,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     <TrendingUp className="h-4 w-4 text-emerald-400" />
                     <span>Adjust Reading Price Hike</span>
                   </button>
-
-                  <button 
-                    onClick={() => setShowManualReadingForm(!showManualReadingForm)}
-                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center space-x-2 shadow-xs cursor-pointer"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span>{showManualReadingForm ? 'Hide Intake Form' : 'Record Manual Intake'}</span>
-                  </button>
                 </div>
               </div>
-
-              {/* Collapsible Manual clerk forms */}
-              {showManualReadingForm && (
-                <form onSubmit={handleCreateManualReading} className="bg-white border border-slate-200 p-6 rounded-3xl shadow-md animate-slide-down space-y-4 text-slate-800">
-                  <h4 className="text-xs font-extrabold text-blue-600 uppercase tracking-widest">Manual Clerk Reading Intake Panel</h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                    
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">Select connection Account</label>
-                      <select
-                        required
-                        value={manualAccount}
-                        onChange={(e) => setManualAccount(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-blue-500 font-semibold"
-                      >
-                        <option value="">-- Choose Account --</option>
-                        {consumers.map((c, cIdx) => (
-                          <option key={`sel-cons-opt-${c.accountNumber || cIdx}-${cIdx}`} value={c.accountNumber}>
-                            #{c.accountNumber} - {c.name} ({c.consumerType || 'Residential'})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">Current Reading (Whole Dial Number)</label>
-                      <input 
-                        type="number"
-                        required
-                        min="0"
-                        placeholder="e.g. 1258"
-                        value={manualCurrentReading}
-                        onChange={(e) => setManualCurrentReading(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-blue-500 font-bold font-mono"
-                      />
-                      <span className="text-[9px] text-slate-400 mt-1 block">Whole number indices displayed on meter face (m³)</span>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">Service Billing Period</label>
-                      <input 
-                        type="text"
-                        required
-                        value={manualBillingPeriod}
-                        onChange={(e) => setManualBillingPeriod(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-blue-500 font-medium"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">Geographic GPS Tag</label>
-                      <input 
-                        type="text"
-                        required
-                        value={manualGps}
-                        onChange={(e) => setManualGps(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-blue-500 font-mono"
-                      />
-                    </div>
-
-                    <div className="sm:col-span-2">
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 font-sans">Clerk Inspection notes</label>
-                      <input 
-                        type="text"
-                        placeholder="Audit description details..."
-                        value={manualNotes}
-                        onChange={(e) => setManualNotes(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-
-                  </div>
-
-                  <div className="pt-3 border-t border-slate-100 flex justify-end">
-                    <button 
-                      type="submit"
-                      className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition shadow-xs"
-                    >
-                      Calculate & Record Registry Entry
-                    </button>
-                  </div>
-                </form>
-              )}
 
               {/* Readings Summary & Quick Filter Chips */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -5153,304 +5504,388 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               </div>
 
               {/* Readings board layout */}
-              <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-xs">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-left border-collapse">
-                    <thead className="bg-slate-50 text-slate-700 font-bold uppercase text-[11px] tracking-wider border-b border-slate-200">
-                      <tr>
-                        <th className="px-4 py-3.5 whitespace-nowrap">Tx ID</th>
-                        <th className="px-4 py-3.5 min-w-[200px]">Consumer & Account</th>
-                        <th className="px-4 py-3.5 whitespace-nowrap">Period</th>
-                        <th className="px-4 py-3.5 whitespace-nowrap">Index (Prev → Curr)</th>
-                        <th className="px-4 py-3.5 min-w-[170px]">Telemetry & Verification</th>
-                        <th className="px-4 py-3.5 whitespace-nowrap">Consumption</th>
-                        <th className="px-4 py-3.5 whitespace-nowrap text-center">Status</th>
-                        <th className="px-4 py-3.5 whitespace-nowrap text-right min-w-[150px]">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-slate-700">
-                      {readings
-                        .filter((r) => {
-                          if (readingsStatusFilter === 'verified' && r.status !== 'verified') return false;
-                          if (readingsStatusFilter === 'pending' && r.status !== 'pending') return false;
-                          if (readingsStatusFilter === 'flagged_abnormal' && r.status !== 'flagged_abnormal' && r.consumption < 50) return false;
+              {(() => {
+                const filteredReadingsList = readings.filter((r) => {
+                  if (readingsStatusFilter === 'verified' && r.status !== 'verified') return false;
+                  if (readingsStatusFilter === 'pending' && r.status !== 'pending') return false;
+                  if (readingsStatusFilter === 'flagged_abnormal' && r.status !== 'flagged_abnormal' && r.consumption < 50) return false;
 
-                          if (readingsSearch.trim()) {
-                            const q = readingsSearch.toLowerCase().trim();
-                            const matchId = (r.id || '').toLowerCase().includes(q);
-                            const matchName = (r.consumerName || '').toLowerCase().includes(q);
-                            const matchAcc = (r.accountNumber || '').toLowerCase().includes(q);
-                            const matchMeter = (r.meterNumber || '').toLowerCase().includes(q);
-                            const matchPeriod = (r.billingPeriod || '').toLowerCase().includes(q);
-                            return matchId || matchName || matchAcc || matchMeter || matchPeriod;
-                          }
-                          return true;
-                        })
-                        .map((r, rIdx) => {
-                          const isAbnormal = r.consumption >= 50;
-                          const resolvedClassification = r.classification || 'Residential';
-                          return (
-                            <tr
-                              key={`board-reading-${r.id || ''}-${rIdx}`}
-                              className={`hover:bg-slate-50/80 transition-colors ${
-                                isAbnormal && r.status === 'flagged_abnormal' ? 'bg-rose-50/40' : ''
-                              }`}
-                            >
-                              {/* Tx ID */}
-                              <td className="px-4 py-3.5 font-mono font-bold text-slate-500 text-[11px] whitespace-nowrap">
-                                {r.id}
-                              </td>
+                  if (readingsSearch.trim()) {
+                    const q = readingsSearch.toLowerCase().trim();
+                    const matchId = (r.id || '').toLowerCase().includes(q);
+                    const matchName = (r.consumerName || '').toLowerCase().includes(q);
+                    const matchAcc = (r.accountNumber || '').toLowerCase().includes(q);
+                    const matchMeter = (r.meterNumber || '').toLowerCase().includes(q);
+                    const matchPeriod = (r.billingPeriod || '').toLowerCase().includes(q);
+                    return matchId || matchName || matchAcc || matchMeter || matchPeriod;
+                  }
+                  return true;
+                });
+                const paginatedReadings = filteredReadingsList.slice((readingsPage - 1) * 10, readingsPage * 10);
 
-                              {/* Consumer & Account */}
-                              <td className="px-4 py-3.5">
-                                <div className="flex flex-col gap-1">
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="font-bold text-slate-900 text-xs">{r.consumerName}</span>
-                                    <span
-                                      className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border tracking-wider shrink-0 ${
-                                        resolvedClassification === 'Commercial'
-                                          ? 'bg-purple-100 text-purple-700 border-purple-200'
-                                          : 'bg-blue-100 text-blue-700 border-blue-200'
-                                      }`}
-                                    >
-                                      {resolvedClassification}
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono flex-wrap">
-                                    <span>Acc: <strong className="text-blue-600 font-bold">{r.accountNumber}</strong></span>
-                                    <span>•</span>
-                                    <span>Meter: <strong className="text-slate-700 font-bold">{r.meterNumber}</strong></span>
-                                  </div>
-                                </div>
-                              </td>
-
-                              {/* Billing Period */}
-                              <td className="px-4 py-3.5 text-slate-700 font-semibold whitespace-nowrap text-xs">
-                                {r.billingPeriod}
-                              </td>
-
-                              {/* Indices */}
-                              <td className="px-4 py-3.5 font-mono whitespace-nowrap">
-                                <span className="text-slate-500 text-xs">{r.previousReading} m³</span>
-                                <span className="text-slate-400 mx-1 font-sans">→</span>
-                                <span className="font-black text-slate-900 text-xs">{r.currentReading} m³</span>
-                              </td>
-
-                              {/* Telemetry (GPS / Photo) */}
-                              <td className="px-4 py-3.5">
-                                <div className="flex flex-col gap-1.5">
-                                  {r.gpsLocation ? (
-                                    <div className="flex items-center text-[10px] font-sans text-slate-600 font-medium">
-                                      <MapPin className="h-3 w-3 text-rose-500 mr-1 shrink-0" />
-                                      <span className="truncate max-w-[140px]" title={r.gpsLocation}>{r.gpsLocation}</span>
-                                    </div>
-                                  ) : (
-                                    <span className="text-[10px] text-slate-400 italic">No GPS</span>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedPhotoUrl(
-                                        r.meterImageUrl ||
-                                          'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop'
-                                      );
-                                      setSelectedPhotoAccount(r.accountNumber);
-                                    }}
-                                    className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-[10px] font-bold transition uppercase tracking-wider w-fit cursor-pointer"
-                                  >
-                                    <Camera className="h-3 w-3 shrink-0 text-blue-600" />
-                                    <span>Dial Photo</span>
-                                  </button>
-                                </div>
-                              </td>
-
-                              {/* Consumption */}
-                              <td className="px-4 py-3.5 whitespace-nowrap">
-                                <div className="flex flex-col gap-0.5">
-                                  <span
-                                    className={`font-mono font-black text-xs ${
-                                      isAbnormal ? 'text-rose-600' : 'text-slate-900'
-                                    }`}
-                                  >
-                                    {r.consumption} m³
-                                  </span>
-                                  {isAbnormal && (
-                                    <span className="bg-rose-100 border border-rose-200 text-rose-700 text-[8px] font-black uppercase px-1.5 py-0.5 rounded tracking-wide inline-flex items-center gap-0.5 w-fit">
-                                      <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
-                                      <span>High Usage</span>
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-
-                              {/* Status */}
-                              <td className="px-4 py-3.5 whitespace-nowrap text-center">
-                                <span
-                                  className={`inline-flex items-center px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider border shadow-2xs ${
-                                    r.status === 'verified'
-                                      ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
-                                      : r.status === 'flagged_abnormal'
-                                      ? 'bg-rose-100 text-rose-900 border-rose-300 animate-pulse'
-                                      : 'bg-amber-100 text-amber-900 border-amber-300'
-                                  }`}
-                                >
-                                  {r.status === 'flagged_abnormal' ? 'ANOMALY' : r.status}
-                                </span>
-                              </td>
-
-                              {/* Actions */}
-                              <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                                <div className="flex items-center justify-end gap-1.5">
-                                  {r.status === 'pending' || r.status === 'flagged_abnormal' ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleVerifyReading(r.id, 'verified')}
-                                      className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] uppercase rounded-lg transition inline-flex items-center gap-1 shadow-xs cursor-pointer tracking-wider active:scale-95 shrink-0"
-                                      id={`approve-read-btn-${r.id}`}
-                                      title="Approve Reading"
-                                    >
-                                      <CheckCircle className="h-3.5 w-3.5 shrink-0" />
-                                      <span>Approve</span>
-                                    </button>
-                                  ) : (
-                                    <span className="text-[10px] text-emerald-800 font-bold bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200 inline-flex items-center gap-1 shrink-0">
-                                      <Check className="h-3 w-3 text-emerald-600 shrink-0" />
-                                      <span>Approved</span>
-                                    </span>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteReading(r.id)}
-                                    className="px-2 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200 font-bold text-[11px] rounded-lg transition inline-flex items-center cursor-pointer shrink-0"
-                                    title="Void / Delete Reading"
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
+                return (
+                  <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left border-collapse">
+                        <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[11px] tracking-wider border-b border-slate-800">
+                          <tr>
+                            <th className="px-4 py-3.5 whitespace-nowrap">Tx ID</th>
+                            <th className="px-4 py-3.5 min-w-[200px]">Consumer & Account</th>
+                            <th className="px-4 py-3.5 whitespace-nowrap">Period</th>
+                            <th className="px-4 py-3.5 whitespace-nowrap">Index (Prev → Curr)</th>
+                            <th className="px-4 py-3.5 min-w-[170px]">Telemetry & Verification</th>
+                            <th className="px-4 py-3.5 whitespace-nowrap">Consumption</th>
+                            <th className="px-4 py-3.5 whitespace-nowrap text-center">Status</th>
+                            <th className="px-4 py-3.5 whitespace-nowrap text-right min-w-[150px]">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/80 text-slate-200 bg-slate-900">
+                          {filteredReadingsList.length === 0 ? (
+                            <tr>
+                              <td colSpan={8} className="px-6 py-12 text-center text-slate-500 text-xs">
+                                No meter readings found matching your filter criteria.
                               </td>
                             </tr>
-                          );
-                        })}
-                      {readings.length === 0 && (
-                        <tr>
-                          <td colSpan={8} className="px-6 py-12 text-center text-slate-400 text-xs">
-                            No meter readings recorded.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                          ) : (
+                            paginatedReadings.map((r, rIdx) => {
+                              const isAbnormal = r.consumption >= 50;
+                              const resolvedClassification = r.classification || 'Residential';
+                              return (
+                                <tr
+                                  key={`board-reading-${r.id || ''}-${rIdx}`}
+                                  className={`hover:bg-slate-800/60 transition-colors ${
+                                    isAbnormal && r.status === 'flagged_abnormal' ? 'bg-rose-950/25' : ''
+                                  }`}
+                                >
+                                  {/* Tx ID */}
+                                  <td className="px-4 py-3.5 font-mono font-bold text-slate-400 text-[11px] whitespace-nowrap">
+                                    {r.id}
+                                  </td>
+
+                                  {/* Consumer & Account */}
+                                  <td className="px-4 py-3.5">
+                                    <div className="flex flex-col gap-1">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="font-bold text-white text-xs">{r.consumerName}</span>
+                                        <span
+                                          className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border tracking-wider shrink-0 ${
+                                            resolvedClassification === 'Commercial'
+                                              ? 'bg-purple-950/80 text-purple-300 border-purple-800/80'
+                                              : 'bg-blue-950/80 text-blue-300 border-blue-800/80'
+                                          }`}
+                                        >
+                                          {resolvedClassification}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono flex-wrap">
+                                        <span>Acc: <strong className="text-sky-400 font-bold">{r.accountNumber}</strong></span>
+                                        <span>•</span>
+                                        <span>Meter: <strong className="text-slate-300 font-bold">{r.meterNumber}</strong></span>
+                                      </div>
+                                    </div>
+                                  </td>
+
+                                  {/* Billing Period */}
+                                  <td className="px-4 py-3.5 text-slate-300 font-semibold whitespace-nowrap text-xs">
+                                    {r.billingPeriod}
+                                  </td>
+
+                                  {/* Indices */}
+                                  <td className="px-4 py-3.5 font-mono whitespace-nowrap">
+                                    <span className="text-slate-400 text-xs">{r.previousReading} m³</span>
+                                    <span className="text-slate-500 mx-1 font-sans">→</span>
+                                    <span className="font-black text-white text-xs">{r.currentReading} m³</span>
+                                  </td>
+
+                                  {/* Telemetry (GPS / Photo) */}
+                                  <td className="px-4 py-3.5">
+                                    <div className="flex flex-col gap-1.5">
+                                      {r.gpsLocation ? (
+                                        <div className="flex items-center text-[10px] font-sans text-slate-300 font-medium">
+                                          <MapPin className="h-3 w-3 text-rose-400 mr-1 shrink-0" />
+                                          <span className="truncate max-w-[140px]" title={r.gpsLocation}>{r.gpsLocation}</span>
+                                        </div>
+                                      ) : (
+                                        <span className="text-[10px] text-slate-500 italic">No GPS</span>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedPhotoUrl(
+                                            r.meterImageUrl ||
+                                              'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop'
+                                          );
+                                          setSelectedPhotoAccount(r.accountNumber);
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 rounded-lg text-[10px] font-bold transition uppercase tracking-wider w-fit cursor-pointer"
+                                      >
+                                        <Camera className="h-3 w-3 shrink-0 text-sky-400" />
+                                        <span>Dial Photo</span>
+                                      </button>
+                                    </div>
+                                  </td>
+
+                                  {/* Consumption */}
+                                  <td className="px-4 py-3.5 whitespace-nowrap">
+                                    <div className="flex flex-col gap-0.5">
+                                      <span
+                                        className={`font-mono font-black text-xs ${
+                                          isAbnormal ? 'text-rose-400' : 'text-emerald-400'
+                                        }`}
+                                      >
+                                        {r.consumption} m³
+                                      </span>
+                                      {isAbnormal && (
+                                        <span className="bg-rose-950/80 border border-rose-800/80 text-rose-300 text-[8px] font-black uppercase px-1.5 py-0.5 rounded tracking-wide inline-flex items-center gap-0.5 w-fit">
+                                          <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
+                                          <span>High Usage</span>
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+
+                                  {/* Status */}
+                                  <td className="px-4 py-3.5 whitespace-nowrap text-center">
+                                    <span
+                                      className={`inline-flex items-center px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider border shadow-2xs ${
+                                        r.status === 'verified'
+                                          ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
+                                          : r.status === 'flagged_abnormal'
+                                          ? 'bg-rose-950/80 text-rose-300 border-rose-800/80 animate-pulse'
+                                          : 'bg-amber-950/80 text-amber-300 border-amber-800/80'
+                                      }`}
+                                    >
+                                      {r.status === 'flagged_abnormal' ? 'ANOMALY' : r.status}
+                                    </span>
+                                  </td>
+
+                                  {/* Actions */}
+                                  <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      {r.status === 'pending' || r.status === 'flagged_abnormal' ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleVerifyReading(r.id, 'verified')}
+                                          className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[11px] uppercase rounded-lg transition inline-flex items-center gap-1 shadow-xs cursor-pointer tracking-wider active:scale-95 shrink-0"
+                                          id={`approve-read-btn-${r.id}`}
+                                          title="Approve Reading"
+                                        >
+                                          <CheckCircle className="h-3.5 w-3.5 shrink-0" />
+                                          <span>Approve</span>
+                                        </button>
+                                      ) : (
+                                        <span className="text-[10px] text-emerald-300 font-bold bg-emerald-950/80 px-2 py-1 rounded-lg border border-emerald-800/80 inline-flex items-center gap-1 shrink-0">
+                                          <Check className="h-3 w-3 text-emerald-400 shrink-0" />
+                                          <span>Approved</span>
+                                        </span>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteReading(r.id)}
+                                        className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/60 font-bold text-[11px] rounded-lg transition inline-flex items-center cursor-pointer shrink-0"
+                                        title="Void / Delete Reading"
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <TablePagination
+                      currentPage={readingsPage}
+                      totalItems={filteredReadingsList.length}
+                      pageSize={10}
+                      onPageChange={setReadingsPage}
+                      itemName="meter readings"
+                    />
+                  </div>
+                );
+              })()}
             </div>
           )}
 
-          {/* 8. PUBLIC ANNOUNCEMENTS BILLBOARD */}
+          {/* 8. PUBLIC ANNOUNCEMENTS & CUSTOMER SERVICE MODULE */}
           {activeTab === 'announcements' && (
             <div className="space-y-6 animate-fade-in" id="announcements-tab">
-              <div className="flex justify-between items-center">
-                <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-wider">Public advisories bulletin</h3>
-                
-                <button
-                  onClick={() => setShowAddAnnouncement(!showAddAnnouncement)}
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider transition flex items-center space-x-2"
-                >
-                  <Plus className="h-4.5 w-4.5" />
-                  <span>Publish Advisory Notice</span>
-                </button>
+              {/* Header & Sub-tab Switcher */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 tracking-tight">
+                    {announcementsSubTab === 'customer_service' ? 'Customer Service & Inquiries Desk' : 'Public Advisories & Bulletin Announcements'}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {announcementsSubTab === 'customer_service' 
+                      ? 'Review and respond to consumer service requests, water leak tickets, and emergency inquiries.' 
+                      : 'Publish emergency maintenance schedules, water disruption notices, and municipal advisories.'}
+                  </p>
+                </div>
+
+                <div className="flex items-center space-x-2 bg-slate-100 p-1 rounded-xl shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setAnnouncementsSubTab('bulletin')}
+                    className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                      announcementsSubTab === 'bulletin'
+                        ? 'bg-white text-blue-600 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <BookOpen className="h-3.5 w-3.5" />
+                    <span>Advisories Bulletin</span>
+                    <span className="text-[10px] px-1.5 py-0.2 bg-slate-200 text-slate-700 rounded-full font-mono font-bold">
+                      {announcements.length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAnnouncementsSubTab('customer_service')}
+                    className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                      announcementsSubTab === 'customer_service'
+                        ? 'bg-white text-blue-600 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <MessageSquare className="h-3.5 w-3.5 text-rose-500" />
+                    <span>Customer Service</span>
+                    {pendingReportsCount > 0 ? (
+                      <span className="text-[10px] px-1.5 py-0.2 bg-rose-500 text-white rounded-full font-mono font-black animate-pulse shadow-2xs">
+                        {pendingReportsCount}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.2 bg-slate-200 text-slate-700 rounded-full font-mono font-bold">
+                        {reports.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
               </div>
 
-              {/* Add Announcement Form */}
-              {showAddAnnouncement && (
-                <form onSubmit={handleCreateAnnouncement} className="bg-white border border-slate-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-2xl">
-                  <h4 className="text-sm font-bold uppercase text-slate-850">Publish Advisory Bulletin specs</h4>
+              {/* Sub-tab A: Public Advisories Bulletin */}
+              {announcementsSubTab === 'bulletin' && (
+                <div className="space-y-6 animate-fade-in">
+                  <div className="flex justify-between items-center">
+                    <h4 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">Public advisories bulletin</h4>
+                    
+                    <button
+                      onClick={() => setShowAddAnnouncement(!showAddAnnouncement)}
+                      className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider transition flex items-center space-x-2 cursor-pointer shadow-xs"
+                    >
+                      <Plus className="h-4.5 w-4.5" />
+                      <span>Publish Advisory Notice</span>
+                    </button>
+                  </div>
+
+                  {/* Add Announcement Form */}
+                  {showAddAnnouncement && (
+                    <form onSubmit={handleCreateAnnouncement} className="bg-white border border-slate-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-2xl">
+                      <h4 className="text-sm font-bold uppercase text-slate-850">Publish Advisory Bulletin specs</h4>
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notice Title</label>
+                          <input 
+                            type="text" 
+                            required
+                            placeholder="e.g. Pipeline Disruption Natumolan Station"
+                            value={newAnnouncement.title}
+                            onChange={(e) => setNewAnnouncement({ ...newAnnouncement, title: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notice Category</label>
+                          <select
+                            value={newAnnouncement.category}
+                            onChange={(e: any) => setNewAnnouncement({ ...newAnnouncement, category: e.target.value })}
+                            className="bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-3 text-xs font-bold text-slate-700"
+                          >
+                            <option value="disruption">Service Disruption / Interruption</option>
+                            <option value="maintenance">Preventive Maintenance</option>
+                            <option value="event">Community Event</option>
+                            <option value="info">General Info Announcement</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notice Content Context</label>
+                          <textarea 
+                            rows={4}
+                            required
+                            placeholder="Tell the water consumers about this schedule..."
+                            value={newAnnouncement.content}
+                            onChange={(e) => setNewAnnouncement({ ...newAnnouncement, content: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
+                          ></textarea>
+                        </div>
+                      </div>
+                      <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                        <button 
+                          type="button" 
+                          onClick={() => setShowAddAnnouncement(false)} 
+                          className="px-4.5 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold text-slate-705 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button 
+                          type="submit" 
+                          className="px-4.5 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold cursor-pointer"
+                        >
+                          Publish Advisory
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  {/* Announcements list */}
                   <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notice Title</label>
-                      <input 
-                        type="text" 
-                        required
-                        placeholder="e.g. Pipeline Disruption Natumolan Station"
-                        value={newAnnouncement.title}
-                        onChange={(e) => setNewAnnouncement({ ...newAnnouncement, title: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notice Category</label>
-                      <select
-                        value={newAnnouncement.category}
-                        onChange={(e: any) => setNewAnnouncement({ ...newAnnouncement, category: e.target.value })}
-                        className="bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-3 text-xs font-bold text-slate-700"
-                      >
-                        <option value="disruption">Service Disruption / Interruption</option>
-                        <option value="maintenance">Preventive Maintenance</option>
-                        <option value="event">Community Event</option>
-                        <option value="info">General Info Announcement</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notice Content Context</label>
-                      <textarea 
-                        rows={4}
-                        required
-                        placeholder="Tell the water consumers about this schedule..."
-                        value={newAnnouncement.content}
-                        onChange={(e) => setNewAnnouncement({ ...newAnnouncement, content: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                      ></textarea>
-                    </div>
+                    {announcements.map((ann, aIdx) => (
+                      <div key={`ann-card-${ann.id || ''}-${aIdx}`} className="bg-white border border-slate-150 rounded-2xl p-6 shadow-sm flex flex-col justify-between">
+                        <div>
+                          <div className="flex justify-between items-center text-xs font-bold mb-2">
+                            <span className="text-blue-600 bg-blue-50 border border-blue-105 px-2 py-0.5 rounded text-[10px] uppercase">{ann.category}</span>
+                            <span className="text-slate-400">{ann.date}</span>
+                          </div>
+                          <h4 className="text-base font-extrabold text-slate-900">{ann.title}</h4>
+                          <p className="text-xs text-slate-600 mt-2 leading-relaxed">{ann.content}</p>
+                        </div>
+                        <div className="pt-3 border-t border-slate-50 mt-4 flex justify-between items-center text-[10px] uppercase font-bold text-slate-400">
+                          <span>Posted by: {ann.postedBy}</span>
+                          <div className="flex items-center space-x-3">
+                            <button
+                              onClick={() => setEditingAnnouncementModal({ ...ann })}
+                              className="text-blue-600 hover:underline cursor-pointer"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeleteAnnouncement(ann)}
+                              className="text-rose-600 hover:underline cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
-                    <button 
-                      type="button" 
-                      onClick={() => setShowAddAnnouncement(false)} 
-                      className="px-4.5 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold text-slate-705"
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      type="submit" 
-                      className="px-4.5 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold"
-                    >
-                      Publish Advisory
-                    </button>
-                  </div>
-                </form>
+                </div>
               )}
 
-              {/* Announcements list */}
-              <div className="space-y-4">
-                {announcements.map((ann, aIdx) => (
-                  <div key={`ann-card-${ann.id || ''}-${aIdx}`} className="bg-white border border-slate-150 rounded-2xl p-6 shadow-sm flex flex-col justify-between">
-                    <div>
-                      <div className="flex justify-between items-center text-xs font-bold mb-2">
-                        <span className="text-blue-600 bg-blue-50 border border-blue-105 px-2 py-0.5 rounded text-[10px] uppercase">{ann.category}</span>
-                        <span className="text-slate-400">{ann.date}</span>
-                      </div>
-                      <h4 className="text-base font-extrabold text-slate-900">{ann.title}</h4>
-                      <p className="text-xs text-slate-600 mt-2 leading-relaxed">{ann.content}</p>
-                    </div>
-                    <div className="pt-3 border-t border-slate-50 mt-4 flex justify-between items-center text-[10px] uppercase font-bold text-slate-400">
-                      <span>Posted by: {ann.postedBy}</span>
-                      <div className="flex items-center space-x-3">
-                        <button
-                          onClick={() => setEditingAnnouncementModal({ ...ann })}
-                          className="text-blue-600 hover:underline cursor-pointer"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDeleteAnnouncement(ann)}
-                          className="text-rose-600 hover:underline cursor-pointer"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              {/* Sub-tab B: Customer Service Inquiries */}
+              {announcementsSubTab === 'customer_service' && (
+                <div className="animate-fade-in">
+                  <ConsumerReportsManager
+                    currentUser={currentUser}
+                    reports={reports}
+                    barangays={barangayList}
+                    onRefreshReports={() => loadAllDataFromStore(true)}
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -5551,7 +5986,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <div className="flex items-center space-x-2 shrink-0">
                   <button
                     onClick={() => {
-                      alert("TWD Water Bills Ledger exported as PDF/CSV.");
+                      toast.success('Export Completed', 'TWD Water Bills Ledger exported as PDF/CSV.');
                     }}
                     className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-xl text-xs uppercase tracking-wider transition shadow-2xs flex items-center space-x-2 cursor-pointer"
                   >
@@ -5562,167 +5997,179 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               </div>
 
               {/* Bills List Table */}
-              <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-sm">
-                <div className="w-full overflow-x-auto">
-                  <table className="min-w-full text-xs text-left">
-                    <thead className="bg-slate-800 text-white font-extrabold uppercase border-b border-slate-700 text-[10px] select-none tracking-wider">
-                      <tr>
-                        <th className="px-3 py-3 whitespace-nowrap">Billing Period</th>
-                        <th className="px-3 py-3 whitespace-nowrap">Account #</th>
-                        <th className="px-3 py-3 whitespace-nowrap">Consumer Name</th>
-                        <th className="px-3 py-3 whitespace-nowrap">Meter #</th>
-                        <th className="px-3 py-3 whitespace-nowrap text-right">Consumption</th>
-                        <th className="px-3 py-3 whitespace-nowrap text-right">Bill Amount</th>
-                        <th className="px-2 py-3 whitespace-nowrap text-center">Status</th>
-                        <th className="px-3 py-3 whitespace-nowrap text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200 text-xs font-medium bg-white">
-                      {(() => {
-                        const filteredBills = readings
-                          .filter(r => r.status === 'verified')
-                          .filter(r => {
-                            if (billStatusFilter === 'unpaid') return r.paymentStatus !== 'paid' && r.status !== 'cancelled';
-                            if (billStatusFilter === 'paid') return r.paymentStatus === 'paid';
-                            if (billStatusFilter === 'overdue') return r.paymentStatus !== 'paid' && r.status !== 'cancelled' && r.isOverdue;
-                            if (billStatusFilter === 'cancelled') return r.status === 'cancelled';
-                            return true;
-                          })
-                          .filter(r => {
-                            if (!billSearch) return true;
-                            const q = (billSearch || '').toLowerCase();
-                            return (r.accountNumber || '').toLowerCase().includes(q) || 
-                                   (r.consumerName || '').toLowerCase().includes(q) || 
-                                   (r.billingPeriod && r.billingPeriod.toLowerCase().includes(q));
-                          });
+              {(() => {
+                const filteredBills = readings
+                  .filter(r => r.status === 'verified')
+                  .filter(r => {
+                    if (billStatusFilter === 'unpaid') return r.paymentStatus !== 'paid' && r.status !== 'cancelled';
+                    if (billStatusFilter === 'paid') return r.paymentStatus === 'paid';
+                    if (billStatusFilter === 'overdue') return r.paymentStatus !== 'paid' && r.status !== 'cancelled' && r.isOverdue;
+                    if (billStatusFilter === 'cancelled') return r.status === 'cancelled';
+                    return true;
+                  })
+                  .filter(r => {
+                    if (!billSearch) return true;
+                    const q = (billSearch || '').toLowerCase();
+                    return (r.accountNumber || '').toLowerCase().includes(q) || 
+                           (r.consumerName || '').toLowerCase().includes(q) || 
+                           (r.billingPeriod && r.billingPeriod.toLowerCase().includes(q));
+                  });
 
-                        if (filteredBills.length === 0) {
-                          return (
+                const paginatedBills = filteredBills.slice((billPage - 1) * 10, billPage * 10);
+
+                return (
+                  <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl">
+                    <div className="w-full overflow-x-auto">
+                      <table className="min-w-full text-xs text-left">
+                        <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase border-b border-slate-800 text-[10px] select-none tracking-wider">
+                          <tr>
+                            <th className="px-3 py-3 whitespace-nowrap">Billing Period</th>
+                            <th className="px-3 py-3 whitespace-nowrap">Account #</th>
+                            <th className="px-3 py-3 whitespace-nowrap">Consumer Name</th>
+                            <th className="px-3 py-3 whitespace-nowrap">Meter #</th>
+                            <th className="px-3 py-3 whitespace-nowrap text-right">Consumption</th>
+                            <th className="px-3 py-3 whitespace-nowrap text-right">Bill Amount</th>
+                            <th className="px-2 py-3 whitespace-nowrap text-center">Status</th>
+                            <th className="px-3 py-3 whitespace-nowrap text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/80 text-xs font-medium bg-slate-900 text-slate-200">
+                          {filteredBills.length === 0 ? (
                             <tr>
-                              <td colSpan={8} className="px-4 py-12 text-center text-slate-700 bg-white">
+                              <td colSpan={8} className="px-4 py-12 text-center text-slate-400 bg-slate-900">
                                 <div className="flex flex-col items-center justify-center space-y-2">
-                                  <FileText className="h-8 w-8 text-slate-400" />
-                                  <p className="font-extrabold text-sm text-slate-900">No bills found matching your criteria</p>
-                                  <p className="text-xs text-slate-600 font-bold">Try adjusting your search query or status filter.</p>
+                                  <FileText className="h-8 w-8 text-slate-500" />
+                                  <p className="font-extrabold text-sm text-slate-200">No bills found matching your criteria</p>
+                                  <p className="text-xs text-slate-400 font-bold">Try adjusting your search query or status filter.</p>
                                 </div>
                               </td>
                             </tr>
-                          );
-                        }
+                          ) : (
+                            paginatedBills.map((bill, bIdx) => {
+                              const totalBill = calculateCostOf(bill.consumption, bill.classification);
+                              const isPaid = bill.paymentStatus === 'paid';
+                              const isCancelled = bill.status === 'cancelled';
 
-                        return filteredBills.map((bill, bIdx) => {
-                          const totalBill = calculateCostOf(bill.consumption, bill.classification);
-                          const isPaid = bill.paymentStatus === 'paid';
-                          const isCancelled = bill.status === 'cancelled';
-
-                          return (
-                            <tr key={`bill-row-${bill.id || ''}-${bIdx}`} className="hover:bg-slate-50 transition-colors bg-white">
-                              <td className="px-3 py-3 whitespace-nowrap font-black text-slate-900">
-                                {bill.billingPeriod || 'Current Period'}
-                              </td>
-                              <td className="px-3 py-3 whitespace-nowrap">
-                                <span className="font-mono font-bold text-blue-900 bg-blue-100/90 px-2 py-0.5 rounded border border-blue-300 text-xs inline-block">
-                                  {bill.accountNumber}
-                                </span>
-                              </td>
-                              <td className="px-3 py-3 whitespace-nowrap font-black text-slate-900">
-                                {bill.consumerName}
-                              </td>
-                              <td className="px-3 py-3 whitespace-nowrap font-mono font-extrabold text-slate-800 text-xs">
-                                {bill.meterNumber}
-                              </td>
-                              <td className="px-3 py-3 whitespace-nowrap text-right">
-                                <span className="inline-flex items-center justify-end space-x-1 bg-slate-900 text-cyan-300 font-mono font-black text-xs px-2.5 py-1 rounded-md border border-slate-800 shadow-2xs">
-                                  <Droplet className="h-3 w-3 text-cyan-400 shrink-0" />
-                                  <span>{bill.consumption} m³</span>
-                                </span>
-                              </td>
-                              <td className="px-3 py-3 whitespace-nowrap text-right font-mono font-black text-slate-950 text-sm">
-                                {isCancelled ? (
-                                  <span className="line-through text-slate-400">₱{totalBill.toFixed(2)}</span>
-                                ) : (
-                                  <span className="text-slate-950 font-black">₱{totalBill.toFixed(2)}</span>
-                                )}
-                              </td>
-                              <td className="px-2 py-3 whitespace-nowrap text-center">
-                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
-                                  isCancelled
-                                    ? 'bg-slate-100 text-slate-900 border-slate-300'
-                                    : isPaid
-                                    ? 'bg-emerald-100 text-emerald-950 border-emerald-300'
-                                    : 'bg-amber-100 text-amber-950 border-amber-300'
-                                }`}>
-                                  {isCancelled ? 'CANCELLED' : isPaid ? 'PAID' : 'UNPAID'}
-                                </span>
-                              </td>
-                              <td className="px-3 py-3 whitespace-nowrap text-right">
-                                <div className="flex items-center justify-end gap-1">
-                                  <button
-                                    onClick={() => {
-                                      const foundConsumer = consumers.find(c => c.accountNumber === bill.accountNumber) || {
-                                        accountNumber: bill.accountNumber,
-                                        name: bill.consumerName,
-                                        address: bill.address || 'SIHAYON-LEFT (ZONE-11A)',
-                                        sitioZone: bill.addressZone || 'ZONE-11A',
-                                        contactNumber: '+63 917 000 0000',
-                                        email: 'consumer@tagoloanwater.gov.ph',
-                                        meterNumber: bill.meterNumber,
-                                        meterBrand: bill.meterBrand || 'EVER',
-                                        status: 'active' as const,
-                                        isRegistered: true,
-                                        consumerType: (bill.classification || 'Residential') as 'Residential' | 'Commercial',
-                                        outstandingBalance: bill.arrears || 0,
-                                        sequenceNo: bill.sequenceNo || '135',
-                                      };
-                                      setSelectedNoticeConsumer(foundConsumer);
-                                      setSelectedNoticeReading(bill);
-                                    }}
-                                    className="px-2.5 py-1 bg-blue-900 hover:bg-blue-800 text-white font-bold text-xs rounded-md transition inline-flex items-center space-x-1 cursor-pointer shadow-2xs border border-blue-900 shrink-0"
-                                    title="View & Print Official Notice"
-                                  >
-                                    <ReceiptText className="h-3.5 w-3.5 text-blue-300" />
-                                    <span>View Notice</span>
-                                  </button>
-
-                                  {!isCancelled && !isPaid && (
-                                    <>
+                              return (
+                                <tr key={`bill-row-${bill.id || ''}-${bIdx}`} className="hover:bg-slate-800/60 transition-colors bg-slate-900">
+                                  <td className="px-3 py-3 whitespace-nowrap font-black text-white">
+                                    {bill.billingPeriod || 'Current Period'}
+                                  </td>
+                                  <td className="px-3 py-3 whitespace-nowrap">
+                                    <span className="font-mono font-bold text-sky-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 text-xs inline-block">
+                                      {bill.accountNumber}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-3 whitespace-nowrap font-black text-white">
+                                    {bill.consumerName}
+                                  </td>
+                                  <td className="px-3 py-3 whitespace-nowrap font-mono font-extrabold text-slate-200 text-xs">
+                                    {bill.meterNumber}
+                                  </td>
+                                  <td className="px-3 py-3 whitespace-nowrap text-right">
+                                    <span className="inline-flex items-center justify-end space-x-1 bg-slate-950 text-cyan-300 font-mono font-black text-xs px-2.5 py-1 rounded-md border border-slate-800 shadow-2xs">
+                                      <Droplet className="h-3 w-3 text-cyan-400 shrink-0" />
+                                      <span>{bill.consumption} m³</span>
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-3 whitespace-nowrap text-right font-mono font-black text-white text-sm">
+                                    {isCancelled ? (
+                                      <span className="line-through text-slate-500">₱{totalBill.toFixed(2)}</span>
+                                    ) : (
+                                      <span className="text-white font-black">₱{totalBill.toFixed(2)}</span>
+                                    )}
+                                  </td>
+                                  <td className="px-2 py-3 whitespace-nowrap text-center">
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
+                                      isCancelled
+                                        ? 'bg-slate-800 text-slate-300 border-slate-700'
+                                        : isPaid
+                                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
+                                        : 'bg-amber-950/80 text-amber-300 border-amber-800/80'
+                                    }`}>
+                                      {isCancelled ? 'CANCELLED' : isPaid ? 'PAID' : 'UNPAID'}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-3 whitespace-nowrap text-right">
+                                    <div className="flex items-center justify-end gap-1">
                                       <button
                                         onClick={() => {
-                                          alert(`SMS and Email bill notification resent to consumer ${bill.consumerName} (Account #${bill.accountNumber}).`);
+                                          const foundConsumer = consumers.find(c => c.accountNumber === bill.accountNumber) || {
+                                            accountNumber: bill.accountNumber,
+                                            name: bill.consumerName,
+                                            address: bill.address || 'SIHAYON-LEFT (ZONE-11A)',
+                                            sitioZone: bill.addressZone || 'ZONE-11A',
+                                            contactNumber: '+63 917 000 0000',
+                                            email: 'consumer@tagoloanwater.gov.ph',
+                                            meterNumber: bill.meterNumber,
+                                            meterBrand: bill.meterBrand || 'EVER',
+                                            status: 'active' as const,
+                                            isRegistered: true,
+                                            consumerType: (bill.classification || 'Residential') as 'Residential' | 'Commercial',
+                                            outstandingBalance: bill.arrears || 0,
+                                            sequenceNo: bill.sequenceNo || '135',
+                                          };
+                                          setSelectedNoticeConsumer(foundConsumer);
+                                          setSelectedNoticeReading(bill);
                                         }}
-                                        className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-md transition inline-flex items-center space-x-1 cursor-pointer shadow-2xs shrink-0"
-                                        title="Resend Notice"
+                                        className="px-2.5 py-1 bg-blue-900 hover:bg-blue-800 text-white font-bold text-xs rounded-md transition inline-flex items-center space-x-1 cursor-pointer shadow-2xs border border-blue-900 shrink-0"
+                                        title="View & Print Official Notice"
                                       >
-                                        <Send className="h-3.5 w-3.5 text-white" />
-                                        <span>Resend</span>
+                                        <ReceiptText className="h-3.5 w-3.5 text-blue-300" />
+                                        <span>View Notice</span>
                                       </button>
 
-                                      <button
-                                        onClick={() => {
-                                          const reason = prompt(`Reason for cancelling bill #${bill.id} (Account #${bill.accountNumber}):`);
-                                          if (reason && reason.trim()) {
-                                            setReadings(prev => prev.map(r => r.id === bill.id ? { ...r, status: 'cancelled' as any } : r));
-                                            alert(`Bill #${bill.id} has been marked as CANCELLED.\nReason: "${reason}"\nAudit trail record generated permanently.`);
-                                          }
-                                        }}
-                                        className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-md transition inline-flex items-center space-x-1 cursor-pointer shadow-2xs shrink-0"
-                                        title="Cancel Bill"
-                                      >
-                                        <XCircle className="h-3.5 w-3.5 text-white" />
-                                        <span>Cancel</span>
-                                      </button>
-                                    </>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        });
-                      })()}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                                      {!isCancelled && !isPaid && (
+                                        <>
+                                          <button
+                                            onClick={() => {
+                                              toast.success(
+                                                'Notice Resent',
+                                                `SMS and Email bill notification resent to consumer ${bill.consumerName} (Account #${bill.accountNumber}).`
+                                              );
+                                            }}
+                                            className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-md transition inline-flex items-center space-x-1 cursor-pointer shadow-2xs shrink-0"
+                                            title="Resend Notice"
+                                          >
+                                            <Send className="h-3.5 w-3.5 text-white" />
+                                            <span>Resend</span>
+                                          </button>
+
+                                          <button
+                                            onClick={() => {
+                                              setCancelBillModal({
+                                                isOpen: true,
+                                                bill: bill,
+                                                reason: ''
+                                              });
+                                            }}
+                                            className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-md transition inline-flex items-center space-x-1 cursor-pointer shadow-2xs shrink-0"
+                                            title="Cancel Bill"
+                                          >
+                                            <XCircle className="h-3.5 w-3.5 text-white" />
+                                            <span>Cancel</span>
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <TablePagination
+                      currentPage={billPage}
+                      totalItems={filteredBills.length}
+                      pageSize={10}
+                      onPageChange={setBillPage}
+                      itemName="water bills"
+                    />
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -6094,11 +6541,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       <button
                         onClick={() => {
                           if (selectedBillIds.length === 0) {
-                            alert("Please select at least one bill to process payment.");
+                            toast.warning('No Bill Selected', 'Please select at least one bill to process payment.');
                             return;
                           }
                           if (paymentAmountPaid <= 0) {
-                            alert("Please enter a valid cash amount tendered greater than 0.");
+                            toast.warning('Invalid Amount', 'Please enter a valid cash amount tendered greater than 0.');
                             return;
                           }
 
@@ -6201,6 +6648,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           // Real-Time Consumer Portal Sync & Notification
                           mockDb.addNotification({
                             accountNumber: selectedPaymentAccount.accountNumber,
+                            consumerId: selectedPaymentAccount.id,
+                            userId: selectedPaymentAccount.linkedUserId,
+                            consumerEmail: selectedPaymentAccount.email,
                             title: `Official Receipt Issued - OR #${generatedOrNumber}`,
                             message: `In-office cash payment of ₱${totalApplied.toFixed(2)} processed at Tagoloan Water District Office Cashier. OR #${generatedOrNumber}. Updated ${selectedBillIds.length} bill(s). Remaining Arrears Balance: ₱${newConsumerArrears.toFixed(2)}.`,
                             type: 'payment',
@@ -6405,16 +6855,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     </span>
                   </button>
                 </div>
-
-                {staffSubTab === 'users' && (
-                  <button
-                    onClick={() => setShowAddStaff(!showAddStaff)}
-                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider transition flex items-center space-x-2 cursor-pointer shadow-xs"
-                  >
-                    <Plus className="h-4.5 w-4.5" />
-                    <span>Enroll Staff User</span>
-                  </button>
-                )}
               </div>
 
               {/* VIEW 1: STAFF DIRECTORY */}
@@ -6450,163 +6890,84 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     </button>
                   </div>
 
-                  <div>
-                    <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-wider">Admin Staff & System Permissions</h3>
-                    <p className="text-xs text-slate-500 mt-0.5">Manage administrative portal users and role access levels.</p>
-                  </div>
-
-                  {/* Add Staff Form */}
-                  {showAddStaff && (
-                    <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-xl">
-                      <h4 className="text-xs font-black uppercase text-slate-900">Enroll New Administrative Staff</h4>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Full Name</label>
-                          <input
-                            type="text"
-                            placeholder="e.g. Maria Clara"
-                            value={newStaff.name}
-                            onChange={(e) => setNewStaff({ ...newStaff, name: e.target.value })}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Email Address</label>
-                          <input
-                            type="email"
-                            placeholder="e.g. m.clara@tagoloanwater.gov.ph"
-                            value={newStaff.email}
-                            onChange={(e) => setNewStaff({ ...newStaff, email: e.target.value })}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Assigned Role</label>
-                          <select
-                            value={newStaff.role}
-                            onChange={(e) => setNewStaff({ ...newStaff, role: e.target.value })}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs font-bold text-slate-700"
-                          >
-                            <option value="Administrator">Administrator (Full Access)</option>
-                            <option value="Supervisor">Supervisor (Approvals & Operations)</option>
-                            <option value="Cashier">Cashier (Process Payments)</option>
-                            <option value="Billing Officer">Billing Officer (Ledger & Reports)</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Department</label>
-                          <input
-                            type="text"
-                            placeholder="e.g. Treasury & Finance"
-                            value={newStaff.department}
-                            onChange={(e) => setNewStaff({ ...newStaff, department: e.target.value })}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                          />
-                        </div>
-                      </div>
-                      <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
-                        <button
-                          onClick={() => setShowAddStaff(false)}
-                          className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (!newStaff.name || !newStaff.email) {
-                              alert("Please fill in staff name and email.");
-                              return;
-                            }
-                            const created = {
-                              id: `ST-${Math.floor(100 + Math.random() * 900)}`,
-                              name: newStaff.name,
-                              email: newStaff.email,
-                              role: newStaff.role,
-                              department: newStaff.department || 'General Admin',
-                              status: 'active'
-                            };
-                            setStaffList(prev => [...prev, created]);
-                            
-                            // Persist staff user to database
-                            const currentUsers = mockDb.getUsers();
-                            const roleStr = (created.role || '').toLowerCase();
-                            currentUsers.push({
-                              id: created.id,
-                              name: created.name,
-                              email: created.email,
-                              role: roleStr === 'administrator' ? 'admin' : (roleStr === 'cashier' ? 'cashier' : 'staff'),
-                              status: 'active',
-                              password: 'TwdStaff2025!'
-                            });
-                            mockDb.saveUsers(currentUsers);
-                            
-                            setShowAddStaff(false);
-                            mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Enrolled Admin Staff', `Created staff account for ${newStaff.name} (${newStaff.role})`);
-                            alert(`Staff user ${newStaff.name} successfully enrolled!`);
-                          }}
-                          className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold"
-                        >
-                          Save Staff User
-                        </button>
-                      </div>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-wider">Admin Staff & System Permissions</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">Manage administrative portal users and role access levels.</p>
                     </div>
-                  )}
+                    <div className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-slate-300 shrink-0">
+                      <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                      <span>Direct Staff Enrollment Disabled • Access Managed via Mobile/System RBAC</span>
+                    </div>
+                  </div>
 
                   {/* Staff List Table */}
-                  <div className="bg-white border border-slate-200 rounded-none overflow-hidden shadow-sm">
-                    <table className="min-w-full text-xs text-left">
-                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-200">
-                        <tr>
-                          <th className="px-6 py-4">Staff ID</th>
-                          <th className="px-6 py-4">Name & Email</th>
-                          <th className="px-6 py-4">Role Title</th>
-                          <th className="px-6 py-4">Department</th>
-                          <th className="px-6 py-4">Status</th>
-                          <th className="px-6 py-4 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 font-medium">
-                        {staffList.map((st, sIdx) => (
-                          <tr key={`staff-user-${st.id || ''}-${st.email || ''}-${sIdx}`} className="hover:bg-slate-50">
-                            <td className="px-6 py-4 font-mono font-bold text-slate-900">{st.id}</td>
-                            <td className="px-6 py-4">
-                              <span className="font-extrabold text-slate-900 block">{st.name}</span>
-                              <span className="text-slate-500 text-[10px] font-mono">{st.email}</span>
-                            </td>
-                            <td className="px-6 py-4 font-bold text-blue-700">{st.role}</td>
-                            <td className="px-6 py-4 text-slate-600">{st.department}</td>
-                            <td className="px-6 py-4">
-                              <span className="bg-emerald-100 text-emerald-800 font-bold px-2.5 py-1 rounded-full text-[10px] uppercase">
-                                {st.status}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 text-right space-x-2">
-                              <button
-                                onClick={() => setEditingStaffModal({ ...st })}
-                                className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 text-blue-700 font-bold text-[10px] uppercase rounded-lg transition"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                onClick={() => {
-                                  alert(`Password reset notification initiated for ${st.email}`);
-                                }}
-                                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] uppercase rounded-lg transition"
-                              >
-                                Reset Pwd
-                              </button>
-                              <button
-                                onClick={() => handleDeleteStaff(st)}
-                                className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[10px] uppercase rounded-lg transition"
-                              >
-                                Terminate
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  {(() => {
+                    const paginatedStaff = staffList.slice((staffPage - 1) * 10, staffPage * 10);
+                    return (
+                      <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl">
+                        <table className="min-w-full text-xs text-left">
+                          <thead className="bg-slate-950 text-slate-300 font-bold uppercase border-b border-slate-800 text-[10px] tracking-wider">
+                            <tr>
+                              <th className="px-6 py-4">Staff ID</th>
+                              <th className="px-6 py-4">Name & Email</th>
+                              <th className="px-6 py-4">Role Title</th>
+                              <th className="px-6 py-4">Department</th>
+                              <th className="px-6 py-4">Status</th>
+                              <th className="px-6 py-4 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800/80 font-medium text-slate-200 bg-slate-900">
+                            {paginatedStaff.map((st, sIdx) => (
+                              <tr key={`staff-user-${st.id || ''}-${st.email || ''}-${sIdx}`} className="hover:bg-slate-800/60 transition">
+                                <td className="px-6 py-4 font-mono font-bold text-white">{st.id}</td>
+                                <td className="px-6 py-4">
+                                  <span className="font-extrabold text-white block">{st.name}</span>
+                                  <span className="text-slate-400 text-[10px] font-mono">{st.email}</span>
+                                </td>
+                                <td className="px-6 py-4 font-bold text-sky-400">{st.role}</td>
+                                <td className="px-6 py-4 text-slate-300">{st.department}</td>
+                                <td className="px-6 py-4">
+                                  <span className="bg-emerald-950/80 text-emerald-300 border border-emerald-800/80 font-bold px-2.5 py-1 rounded-full text-[10px] uppercase">
+                                    {st.status}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 text-right space-x-2">
+                                  <button
+                                    onClick={() => setEditingStaffModal({ ...st })}
+                                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 font-bold text-[10px] uppercase rounded-lg transition cursor-pointer"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      toast.info('Password Reset Initiated', `Password reset notification initiated for ${st.email}`);
+                                    }}
+                                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] uppercase rounded-lg transition"
+                                  >
+                                    Reset Pwd
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteStaff(st)}
+                                    className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[10px] uppercase rounded-lg transition"
+                                  >
+                                    Terminate
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <TablePagination
+                          currentPage={staffPage}
+                          totalItems={staffList.length}
+                          pageSize={10}
+                          onPageChange={setStaffPage}
+                          itemName="staff users"
+                        />
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -6629,159 +6990,218 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           )}
 
           {/* 11. BARANGAYS MODULE */}
-          {activeTab === 'barangays' && (
-            <div className="space-y-6 animate-fade-in" id="barangays-tab">
-              <div className="flex justify-between items-center">
-                <div>
-                  <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-wider">Barangays & Service Area Zones</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">Municipal water distribution zones and collection schedules in Tagoloan.</p>
-                </div>
-                <button
-                  onClick={() => setShowAddBarangay(!showAddBarangay)}
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider transition flex items-center space-x-2"
-                >
-                  <Plus className="h-4.5 w-4.5" />
-                  <span>Add Service Zone</span>
-                </button>
-              </div>
+          {activeTab === 'barangays' && (() => {
+            // Robust synchronization & mapping of consumers to their Barangay and Zone
+            const getConsumersForBarangay = (bg: Barangay) => {
+              const bgName = (bg.name || '').trim().toLowerCase();
+              const bgId = (bg.id || '').trim().toLowerCase();
+              const bgCode = (bg.code || '').trim().toLowerCase();
 
-              {/* Add Barangay Form */}
-              {showAddBarangay && (
-                <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-lg space-y-4 max-w-xl">
-                  <h4 className="text-xs font-black uppercase text-slate-900">Define New Barangay Service Area</h4>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Barangay Name</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Casinglot"
-                        value={newBarangay.name}
-                        onChange={(e) => setNewBarangay({ ...newBarangay, name: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Zone Code</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. CS-07"
-                        value={newBarangay.code}
-                        onChange={(e) => setNewBarangay({ ...newBarangay, code: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Collection Schedule</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. 1st - 10th of Month"
-                        value={newBarangay.schedule}
-                        onChange={(e) => setNewBarangay({ ...newBarangay, schedule: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Rate per m³ (₱)</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={newBarangay.ratePerM3}
-                        onChange={(e) => setNewBarangay({ ...newBarangay, ratePerM3: parseFloat(e.target.value) || 24.5 })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-xs font-mono font-bold"
-                      />
-                    </div>
+              return consumers.filter(c => {
+                // 1. Direct Barangay ID match
+                if (c.barangayId && c.barangayId.trim().toLowerCase() === bgId) return true;
+
+                // 2. Exact or normalized barangay name match
+                const cBarangay = (c.barangay || '').trim().toLowerCase();
+                if (cBarangay) {
+                  if (cBarangay === bgName) return true;
+                  if (cBarangay.includes(bgName) || bgName.includes(cBarangay)) return true;
+                  const cleanC = cBarangay.replace(/\./g, '').replace(/santa/g, 'sta');
+                  const cleanBg = bgName.replace(/\./g, '').replace(/santa/g, 'sta');
+                  if (cleanC === cleanBg) return true;
+                }
+
+                // 3. Address match
+                const cAddr = (c.address || '').trim().toLowerCase();
+                if (cAddr) {
+                  if (cAddr.includes(bgName)) return true;
+                  if (bgCode && cAddr.includes(bgCode)) return true;
+                  const cleanAddr = cAddr.replace(/\./g, '').replace(/santa/g, 'sta');
+                  const cleanBg = bgName.replace(/\./g, '').replace(/santa/g, 'sta');
+                  if (cleanAddr.includes(cleanBg)) return true;
+                }
+
+                // 4. Fallback check for Poblacion if no other barangay matches
+                if (bg.code === 'PB-01') {
+                  const matchesOther = barangayList.some(other => {
+                    if (other.id === bg.id) return false;
+                    const otherName = (other.name || '').trim().toLowerCase();
+                    const otherCode = (other.code || '').trim().toLowerCase();
+                    const cleanOther = otherName.replace(/\./g, '').replace(/santa/g, 'sta');
+                    return (c.barangayId && c.barangayId.trim().toLowerCase() === other.id.trim().toLowerCase()) ||
+                           (cBarangay && (cBarangay === otherName || cBarangay.replace(/\./g, '').replace(/santa/g, 'sta') === cleanOther)) ||
+                           (cAddr && (cAddr.includes(otherName) || (otherCode && cAddr.includes(otherCode))));
+                  });
+                  if (!matchesOther) return true;
+                }
+
+                return false;
+              });
+            };
+
+            return (
+              <div className="space-y-6 animate-fade-in" id="barangays-tab">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-base sm:text-lg font-black text-white uppercase tracking-wider font-sans">Barangays & Service Area Zones</h3>
+                    <p className="text-xs text-slate-400 font-medium mt-0.5">Municipal water distribution zones, collection schedules, and real-time consumer synchronization in Tagoloan.</p>
                   </div>
-                  <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
-                    <button onClick={() => setShowAddBarangay(false)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">
-                      Cancel
-                    </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-slate-300">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                      <span className="font-bold text-white">{consumers.length}</span> Total Consumers Synced Across <span className="font-bold text-white">{barangayList.length}</span> Barangays
+                    </div>
                     <button
-                      onClick={() => {
-                        if (!newBarangay.name) return;
-                        const newEntry = {
-                          id: `BRG-${Math.floor(10 + Math.random() * 90)}`,
-                          name: newBarangay.name.trim(),
-                          code: newBarangay.code.trim().toUpperCase() || 'ZONE',
-                          consumers: 0,
-                          activeMeters: 0,
-                          schedule: newBarangay.schedule || 'Monthly',
-                          supervisor: newBarangay.supervisor,
-                          ratePerM3: newBarangay.ratePerM3
-                        };
-                        const updated = [...barangayList, newEntry];
-                        mockDb.saveBarangays(updated);
-                        setBarangayList(updated);
-                        setShowAddBarangay(false);
-                        mockDb.addAuditLog(currentUser.id, currentUser.name, 'admin', 'Add Barangay Service Zone', `Added barangay service area ${newBarangay.name}`);
-                        alert(`Barangay ${newBarangay.name} successfully registered in system!`);
-                      }}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold"
+                      type="button"
+                      onClick={handleSyncConsumersAndBarangays}
+                      disabled={isSyncingBarangays}
+                      className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition flex items-center space-x-1.5 shadow-md cursor-pointer disabled:opacity-50"
+                      title="Validate and synchronize every consumer into their respective Barangay and Sitio Zone"
                     >
-                      Save Zone
+                      <RefreshCw className={`h-3.5 w-3.5 ${isSyncingBarangays ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingBarangays ? 'Syncing...' : 'Sync Consumers & Zones'}</span>
                     </button>
                   </div>
                 </div>
-              )}
 
-              {/* Barangay Cards Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {barangayList.map((bg, bgIdx) => {
-                  const bgName = (bg.name || '').toLowerCase();
-                  const liveCount = consumers.filter(c => 
-                    c.barangayId === bg.id || 
-                    (c.barangay && c.barangay.toLowerCase() === bgName) || 
-                    (c.address && c.address.toLowerCase().includes(bgName))
-                  ).length;
-                  const displayCount = Math.max(bg.consumers || 0, liveCount);
+                {/* Barangay Cards Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {barangayList.map((bg, bgIdx) => {
+                    const bgConsumers = getConsumersForBarangay(bg);
+                    const activeCount = bgConsumers.filter(c => c.status === 'active').length;
+                    const pendingCount = bgConsumers.filter(c => c.status === 'pending_approval' || c.status === 'pending').length;
+                    const inactiveCount = bgConsumers.filter(c => c.status === 'inactive').length;
+                    const activeMeters = bgConsumers.filter(c => c.meterNumber && c.status === 'active').length;
+                    const resCount = bgConsumers.filter(c => (c.consumerType || 'Residential') === 'Residential').length;
+                    const commCount = bgConsumers.filter(c => c.consumerType === 'Commercial').length;
+                    const uniqueSitios = Array.from(new Set(bgConsumers.map(c => (c.sitioZone || '').trim()).filter(Boolean)));
 
-                  return (
-                    <div key={`bg-card-${bg.id || bg.code || bgIdx}-${bgIdx}`} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h4 className="text-base font-black text-slate-900">{bg.name}</h4>
-                          <span className="text-[11px] text-slate-500 font-medium">Barangay Service Area</span>
+                    return (
+                      <div 
+                        key={`bg-card-${bg.id || bg.code || bgIdx}-${bgIdx}`} 
+                        onClick={() => {
+                          setSelectedBarangayForDetail(bg);
+                          setBarangaySearchQuery('');
+                          setBarangayZoneFilter('all');
+                          setBarangayStatusFilter('all');
+                          setBarangayConsumersPage(1);
+                          setExpandedBarangayConsumerId(null);
+                        }}
+                        className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4 hover:border-blue-500/80 hover:shadow-2xl hover:scale-[1.01] transition-all cursor-pointer group flex flex-col justify-between relative overflow-hidden"
+                      >
+                        <div className="space-y-4">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-base font-black text-white group-hover:text-blue-400 transition-colors">{bg.name}</h4>
+                                <span className="text-[10px] font-mono font-bold text-sky-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                                  {bg.code || 'ZONE'}
+                                </span>
+                              </div>
+                              <span className="text-[11px] text-slate-400 font-medium">Tagoloan Water District Coverage Area</span>
+                            </div>
+                            <div className="p-2.5 rounded-2xl bg-blue-950/60 border border-blue-800/70 text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition-all shadow-xs">
+                              <MapPin className="h-5 w-5" />
+                            </div>
+                          </div>
+
+                          {/* Connection Metrics */}
+                          <div className="grid grid-cols-2 gap-2 text-xs bg-slate-950 p-3.5 rounded-2xl border border-slate-800/80">
+                            <div>
+                              <span className="text-[10px] text-slate-400 font-bold uppercase block">Consumers</span>
+                              <span className="font-extrabold text-white text-sm flex items-center gap-1.5">
+                                {bgConsumers.length} Total
+                                {pendingCount > 0 && (
+                                  <span className="text-[9px] px-1.5 py-0.2 bg-amber-950/80 text-amber-400 rounded border border-amber-800/60 font-semibold">
+                                    {pendingCount} new
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-slate-400 font-bold uppercase block">Active Meters</span>
+                              <span className="font-bold text-emerald-400 text-sm">{activeMeters} installed</span>
+                            </div>
+                            <div className="pt-2 border-t border-slate-900 col-span-2 flex items-center justify-between text-[11px] text-slate-400">
+                              <span>Classification:</span>
+                              <span className="font-bold text-slate-200">{resCount} Res • {commCount} Comm</span>
+                            </div>
+                          </div>
+
+                          {/* Zone / Sitio Coverage Preview with Consumer Counts */}
+                          <div className="space-y-1.5">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Zones & Sitios</span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {uniqueSitios.length > 0 ? (
+                                uniqueSitios.slice(0, 3).map((st, sIdx) => {
+                                  const countInSitio = bgConsumers.filter(c => (c.sitioZone || '').trim() === st).length;
+                                  return (
+                                    <span key={`st-chip-${sIdx}`} className="text-[10px] font-mono px-2 py-0.5 bg-slate-800/80 text-slate-300 rounded border border-slate-700/80 flex items-center gap-1">
+                                      <span>{st}</span>
+                                      <span className="text-sky-400 font-bold">({countInSitio})</span>
+                                    </span>
+                                  );
+                                })
+                              ) : (
+                                <span className="text-[10px] text-slate-500 italic">Central Service Zone</span>
+                              )}
+                              {uniqueSitios.length > 3 && (
+                                <span className="text-[10px] font-mono px-1.5 py-0.5 bg-slate-800 text-slate-400 rounded">
+                                  +{uniqueSitios.length - 3} more
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Supervisor & Rate */}
+                          <div className="text-[11px] text-slate-400 flex justify-between items-center pt-2 border-t border-slate-800/80">
+                            <span className="truncate max-w-[160px]" title={bg.supervisor || 'District Lead'}>
+                              Lead: <strong className="text-slate-200">{bg.supervisor || 'District Lead'}</strong>
+                            </span>
+                            <span className="font-mono font-bold text-emerald-400 bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-800/60 shrink-0">
+                              ₱{bg.ratePerM3}/m³
+                            </span>
+                          </div>
                         </div>
-                        <MapPin className="h-6 w-6 text-orange-500 shrink-0" />
-                      </div>
 
-                      <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-3 rounded-2xl border border-slate-100">
-                        <div>
-                          <span className="text-[10px] text-slate-400 font-bold uppercase block">Connections</span>
-                          <span className="font-extrabold text-slate-800">{displayCount} active</span>
+                        {/* Card Action Buttons */}
+                        <div className="flex items-center justify-between pt-3 border-t border-slate-800 gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedBarangayForDetail(bg);
+                              setBarangaySearchQuery('');
+                              setBarangayZoneFilter('all');
+                              setBarangayStatusFilter('all');
+                              setBarangayConsumersPage(1);
+                              setExpandedBarangayConsumerId(null);
+                            }}
+                            className="flex-1 py-2 px-3 bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5 border border-blue-500/30 cursor-pointer shadow-xs"
+                          >
+                            <Users className="h-3.5 w-3.5" />
+                            <span>View Consumers ({bgConsumers.length}) & Details</span>
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingBarangayModal({ ...bg });
+                            }}
+                            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-bold transition border border-slate-700 cursor-pointer"
+                            title="Edit Zone Parameters"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
                         </div>
-                        <div>
-                          <span className="text-[10px] text-slate-400 font-bold uppercase block">Schedule</span>
-                          <span className="font-bold text-slate-700">{bg.schedule}</span>
-                        </div>
                       </div>
-
-                      <div className="text-[11px] text-slate-500 flex justify-between items-center pt-2 border-t border-slate-100">
-                        <span>Area Supervisor: <strong className="text-slate-800">{bg.supervisor}</strong></span>
-                        <span className="font-mono font-bold text-emerald-700">₱{bg.ratePerM3}/m³</span>
-                      </div>
-
-                      <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
-                        <button
-                          onClick={() => setEditingBarangayModal({ ...bg })}
-                          className="px-3 py-1.5 bg-slate-100 hover:bg-blue-50 text-blue-700 rounded-lg text-xs font-bold transition flex items-center space-x-1"
-                        >
-                          <Edit2 className="h-3 w-3" />
-                          <span>Edit Zone</span>
-                        </button>
-                        <button
-                          onClick={() => handleDeleteBarangay(bg)}
-                          className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold transition flex items-center space-x-1"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          <span>Delete</span>
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* 13. PROFILE MODULE */}
           {activeTab === 'profile' && (
@@ -6872,6 +7292,449 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         </div>
       </main>
 
+      {/* 11. BARANGAY CONSUMERS & ZONE DETAILS DRILL-DOWN ROOT OVERLAY MODAL */}
+      {selectedBarangayForDetail && (() => {
+        const bg = barangayList.find(b => b.id === selectedBarangayForDetail.id) || selectedBarangayForDetail;
+        const allInBarangay = getConsumersForBarangay(bg);
+        const uniqueSitios = Array.from(new Set(allInBarangay.map(c => (c.sitioZone || '').trim()).filter(Boolean)));
+        const activeMeters = allInBarangay.filter(c => c.meterNumber && c.status === 'active').length;
+        const activeCount = allInBarangay.filter(c => c.status === 'active').length;
+        const pendingCount = allInBarangay.filter(c => c.status === 'pending_approval' || c.status === 'pending').length;
+        const resCount = allInBarangay.filter(c => (c.consumerType || 'Residential') === 'Residential').length;
+        const commCount = allInBarangay.filter(c => c.consumerType === 'Commercial').length;
+        const totalArrearsInBarangay = allInBarangay.reduce((sum, c) => sum + (Number(c.outstandingBalance) || 0), 0);
+
+        // Filter consumers based on search, zone, status, and category
+        const filteredModalConsumers = allInBarangay.filter(c => {
+          if (barangayZoneFilter !== 'all') {
+            if ((c.sitioZone || '').trim() !== barangayZoneFilter) return false;
+          }
+          if (barangayStatusFilter !== 'all') {
+            if (c.status !== barangayStatusFilter) return false;
+          }
+          if (barangayCategoryFilter !== 'all') {
+            if ((c.consumerType || 'Residential') !== barangayCategoryFilter) return false;
+          }
+          if (barangaySearchQuery.trim()) {
+            const q = barangaySearchQuery.trim().toLowerCase();
+            const nameMatch = (c.name || '').toLowerCase().includes(q);
+            const accMatch = String(c.accountNumber || '').toLowerCase().includes(q);
+            const meterMatch = String(c.meterNumber || '').toLowerCase().includes(q);
+            const sitioMatch = (c.sitioZone || '').toLowerCase().includes(q);
+            const phoneMatch = (c.contactNumber || '').toLowerCase().includes(q);
+            const addrMatch = (c.address || '').toLowerCase().includes(q);
+            return nameMatch || accMatch || meterMatch || sitioMatch || phoneMatch || addrMatch;
+          }
+          return true;
+        });
+
+        const paginatedBarangayConsumers = filteredModalConsumers.slice(
+          (barangayConsumersPage - 1) * 10,
+          barangayConsumersPage * 10
+        );
+
+        return (
+          <div 
+            className="fixed inset-0 z-[110] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-y-auto animate-fade-in select-none"
+            onClick={() => setSelectedBarangayForDetail(null)}
+          >
+            <div 
+              className="bg-slate-900 border border-slate-700/80 rounded-3xl max-w-5xl w-full max-h-[92vh] overflow-hidden flex flex-col shadow-2xl text-slate-100 select-text my-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="bg-slate-950 p-4 sm:p-6 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="p-3 bg-blue-950/80 border border-blue-800/80 rounded-2xl text-blue-400 shrink-0 shadow-xs">
+                    <MapPin className="h-6 w-6" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-lg sm:text-xl font-black text-white truncate">Barangay {bg.name}</h3>
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-blue-900/60 text-blue-300 border border-blue-700">
+                        {bg.code || 'ZONE'}
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                        {allInBarangay.length} Registered Consumers
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1 truncate">
+                      Tagoloan Water District • Zone Coverage & Consumer Directory • Lead: <strong className="text-slate-200">{bg.supervisor || 'Operations Lead'}</strong>
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setEditingBarangayModal({ ...bg })}
+                    className="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition border border-slate-700 cursor-pointer"
+                    title="Edit Zone Parameters & Tariff"
+                  >
+                    <Edit2 className="h-3.5 w-3.5 text-blue-400" />
+                    <span>Edit Parameters</span>
+                  </button>
+
+                  <button 
+                    type="button"
+                    onClick={() => setSelectedBarangayForDetail(null)}
+                    className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer"
+                    title="Close Details Modal (Esc)"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Modal Scrollable Body */}
+              <div className="overflow-y-auto p-4 sm:p-6 space-y-5 flex-1">
+                {/* 5 Summary Stat Metrics */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 shadow-xs space-y-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Consumers</span>
+                    <span className="text-xl sm:text-2xl font-black text-white">{allInBarangay.length}</span>
+                    <span className="text-[10px] text-slate-500 block truncate">
+                      {activeCount} active • {pendingCount} pending
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-emerald-950/30 border border-emerald-900/50 shadow-xs space-y-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block">Active Meters</span>
+                    <span className="text-xl sm:text-2xl font-black text-emerald-300">{activeMeters}</span>
+                    <span className="text-[10px] text-emerald-400/70 block truncate">Operational connections</span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-blue-950/30 border border-blue-900/50 shadow-xs space-y-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 block">Classification</span>
+                    <span className="text-base sm:text-lg font-black text-blue-200">{resCount} Res • {commCount} Comm</span>
+                    <span className="text-[10px] text-blue-400/70 block truncate">Connection types</span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 shadow-xs space-y-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Tariff & Cycle</span>
+                    <span className="text-base sm:text-lg font-mono font-black text-emerald-400">₱{Number(bg.ratePerM3 || 0).toFixed(2)}/m³</span>
+                    <span className="text-[10px] text-slate-400 block truncate" title={bg.schedule}>{bg.schedule || 'Monthly'}</span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-amber-950/20 border border-amber-900/40 shadow-xs space-y-1 col-span-2 sm:col-span-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block">Outstanding Dues</span>
+                    <span className="text-base sm:text-lg font-mono font-black text-amber-300">₱{totalArrearsInBarangay.toFixed(2)}</span>
+                    <span className="text-[10px] text-amber-400/70 block truncate">Total receivables</span>
+                  </div>
+                </div>
+
+                {/* Zone / Sitio Filter Matrix */}
+                {uniqueSitios.length > 0 && (
+                  <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/80 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <Route className="h-3.5 w-3.5 text-blue-400" />
+                        <span>Filter by Sitio / Service Zone</span>
+                      </span>
+                      <span className="text-[11px] text-slate-400 font-mono">{uniqueSitios.length} zones recorded</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setBarangayZoneFilter('all')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                          barangayZoneFilter === 'all'
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-850'
+                        }`}
+                      >
+                        All Zones ({allInBarangay.length})
+                      </button>
+                      {uniqueSitios.map((st, sIdx) => {
+                        const stCount = allInBarangay.filter(c => (c.sitioZone || '').trim() === st).length;
+                        return (
+                          <button
+                            key={`filter-st-${sIdx}`}
+                            type="button"
+                            onClick={() => setBarangayZoneFilter(st)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                              barangayZoneFilter === st
+                                ? 'bg-blue-600 text-white shadow-xs'
+                                : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-850'
+                            }`}
+                          >
+                            <span>{st}</span>
+                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/40 text-slate-200 font-mono font-bold">
+                              {stCount}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Search and Filters Bar */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-950 p-3.5 rounded-2xl border border-slate-800">
+                  <div className="relative flex-1 w-full">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                    <input
+                      type="text"
+                      value={barangaySearchQuery}
+                      onChange={(e) => setBarangaySearchQuery(e.target.value)}
+                      placeholder={`Search in ${bg.name} by name, account #, meter #, address, phone...`}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                    <select
+                      value={barangayStatusFilter}
+                      onChange={(e) => setBarangayStatusFilter(e.target.value)}
+                      className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-200 focus:outline-none cursor-pointer"
+                    >
+                      <option value="all">All Statuses</option>
+                      <option value="active">Active Only</option>
+                      <option value="pending_approval">Pending Approval</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
+
+                    <select
+                      value={barangayCategoryFilter}
+                      onChange={(e) => setBarangayCategoryFilter(e.target.value)}
+                      className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-200 focus:outline-none cursor-pointer"
+                    >
+                      <option value="all">All Types</option>
+                      <option value="Residential">Residential</option>
+                      <option value="Commercial">Commercial</option>
+                    </select>
+
+                    {(barangaySearchQuery || barangayZoneFilter !== 'all' || barangayStatusFilter !== 'all' || barangayCategoryFilter !== 'all') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBarangaySearchQuery('');
+                          setBarangayZoneFilter('all');
+                          setBarangayStatusFilter('all');
+                          setBarangayCategoryFilter('all');
+                        }}
+                        className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition cursor-pointer shrink-0"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Detailed Consumers Table */}
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead className="bg-slate-900 text-slate-300 uppercase text-[10px] tracking-wider font-extrabold border-b border-slate-800">
+                        <tr>
+                          <th className="py-3 px-4">Account Number</th>
+                          <th className="py-3 px-4">Consumer Name</th>
+                          <th className="py-3 px-4">Sitio / Zone</th>
+                          <th className="py-3 px-4">Meter Serial & Brand</th>
+                          <th className="py-3 px-4">Category</th>
+                          <th className="py-3 px-4">Outstanding Due</th>
+                          <th className="py-3 px-4">Status</th>
+                          <th className="py-3 px-4 text-right">Details & Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium">
+                        {paginatedBarangayConsumers.length > 0 ? (
+                          paginatedBarangayConsumers.map((c, cIdx) => {
+                            const isPending = !c.accountNumber || String(c.accountNumber).toUpperCase().startsWith('PENDING') || c.status === 'pending_approval';
+                            const consumerKey = String(c.accountNumber || c.id || `c-${cIdx}`);
+                            const isExpanded = expandedBarangayConsumerId === consumerKey;
+
+                            return (
+                              <React.Fragment key={`bg-con-${consumerKey}`}>
+                                <tr className={`hover:bg-slate-900/60 transition ${isExpanded ? 'bg-slate-900/80' : ''}`}>
+                                  <td className="py-3 px-4 font-mono font-bold whitespace-nowrap">
+                                    {isPending ? (
+                                      <span className="text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800 text-[11px]">
+                                        Pending Issuance
+                                      </span>
+                                    ) : (
+                                      <span className="text-sky-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                                        #{c.accountNumber}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    <p className="font-bold text-white leading-tight">{c.name}</p>
+                                    <p className="text-[10px] text-slate-400 truncate max-w-[180px]">{c.email || c.contactNumber || 'No contact on file'}</p>
+                                  </td>
+                                  <td className="py-3 px-4 whitespace-nowrap">
+                                    <span className="inline-block px-2.5 py-0.5 rounded-md bg-slate-900 text-slate-300 font-mono text-[11px] border border-slate-800">
+                                      {c.sitioZone || 'Central Zone'}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 px-4 whitespace-nowrap font-mono">
+                                    {c.meterNumber ? (
+                                      <span className="text-white font-bold">{c.meterNumber} <span className="text-slate-400 text-[10px]">({c.meterBrand || 'EVER'})</span></span>
+                                    ) : (
+                                      <span className="text-slate-500 italic">No meter linked</span>
+                                    )}
+                                  </td>
+                                  <td className="py-3 px-4 whitespace-nowrap">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                      c.consumerType === 'Commercial'
+                                        ? 'bg-purple-950 text-purple-300 border border-purple-800'
+                                        : 'bg-blue-950 text-blue-300 border border-blue-800'
+                                    }`}>
+                                      {c.consumerType || 'Residential'}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 px-4 whitespace-nowrap font-mono">
+                                    {(Number(c.outstandingBalance) || 0) > 0 ? (
+                                      <span className="text-amber-400 font-bold">₱{(Number(c.outstandingBalance) || 0).toFixed(2)}</span>
+                                    ) : (
+                                      <span className="text-emerald-400 font-bold">₱0.00</span>
+                                    )}
+                                  </td>
+                                  <td className="py-3 px-4 whitespace-nowrap">
+                                    <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${
+                                      c.status === 'active'
+                                        ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                                        : c.status === 'pending_approval' || c.status === 'pending'
+                                        ? 'bg-amber-950 text-amber-300 border-amber-800'
+                                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                                    }`}>
+                                      {c.status === 'pending_approval' ? 'Pending Approval' : c.status}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 px-4 text-right whitespace-nowrap space-x-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => setExpandedBarangayConsumerId(isExpanded ? null : consumerKey)}
+                                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer border inline-flex items-center gap-1 ${
+                                        isExpanded
+                                          ? 'bg-blue-600 text-white border-blue-500'
+                                          : 'bg-slate-800 hover:bg-slate-700 text-sky-300 border-slate-700'
+                                      }`}
+                                      title={isExpanded ? 'Collapse Quick Details' : 'View Quick Details'}
+                                    >
+                                      <span>{isExpanded ? 'Hide' : 'Details'}</span>
+                                      {isExpanded ? <ChevronUp className="h-3 w-3 inline" /> : <ChevronDown className="h-3 w-3 inline" />}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedConsumerModal(c);
+                                      }}
+                                      className="px-2.5 py-1 bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white rounded-lg text-xs font-bold transition cursor-pointer border border-slate-700"
+                                      title="View Full Profile & Ledger"
+                                    >
+                                      Profile
+                                    </button>
+                                  </td>
+                                </tr>
+
+                                {/* Expandable Consumer Details Drawer */}
+                                {isExpanded && (
+                                  <tr className="bg-slate-900/90 border-b border-slate-800">
+                                    <td colSpan={8} className="p-4 bg-slate-950/80 border-t border-slate-800/80">
+                                      <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-3">
+                                        <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-mono font-bold text-sky-400 text-xs">#{c.accountNumber || 'PENDING'}</span>
+                                            <span className="text-xs font-bold text-white">{c.name}</span>
+                                            <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+                                              Barangay {bg.name} ({c.sitioZone || 'Central Zone'})
+                                            </span>
+                                          </div>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setSelectedConsumerModal(c);
+                                            }}
+                                            className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
+                                          >
+                                            <ExternalLink className="h-3.5 w-3.5" />
+                                            <span>Open Full Profile & Ledger</span>
+                                          </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                                          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/80 space-y-1">
+                                            <span className="text-[10px] text-slate-400 font-bold uppercase block">Registered Address</span>
+                                            <p className="font-semibold text-slate-200">{c.address || `${c.sitioZone || 'Central'}, ${bg.name}, Tagoloan`}</p>
+                                            <span className="text-[10px] text-slate-500 block">Designated Zone: {c.sitioZone || 'Zone 1'}</span>
+                                          </div>
+
+                                          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/80 space-y-1">
+                                            <span className="text-[10px] text-slate-400 font-bold uppercase block">Contact Information</span>
+                                            <p className="font-semibold text-slate-200">{c.contactNumber || 'No phone recorded'}</p>
+                                            <p className="text-[11px] text-slate-400 truncate">{c.email || 'No email recorded'}</p>
+                                          </div>
+
+                                          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/80 space-y-1">
+                                            <span className="text-[10px] text-slate-400 font-bold uppercase block">Water Meter Specs</span>
+                                            <p className="font-semibold text-emerald-400 font-mono">{c.meterNumber || 'Unassigned Meter'}</p>
+                                            <p className="text-[10px] text-slate-400">Brand: {c.meterBrand || 'EVER Standard'} • RFID: {c.rfidTag || 'None'}</p>
+                                          </div>
+
+                                          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/80 space-y-1">
+                                            <span className="text-[10px] text-slate-400 font-bold uppercase block">Reading & Billing Cycle</span>
+                                            <p className="font-semibold text-sky-300">{bg.schedule || 'Monthly Schedule'}</p>
+                                            <p className="text-[10px] text-slate-400 font-mono">Current Tariff: ₱{Number(bg.ratePerM3 || 0).toFixed(2)}/m³</p>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            );
+                          })
+                        ) : (
+                          <tr>
+                            <td colSpan={8} className="py-12 text-center text-slate-400">
+                              <p className="font-bold text-white text-sm">No consumers match your filter in Barangay {bg.name}</p>
+                              <p className="text-xs text-slate-500 mt-1">Try resetting the search query or selecting "All Zones".</p>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <TablePagination
+                    currentPage={barangayConsumersPage}
+                    totalItems={filteredModalConsumers.length}
+                    pageSize={10}
+                    onPageChange={setBarangayConsumersPage}
+                    itemName="consumers"
+                  />
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="bg-slate-950 p-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+                <span className="text-xs text-slate-400 text-center sm:text-left">
+                  Showing <strong className="text-white">{filteredModalConsumers.length}</strong> of <strong className="text-white">{allInBarangay.length}</strong> registered consumers in Barangay {bg.name}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingBarangayModal({ ...bg })}
+                    className="sm:hidden px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
+                  >
+                    Edit Zone
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBarangayForDetail(null)}
+                    className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-xs"
+                  >
+                    Close Details
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* DIAL PHOTO INSPECTION OVERLAY MODAL */}
       {selectedPhotoUrl && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in" id="dial-photo-modal">
@@ -6947,7 +7810,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       {/* CONSUMER VIEW / EDIT / ISSUE IDS MODAL (FIXED VIEWPORT-CENTERED ROOT OVERLAY) */}
       {selectedConsumerModal && (
         <div 
-          className="fixed inset-0 z-[100] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-hidden animate-fade-in select-none"
+          className="fixed inset-0 z-[130] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-hidden animate-fade-in select-none"
           onClick={(e) => {
             if (e.target === e.currentTarget) setSelectedConsumerModal(null);
           }}
@@ -7692,7 +8555,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
       {/* EDIT BARANGAY MODAL */}
       {editingBarangayModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[130] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-white shadow-2xl space-y-6 animate-fade-in">
             <div className="flex justify-between items-center border-b border-slate-800 pb-4">
               <div>
@@ -7957,21 +8820,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       {/* EDIT METER READER MODAL */}
       {editingReaderModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-slate-900 shadow-2xl space-y-6 animate-fade-in max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-slate-100 shadow-2xl space-y-6 animate-fade-in max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-4">
               <div className="flex items-center space-x-3">
-                <div className="h-10 w-10 rounded-xl bg-blue-50 text-blue-600 border border-blue-200 flex items-center justify-center font-bold">
+                <div className="h-10 w-10 rounded-xl bg-blue-950/70 text-blue-400 border border-blue-800/60 flex items-center justify-center font-bold">
                   <UserCheck className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-slate-900">Edit Meter Reader Officer</h3>
-                  <p className="text-xs text-slate-500">Update field credentials, duty status & service route</p>
+                  <h3 className="text-base font-black text-white">Edit Meter Reader Officer</h3>
+                  <p className="text-xs text-slate-400">Update field credentials, duty status & service route</p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setEditingReaderModal(null)}
-                className="text-slate-400 hover:text-slate-700 p-1.5 rounded-lg hover:bg-slate-100 cursor-pointer transition"
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 cursor-pointer transition"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -7979,29 +8842,29 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
             <form onSubmit={handleUpdateReader} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Full Officer Name</label>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Full Officer Name</label>
                 <input
                   type="text"
                   required
                   value={editingReaderModal.name}
                   onChange={(e) => setEditingReaderModal({ ...editingReaderModal, name: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Username / Badge ID</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Username / Badge ID</label>
                   <input
                     type="text"
                     required
                     value={editingReaderModal.username || ''}
                     onChange={(e) => setEditingReaderModal({ ...editingReaderModal, username: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-mono text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Duty Status</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Duty Status</label>
                   <select
                     value={editingReaderModal.employmentStatus || 'active'}
                     onChange={(e: any) => setEditingReaderModal({ 
@@ -8009,7 +8872,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       employmentStatus: e.target.value,
                       status: e.target.value
                     })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-bold text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 cursor-pointer"
                   >
                     <option value="active">Active Duty</option>
                     <option value="pending_approval">Pending Approval</option>
@@ -8020,17 +8883,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Mobile Phone / Contact</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Mobile Phone / Contact</label>
                   <input
                     type="text"
                     placeholder="09XXXXXXXXX"
                     value={editingReaderModal.contactNumber || ''}
                     onChange={(e) => setEditingReaderModal({ ...editingReaderModal, contactNumber: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Terminal PIN / Password</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Terminal PIN / Password</label>
                   <input
                     type="text"
                     placeholder="e.g. 1234"
@@ -8040,24 +8903,24 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       password: e.target.value,
                       pin: e.target.value
                     })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-mono text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Email Address</label>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Email Address</label>
                 <input
                   type="email"
                   placeholder="officer@tagoloanwater.ph"
                   value={editingReaderModal.email || ''}
                   onChange={(e) => setEditingReaderModal({ ...editingReaderModal, email: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Primary Route Assignment</label>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Primary Route Assignment</label>
                 <select
                   value={(editingReaderModal.assignedRoutes && editingReaderModal.assignedRoutes[0]) || editingReaderModal.targetRoute || 'Zone 1-4: Poblacion (Main Central)'}
                   onChange={(e) => {
@@ -8068,7 +8931,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       targetRoute: newRoute
                     });
                   }}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-bold text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 cursor-pointer"
                 >
                   {routes.map(rt => (
                     <option key={rt.id} value={rt.routeName}>
@@ -8078,11 +8941,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 </select>
               </div>
 
-              <div className="flex justify-end space-x-3 pt-4 border-t border-slate-100">
+              <div className="flex justify-end space-x-3 pt-4 border-t border-slate-800">
                 <button
                   type="button"
                   onClick={() => setEditingReaderModal(null)}
-                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer transition"
+                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl cursor-pointer transition border border-slate-700"
                 >
                   Cancel
                 </button>
@@ -8094,6 +8957,175 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------- */}
+      {/* GLOBAL SANDBOX-SAFE CONFIRMATION MODAL                        */}
+      {/* ------------------------------------------------------------- */}
+      {confirmDialog.isOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-start space-x-3.5">
+              <div className={`p-3 rounded-2xl shrink-0 ${
+                confirmDialog.confirmVariant === 'success' 
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                  : confirmDialog.confirmVariant === 'primary'
+                  ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+                  : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+              }`}>
+                {confirmDialog.confirmVariant === 'success' ? (
+                  <CheckCheck className="h-6 w-6" />
+                ) : confirmDialog.confirmVariant === 'primary' ? (
+                  <CheckCircle className="h-6 w-6" />
+                ) : (
+                  <AlertTriangle className="h-6 w-6" />
+                )}
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-black text-white">{confirmDialog.title}</h3>
+                <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-line">
+                  {confirmDialog.message}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const action = confirmDialog.onConfirm;
+                  setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                  action();
+                }}
+                className={`px-5 py-2.5 text-white font-black text-xs rounded-xl uppercase tracking-wider transition shadow-sm cursor-pointer ${
+                  confirmDialog.confirmVariant === 'success'
+                    ? 'bg-emerald-600 hover:bg-emerald-500'
+                    : confirmDialog.confirmVariant === 'primary'
+                    ? 'bg-blue-600 hover:bg-blue-500'
+                    : 'bg-rose-600 hover:bg-rose-500'
+                }`}
+              >
+                {confirmDialog.confirmLabel || 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------- */}
+      {/* IN-APP WATER BILL CANCELLATION MODAL                           */}
+      {/* ------------------------------------------------------------- */}
+      {cancelBillModal.isOpen && cancelBillModal.bill && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="p-3 bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded-2xl">
+                  <XCircle className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white">Cancel Water Billing Statement</h3>
+                  <p className="text-xs text-slate-400">Statement ID #{cancelBillModal.bill.id}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCancelBillModal({ isOpen: false, bill: null, reason: '' })}
+                className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Bill Summary Details */}
+            <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-4 grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider block">Consumer Name</span>
+                <span className="font-black text-white">{cancelBillModal.bill.consumerName}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider block">Account Number</span>
+                <span className="font-mono font-bold text-sky-400">#{cancelBillModal.bill.accountNumber}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider block">Billing Period</span>
+                <span className="font-bold text-slate-200">{cancelBillModal.bill.billingPeriod || 'N/A'}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider block">Billed Amount</span>
+                <span className="font-mono font-black text-rose-400">₱{(cancelBillModal.bill.totalAmount || calculateCostOf(cancelBillModal.bill.consumption, cancelBillModal.bill.classification)).toFixed(2)}</span>
+              </div>
+            </div>
+
+            {/* Reason Field */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
+                Reason for Cancellation <span className="text-rose-400">*</span>
+              </label>
+              <textarea
+                value={cancelBillModal.reason}
+                onChange={(e) => setCancelBillModal(prev => ({ ...prev, reason: e.target.value }))}
+                placeholder="e.g. Erroneous meter reading entered, administrative rate adjustment, or leak disputed..."
+                rows={3}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-rose-500/40 focus:border-rose-500"
+              />
+              <p className="text-[11px] text-slate-500">
+                This reason will be recorded permanently in the official utility audit trail.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setCancelBillModal({ isOpen: false, bill: null, reason: '' })}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
+              >
+                Keep Bill / Close
+              </button>
+              <button
+                type="button"
+                disabled={!cancelBillModal.reason.trim()}
+                onClick={() => {
+                  const bill = cancelBillModal.bill;
+                  const reason = cancelBillModal.reason.trim();
+                  if (!bill || !reason) return;
+
+                  const updatedReadings = readings.map(r => 
+                    r.id === bill.id ? { ...r, status: 'cancelled' as any } : r
+                  );
+                  setReadings(updatedReadings);
+                  mockDb.saveReadings(updatedReadings);
+
+                  mockDb.addAuditLog(
+                    currentUser.id,
+                    currentUser.name,
+                    'admin',
+                    'Cancel Water Bill Statement',
+                    `Cancelled bill #${bill.id} for Account #${bill.accountNumber} (${bill.consumerName}). Reason: "${reason}".`
+                  );
+
+                  window.dispatchEvent(new Event('twd_database_updated'));
+                  toast.success('Bill Cancelled', `Bill #${bill.id} has been marked as CANCELLED.`);
+                  setCancelBillModal({ isOpen: false, bill: null, reason: '' });
+                }}
+                className={`px-5 py-2.5 font-black text-xs rounded-xl uppercase tracking-wider transition shadow-sm cursor-pointer ${
+                  cancelBillModal.reason.trim()
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                    : 'bg-rose-950 text-rose-400 cursor-not-allowed opacity-50'
+                }`}
+              >
+                Confirm Cancellation
+              </button>
+            </div>
           </div>
         </div>
       )}

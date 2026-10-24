@@ -98,7 +98,7 @@ export default function WaterConsumptionTrendChart({ data }: WaterConsumptionTre
             </div>
             <div>
               <h3 className="text-base font-extrabold text-slate-900 tracking-tight">Water Consumption & Discharge Dynamics</h3>
-              <p className="text-xs text-slate-500">Historical time-series telemetry across municipal intake zones</p>
+              <p className="text-xs text-slate-500">Historical time-series telemetry across municipal water service zones</p>
             </div>
           </div>
         </div>
@@ -163,7 +163,7 @@ export default function WaterConsumptionTrendChart({ data }: WaterConsumptionTre
       {/* KPI Metric Strip */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-50/80 p-3.5 rounded-2xl border border-slate-100 text-xs">
         <div>
-          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Cumulative Intake</span>
+          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Cumulative Consumption</span>
           <span className="text-base font-black text-slate-900 font-mono">{totalVolume.toLocaleString()} m³</span>
         </div>
         <div>
@@ -237,7 +237,7 @@ export default function WaterConsumptionTrendChart({ data }: WaterConsumptionTre
                   <Line
                     type="monotone"
                     dataKey="averageVolume"
-                    name="Avg Household Intake (m³)"
+                    name="Avg Household Consumption (m³)"
                     stroke="#f59e0b"
                     strokeWidth={2}
                     strokeDasharray="4 4"

@@ -8,12 +8,46 @@
     <meta property="og:title" content="Tagoloan Water District Portal" />
     <meta property="og:description" content="Unified administrative and consumer portals for Tagoloan Water District, featuring billing alerts, 3-month disconnection cutting notices, strict 50% minimum partial payments, and office receipt photo validation." />
     <script>
-      // Ignore transient Vite HMR and WebSocket errors in iframe environment
+      // Safeguard performance.measure against React 19 logComponentRender DataCloneError
+      if (typeof window !== 'undefined' && window.performance && typeof window.performance.measure === 'function') {
+        try {
+          var nativeMeasure = window.performance.measure.bind(window.performance);
+          window.performance.measure = function(name, startOrOptions, endMark) {
+            try {
+              return nativeMeasure(name, startOrOptions, endMark);
+            } catch (err) {
+              if (err && (err.name === 'DataCloneError' || err.code === 25 || String(err).indexOf('clone') !== -1 || String(err).indexOf('memory') !== -1)) {
+                try {
+                  if (typeof startOrOptions === 'object' && startOrOptions !== null) {
+                    var safeOptions = Object.assign({}, startOrOptions);
+                    delete safeOptions.detail;
+                    return nativeMeasure(name, safeOptions, endMark);
+                  }
+                } catch (_) {}
+                try {
+                  return nativeMeasure(name);
+                } catch (_) {}
+                return undefined;
+              }
+              return undefined;
+            }
+          };
+        } catch (_) {}
+      }
+
+      // Ignore transient Vite HMR, WebSocket, and DataClone errors in iframe environment
       window.addEventListener('unhandledrejection', function(event) {
         var reason = event && event.reason;
         var msg = reason ? (reason.message || String(reason)) : '';
-        if (msg.indexOf('WebSocket') !== -1 || msg.indexOf('vite') !== -1 || msg.indexOf('closed without opened') !== -1) {
+        if (msg.indexOf('WebSocket') !== -1 || msg.indexOf('vite') !== -1 || msg.indexOf('closed without opened') !== -1 || msg.indexOf('cloned') !== -1) {
           event.preventDefault();
+        }
+      });
+      window.addEventListener('error', function(event) {
+        var msg = event && event.message ? String(event.message) : '';
+        if (msg.indexOf('DataCloneError') !== -1 || msg.indexOf('cloned') !== -1 || msg.indexOf('Failed to execute \'measure\'') !== -1) {
+          event.preventDefault();
+          return true;
         }
       });
     </script>

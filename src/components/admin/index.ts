@@ -11,3 +11,4 @@ export * from './GracePeriodScannerCard';
 export * from './OfficialReportsGenerator';
 export * from './RecordsArchiveView';
 export * from './TariffRateManager';
+export * from './ConsumerReportsManager';

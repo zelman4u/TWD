@@ -443,6 +443,127 @@ select:focus {
 }
 
 /* =========================================================================
+   CUSTOM DATA TABLE STYLES: ADMIN & CONSUMER PORTALS
+   Eliminates all white backgrounds, bright flashes, and harsh highlights.
+   Provides unified, eye-friendly dark slate & navy data grid aesthetic.
+   ========================================================================= */
+
+/* All on-screen tables */
+table:not(#official-print-document table) {
+  background-color: #0E1626 !important;
+  color: #CBD5E1 !important;
+  border-color: #1E2D44 !important;
+}
+
+/* Table Headers - Deep, distraction-free slate header */
+thead:not(#official-print-document thead),
+thead:not(#official-print-document thead) tr {
+  background-color: #080D17 !important;
+  color: #94A3B8 !important;
+  border-color: #1E2D44 !important;
+}
+
+th:not(#official-print-document th) {
+  background-color: #080D17 !important;
+  color: #94A3B8 !important;
+  border-color: #1E2D44 !important;
+}
+
+/* Table Bodies */
+tbody:not(#official-print-document tbody) {
+  background-color: #0E1626 !important;
+  color: #CBD5E1 !important;
+}
+
+tbody:not(#official-print-document tbody) tr {
+  background-color: transparent;
+  border-color: #1E2D44 !important;
+  transition: background-color 0.15s ease-in-out;
+}
+
+/* Dark Alternating Striping where desired */
+tbody:not(#official-print-document tbody) tr:nth-child(even) {
+  background-color: rgba(13, 21, 39, 0.4);
+}
+
+/* Eye-friendly hover state: NO white flash, NO blinding bright background */
+tbody:not(#official-print-document tbody) tr:hover,
+tbody:not(#official-print-document tbody) tr:hover > td,
+table:not(#official-print-document table) [class*="hover:bg-slate-50"]:hover,
+table:not(#official-print-document table) [class*="hover:bg-gray-50"]:hover,
+table:not(#official-print-document table) [class*="hover:bg-blue-50"]:hover,
+table:not(#official-print-document table) [class*="hover:bg-white"]:hover {
+  background-color: #152238 !important;
+}
+
+/* Table Cells */
+td:not(#official-print-document td) {
+  border-color: #1E2D44 !important;
+  color: inherit;
+}
+
+/* Neutralize any legacy white/light background inside table cells */
+table:not(#official-print-document table) .bg-white,
+table:not(#official-print-document table) .bg-slate-50,
+table:not(#official-print-document table) .bg-gray-50 {
+  background-color: #0E1626 !important;
+  color: #CBD5E1 !important;
+}
+
+table:not(#official-print-document table) .bg-slate-100,
+table:not(#official-print-document table) .bg-gray-100 {
+  background-color: #152238 !important;
+  color: #CBD5E1 !important;
+}
+
+/* Data Table Container Wrappers */
+.table-container,
+div:has(> table:not(#official-print-document table)),
+div:has(> div > table:not(#official-print-document table)) {
+  background-color: #0E1626;
+  border-color: #1E2D44;
+}
+
+/* Data Table Status Badges: Soft eye-friendly tones (no harsh white or neon glare) */
+table:not(#official-print-document table) .badge-pending,
+table:not(#official-print-document table) [class*="bg-amber-100"],
+table:not(#official-print-document table) [class*="bg-amber-50"] {
+  background-color: rgba(245, 158, 11, 0.15) !important;
+  color: #FCD34D !important;
+  border-color: rgba(245, 158, 11, 0.35) !important;
+}
+
+table:not(#official-print-document table) [class*="bg-emerald-100"],
+table:not(#official-print-document table) [class*="bg-emerald-50"] {
+  background-color: rgba(16, 185, 129, 0.15) !important;
+  color: #6EE7B7 !important;
+  border-color: rgba(16, 185, 129, 0.35) !important;
+}
+
+table:not(#official-print-document table) [class*="bg-rose-100"],
+table:not(#official-print-document table) [class*="bg-rose-50"],
+table:not(#official-print-document table) [class*="bg-red-100"],
+table:not(#official-print-document table) [class*="bg-red-50"] {
+  background-color: rgba(239, 68, 68, 0.15) !important;
+  color: #FCA5A5 !important;
+  border-color: rgba(239, 68, 68, 0.35) !important;
+}
+
+table:not(#official-print-document table) [class*="bg-blue-100"],
+table:not(#official-print-document table) [class*="bg-blue-50"] {
+  background-color: rgba(59, 130, 246, 0.15) !important;
+  color: #93C5FD !important;
+  border-color: rgba(59, 130, 246, 0.35) !important;
+}
+
+table:not(#official-print-document table) [class*="bg-purple-100"],
+table:not(#official-print-document table) [class*="bg-purple-50"] {
+  background-color: rgba(168, 85, 247, 0.15) !important;
+  color: #D8B4FE !important;
+  border-color: rgba(168, 85, 247, 0.35) !important;
+}
+
+/* =========================================================================
    OFFICIAL PRINT STYLES (Zero Overlap, Crisp B&W / Color Typography)
    ========================================================================= */
 @media print {

@@ -1,0 +1,421 @@
+initial theme: light
+3m=_b:1447 No ID or name found in config.
+updateJsLog @ m=_b:1447
+index.iife.js:123   Uncaught (in promise) TypeError: Failed to fetch
+    at ds (index.iife.js:123:39008)
+IWU5O3yRaE9v/vs/loader.js:8 Duplicate definition of module 'vs/language/json/jsonMode'
+defineModule @ IWU5O3yRaE9v/vs/loader.js:8
+19m=_b:1447 No ID or name found in config.
+updateJsLog @ m=_b:1447
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=ov92axWJOQ7i' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+2m=_b:1447 No ID or name found in config.
+updateJsLog @ m=_b:1447
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=EY2-rhcoLlsP' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+1000The resource <URL> was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally.
+alkalimakersuite-pa.clients6.google.com/$rpc/google.alkali.boq.makersuite.makersuiteappletcontrol.proto.MakersuiteAppletControlService/StreamLogs:1  Failed to load resource: net::ERR_QUIC_PROTOCOL_ERROR.QUIC_NETWORK_IDLE_TIMEOUT
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+VM5793:1 The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127
+eval @ VM5793:1
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+/apps/29aaeffc-dbd1-4669-9b5b-63d636462350?showAssistant=true&showPreview=true&fullscreenApplet=true:1 No available adapters.
+VM5941:1 The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127
+eval @ VM5941:1
+/apps/29aaeffc-dbd1-4669-9b5b-63d636462350?showAssistant=true&showPreview=true&fullscreenApplet=true:1 No available adapters.
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+m=Jn51xb:2251 Origin trial controlled feature not enabled: 'writer'.
+(anonymous) @ m=Jn51xb:2251
+m=Jn51xb:2251 Origin trial controlled feature not enabled: 'rewriter'.
+(anonymous) @ m=Jn51xb:2251
+m=Jn51xb:2251 Unrecognized feature: 'proofreader'.
+(anonymous) @ m=Jn51xb:2251
+ Ignored call to 'prompt()'. The document is sandboxed, and the 'allow-modals' keyword is not set.
+onClick @ AdminPortal.tsx:10104
+ Ignored call to 'prompt()'. The document is sandboxed, and the 'allow-modals' keyword is not set.
+onClick @ AdminPortal.tsx:10104
+realtimeSocket.ts:145 [WebSocket Client] Connecting to wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws... (attempt #1)
+realtimeSocket.ts:152 [WebSocket Client] Connection established successfully with Tagoloan District Broker.
+AdminPortal.tsx:6264 Ignored call to 'prompt()'. The document is sandboxed, and the 'allow-modals' keyword is not set.
+(anonymous) @ AdminPortal.tsx:6264
+2453 log entries are not shown.
+_aistudio-iframe.js?v=6634132a:305 WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=JJSaoSYDBBa_' failed: 
+createWebSocket @ _aistudio-iframe.js?v=6634132a:305
+_aistudio-iframe.js?v=6634132a:401 [vite] failed to connect to websocket (Error: WebSocket closed without opened.). 

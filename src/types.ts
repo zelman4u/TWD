@@ -30,6 +30,7 @@ export interface Barangay {
 }
 
 export interface Consumer {
+  id?: string;
   accountNumber: string;
   name: string;
   address: string;
@@ -142,13 +143,52 @@ export interface MeterReading {
   disconnectionDate?: string;
 }
 
+export interface ConsumerReportReply {
+  id: string;
+  reportId: string;
+  senderId: string;
+  senderName: string;
+  senderRole: 'admin' | 'consumer' | 'staff';
+  message: string;
+  timestamp: string;
+  statusUpdate?: 'pending' | 'in_progress' | 'resolved' | 'closed';
+}
+
+export interface ConsumerReport {
+  id: string;
+  ticketNumber: string;
+  accountNumber: string;
+  consumerName: string;
+  consumerEmail?: string;
+  consumerPhone?: string;
+  barangay?: string;
+  address?: string;
+  meterNumber?: string;
+  category: 'leak' | 'low_pressure' | 'water_quality' | 'billing' | 'meter_issue' | 'illegal_connection' | 'other';
+  title: string;
+  description: string;
+  urgency: 'normal' | 'urgent' | 'emergency';
+  status: 'pending' | 'in_progress' | 'resolved' | 'closed';
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+  assignedStaff?: string;
+  photoUrl?: string;
+  replies: ConsumerReportReply[];
+  hasUnreadAdminReply?: boolean;
+  hasUnreadConsumerUpdate?: boolean;
+}
+
 export interface ConsumerNotification {
   id: string;
   accountNumber: string;
+  consumerId?: string;
+  userId?: string;
+  consumerEmail?: string;
   title: string;
   message: string;
   timestamp: string;
-  type: 'payment' | 'billing' | 'announcement' | 'disconnection' | 'receipt_upload';
+  type: 'payment' | 'billing' | 'announcement' | 'disconnection' | 'receipt_upload' | 'report' | 'account_issue';
   read: boolean;
   orNumber?: string;
   amountPaid?: number;
@@ -156,6 +196,8 @@ export interface ConsumerNotification {
   readingId?: string;
   billingPeriod?: string;
   receiptUrl?: string;
+  reportId?: string;
+  ticketNumber?: string;
 }
 
 export interface RouteAssignment {

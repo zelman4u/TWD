@@ -213,9 +213,9 @@ export default function AdminAnalyticsSection({
               <div className="flex items-start space-x-3 p-3 bg-slate-50 rounded-2xl border border-slate-100">
                 <TrendingUp className="h-4 w-4 text-blue-600 mt-0.5 shrink-0" />
                 <div>
-                  <p className="font-bold text-slate-800">Highest Intake Zone</p>
+                  <p className="font-bold text-slate-800">Highest Consumption Zone</p>
                   <p className="text-slate-500 text-[11px] mt-0.5">
-                    <span className="font-bold text-blue-700">{barangayData[0]?.barangayName || 'Baluarte'}</span> registers highest aggregate intake at {barangayData[0]?.totalVolume || 710} m³.
+                    <span className="font-bold text-blue-700">{barangayData[0]?.barangayName || 'Baluarte'}</span> registers highest aggregate consumption at {barangayData[0]?.totalVolume || 710} m³.
                   </p>
                 </div>
               </div>

@@ -15,6 +15,7 @@ import { GoogleGenAI } from "@google/genai";
 import "dotenv/config";
 
 const app = express();
+app.set("trust proxy", 1);
 const httpServer = createHttpServer(app);
 const PORT = 3000;
 
@@ -109,6 +110,81 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
+  next();
+});
+
+// ==========================================
+// ANTI-BOT & DDOS RATE LIMITING SYSTEM
+// ==========================================
+interface RateLimitBucket {
+  count: number;
+  resetTime: number;
+}
+const rateLimitMap = new Map<string, RateLimitBucket>();
+let totalServedRequests = 0;
+let totalThrottledRequests = 0;
+
+// Periodic bucket sweep every 60 seconds
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, bucket] of rateLimitMap.entries()) {
+    if (now > bucket.resetTime) {
+      rateLimitMap.delete(ip);
+    }
+  }
+}, 60000);
+
+// Anti-flood rate limiting middleware
+app.use((req, res, next) => {
+  totalServedRequests++;
+
+  // Only filter API calls; assets and static files are served without API rate gating
+  if (!req.path.startsWith("/api/")) {
+    return next();
+  }
+
+  // Exempt survival and health check probes
+  if (req.path === "/api/health" || req.path === "/api/status" || req.path === "/api/ping" || req.path === "/api/survival") {
+    return next();
+  }
+
+  const forwarded = req.headers["x-forwarded-for"];
+  const clientIp = (typeof forwarded === "string" ? forwarded.split(",")[0].trim() : null) || req.socket.remoteAddress || "127.0.0.1";
+  const now = Date.now();
+  const windowMs = 60 * 1000; // 1 minute sliding window
+
+  // Stricter limit on credential authentication routes (max 25/min), wider limit for general reads (max 200/min)
+  const isAuthRoute = req.path.includes("/auth") || req.path.includes("/login") || req.path.includes("/verify");
+  const maxAllowed = isAuthRoute ? 25 : 200;
+
+  let bucket = rateLimitMap.get(clientIp);
+  if (!bucket || now > bucket.resetTime) {
+    bucket = { count: 1, resetTime: now + windowMs };
+    rateLimitMap.set(clientIp, bucket);
+  } else {
+    bucket.count++;
+  }
+
+  const remaining = Math.max(0, maxAllowed - bucket.count);
+  const retryAfterSec = Math.ceil((bucket.resetTime - now) / 1000);
+
+  res.setHeader("X-RateLimit-Limit", maxAllowed);
+  res.setHeader("X-RateLimit-Remaining", remaining);
+  res.setHeader("X-RateLimit-Reset", retryAfterSec);
+
+  // If a bot sends 10,000 requests, it triggers HTTP 429
+  if (bucket.count > maxAllowed) {
+    totalThrottledRequests++;
+    res.setHeader("Retry-After", retryAfterSec);
+    return res.status(429).json({
+      success: false,
+      error: "Too Many Requests",
+      message: `TWD Rate Limiter: Maximum limit of ${maxAllowed} requests/min exceeded. Your IP (${clientIp}) is temporarily throttled to safeguard municipal water telemetry.`,
+      retryAfterSeconds: retryAfterSec,
+      timestamp: new Date().toISOString()
+    });
+  }
+
   next();
 });
 
@@ -285,8 +361,235 @@ let syncedConsumers: MobileConsumerSync[] = [
     email: "vicente.daganato@gmail.com",
     rfidTag: "RFID-180602345",
     isRegistered: true
+  },
+  {
+    accountNumber: "033-202-088",
+    name: "MERCADO, ANICETO C.",
+    address: "RIVERSIDE DRIVE, BALUARTE",
+    barangay: "Baluarte",
+    barangayId: "BRG-03",
+    sitioZone: "Zone 10",
+    meterNumber: "170502234",
+    previousReading: 1845,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Commercial",
+    status: "active",
+    contactNumber: "+63 921 555 3322",
+    email: "aniceto.mercado@gmail.com",
+    rfidTag: "RFID-170502234",
+    isRegistered: true
+  },
+  {
+    accountNumber: "044-101-019",
+    name: "VALDEZ, RAMON S.",
+    address: "STA. ANA CENTRAL, STA. ANA",
+    barangay: "Sta. Ana",
+    barangayId: "BRG-04",
+    sitioZone: "Zone 13",
+    meterNumber: "180601345",
+    previousReading: 1220,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 922 666 4411",
+    email: "ramon.valdez@gmail.com",
+    rfidTag: "RFID-180601345",
+    isRegistered: true
+  },
+  {
+    accountNumber: "044-202-044",
+    name: "PACAÑA, MERLITA G.",
+    address: "CROSSING STA. ANA, STA. ANA",
+    barangay: "Sta. Ana",
+    barangayId: "BRG-04",
+    sitioZone: "Zone 14",
+    meterNumber: "180602456",
+    previousReading: 2430,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Commercial",
+    status: "active",
+    contactNumber: "+63 923 777 5522",
+    email: "merlita.pacana@gmail.com",
+    rfidTag: "RFID-180602456",
+    isRegistered: true
+  },
+  {
+    accountNumber: "055-101-032",
+    name: "YBAÑEZ, DANILO M.",
+    address: "STA. CRUZ VALLEY, STA. CRUZ",
+    barangay: "Sta. Cruz",
+    barangayId: "BRG-05",
+    sitioZone: "Zone 17",
+    meterNumber: "190701567",
+    previousReading: 1980,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 925 888 6633",
+    email: "danilo.ybanez@gmail.com",
+    rfidTag: "RFID-190701567",
+    isRegistered: true
+  },
+  {
+    accountNumber: "055-202-061",
+    name: "CASIÑO, ROWENA T.",
+    address: "PUROK 4, STA. CRUZ",
+    barangay: "Sta. Cruz",
+    barangayId: "BRG-05",
+    sitioZone: "Zone 18",
+    meterNumber: "190702678",
+    previousReading: 1450,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 926 999 7744",
+    email: "rowena.casino@gmail.com",
+    rfidTag: "RFID-190702678",
+    isRegistered: true
+  },
+  {
+    accountNumber: "066-101-089",
+    name: "JADMAN, ELEUTERIO R.",
+    address: "FOOTHILL PUROK 2, MOHON",
+    barangay: "Mohon",
+    barangayId: "BRG-06",
+    sitioZone: "Zone 12",
+    meterNumber: "180603789",
+    previousReading: 970,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 927 111 8855",
+    email: "eleuterio.jadman@gmail.com",
+    rfidTag: "RFID-180603789",
+    isRegistered: true
+  },
+  {
+    accountNumber: "077-101-023",
+    name: "RIVERA, FEDERICO D.",
+    address: "GRACIA PROPER, GRACIA",
+    barangay: "Gracia",
+    barangayId: "BRG-07",
+    sitioZone: "Zone 25",
+    meterNumber: "200801122",
+    previousReading: 1650,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 928 222 9966",
+    email: "federico.rivera@gmail.com",
+    rfidTag: "RFID-200801122",
+    isRegistered: true
+  },
+  {
+    accountNumber: "077-202-054",
+    name: "GORRES, ISIDRA M.",
+    address: "PUROK 3, GRACIA",
+    barangay: "Gracia",
+    barangayId: "BRG-07",
+    sitioZone: "Zone 26",
+    meterNumber: "200802233",
+    previousReading: 1110,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 929 333 0077",
+    email: "isidra.gorres@gmail.com",
+    rfidTag: "RFID-200802233",
+    isRegistered: true
+  },
+  {
+    accountNumber: "088-101-011",
+    name: "LABIS, GREGORIO F.",
+    address: "CASINGLOT COASTAL, CASINGLOT",
+    barangay: "Casinglot",
+    barangayId: "BRG-08",
+    sitioZone: "Zone 21",
+    meterNumber: "210901344",
+    previousReading: 2240,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 930 444 1188",
+    email: "gregorio.labis@gmail.com",
+    rfidTag: "RFID-210901344",
+    isRegistered: true
+  },
+  {
+    accountNumber: "088-202-076",
+    name: "RANISES, EMMA L.",
+    address: "SEASIDE BLVD, CASINGLOT",
+    barangay: "Casinglot",
+    barangayId: "BRG-08",
+    sitioZone: "Zone 22",
+    meterNumber: "210902455",
+    previousReading: 3890,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Commercial",
+    status: "active",
+    contactNumber: "+63 931 555 2299",
+    email: "emma.ranises@gmail.com",
+    rfidTag: "RFID-210902455",
+    isRegistered: true
+  },
+  {
+    accountNumber: "099-101-098",
+    name: "ZAMBRANO, CRISANTO P.",
+    address: "SUGBONGCOGON HIGHWAY, SUGBONGCOGON",
+    barangay: "Sugbongcogon",
+    barangayId: "BRG-09",
+    sitioZone: "Zone 33",
+    meterNumber: "221001566",
+    previousReading: 1780,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 932 666 3300",
+    email: "crisanto.zambrano@gmail.com",
+    rfidTag: "RFID-221001566",
+    isRegistered: true
+  },
+  {
+    accountNumber: "099-202-033",
+    name: "BEJA, ALICIA N.",
+    address: "PUROK 1, SUGBONGCOGON",
+    barangay: "Sugbongcogon",
+    barangayId: "BRG-09",
+    sitioZone: "Zone 34",
+    meterNumber: "221002677",
+    previousReading: 1340,
+    lastReadingDate: "2024-10-15",
+    consumerType: "Residential",
+    status: "active",
+    contactNumber: "+63 933 777 4411",
+    email: "alicia.beja@gmail.com",
+    rfidTag: "RFID-221002677",
+    isRegistered: true
   }
 ];
+
+// Helper: Checks if a consumer has been officially validated by Admin (issued Account # and Meter Serial #)
+function isValidatedConsumerForReader(c: MobileConsumerSync): boolean {
+  // 1. Must have an official issued Account Number (not empty and not starting with PENDING/UNASSIGNED)
+  const acc = (c.accountNumber || "").trim().toUpperCase();
+  if (!acc || acc.startsWith("PENDING") || acc === "UNASSIGNED" || acc === "UNISSUED" || acc === "PENDING ADMIN ISSUANCE") {
+    return false;
+  }
+
+  // 2. Must have a real Meter Serial Number (not empty and not starting with PENDING)
+  const meter = (c.meterNumber || "").trim().toUpperCase();
+  if (!meter || meter.startsWith("PENDING") || meter === "UNASSIGNED" || meter === "UNISSUED") {
+    return false;
+  }
+
+  // 3. Status must not be pending_approval or pending
+  const status = (c.status || "").trim().toLowerCase();
+  if (status === "pending_approval" || status === "pending") {
+    return false;
+  }
+
+  return true;
+}
 
 // Helper: Checks if a consumer belongs to any of the assigned routes/barangays/areas
 function doesConsumerMatchAreas(consumer: MobileConsumerSync, areas: string[]): boolean {
@@ -411,6 +714,133 @@ interface MobileReadingSubmission {
 
 let pendingMobileReadings: MobileReadingSubmission[] = [];
 
+// ==========================================
+// IN-MEMORY CONSUMER CONCERNS & REPORTS STORE
+// ==========================================
+interface ServerReportReply {
+  id: string;
+  reportId: string;
+  senderId: string;
+  senderName: string;
+  senderRole: "admin" | "consumer" | "staff";
+  message: string;
+  timestamp: string;
+  statusUpdate?: "pending" | "in_progress" | "resolved" | "closed";
+}
+
+interface ServerConsumerReport {
+  id: string;
+  ticketNumber: string;
+  accountNumber: string;
+  consumerName: string;
+  consumerEmail?: string;
+  consumerPhone?: string;
+  barangay?: string;
+  address?: string;
+  meterNumber?: string;
+  category: "leak" | "low_pressure" | "water_quality" | "billing" | "meter_issue" | "illegal_connection" | "other";
+  title: string;
+  description: string;
+  urgency: "normal" | "urgent" | "emergency";
+  status: "pending" | "in_progress" | "resolved" | "closed";
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+  assignedStaff?: string;
+  photoUrl?: string;
+  replies: ServerReportReply[];
+  hasUnreadAdminReply?: boolean;
+  hasUnreadConsumerUpdate?: boolean;
+}
+
+let inMemoryReports: ServerConsumerReport[] = [
+  {
+    id: "REP-2024-001",
+    ticketNumber: "TWD-CR-2024-001",
+    accountNumber: "BRG-01-3117",
+    consumerName: "Bruce Acero",
+    consumerEmail: "acero@gmail.com",
+    consumerPhone: "+63 917 888 2345",
+    barangay: "Poblacion",
+    address: "PUROK 3, POBLACION",
+    meterNumber: "150309988",
+    category: "leak",
+    title: "Water Leak along Purok 3 main connection pipe",
+    description: "Noticeable water bubbling out from underground pipe near the meter box outside our gate. Significant drop of pressure observed in our household.",
+    urgency: "urgent",
+    status: "in_progress",
+    createdAt: "2024-10-14T08:30:00.000Z",
+    updatedAt: "2024-10-14T09:15:00.000Z",
+    assignedStaff: "Field Maintenance Crew - Team Alpha",
+    replies: [
+      {
+        id: "REP-MSG-001",
+        reportId: "REP-2024-001",
+        senderId: "user-acero",
+        senderName: "Bruce Acero",
+        senderRole: "consumer",
+        message: "Noticeable water bubbling out from underground pipe near the meter box outside our gate. Significant drop of pressure observed in our household.",
+        timestamp: "2024-10-14T08:30:00.000Z"
+      },
+      {
+        id: "REP-MSG-002",
+        reportId: "REP-2024-001",
+        senderId: "admin-1",
+        senderName: "TWD Operations Admin",
+        senderRole: "admin",
+        message: "Good morning Mr. Acero. We have logged your concern and dispatched Field Maintenance Crew (Team Alpha) led by Engr. Morales to inspect the underground coupling at Purok 3.",
+        timestamp: "2024-10-14T09:15:00.000Z",
+        statusUpdate: "in_progress"
+      }
+    ],
+    hasUnreadAdminReply: true,
+    hasUnreadConsumerUpdate: false
+  },
+  {
+    id: "REP-2024-002",
+    ticketNumber: "TWD-CR-2024-002",
+    accountNumber: "011-102-056",
+    consumerName: "FIGUEROA, GINA O.",
+    consumerEmail: "gina.figueroa@gmail.com",
+    consumerPhone: "+63 917 123 4567",
+    barangay: "Poblacion",
+    address: "SIHAYON-LEFT (ZONE-11A)",
+    meterNumber: "150307143",
+    category: "billing",
+    title: "Inquiry regarding October Consumption Breakdown",
+    description: "Requesting confirmation on whether late penalty is waived before due date. Would like clarification on franchise tax calculation.",
+    urgency: "normal",
+    status: "resolved",
+    createdAt: "2024-10-10T10:00:00.000Z",
+    updatedAt: "2024-10-10T11:20:00.000Z",
+    resolvedAt: "2024-10-10T11:20:00.000Z",
+    assignedStaff: "Billing Department Desk 2",
+    replies: [
+      {
+        id: "REP-MSG-003",
+        reportId: "REP-2024-002",
+        senderId: "consumer-gina",
+        senderName: "Gina Figueroa",
+        senderRole: "consumer",
+        message: "Requesting confirmation on whether late penalty is waived before due date. Would like clarification on franchise tax calculation.",
+        timestamp: "2024-10-10T10:00:00.000Z"
+      },
+      {
+        id: "REP-MSG-004",
+        reportId: "REP-2024-002",
+        senderId: "admin-1",
+        senderName: "TWD Billing Supervisor",
+        senderRole: "admin",
+        message: "Hello Ms. Figueroa! The 10% late surcharge is strictly applied only after the due date. The 2% franchise tax is mandated by national utility regulations. Your current statement is valid for normal payment.",
+        timestamp: "2024-10-10T11:20:00.000Z",
+        statusUpdate: "resolved"
+      }
+    ],
+    hasUnreadAdminReply: false,
+    hasUnreadConsumerUpdate: false
+  }
+];
+
 // Keep pool of connected sockets
 const clients = new Set<WebSocket>();
 
@@ -492,10 +922,11 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
     }
   });
 
-  // Check if reader already exists
+  // Check if reader already exists by username, id, or normalized name
   const existingIdx = registeredStaff.findIndex(
-    s => s.username?.toLowerCase() === newReader.username.toLowerCase() ||
-         s.id?.toLowerCase() === newReader.id.toLowerCase()
+    s => (s.username && newReader.username && s.username.toLowerCase() === newReader.username.toLowerCase()) ||
+         (s.id && newReader.id && s.id.toLowerCase() === newReader.id.toLowerCase()) ||
+         (s.name && newReader.name && s.name.trim().toLowerCase() === newReader.name.trim().toLowerCase())
   );
   if (existingIdx >= 0) {
     registeredStaff[existingIdx] = { ...registeredStaff[existingIdx], ...newReader, employmentStatus: "active" };
@@ -634,12 +1065,26 @@ app.get(["/api/staff", "/api/readers"], (req, res) => {
   const activeStaff = registeredStaff.filter(
     s => !isStaffTerminated(s.id) && !isStaffTerminated(s.username) && !isStaffTerminated(s.name)
   );
+  const seen = new Set<string>();
+  const deduplicatedStaff: MobileReader[] = [];
+  activeStaff.forEach(s => {
+    const kName = (s.name || "").trim().toLowerCase();
+    const kUser = (s.username || "").trim().toLowerCase();
+    const kId = (s.id || "").trim().toLowerCase();
+    if ((kName && seen.has(kName)) || (kUser && seen.has(kUser)) || (kId && seen.has(kId))) {
+      return;
+    }
+    if (kName) seen.add(kName);
+    if (kUser) seen.add(kUser);
+    if (kId) seen.add(kId);
+    deduplicatedStaff.push(s);
+  });
   res.json({
     success: true,
-    count: activeStaff.length,
-    staff: activeStaff,
-    readers: activeStaff,
-    data: activeStaff
+    count: deduplicatedStaff.length,
+    staff: deduplicatedStaff,
+    readers: deduplicatedStaff,
+    data: deduplicatedStaff
   });
 });
 
@@ -820,11 +1265,26 @@ app.put(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
 });
 
 // 3.1 Consumer Registry Endpoint for Mobile App & Web (GET /api/consumers, GET /api/sync/pull, GET /api/sync/consumers)
-// Filters consumers strictly by the meter reader's assigned coverage areas if reader context is present
+// Filters consumers strictly by the meter reader's assigned coverage areas and requires Admin-issued IDs for field sync
 app.get(["/api/consumers", "/api/sync/pull", "/api/sync/consumers"], (req, res) => {
   try {
-    const { search, status } = req.query;
+    const { search, status, includePending, view, role } = req.query;
     let list = [...syncedConsumers];
+
+    // Determine if request is an Admin dashboard query or Mobile Field Reader sync
+    const isAdminView = (
+      includePending === "true" || 
+      view === "admin" || 
+      role === "admin" || 
+      req.headers["x-portal"] === "admin" ||
+      req.headers["x-role"] === "admin"
+    );
+
+    // If NOT explicitly an admin view, strictly filter for field reading:
+    // Only consumers who have official Admin-issued Account # and Meter Serial # are synced to mobile readers
+    if (!isAdminView) {
+      list = list.filter(isValidatedConsumerForReader);
+    }
 
     // Extract reader assignment filter
     const { reader, assignedAreas } = extractReaderAssignedAreas(req);
@@ -861,8 +1321,10 @@ app.get(["/api/consumers", "/api/sync/pull", "/api/sync/consumers"], (req, res) 
         sitioZone: c.sitioZone,
         meterNumber: c.meterNumber, // Tag Number for scanning & auto-matching
         meterSerial: c.meterNumber,
+        meterSerialNumber: c.meterNumber,
         previousReading: c.previousReading,
         lastReadingDate: c.lastReadingDate,
+        previousReadingDate: c.lastReadingDate,
         meterSize: c.meterSize,
         consumerType: c.consumerType,
         status: c.status,
@@ -883,11 +1345,12 @@ app.get(["/api/consumers", "/api/sync/pull", "/api/sync/consumers"], (req, res) 
   }
 });
 
-// Dedicated endpoint: GET consumers by reader ID
+// Dedicated endpoint: GET consumers strictly by reader ID and assigned route
 app.get(["/api/readers/:id/consumers", "/api/staff/:id/consumers", "/api/consumers/by-reader/:readerId", "/api/consumers/assigned/:readerId"], (req, res) => {
   try {
     const { reader, assignedAreas } = extractReaderAssignedAreas(req);
-    let list = [...syncedConsumers];
+    // Reader route endpoint ALWAYS only returns officially validated consumers with issued IDs
+    let list = syncedConsumers.filter(isValidatedConsumerForReader);
 
     if (assignedAreas && assignedAreas.length > 0) {
       list = list.filter(c => doesConsumerMatchAreas(c, assignedAreas));
@@ -898,7 +1361,26 @@ app.get(["/api/readers/:id/consumers", "/api/staff/:id/consumers", "/api/consume
       readerId: reader ? reader.id : (req.params.id || req.params.readerId),
       coverageAreas: assignedAreas || [],
       count: list.length,
-      consumers: list,
+      consumers: list.map(c => ({
+        accountNumber: c.accountNumber,
+        name: c.name,
+        address: c.address,
+        barangay: c.barangay,
+        barangayId: c.barangayId,
+        sitioZone: c.sitioZone,
+        meterNumber: c.meterNumber,
+        meterSerial: c.meterNumber,
+        meterSerialNumber: c.meterNumber,
+        previousReading: c.previousReading,
+        lastReadingDate: c.lastReadingDate,
+        previousReadingDate: c.lastReadingDate,
+        meterSize: c.meterSize,
+        consumerType: c.consumerType,
+        status: c.status,
+        contactNumber: c.contactNumber,
+        email: c.email,
+        rfidTag: c.rfidTag
+      })),
       data: list
     });
   } catch (err) {
@@ -1281,6 +1763,68 @@ app.patch("/api/consumers/:identifier", (req, res) => {
   }
 });
 
+// POST /api/consumers/:identifier/issue-id - Administrator Issues Official IDs (Account # and Meter Serial #)
+app.post(["/api/consumers/:identifier/issue-id", "/api/consumers/:identifier/approve", "/api/consumers/issue-id"], (req, res) => {
+  try {
+    const identifier = (req.params.identifier || req.body.accountNumber || req.body.email || req.body.id || req.body.linkedUserId || "").toString().trim();
+    const { accountNumber, meterNumber, meterSerialNumber, rfidTag, status, sitioZone, barangay } = req.body;
+
+    const idx = syncedConsumers.findIndex(c => 
+      (identifier && c.accountNumber === identifier) || 
+      (identifier && c.email && c.email.toLowerCase() === identifier.toLowerCase()) ||
+      (identifier && c.linkedUserId === identifier) ||
+      (req.body.name && c.name && c.name.toLowerCase() === req.body.name.toLowerCase())
+    );
+
+    if (idx < 0) {
+      return res.status(404).json({
+        success: false,
+        message: `Consumer record for ${identifier} not found in registry.`
+      });
+    }
+
+    const issuedAcc = (accountNumber || `011-${Math.floor(100 + Math.random() * 900)}-${Math.floor(100 + Math.random() * 900)}`).toString().trim().toUpperCase();
+    const issuedMeter = (meterNumber || meterSerialNumber || `MTR-${Math.floor(10000 + Math.random() * 90000)}`).toString().trim().toUpperCase();
+    const issuedRfid = (rfidTag || `RFID-${issuedMeter}`).toString().trim().toUpperCase();
+
+    syncedConsumers[idx] = {
+      ...syncedConsumers[idx],
+      accountNumber: issuedAcc,
+      meterNumber: issuedMeter,
+      rfidTag: issuedRfid,
+      status: (status && status !== "pending_approval" && status !== "pending") ? status : "active",
+      sitioZone: sitioZone || syncedConsumers[idx].sitioZone || "Zone 1",
+      barangay: barangay || syncedConsumers[idx].barangay || "Poblacion"
+    };
+
+    const validatedConsumer = syncedConsumers[idx];
+
+    // Broadcast ID activation event to Admin consoles and mobile reader route streams
+    broadcast("CONSUMER_UPDATED", {
+      consumer: validatedConsumer,
+      message: `Official IDs issued for ${validatedConsumer.name}: Acct #${validatedConsumer.accountNumber}, Meter #${validatedConsumer.meterNumber}.`
+    });
+
+    broadcast("CONSUMER_ACTIVATED_FOR_READER", {
+      consumer: validatedConsumer,
+      accountNumber: validatedConsumer.accountNumber,
+      meterNumber: validatedConsumer.meterNumber,
+      barangay: validatedConsumer.barangay,
+      sitioZone: validatedConsumer.sitioZone,
+      message: `Consumer ${validatedConsumer.name} is now validated and routed to field readers for ${validatedConsumer.barangay}.`
+    });
+
+    res.json({
+      success: true,
+      message: `Official IDs successfully issued. Consumer is active and synced to mobile field route.`,
+      consumer: validatedConsumer
+    });
+  } catch (err) {
+    console.error("[API Error] Issue IDs:", err);
+    res.status(500).json({ success: false, message: "Failed to issue IDs for consumer." });
+  }
+});
+
 // DELETE /api/consumers/:identifier
 app.delete("/api/consumers/:identifier", (req, res) => {
   try {
@@ -1523,22 +2067,26 @@ app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req,
     const curr = Number(item.currentReading || 0);
     const consumption = Math.max(0, curr - prev);
 
+    const matchedConsumer = item.accountNumber 
+      ? syncedConsumers.find(c => c.accountNumber === item.accountNumber) 
+      : null;
+
     const submission: MobileReadingSubmission = {
       id: item.id || `READ-${Math.floor(10000 + Math.random() * 90000)}`,
-      accountNumber: item.accountNumber || "UNKNOWN",
-      consumerName: item.consumerName || "Consumer",
-      meterNumber: item.meterNumber || "MT-TAG",
-      billingPeriod: item.billingPeriod || "August 2026",
+      accountNumber: item.accountNumber || (matchedConsumer ? matchedConsumer.accountNumber : "UNKNOWN"),
+      consumerName: item.consumerName || (matchedConsumer ? matchedConsumer.name : "Consumer"),
+      meterNumber: item.meterNumber || item.meterSerialNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG"),
+      billingPeriod: item.billingPeriod || "October 2026",
       readingDate: item.readingDate || new Date().toISOString().split("T")[0],
       previousReading: prev,
       currentReading: curr,
       consumption,
-      readerId: item.readerId || "WDT-FIELD",
+      readerId: item.readerId || (req.headers["x-reader-id"] as string) || "WDT-FIELD",
       readerName: item.readerName || "Field Meter Officer",
-      route: item.route || item.barangay || "Poblacion",
+      route: item.route || item.barangay || (matchedConsumer ? matchedConsumer.barangay : "Poblacion"),
       status: "pending_approval",
       photoUrl: item.photoUrl || item.dialPhotoUrl || "",
-      coordinates: item.coordinates || { latitude: 8.5372, longitude: 124.7523 },
+      coordinates: item.coordinates || item.gps || { latitude: 8.5372, longitude: 124.7523 },
       notes: item.notes || "Batch synced from Mobile Offline Queue",
       submittedAt: new Date().toISOString()
     };
@@ -1608,6 +2156,287 @@ app.post("/api/readings/:id/approve", (req, res) => {
     message: `Reading #${id} approved. Statement issued to Consumer Portal for Account #${item.accountNumber}.`,
     reading: item
   });
+});
+
+// ==========================================
+// 6. CONSUMER SERVICE REPORTS & ADMIN REPLY APIS
+// ==========================================
+
+// GET /api/reports - Fetch reports with optional filters
+app.get("/api/reports", (req, res) => {
+  try {
+    const { accountNumber, status, category, search } = req.query;
+    let list = [...inMemoryReports];
+
+    if (accountNumber && typeof accountNumber === "string" && accountNumber.trim()) {
+      const acc = accountNumber.trim().toLowerCase();
+      list = list.filter(r => 
+        (r.accountNumber && r.accountNumber.toLowerCase() === acc) ||
+        (r.consumerEmail && r.consumerEmail.toLowerCase() === acc)
+      );
+    }
+
+    if (status && typeof status === "string" && status.trim() && status !== "all") {
+      list = list.filter(r => r.status === status);
+    }
+
+    if (category && typeof category === "string" && category.trim() && category !== "all") {
+      list = list.filter(r => r.category === category);
+    }
+
+    if (search && typeof search === "string" && search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter(r => 
+        r.ticketNumber.toLowerCase().includes(q) ||
+        r.title.toLowerCase().includes(q) ||
+        r.consumerName.toLowerCase().includes(q) ||
+        (r.description && r.description.toLowerCase().includes(q))
+      );
+    }
+
+    res.json({
+      success: true,
+      count: list.length,
+      reports: list,
+      data: list
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to fetch consumer reports." });
+  }
+});
+
+// GET /api/reports/:id - Fetch single report
+app.get("/api/reports/:id", (req, res) => {
+  const { id } = req.params;
+  const found = inMemoryReports.find(r => r.id === id || r.ticketNumber === id);
+  if (!found) {
+    return res.status(404).json({ success: false, message: `Report ${id} not found.` });
+  }
+  res.json({ success: true, report: found, data: found });
+});
+
+// POST /api/reports - Consumer creates a report
+app.post("/api/reports", (req, res) => {
+  try {
+    const {
+      accountNumber,
+      consumerName,
+      consumerEmail,
+      consumerPhone,
+      barangay,
+      address,
+      meterNumber,
+      category,
+      title,
+      description,
+      urgency,
+      photoUrl
+    } = req.body;
+
+    if (!title || !category) {
+      return res.status(400).json({
+        success: false,
+        message: "Report title and category are required."
+      });
+    }
+
+    const id = `REP-${Date.now()}`;
+    const randNum = Math.floor(1000 + Math.random() * 9000);
+    const ticketNumber = `TWD-CR-${new Date().getFullYear()}-${randNum}`;
+    const now = new Date().toISOString();
+
+    const replies: ServerReportReply[] = [];
+    if (description) {
+      replies.push({
+        id: `REP-MSG-${Date.now()}-1`,
+        reportId: id,
+        senderId: accountNumber || "consumer",
+        senderName: consumerName || "Consumer",
+        senderRole: "consumer",
+        message: description,
+        timestamp: now
+      });
+    }
+
+    const newReport: ServerConsumerReport = {
+      id,
+      ticketNumber,
+      accountNumber: accountNumber || "UNASSIGNED",
+      consumerName: consumerName || "Consumer",
+      consumerEmail: consumerEmail || "",
+      consumerPhone: consumerPhone || "",
+      barangay: barangay || "Poblacion",
+      address: address || "",
+      meterNumber: meterNumber || "",
+      category: category || "other",
+      title: title.trim(),
+      description: (description || "").trim(),
+      urgency: urgency || "normal",
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+      photoUrl: photoUrl || "",
+      replies,
+      hasUnreadAdminReply: false,
+      hasUnreadConsumerUpdate: true
+    };
+
+    inMemoryReports.unshift(newReport);
+
+    // Broadcast report creation to Admin Portal and all WebSocket clients
+    broadcast("CONSUMER_REPORT_CREATED", {
+      report: newReport,
+      ticketNumber: newReport.ticketNumber,
+      consumerName: newReport.consumerName,
+      accountNumber: newReport.accountNumber,
+      category: newReport.category,
+      title: newReport.title,
+      urgency: newReport.urgency,
+      message: `🚨 New Consumer Concern Filed [${newReport.ticketNumber}] by ${newReport.consumerName} (${newReport.accountNumber}): "${newReport.title}"`
+    });
+
+    broadcast("consumer:report:created", {
+      report: newReport,
+      ticketNumber: newReport.ticketNumber,
+      message: `🚨 New report ${newReport.ticketNumber} filed for ${newReport.barangay}.`
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `Concern filed successfully. Tracking Ticket: ${ticketNumber}`,
+      report: newReport
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to submit consumer report." });
+  }
+});
+
+// POST /api/reports/:id/reply - Admin or Consumer adds a reply
+app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
+  try {
+    const { id } = req.params;
+    const { senderId, senderName, senderRole, message, statusUpdate, assignedStaff } = req.body;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ success: false, message: "Reply message cannot be empty." });
+    }
+
+    const idx = inMemoryReports.findIndex(r => r.id === id || r.ticketNumber === id);
+    if (idx === -1) {
+      return res.status(404).json({ success: false, message: `Report ${id} not found.` });
+    }
+
+    const report = inMemoryReports[idx];
+    const now = new Date().toISOString();
+    const replyItem: ServerReportReply = {
+      id: `REP-MSG-${Date.now()}`,
+      reportId: report.id,
+      senderId: senderId || "staff",
+      senderName: senderName || (senderRole === "admin" ? "TWD Admin" : "Consumer"),
+      senderRole: senderRole || "admin",
+      message: message.trim(),
+      timestamp: now,
+      statusUpdate: statusUpdate || undefined
+    };
+
+    const nextStatus = statusUpdate || report.status;
+    const isResolved = nextStatus === "resolved";
+
+    const updated: ServerConsumerReport = {
+      ...report,
+      status: nextStatus,
+      updatedAt: now,
+      resolvedAt: isResolved ? (report.resolvedAt || now) : report.resolvedAt,
+      assignedStaff: assignedStaff !== undefined ? assignedStaff : report.assignedStaff,
+      replies: [...report.replies, replyItem],
+      hasUnreadAdminReply: replyItem.senderRole === "admin",
+      hasUnreadConsumerUpdate: replyItem.senderRole === "consumer"
+    };
+
+    inMemoryReports[idx] = updated;
+
+    // Broadcast reply event to all connected sockets
+    if (replyItem.senderRole === "admin") {
+      broadcast("ADMIN_REPLIED_TO_REPORT", {
+        report: updated,
+        reply: replyItem,
+        accountNumber: updated.accountNumber,
+        ticketNumber: updated.ticketNumber,
+        message: `Admin ${replyItem.senderName} responded to Ticket #${updated.ticketNumber}: "${replyItem.message}" (Status: ${nextStatus.toUpperCase()})`
+      });
+      broadcast("consumer:report:replied", {
+        report: updated,
+        reply: replyItem,
+        accountNumber: updated.accountNumber,
+        ticketNumber: updated.ticketNumber
+      });
+    } else {
+      broadcast("CONSUMER_REPLIED_TO_REPORT", {
+        report: updated,
+        reply: replyItem,
+        ticketNumber: updated.ticketNumber,
+        message: `Consumer ${replyItem.senderName} posted a follow-up on Ticket #${updated.ticketNumber}.`
+      });
+      broadcast("consumer:report:updated", {
+        report: updated,
+        reply: replyItem,
+        ticketNumber: updated.ticketNumber
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Reply logged successfully.",
+      report: updated,
+      reply: replyItem
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to post reply." });
+  }
+});
+
+// PATCH & POST /api/reports/:id/status - Update report status and assigned crew
+app.all(["/api/reports/:id/status"], (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, assignedStaff } = req.body;
+
+    const idx = inMemoryReports.findIndex(r => r.id === id || r.ticketNumber === id);
+    if (idx === -1) {
+      return res.status(404).json({ success: false, message: `Report ${id} not found.` });
+    }
+
+    const report = inMemoryReports[idx];
+    const now = new Date().toISOString();
+    const isResolved = status === "resolved";
+
+    const updated: ServerConsumerReport = {
+      ...report,
+      status: status || report.status,
+      updatedAt: now,
+      resolvedAt: isResolved ? now : report.resolvedAt,
+      assignedStaff: assignedStaff !== undefined ? assignedStaff : report.assignedStaff,
+      hasUnreadAdminReply: true
+    };
+
+    inMemoryReports[idx] = updated;
+
+    broadcast("REPORT_STATUS_CHANGED", {
+      report: updated,
+      ticketNumber: updated.ticketNumber,
+      status: updated.status,
+      assignedStaff: updated.assignedStaff,
+      message: `Ticket #${updated.ticketNumber} updated to ${updated.status.toUpperCase()}`
+    });
+
+    res.json({
+      success: true,
+      message: `Status updated to ${updated.status}.`,
+      report: updated
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to update report status." });
+  }
 });
 
 // WebSocket Connection Management
@@ -1923,12 +2752,32 @@ app.get(["/api/barangays", "/api/routes", "/api/areas"], (req, res) => {
   res.json({ success: true, count: barangays.length, barangays, routes: barangays, areas: barangays, data: barangays });
 });
 
-app.get(["/api/health", "/api/status", "/api/ping"], (req, res) => {
+app.get(["/api/health", "/api/status", "/api/ping", "/api/survival"], (req, res) => {
+  const mem = process.memoryUsage();
   res.json({
-    status: "ok",
+    status: "online",
+    state: "ONLINE",
+    healthy: true,
+    online: true,
+    system: "Tagoloan Water District Real-Time Cloud Service",
+    uptimeSeconds: Math.floor(process.uptime()),
     activeWebSocketClients: clients.size,
     consumersCount: syncedConsumers.length,
     staffCount: registeredStaff.length,
+    botDefense: {
+      totalRequestsServed: totalServedRequests,
+      totalRequestsThrottled: totalThrottledRequests,
+      activeTrackedIPs: rateLimitMap.size,
+      rateLimitWindow: "60 seconds",
+      maxPerMinute: "200 req/min (General), 25 req/min (Auth)"
+    },
+    systemMetrics: {
+      heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024 * 100) / 100,
+      heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024 * 100) / 100,
+      rssMB: Math.round(mem.rss / 1024 / 1024 * 100) / 100,
+      nodeVersion: process.version,
+      pid: process.pid
+    },
     timestamp: new Date().toISOString()
   });
 });

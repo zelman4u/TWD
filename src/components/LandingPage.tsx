@@ -28,6 +28,7 @@ import {
 import { Announcement } from '../types';
 import { calculateWaterTariff } from '../utils/tariffCalculator';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
+import { useToast } from '../context/ToastContext';
 
 interface LandingPageProps {
   announcements: Announcement[];
@@ -35,6 +36,7 @@ interface LandingPageProps {
 }
 
 export default function LandingPage({ announcements, onNavigate }: LandingPageProps) {
+  const toast = useToast();
   // Mobile Navigation Menu State
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -71,7 +73,10 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
       setContactAccount('');
       setContactMsg('');
       setContactSent(false);
-      alert("Thank you! Your message has been submitted to Tagoloan Water District Support. We will review your inquiry shortly.");
+      toast.success(
+        'Inquiry Submitted',
+        'Thank you! Your message has been submitted to Tagoloan Water District Support. We will review your inquiry shortly.'
+      );
     }, 1200);
   };
 

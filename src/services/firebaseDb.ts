@@ -40,6 +40,7 @@ export const COLLECTIONS = {
   NOTIFICATIONS: 'notifications',
   BARANGAYS: 'barangays',
   SETTINGS: 'settings',
+  REPORTS: 'consumer_reports',
 };
 
 // Storage prefix used by mockDb
@@ -56,6 +57,7 @@ export const KEYS = {
   ANNOUNCEMENTS: `${STORAGE_PREFIX}announcements`,
   AUDIT_LOGS: `${STORAGE_PREFIX}audit_logs`,
   NOTIFICATIONS: `${STORAGE_PREFIX}notifications`,
+  REPORTS: `${STORAGE_PREFIX}consumer_reports`,
   BARANGAYS: `${STORAGE_PREFIX}barangays`,
   TARIFF_CONFIG: `${STORAGE_PREFIX}tariff_config`,
   TERMINATED: TERMINATED_ACCOUNTS_KEY,
@@ -333,30 +335,39 @@ export function startRealtimeFirestoreListeners() {
         const localRaw = localStorage.getItem(KEYS.READERS);
         const localReaders: MeterReader[] = localRaw ? JSON.parse(localRaw) : [];
         const activeLocalReaders = localReaders.filter(r => !isAccountTerminated(r));
-        const mergedMap = new Map<string, MeterReader>();
+        const mergedList: MeterReader[] = [];
+        const seen = new Set<string>();
 
-        cloudReaders.forEach(r => {
-          if (!isAccountTerminated(r)) {
-            const k = ((r.employeeId || r.id || r.username || r.email || r.name || '').trim().toLowerCase()) || (`reader_${r.id || Math.random()}`);
-            mergedMap.set(k, r);
+        const addUniqueReader = (r: MeterReader) => {
+          if (isAccountTerminated(r)) return;
+          const kId = (r.id || '').trim().toLowerCase();
+          const kEmp = (r.employeeId || '').trim().toLowerCase();
+          const kUser = (r.username || '').trim().toLowerCase();
+          const kName = (r.name || '').trim().toLowerCase();
+          const kEmail = (r.email || '').trim().toLowerCase();
+
+          if (
+            (kId && seen.has(kId)) ||
+            (kEmp && seen.has(kEmp)) ||
+            (kUser && seen.has(kUser)) ||
+            (kName && seen.has(kName)) ||
+            (kEmail && seen.has(kEmail))
+          ) {
+            return;
           }
-        });
 
-        activeLocalReaders.forEach(r => {
-          if (!isAccountTerminated(r)) {
-            const k = ((r.employeeId || r.id || r.username || r.email || r.name || '').trim().toLowerCase()) || (`reader_${r.id || Math.random()}`);
-            if (!mergedMap.has(k)) {
-              mergedMap.set(k, r);
-            } else {
-              const existing = mergedMap.get(k)!;
-              if (r.employmentStatus === 'active' && existing.employmentStatus !== 'active') {
-                mergedMap.set(k, { ...existing, employmentStatus: 'active' });
-              }
-            }
-          }
-        });
+          if (kId) seen.add(kId);
+          if (kEmp) seen.add(kEmp);
+          if (kUser) seen.add(kUser);
+          if (kName) seen.add(kName);
+          if (kEmail) seen.add(kEmail);
+          mergedList.push({ ...r, employmentStatus: 'active' });
+        };
 
-        const finalReaders = Array.from(mergedMap.values()).filter(r => !isAccountTerminated(r));
+        cloudReaders.forEach(addUniqueReader);
+        activeLocalReaders.forEach(addUniqueReader);
+
+        const finalReaders = mergedList;
         localStorage.setItem(KEYS.READERS, JSON.stringify(finalReaders));
         triggerLocalUpdateEvent(KEYS.READERS);
       }

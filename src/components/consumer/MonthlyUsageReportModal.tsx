@@ -688,13 +688,13 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
 
           {/* Historical Month-over-Month Matrix */}
           <div className="space-y-2">
-            <h5 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+            <h5 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
               <Calendar className="h-3.5 w-3.5 text-slate-400" />
               <span>Historical Reading History & Household Average Variance</span>
             </h5>
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-lg">
               <table className="w-full text-xs text-left">
-                <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-200">
+                <thead className="bg-slate-950 text-slate-300 font-bold uppercase border-b border-slate-800 text-[10px]">
                   <tr>
                     <th className="px-4 py-3">Billing Cycle</th>
                     <th className="px-4 py-3">Index (Prev → Curr)</th>
@@ -704,25 +704,25 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
                     <th className="px-4 py-3">Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-slate-800/80 bg-slate-900 text-slate-200">
                   {historyTimeline.map((h, i) => (
-                    <tr key={i} className="hover:bg-slate-50/70">
-                      <td className="px-4 py-3 font-bold text-slate-900">{h.period}</td>
-                      <td className="px-4 py-3 font-mono text-slate-600">{h.prev} m³ → {h.curr} m³</td>
-                      <td className="px-4 py-3 font-mono font-black text-blue-700">{h.m3} m³</td>
+                    <tr key={i} className="hover:bg-slate-800/60 transition">
+                      <td className="px-4 py-3 font-bold text-white">{h.period}</td>
+                      <td className="px-4 py-3 font-mono text-slate-300">{h.prev} m³ → {h.curr} m³</td>
+                      <td className="px-4 py-3 font-mono font-black text-sky-400">{h.m3} m³</td>
                       <td className="px-4 py-3">
                         <span className={`font-mono text-[11px] font-bold ${
-                          h.varVsAvg <= 0 ? 'text-emerald-700' : 'text-rose-700'
+                          h.varVsAvg <= 0 ? 'text-emerald-400' : 'text-rose-400'
                         }`}>
                           {h.varVsAvg <= 0 ? `-${Math.abs(h.varVsAvg)} m³` : `+${h.varVsAvg} m³`}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-mono font-bold text-slate-800">
+                      <td className="px-4 py-3 font-mono font-bold text-slate-200">
                         ₱{h.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                          h.status === 'paid' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                        <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
+                          h.status === 'paid' ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80' : 'bg-amber-950/80 text-amber-300 border-amber-800/80'
                         }`}>
                           {h.status}
                         </span>

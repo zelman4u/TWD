@@ -470,6 +470,9 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
       // 3. Create Official Real-time Notification
       mockDb.addNotification({
         accountNumber: consumerRecord.accountNumber,
+        consumerId: consumerRecord.id,
+        userId: consumerRecord.linkedUserId,
+        consumerEmail: consumerRecord.email,
         title: isFullSettlement
           ? `Receipt Validated: ${activeReading.billingPeriod} Settled in Full`
           : `Receipt Validated: Partial Payment (₱${numericPayment.toFixed(2)}) Recorded`,

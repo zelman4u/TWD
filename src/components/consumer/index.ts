@@ -12,3 +12,4 @@ export * from './DynamicDueAlert';
 export * from './MonthlyUsageReportModal';
 export * from './OverdueBillBanner';
 export * from './UploadReceiptModal';
+export * from './ConsumerReportsSection';

@@ -248,6 +248,9 @@ export function scanAndUpdateAccounts(): ScanSummary {
         if (!hasNoticeNotif) {
           mockDb.addNotification({
             accountNumber: consumer.accountNumber,
+            consumerId: consumer.id,
+            userId: consumer.linkedUserId,
+            consumerEmail: consumer.email,
             title: 'CRITICAL: Water Service Disconnection Notice Issued',
             message: `Official Notice from Tagoloan Water District: Account #${consumer.accountNumber} has exceeded the 3-month payment grace period (${evalResult.maxDaysOverdue} days overdue, ${evalResult.unpaidCycles} unpaid statements, ₱${evalResult.totalOverdueAmount.toFixed(2)} arrears). A physical curb-stop disconnection order is scheduled within 5 working days unless settled.`,
             type: 'disconnection',

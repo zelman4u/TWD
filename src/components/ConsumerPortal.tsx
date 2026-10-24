@@ -60,10 +60,13 @@ import {
   Download,
   AlertOctagon,
   Image as ImageIcon,
-  Award
+  Award,
+  MessageSquare,
+  Plus,
+  UserCheck
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
-import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotification } from '../types';
+import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotification, ConsumerReport } from '../types';
 import { ConsumerPortalSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import DataLoadingIndicator from './common/DataLoadingIndicator';
 import { OverdueBillBanner } from './consumer/OverdueBillBanner';
@@ -71,10 +74,14 @@ import { DynamicDueAlert } from './consumer/DynamicDueAlert';
 import { UploadReceiptModal } from './consumer/UploadReceiptModal';
 import { MonthlyUsageReportModal } from './consumer/MonthlyUsageReportModal';
 import { BillDetails } from './consumer/BillDetails';
+import { ConsumerReportsSection } from './consumer/ConsumerReportsSection';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
 import { calculateWaterTariff, getActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
+import { apiClient } from '../services/apiClient';
+import { initRealtimeSocket } from '../services/realtimeSocket';
+import { TablePagination } from './common/TablePagination';
 
 interface ConsumerPortalProps {
   currentUser: UserType;
@@ -85,8 +92,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const toast = useToast();
   const { showLoading, hideLoading } = useLoading();
 
-  // Navigation Modules: Dashboard, My Bills, My Usage, Notifications, My Profile
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'bills' | 'usage' | 'notifications' | 'profile'>('dashboard');
+  // Navigation Modules: Dashboard, My Bills, My Usage, Reports & Inquiries, Notifications, My Profile
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'bills' | 'usage' | 'reports' | 'notifications' | 'profile'>('dashboard');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Loading States
@@ -110,6 +117,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       case 'dashboard': return { title: 'Compiling Water Service Dashboard...', subtitle: 'Fetching current cubic meter index, billing summary, and active notices' };
       case 'bills': return { title: 'Loading My Water Bills Ledger...', subtitle: 'Calculating itemized tariff breakdown, due dates, and official payment receipts' };
       case 'usage': return { title: 'Querying Historical Consumption Telemetry...', subtitle: 'Aggregating monthly cubic meter trends and conservation metrics' };
+      case 'reports': return { title: 'Querying Consumer Service Reports...', subtitle: 'Retrieving water leak reports, pressure issues, and administrative reply threads' };
       case 'notifications': return { title: 'Retrieving Account Alerts & Bulletins...', subtitle: 'Loading water advisory notices, billing alerts, and payment confirmations' };
       case 'profile': return { title: 'Loading Consumer Profile Information...', subtitle: 'Fetching registered address, account credentials, and meter serials' };
       default: return { title: 'Fetching Consumer Records...', subtitle: 'Synchronizing with Tagoloan Water District database' };
@@ -122,6 +130,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const [allHistoryReadings, setAllHistoryReadings] = useState<MeterReading[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [notifications, setNotifications] = useState<ConsumerNotification[]>([]);
+  const [reports, setReports] = useState<ConsumerReport[]>([]);
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
 
   // Notification spotlight and highlight states
@@ -155,9 +165,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
   // My Bills Filter State
   const [billFilter, setBillFilter] = useState<'all' | 'unpaid' | 'paid' | 'partial'>('all');
+  const [consumerBillsPage, setConsumerBillsPage] = useState(1);
+  const [consumerUsagePage, setConsumerUsagePage] = useState(1);
+
+  useEffect(() => {
+    setConsumerBillsPage(1);
+  }, [billFilter]);
 
   // Notifications Filter State
-  const [notifFilter, setNotifFilter] = useState<'all' | 'billing' | 'payment' | 'announcement'>('all');
+  const [notifFilter, setNotifFilter] = useState<'all' | 'billing' | 'payment' | 'account_issue' | 'announcement'>('all');
 
   // Official Office Receipt Upload & Validation Modal States
   const [isUploadReceiptOpen, setIsUploadReceiptOpen] = useState(false);
@@ -267,15 +283,34 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
              (currentUser.name && u.name && u.name.toLowerCase() === currentUser.name.toLowerCase())
       );
 
-      // Match linked account number, user id, email, or name
-      const matching = consumers.filter(
-        c => (currentUser.linkedAccountNumber && c.accountNumber === currentUser.linkedAccountNumber) || 
-             (liveUser?.linkedAccountNumber && c.accountNumber === liveUser.linkedAccountNumber) ||
-             (currentUser.email && c.email && c.email.toLowerCase() === currentUser.email.toLowerCase()) ||
-             (currentUser.id && c.linkedUserId === currentUser.id) ||
-             (liveUser?.id && c.linkedUserId === liveUser.id) ||
-             (currentUser.name && c.name && c.name.trim().toLowerCase() === currentUser.name.trim().toLowerCase())
-      );
+      // Match linked account number, user id, or verified email strictly to prevent cross-account contamination
+      const matching = consumers.filter(c => {
+        // 1. Account Number Match
+        const userAcc = currentUser.linkedAccountNumber || liveUser?.linkedAccountNumber;
+        if (userAcc && c.accountNumber && c.accountNumber === userAcc) {
+          return true;
+        }
+        // 2. User ID Match
+        const uid = currentUser.id || liveUser?.id;
+        if (uid && c.linkedUserId && c.linkedUserId === uid) {
+          return true;
+        }
+        // 3. Email Match
+        const userEmail = (currentUser.email || liveUser?.email || '').trim().toLowerCase();
+        const consumerEmail = (c.email || '').trim().toLowerCase();
+        if (userEmail && consumerEmail && userEmail === consumerEmail) {
+          return true;
+        }
+        // 4. Name match ONLY if neither the consumer nor user has a conflicting email or user ID
+        const userName = (currentUser.name || liveUser?.name || '').trim().toLowerCase();
+        const consumerName = (c.name || '').trim().toLowerCase();
+        if (userName && consumerName && userName === consumerName) {
+          if (!consumerEmail && !c.linkedUserId) {
+            return true;
+          }
+        }
+        return false;
+      });
 
       // Sort matching so active issued record always takes top precedence over stale pending records
       matching.sort((a, b) => {
@@ -362,7 +397,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               const net = Math.max(0, gross - paid);
 
               if (net > 0) {
-                const existingNotifs = mockDb.getNotifications(record.accountNumber);
+                const existingNotifs = mockDb.getNotifications(record.accountNumber, {
+                  userId: record.linkedUserId || currentUser.id,
+                  email: record.email || currentUser.email,
+                  consumerId: record.id
+                });
                 const hasAlert = existingNotifs.some(
                   n => (n.readingId === r.id || n.billingPeriod === r.billingPeriod) &&
                        ((n.title || '').toLowerCase().includes('overdue') || (n.title || '').toLowerCase().includes('urgent'))
@@ -372,6 +411,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   alertedOverdueRef.current.add(r.id);
                   mockDb.addNotification({
                     accountNumber: record.accountNumber,
+                    consumerId: record.id,
+                    userId: record.linkedUserId || currentUser.id,
+                    consumerEmail: record.email || currentUser.email,
                     title: `URGENT: Water Tariff Overdue — ${r.billingPeriod}`,
                     message: `Your water tariff bill of ₱${net.toFixed(2)} for ${r.billingPeriod} (${r.consumption} m³) is past its due date. Standard 10% late surcharge applies. Settle online or upload your office payment receipt to prevent service disruption.`,
                     type: 'billing',
@@ -393,7 +435,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         });
 
         if (has3MonthsOverdue && unpaidList.length > 0) {
-          const existingNotifs = mockDb.getNotifications(record.accountNumber);
+          const existingNotifs = mockDb.getNotifications(record.accountNumber, {
+            userId: record.linkedUserId || currentUser.id,
+            email: record.email || currentUser.email,
+            consumerId: record.id
+          });
           const hasDisconnectionAlert = existingNotifs.some(
             n => n.type === 'disconnection' || (n.title || '').toLowerCase().includes('disconnection') || (n.title || '').toLowerCase().includes('cutting')
           );
@@ -403,6 +449,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             const net = Math.max(0, gross - (primaryOverdue.paidAmount || 0));
             mockDb.addNotification({
               accountNumber: record.accountNumber,
+              consumerId: record.id,
+              userId: record.linkedUserId || currentUser.id,
+              consumerEmail: record.email || currentUser.email,
               title: `CRITICAL: 3-Month Disconnection & Cutting Order Notice`,
               message: `Your water account #${record.accountNumber} has unpaid statements exceeding 3 consecutive months. In accordance with Tagoloan Water District policy, a physical curb-stop disconnection order is pending. Pay at least 50% partial or upload your office receipt immediately to stop cutting.`,
               type: 'disconnection',
@@ -425,16 +474,40 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         }
         setAllHistoryReadings(allCustomerReads);
 
-        // Load consumer notifications
-        const notifs = mockDb.getNotifications(record.accountNumber);
+        // Load consumer notifications strictly for this consumer account
+        const notifs = mockDb.getNotifications(record.accountNumber, {
+          userId: record.linkedUserId || currentUser.id,
+          email: record.email || currentUser.email,
+          consumerId: record.id
+        });
         if (JSON.stringify(notifsRef.current) !== JSON.stringify(notifs)) {
           notifsRef.current = notifs;
           setNotifications(notifs);
         }
+
+        // Load consumer reports & concerns
+        const localReports = mockDb.getReports(record.accountNumber);
+        setReports(localReports);
+        apiClient.getReports({ accountNumber: record.accountNumber })
+          .then(res => {
+            if (res?.success && Array.isArray(res.reports)) {
+              setReports(res.reports);
+            }
+          })
+          .catch(() => {});
       } else {
         if (consumerRecordRef.current !== null) {
           consumerRecordRef.current = null;
           setConsumerRecord(null);
+        }
+        // Load fallback notifications strictly for this user (e.g. self-registered awaiting issuance)
+        const userNotifs = mockDb.getNotifications(currentUser.linkedAccountNumber, {
+          userId: currentUser.id,
+          email: currentUser.email
+        });
+        if (JSON.stringify(notifsRef.current) !== JSON.stringify(userNotifs)) {
+          notifsRef.current = userNotifs;
+          setNotifications(userNotifs);
         }
       }
 
@@ -452,6 +525,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
   // Initial Load & Real-Time Sync Event Listeners
   useEffect(() => {
+    // Clear notifications and active cache on user identity switch to prevent cross-account display
+    setNotifications([]);
+    notifsRef.current = [];
+    setConsumerRecord(null);
+    consumerRecordRef.current = null;
+    setReadings([]);
+    readingsRef.current = [];
+    prevReadingsRef.current = [];
+    alertedOverdueRef.current.clear();
+
     loadConsumerInfo();
 
     // 1. Instantaneous reactive sync with debounce to prevent state loops
@@ -481,7 +564,23 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     };
     window.addEventListener('twd_tariff_updated', handleTariffUpdated);
 
-    // 4. Fallback automated polling every 5 seconds
+    // 4. Dedicated Live WebSocket Stream for immediate notifications & report updates
+    const cleanupWs = initRealtimeSocket((data) => {
+      if (data.type === 'CONSUMER_REPORT_REPLY') {
+        const payload = data.payload;
+        if (payload?.accountNumber && consumerRecordRef.current?.accountNumber === payload.accountNumber) {
+          toast.info(
+            'New Administrative Reply',
+            payload.message || 'The water district desk replied to your report.'
+          );
+        }
+        loadConsumerInfo(true);
+      } else if (data.type === 'CONSUMER_REPORT_UPDATED' || data.type === 'CONSUMER_REPORT_CREATED') {
+        loadConsumerInfo(true);
+      }
+    });
+
+    // 5. Fallback automated polling every 5 seconds
     const interval = setInterval(() => {
       loadConsumerInfo(true);
     }, 5000);
@@ -491,6 +590,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('twd_tariff_updated', handleTariffUpdated);
       clearInterval(interval);
+      cleanupWs();
       if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
       if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
     };
@@ -579,12 +679,30 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
   // Unread notification count
   const unreadNotifCount = notifications.filter(n => !n.read).length;
+  // Unread admin reply count on filed reports
+  const unreadReportsCount = reports.filter(r => r.hasUnreadAdminReply).length;
 
-  // Action: Handle clicking a notification to route to Dashboard or Bills and highlight the reading
-  const handleNotificationClick = (notif: ConsumerNotification, targetPreference?: 'dashboard' | 'bills' | 'announcements') => {
+  // Action: Handle clicking a notification to route to Dashboard, Bills, Profile, or Reports and highlight the reading
+  const handleNotificationClick = (notif: ConsumerNotification, targetPreference?: 'dashboard' | 'bills' | 'announcements' | 'profile' | 'reports') => {
     // 1. Mark as read in storage and state
     mockDb.markNotificationRead(notif.id);
     setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
+
+    if (targetPreference === 'profile' || notif.type === 'account_issue') {
+      setActiveTab('profile');
+      setShowNotifDropdown(false);
+      return;
+    }
+
+    // Special handler: If notification is for a consumer report reply from admin
+    if (notif.type === 'report' || notif.reportId) {
+      if (notif.reportId) {
+        setSelectedReportId(notif.reportId);
+      }
+      setActiveTab('reports');
+      setShowNotifDropdown(false);
+      return;
+    }
 
     // 2. Resolve matching reading
     let matchedReading: MeterReading | undefined;
@@ -934,6 +1052,36 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${activeTab === 'usage' ? 'rotate-90 text-white' : 'text-slate-600 group-hover:text-slate-400'}`} />
             </button>
 
+            {/* Module: Reports & Concerns */}
+            <button
+              onClick={() => handleConsumerTabChange('reports')}
+              className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-left transition cursor-pointer group ${
+                activeTab === 'reports'
+                  ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+              }`}
+              id="sidebar-mod-reports"
+            >
+              <div className="flex items-center space-x-3 min-w-0">
+                <div className={`p-1.5 rounded-lg ${activeTab === 'reports' ? 'bg-white/20' : 'bg-slate-800 text-teal-400 group-hover:text-teal-300'}`}>
+                  <MessageSquare className="h-4 w-4" />
+                </div>
+                <div className="truncate">
+                  <div className="text-xs font-bold leading-tight">Reports & Inquiries</div>
+                  <div className={`text-[10px] truncate ${activeTab === 'reports' ? 'text-blue-100' : 'text-slate-400'}`}>
+                    Leaks, pressure & admin replies
+                  </div>
+                </div>
+              </div>
+              {unreadReportsCount > 0 ? (
+                <span className="px-1.5 py-0.5 bg-amber-400 text-slate-950 text-[10px] font-black rounded-full shadow-xs animate-pulse">
+                  {unreadReportsCount} new
+                </span>
+              ) : (
+                <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${activeTab === 'reports' ? 'rotate-90 text-white' : 'text-slate-600 group-hover:text-slate-400'}`} />
+              )}
+            </button>
+
             {/* Module 4: Notifications */}
             <button
               onClick={() => handleConsumerTabChange('notifications')}
@@ -1046,6 +1194,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   {activeTab === 'dashboard' && 'Dashboard Overview'}
                   {activeTab === 'bills' && 'My Water Bills'}
                   {activeTab === 'usage' && 'Consumption & Usage'}
+                  {activeTab === 'reports' && 'Service Reports & Inquiries'}
                   {activeTab === 'notifications' && 'Notifications & Alerts'}
                   {activeTab === 'profile' && 'Consumer Profile'}
                 </span>
@@ -1054,6 +1203,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 {activeTab === 'dashboard' && 'Account & Telemetry Dashboard'}
                 {activeTab === 'bills' && 'Billing Ledger & Online Settle'}
                 {activeTab === 'usage' && 'Meter Telemetry & Historical Readings'}
+                {activeTab === 'reports' && 'Service Concerns & Administrator Replies'}
                 {activeTab === 'notifications' && 'Official Advisories & Receipts'}
                 {activeTab === 'profile' && 'Personal Information & Security'}
               </h2>
@@ -1127,25 +1277,45 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     ) : (
                       notifications.slice(0, 6).map((n, idx) => {
                         const isBilling = n.type === 'billing' || n.type === 'balance';
+                        const isPayment = n.type === 'payment' || n.type === 'receipt_upload';
+                        const isAccountIssue = n.type === 'account_issue';
+                        const isDisconnection = n.type === 'disconnection';
+                        const isReport = n.type === 'report';
                         const isPartialAlert = (n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining');
+                        const targetTab = isAccountIssue ? 'profile' : isBilling ? 'bills' : isReport ? 'reports' : 'dashboard';
 
                         return (
                           <div
                             key={`dropdown-notif-${n.id || idx}`}
-                            onClick={() => handleNotificationClick(n, 'dashboard')}
+                            onClick={() => {
+                              handleNotificationClick(n, targetTab);
+                              setShowNotifDropdown(false);
+                            }}
                             className={`p-3.5 hover:bg-slate-50 transition cursor-pointer flex items-start space-x-3 ${
                               !n.read ? 'bg-blue-50/40' : ''
                             }`}
                           >
                             <div className={`p-2 rounded-xl shrink-0 mt-0.5 ${
-                              isPartialAlert
+                              isDisconnection
+                                ? 'bg-rose-100 text-rose-800'
+                                : isAccountIssue
+                                ? 'bg-purple-100 text-purple-800'
+                                : isPartialAlert
                                 ? 'bg-amber-100 text-amber-800'
+                                : isReport
+                                ? 'bg-indigo-100 text-indigo-800'
                                 : isBilling
                                 ? 'bg-blue-100 text-blue-800'
                                 : 'bg-emerald-100 text-emerald-800'
                             }`}>
-                              {isPartialAlert ? (
+                              {isDisconnection ? (
+                                <AlertOctagon className="h-4 w-4" />
+                              ) : isAccountIssue ? (
+                                <UserCheck className="h-4 w-4" />
+                              ) : isPartialAlert ? (
                                 <AlertTriangle className="h-4 w-4" />
+                              ) : isReport ? (
+                                <MessageSquare className="h-4 w-4" />
                               ) : isBilling ? (
                                 <ReceiptText className="h-4 w-4" />
                               ) : (
@@ -1169,7 +1339,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   {new Date(n.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                                 </span>
                                 <span className="text-[10px] font-black text-blue-600 hover:text-blue-800 flex items-center space-x-0.5">
-                                  <span>View on Dashboard</span>
+                                  <span>{isAccountIssue ? 'View Account' : isBilling ? 'View Bill' : isReport ? 'View Report' : 'View Dashboard'}</span>
                                   <ChevronRight className="h-3 w-3" />
                                 </span>
                               </div>
@@ -1778,6 +1948,68 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             </div>
 
+            {/* CONSUMER SERVICE ASSISTANCE & REPORT CONCERN DASHBOARD BANNER */}
+            <div className="bg-gradient-to-r from-blue-900 via-indigo-950 to-slate-900 text-white border border-blue-800/80 rounded-3xl p-6 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-6" id="dashboard-reports-banner">
+              <div className="flex items-start space-x-4">
+                <div className="p-3 bg-blue-500/20 text-blue-300 rounded-2xl border border-blue-400/30 shrink-0 mt-0.5">
+                  <MessageSquare className="h-6 w-6" />
+                </div>
+                <div className="space-y-1.5 max-w-xl">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2.5 py-0.5 bg-blue-500/30 border border-blue-400/40 text-blue-200 text-[10px] font-black uppercase tracking-wider rounded-md">
+                      24/7 Consumer Assistance Desk
+                    </span>
+                    {unreadReportsCount > 0 && (
+                      <span className="px-2.5 py-0.5 bg-amber-400 text-slate-950 text-[10px] font-black uppercase tracking-wider rounded-md animate-pulse">
+                        {unreadReportsCount} Admin Reply Awaiting Review
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="text-base font-black text-white">
+                    Need Help? Report a Water Leak, Pressure Drop, or Billing Concern
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Have an issue at your service connection? File an official report directly to Tagoloan Water District. 
+                    Admins and maintenance crew receive instant alerts and respond directly to your ticket with status updates.
+                  </p>
+                  
+                  {reports.length > 0 && (
+                    <div className="pt-1 flex items-center gap-2 text-xs text-slate-300">
+                      <span className="font-semibold text-blue-200">Latest Ticket:</span>
+                      <span className="font-mono text-white font-bold bg-white/10 px-2 py-0.5 rounded text-[11px]">
+                        {reports[0].ticketNumber}
+                      </span>
+                      <span className="truncate max-w-xs text-slate-300 font-medium">({reports[0].title})</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0 w-full md:w-auto">
+                <button
+                  onClick={() => {
+                    setActiveTab('reports');
+                  }}
+                  className="px-5 py-3 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center gap-2 shadow-md cursor-pointer flex-1 md:flex-initial"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span>Report An Issue</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveTab('reports');
+                    if (reports.length > 0) {
+                      setSelectedReportId(reports[0].id);
+                    }
+                  }}
+                  className="px-4 py-3 bg-white/10 hover:bg-white/20 text-white font-bold text-xs uppercase tracking-wider rounded-xl border border-white/20 transition flex items-center justify-center gap-1.5 cursor-pointer flex-1 md:flex-initial"
+                >
+                  <Eye className="h-4 w-4" />
+                  <span>View My Tickets ({reports.length})</span>
+                </button>
+              </div>
+            </div>
+
             {/* EMBEDDED DASHBOARD BILL DETAILS BREAKDOWN COMPONENT */}
             {consumerRecord && (
               <div className="bg-white border border-slate-200/90 rounded-3xl p-6 shadow-xs space-y-4">
@@ -2240,32 +2472,35 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             </div>
 
             {/* Complete Bills Table & Responsive Grid - Eye-Friendly Dark Navy Slate Theme */}
-            <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl text-slate-100">
-              {/* Desktop & Tablet Table View */}
-              <div className="hidden md:block overflow-x-auto">
-                <table className="w-full text-xs text-left border-collapse">
-                  <thead className="bg-slate-950 text-slate-300 font-black uppercase text-[11px] tracking-wider border-b border-slate-800">
-                    <tr>
-                      <th className="px-4 py-3.5 whitespace-nowrap">Billing Period</th>
-                      <th className="px-4 py-3.5 whitespace-nowrap">Index (m³)</th>
-                      <th className="px-4 py-3.5 whitespace-nowrap">Consumption</th>
-                      <th className="px-4 py-3.5 whitespace-nowrap">Gross Amount</th>
-                      <th className="px-4 py-3.5 whitespace-nowrap">Paid / Credit</th>
-                      <th className="px-4 py-3.5 whitespace-nowrap">Net Balance Due</th>
-                      <th className="px-4 py-3.5 whitespace-nowrap">Due Date</th>
-                      <th className="px-4 py-3.5 whitespace-nowrap">Status</th>
-                      <th className="px-4 py-3.5 text-right whitespace-nowrap">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium">
-                    {readings
-                      .filter(r => {
-                        if (billFilter === 'unpaid') return r.paymentStatus !== 'paid';
-                        if (billFilter === 'paid') return r.paymentStatus === 'paid';
-                        if (billFilter === 'partial') return r.paymentStatus === 'partial';
-                        return true;
-                      })
-                      .map((r, idx) => {
+            {(() => {
+              const filteredBills = readings.filter(r => {
+                if (billFilter === 'unpaid') return r.paymentStatus !== 'paid';
+                if (billFilter === 'paid') return r.paymentStatus === 'paid';
+                if (billFilter === 'partial') return r.paymentStatus === 'partial';
+                return true;
+              });
+              const paginatedBills = filteredBills.slice((consumerBillsPage - 1) * 10, consumerBillsPage * 10);
+
+              return (
+                <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl text-slate-100">
+                  {/* Desktop & Tablet Table View */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead className="bg-slate-950 text-slate-300 font-black uppercase text-[11px] tracking-wider border-b border-slate-800">
+                        <tr>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Billing Period</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Index (m³)</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Consumption</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Gross Amount</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Paid / Credit</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Net Balance Due</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Due Date</th>
+                          <th className="px-4 py-3.5 whitespace-nowrap">Status</th>
+                          <th className="px-4 py-3.5 text-right whitespace-nowrap">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium">
+                        {paginatedBills.map((r, idx) => {
                         const totalAmount = calculateCostOf(r.consumption, consumerRecord.consumerType);
                         const isPaid = r.paymentStatus === 'paid';
                         const isPartial = r.paymentStatus === 'partial';
@@ -2446,14 +2681,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
               {/* Mobile Card List View for Perfect Fitting on Small Screens */}
               <div className="block md:hidden divide-y divide-slate-800/80">
-                {readings
-                  .filter(r => {
-                    if (billFilter === 'unpaid') return r.paymentStatus !== 'paid';
-                    if (billFilter === 'paid') return r.paymentStatus === 'paid';
-                    if (billFilter === 'partial') return r.paymentStatus === 'partial';
-                    return true;
-                  })
-                  .map((r, idx) => {
+                {paginatedBills.map((r, idx) => {
                     const totalAmount = calculateCostOf(r.consumption, consumerRecord.consumerType);
                     const isPaid = r.paymentStatus === 'paid';
                     const isPartial = r.paymentStatus === 'partial';
@@ -2583,7 +2811,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     );
                   })}
               </div>
+
+              <TablePagination
+                currentPage={consumerBillsPage}
+                totalItems={filteredBills.length}
+                pageSize={10}
+                onPageChange={setConsumerBillsPage}
+                itemName="water bills"
+              />
             </div>
+          );
+        })()}
 
           </div>
         )}
@@ -2676,61 +2914,88 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             </div>
 
             {/* Comprehensive Reading History Table */}
-            <div className="bg-white border border-slate-200/80 rounded-none overflow-hidden shadow-xs">
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs text-left">
-                  <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-100">
-                    <tr>
-                      <th className="px-6 py-4">Reading Date</th>
-                      <th className="px-6 py-4">Meter Serial / Tag</th>
-                      <th className="px-6 py-4">Prev → Current Index</th>
-                      <th className="px-6 py-4">Consumption (m³)</th>
-                      <th className="px-6 py-4">Reading Status</th>
-                      <th className="px-6 py-4">Log Method</th>
-                      <th className="px-6 py-4">Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                    {allHistoryReadings.map((r, idx) => (
-                      <tr key={`usage-tbl-${r.id || idx}`} className="hover:bg-slate-50/80 transition">
-                        <td className="px-6 py-4 font-bold text-slate-900">
-                          {r.readingDate}
-                          <span className="text-[10px] text-slate-400 font-mono block mt-0.5">{r.billingPeriod}</span>
-                        </td>
-                        <td className="px-6 py-4 font-mono font-bold text-blue-700">
-                          {r.meterNumber}
-                        </td>
-                        <td className="px-6 py-4 font-mono text-slate-700">
-                          {r.previousReading} m³ → <strong className="text-slate-900">{r.currentReading} m³</strong>
-                        </td>
-                        <td className="px-6 py-4 font-mono font-black text-blue-800 text-sm">
-                          {r.consumption} m³
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
-                            r.status === 'flagged_abnormal'
-                              ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                              : r.status === 'pending'
-                              ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                              : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                          }`}>
-                            {r.status === 'flagged_abnormal' ? 'Flagged Abnormal' : r.status === 'pending' ? 'Pending Approval' : 'Verified'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-slate-600 font-mono text-[11px]">
-                          TWD Field Unit
-                        </td>
-                        <td className="px-6 py-4 text-slate-500 italic max-w-xs truncate">
-                          {r.notes || (r.status === 'pending' ? 'Awaiting verification in Approvals module' : 'Normal residential baseline reading')}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            {(() => {
+              const paginatedUsageReadings = allHistoryReadings.slice((consumerUsagePage - 1) * 10, consumerUsagePage * 10);
+              return (
+                <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl text-slate-100">
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-xs text-left">
+                      <thead className="bg-slate-950 text-slate-300 font-black uppercase text-[11px] tracking-wider border-b border-slate-800">
+                        <tr>
+                          <th className="px-6 py-4">Reading Date</th>
+                          <th className="px-6 py-4">Meter Serial / Tag</th>
+                          <th className="px-6 py-4">Prev → Current Index</th>
+                          <th className="px-6 py-4">Consumption (m³)</th>
+                          <th className="px-6 py-4">Reading Status</th>
+                          <th className="px-6 py-4">Log Method</th>
+                          <th className="px-6 py-4">Notes</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
+                        {paginatedUsageReadings.map((r, idx) => (
+                          <tr key={`usage-tbl-${r.id || idx}`} className="hover:bg-slate-800/60 transition">
+                            <td className="px-6 py-4 font-bold text-white">
+                              {r.readingDate}
+                              <span className="text-[10px] text-slate-400 font-mono block mt-0.5">{r.billingPeriod}</span>
+                            </td>
+                            <td className="px-6 py-4 font-mono font-bold text-sky-400">
+                              {r.meterNumber}
+                            </td>
+                            <td className="px-6 py-4 font-mono text-slate-300">
+                              {r.previousReading} m³ → <strong className="text-white">{r.currentReading} m³</strong>
+                            </td>
+                            <td className="px-6 py-4 font-mono font-black text-sky-400 text-sm">
+                              {r.consumption} m³
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${
+                                r.status === 'flagged_abnormal'
+                                  ? 'bg-rose-950/80 text-rose-300 border-rose-800/80'
+                                  : r.status === 'pending'
+                                  ? 'bg-amber-950/80 text-amber-300 border-amber-800/80'
+                                  : 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
+                              }`}>
+                                {r.status === 'flagged_abnormal' ? 'Flagged Abnormal' : r.status === 'pending' ? 'Pending Approval' : 'Verified'}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-slate-400 font-mono text-[11px]">
+                              TWD Field Unit
+                            </td>
+                            <td className="px-6 py-4 text-slate-400 italic max-w-xs truncate">
+                              {r.notes || (r.status === 'pending' ? 'Awaiting verification in Approvals module' : 'Normal residential baseline reading')}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <TablePagination
+                    currentPage={consumerUsagePage}
+                    totalItems={allHistoryReadings.length}
+                    pageSize={10}
+                    onPageChange={setConsumerUsagePage}
+                    itemName="reading records"
+                  />
+                </div>
+              );
+            })()}
 
           </div>
+        )}
+
+        {/* ------------------------------------------------------------- */}
+        {/* MODULE: SERVICE REPORTS & CONCERNS                            */}
+        {/* ------------------------------------------------------------- */}
+        {activeTab === 'reports' && consumerRecord && (
+          <ConsumerReportsSection
+            consumer={consumerRecord}
+            currentUser={currentUser}
+            reports={reports}
+            onRefreshReports={loadConsumerInfo}
+            selectedReportId={selectedReportId}
+            onClearSelectedReport={() => setSelectedReportId(null)}
+          />
         )}
 
         {/* ------------------------------------------------------------- */}
@@ -2763,6 +3028,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   All ({notifications.length + announcements.length})
                 </button>
                 <button
+                  onClick={() => setNotifFilter('account_issue')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
+                    notifFilter === 'account_issue' 
+                      ? 'bg-purple-600 text-white shadow-sm' 
+                      : 'bg-white text-purple-700 hover:text-purple-800 hover:bg-purple-50 border border-purple-200'
+                  }`}
+                  id="filter-notif-account"
+                >
+                  Account & ID ({notifications.filter(n => n.type === 'account_issue' || n.type === 'disconnection' || n.type === 'report').length})
+                </button>
+                <button
                   onClick={() => setNotifFilter('billing')}
                   className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
                     notifFilter === 'billing' 
@@ -2782,7 +3058,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   }`}
                   id="filter-notif-payment"
                 >
-                  Payments ({notifications.filter(n => n.type === 'payment').length})
+                  Payments ({notifications.filter(n => n.type === 'payment' || n.type === 'receipt_upload').length})
                 </button>
                 <button
                   onClick={() => setNotifFilter('announcement')}
@@ -2801,16 +3077,22 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             {/* Notifications Grid */}
             <div className="grid grid-cols-1 gap-4">
               
-              {/* Payment & Billing Notifications from mockDb */}
+              {/* Account, Payment & Billing Notifications from mockDb */}
               {notifications
                 .filter(n => {
                   if (notifFilter === 'all') return true;
                   if (notifFilter === 'billing') return n.type === 'billing' || n.type === 'balance';
-                  if (notifFilter === 'payment') return n.type === 'payment';
+                  if (notifFilter === 'payment') return n.type === 'payment' || n.type === 'receipt_upload';
+                  if (notifFilter === 'account_issue') return n.type === 'account_issue' || n.type === 'disconnection' || n.type === 'report';
                   return notifFilter === n.type;
                 })
                 .map((n, idx) => {
                   const isBilling = n.type === 'billing' || n.type === 'balance';
+                  const isPayment = n.type === 'payment' || n.type === 'receipt_upload';
+                  const isAccountIssue = n.type === 'account_issue';
+                  const isDisconnection = n.type === 'disconnection';
+                  const isReport = n.type === 'report';
+                  const isReceiptUpload = n.type === 'receipt_upload';
                   const isPartialAlert = (n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining');
 
                   return (
@@ -2822,14 +3104,26 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     >
                       <div className="flex items-start space-x-3.5">
                         <div className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${
-                          isPartialAlert
+                          isDisconnection
+                            ? 'bg-rose-100 text-rose-800'
+                            : isAccountIssue
+                            ? 'bg-purple-100 text-purple-800'
+                            : isPartialAlert
                             ? 'bg-amber-100 text-amber-800'
+                            : isReport
+                            ? 'bg-indigo-100 text-indigo-800'
                             : isBilling
                             ? 'bg-blue-100 text-blue-800'
                             : 'bg-emerald-100 text-emerald-800'
                         }`}>
-                          {isPartialAlert ? (
+                          {isDisconnection ? (
+                            <AlertOctagon className="h-5 w-5" />
+                          ) : isAccountIssue ? (
+                            <UserCheck className="h-5 w-5" />
+                          ) : isPartialAlert ? (
                             <AlertTriangle className="h-5 w-5" />
+                          ) : isReport ? (
+                            <MessageSquare className="h-5 w-5" />
                           ) : isBilling ? (
                             <ReceiptText className="h-5 w-5" />
                           ) : (
@@ -2838,14 +3132,22 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         </div>
                         <div className="space-y-1">
                           <div className="flex items-center space-x-2">
-                            <span className={`px-2 py-0.2 font-black text-[9px] uppercase rounded ${
-                              isPartialAlert
-                                ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            <span className={`px-2 py-0.5 font-black text-[9px] uppercase rounded border ${
+                              isDisconnection
+                                ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                : isAccountIssue
+                                ? 'bg-purple-100 text-purple-800 border-purple-300'
+                                : isReport
+                                ? 'bg-indigo-100 text-indigo-800 border-indigo-300'
+                                : isPartialAlert
+                                ? 'bg-amber-100 text-amber-800 border-amber-300'
                                 : isBilling
-                                ? 'bg-blue-100 text-blue-800 border border-blue-300'
-                                : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                ? 'bg-blue-100 text-blue-800 border-blue-300'
+                                : isReceiptUpload
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : 'bg-emerald-100 text-emerald-800 border-emerald-300'
                             }`}>
-                              {isPartialAlert ? 'Remaining Balance' : isBilling ? 'Bill Arrival' : 'Payment Success'}
+                              {isDisconnection ? 'Disconnection Notice' : isAccountIssue ? 'Account & ID Notice' : isReport ? 'Concern Reply' : isPartialAlert ? 'Remaining Balance' : isBilling ? 'Bill Issued' : isReceiptUpload ? 'Receipt Verified' : 'Payment Success'}
                             </span>
                             <span className="text-[10px] font-mono text-slate-400">
                               {new Date(n.timestamp).toLocaleString()}
@@ -2857,6 +3159,53 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2 self-end sm:self-center shrink-0">
+                        {/* View Profile Button for Account/ID issues */}
+                        {isAccountIssue && (
+                          <button
+                            onClick={() => {
+                              setActiveTab('profile');
+                              if (!n.read) {
+                                mockDb.markNotificationRead(n.id);
+                                loadConsumerInfo(true);
+                              }
+                            }}
+                            className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs rounded-xl border border-purple-200 transition flex items-center space-x-1 cursor-pointer"
+                          >
+                            <UserCheck className="h-3.5 w-3.5" />
+                            <span>View Account Profile</span>
+                          </button>
+                        )}
+
+                        {/* View in Reports Button */}
+                        {isReport && (
+                          <button
+                            onClick={() => {
+                              setActiveTab('reports');
+                              if (n.reportId) setSelectedReportId(n.reportId);
+                              if (!n.read) {
+                                mockDb.markNotificationRead(n.id);
+                                loadConsumerInfo(true);
+                              }
+                            }}
+                            className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 transition flex items-center space-x-1 cursor-pointer"
+                          >
+                            <MessageSquare className="h-3.5 w-3.5" />
+                            <span>View Concern Ticket</span>
+                          </button>
+                        )}
+
+                        {/* View in Bills Button */}
+                        {(isBilling || isPayment) && (
+                          <button
+                            onClick={() => handleNotificationClick(n, 'bills')}
+                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition flex items-center space-x-1 cursor-pointer"
+                            title="View Statement in My Bills"
+                          >
+                            <ReceiptText className="h-3.5 w-3.5" />
+                            <span>View in Bills</span>
+                          </button>
+                        )}
+
                         {/* View on Dashboard Button */}
                         <button
                           onClick={() => handleNotificationClick(n, 'dashboard')}
@@ -2865,16 +3214,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         >
                           <LayoutDashboard className="h-3.5 w-3.5" />
                           <span>View on Dashboard</span>
-                        </button>
-
-                        {/* View in Bills Button */}
-                        <button
-                          onClick={() => handleNotificationClick(n, 'bills')}
-                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition flex items-center space-x-1 cursor-pointer"
-                          title="View Statement in My Bills"
-                        >
-                          <ReceiptText className="h-3.5 w-3.5" />
-                          <span>View in Bills</span>
                         </button>
 
                         {/* Direct Pay Action if Unpaid */}

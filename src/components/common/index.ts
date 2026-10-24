@@ -11,3 +11,4 @@ export * from './DistrictProfileSection';
 export * from './SkeletonLoader';
 export * from './GlobalLoadingSpinner';
 export * from './DataLoadingIndicator';
+export * from './TablePagination';

@@ -78,6 +78,9 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
     memoNotes: 'Official Tagoloan Water District price hike adjustment to cover escalating electricity tariff, water treatment inputs, and municipal transmission pipeline maintenance.'
   }));
 
+  // Target classification state: 'Residential' (Regular community / single account) | 'Commercial' (Private high-consumption accounts) | 'both'
+  const [targetScope, setTargetScope] = useState<'Residential' | 'Commercial' | 'both'>('Residential');
+
   // Options toggles
   const [recalculateUnbilledReadings, setRecalculateUnbilledReadings] = useState(true);
   const [notifyAllConsumers, setNotifyAllConsumers] = useState(true);
@@ -97,90 +100,120 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
 
-  // Quick percentage adjuster across all tiers
+  // Filtered account and statement counts
+  const residentialConsumersCount = consumers.filter(
+    c => c.consumerType !== 'Commercial' && c.accountNumber && !c.accountNumber.toUpperCase().startsWith('PENDING')
+  ).length;
+  const commercialConsumersCount = consumers.filter(
+    c => c.consumerType === 'Commercial' && c.accountNumber && !c.accountNumber.toUpperCase().startsWith('PENDING')
+  ).length;
+
+  const residentialUnpaidCount = readings.filter(
+    r => r.paymentStatus !== 'paid' && r.consumption > 0 && r.classification !== 'Commercial'
+  ).length;
+  const commercialUnpaidCount = readings.filter(
+    r => r.paymentStatus !== 'paid' && r.consumption > 0 && r.classification === 'Commercial'
+  ).length;
+
+  // Quick percentage adjuster respecting targetScope (Residential vs Commercial)
   const handleApplyPercentageHike = (pct: number) => {
     const multiplier = 1 + (pct / 100);
-    setFormConfig(prev => ({
-      ...prev,
-      residential: {
-        baseMinCharge: Math.round(prev.residential.baseMinCharge * multiplier * 100) / 100,
-        tier1_rate: Math.round(prev.residential.tier1_rate * multiplier * 100) / 100,
-        tier2_rate: Math.round(prev.residential.tier2_rate * multiplier * 100) / 100,
-        tier3_rate: Math.round(prev.residential.tier3_rate * multiplier * 100) / 100,
-        tier4_rate: Math.round(prev.residential.tier4_rate * multiplier * 100) / 100,
-      },
-      commercial: {
-        baseMinCharge: Math.round(prev.commercial.baseMinCharge * multiplier * 100) / 100,
-        tier1_rate: Math.round(prev.commercial.tier1_rate * multiplier * 100) / 100,
-        tier2_rate: Math.round(prev.commercial.tier2_rate * multiplier * 100) / 100,
-        tier3_rate: Math.round(prev.commercial.tier3_rate * multiplier * 100) / 100,
-        tier4_rate: Math.round(prev.commercial.tier4_rate * multiplier * 100) / 100,
-        tier5_rate: Math.round(prev.commercial.tier5_rate * multiplier * 100) / 100,
+    setFormConfig(prev => {
+      const updated = { ...prev };
+      if (targetScope === 'both' || targetScope === 'Residential') {
+        updated.residential = {
+          baseMinCharge: Math.round(prev.residential.baseMinCharge * multiplier * 100) / 100,
+          tier1_rate: Math.round(prev.residential.tier1_rate * multiplier * 100) / 100,
+          tier2_rate: Math.round(prev.residential.tier2_rate * multiplier * 100) / 100,
+          tier3_rate: Math.round(prev.residential.tier3_rate * multiplier * 100) / 100,
+          tier4_rate: Math.round(prev.residential.tier4_rate * multiplier * 100) / 100,
+        };
       }
-    }));
-    toast.info(`Applied +${pct}% price hike across all meter reading tiers.`);
+      if (targetScope === 'both' || targetScope === 'Commercial') {
+        updated.commercial = {
+          baseMinCharge: Math.round(prev.commercial.baseMinCharge * multiplier * 100) / 100,
+          tier1_rate: Math.round(prev.commercial.tier1_rate * multiplier * 100) / 100,
+          tier2_rate: Math.round(prev.commercial.tier2_rate * multiplier * 100) / 100,
+          tier3_rate: Math.round(prev.commercial.tier3_rate * multiplier * 100) / 100,
+          tier4_rate: Math.round(prev.commercial.tier4_rate * multiplier * 100) / 100,
+          tier5_rate: Math.round(prev.commercial.tier5_rate * multiplier * 100) / 100,
+        };
+      }
+      return updated;
+    });
+
+    if (targetScope === 'Residential') {
+      toast.info(`Applied +${pct}% price hike to Residential (regular community / single-account) tiers only.`);
+    } else if (targetScope === 'Commercial') {
+      toast.info(`Applied +${pct}% price hike to Commercial (private high-consumption) tiers only.`);
+    } else {
+      toast.info(`Applied +${pct}% price hike across all meter reading tiers.`);
+    }
   };
 
-  // Quick per-cubic-meter hike on every reading
+  // Quick per-cubic-meter hike respecting targetScope (Residential vs Commercial)
   const handleApplyPerM3Hike = (hikePerM3: number) => {
-    setFormConfig(prev => ({
-      ...prev,
-      residential: {
-        ...prev.residential,
-        tier1_rate: Math.round((prev.residential.tier1_rate + hikePerM3) * 100) / 100,
-        tier2_rate: Math.round((prev.residential.tier2_rate + hikePerM3) * 100) / 100,
-        tier3_rate: Math.round((prev.residential.tier3_rate + hikePerM3) * 100) / 100,
-        tier4_rate: Math.round((prev.residential.tier4_rate + hikePerM3) * 100) / 100,
-      },
-      commercial: {
-        ...prev.commercial,
-        tier1_rate: Math.round((prev.commercial.tier1_rate + (hikePerM3 * 1.5)) * 100) / 100,
-        tier2_rate: Math.round((prev.commercial.tier2_rate + (hikePerM3 * 1.5)) * 100) / 100,
-        tier3_rate: Math.round((prev.commercial.tier3_rate + (hikePerM3 * 1.5)) * 100) / 100,
-        tier4_rate: Math.round((prev.commercial.tier4_rate + (hikePerM3 * 1.5)) * 100) / 100,
-        tier5_rate: Math.round((prev.commercial.tier5_rate + (hikePerM3 * 1.5)) * 100) / 100,
+    setFormConfig(prev => {
+      const updated = { ...prev };
+      if (targetScope === 'both' || targetScope === 'Residential') {
+        updated.residential = {
+          ...prev.residential,
+          tier1_rate: Math.round((prev.residential.tier1_rate + hikePerM3) * 100) / 100,
+          tier2_rate: Math.round((prev.residential.tier2_rate + hikePerM3) * 100) / 100,
+          tier3_rate: Math.round((prev.residential.tier3_rate + hikePerM3) * 100) / 100,
+          tier4_rate: Math.round((prev.residential.tier4_rate + hikePerM3) * 100) / 100,
+        };
       }
-    }));
-    toast.info(`Applied +₱${hikePerM3.toFixed(2)}/m³ price hike to every meter reading tier.`);
+      if (targetScope === 'both' || targetScope === 'Commercial') {
+        const commHike = targetScope === 'Commercial' ? hikePerM3 : Math.round((hikePerM3 * 1.5) * 100) / 100;
+        updated.commercial = {
+          ...prev.commercial,
+          tier1_rate: Math.round((prev.commercial.tier1_rate + commHike) * 100) / 100,
+          tier2_rate: Math.round((prev.commercial.tier2_rate + commHike) * 100) / 100,
+          tier3_rate: Math.round((prev.commercial.tier3_rate + commHike) * 100) / 100,
+          tier4_rate: Math.round((prev.commercial.tier4_rate + commHike) * 100) / 100,
+          tier5_rate: Math.round((prev.commercial.tier5_rate + commHike) * 100) / 100,
+        };
+      }
+      return updated;
+    });
+
+    if (targetScope === 'Residential') {
+      toast.info(`Applied +₱${hikePerM3.toFixed(2)}/m³ hike to Residential (regular community / single-account) tiers only.`);
+    } else if (targetScope === 'Commercial') {
+      toast.info(`Applied +₱${hikePerM3.toFixed(2)}/m³ hike to Commercial (private high-consumption) tiers only.`);
+    } else {
+      toast.info(`Applied volumetric price hike (+₱${hikePerM3.toFixed(2)}/m³ Res, +₱${(hikePerM3 * 1.5).toFixed(2)}/m³ Comm).`);
+    }
   };
 
-  // Quick baseline minimum charge hike on every reading
+  // Quick baseline minimum charge hike respecting targetScope
   const handleApplyBaseHike = (baseHike: number) => {
-    setFormConfig(prev => ({
-      ...prev,
-      residential: {
-        ...prev.residential,
-        baseMinCharge: Math.round((prev.residential.baseMinCharge + baseHike) * 100) / 100
-      },
-      commercial: {
-        ...prev.commercial,
-        baseMinCharge: Math.round((prev.commercial.baseMinCharge + (baseHike * 1.5)) * 100) / 100
+    setFormConfig(prev => {
+      const updated = { ...prev };
+      if (targetScope === 'both' || targetScope === 'Residential') {
+        updated.residential = {
+          ...prev.residential,
+          baseMinCharge: Math.round((prev.residential.baseMinCharge + baseHike) * 100) / 100
+        };
       }
-    }));
-    toast.info(`Applied +₱${baseHike.toFixed(2)} lifeline minimum charge hike to every reading.`);
-  };
+      if (targetScope === 'both' || targetScope === 'Commercial') {
+        const commBaseHike = targetScope === 'Commercial' ? baseHike : Math.round((baseHike * 1.5) * 100) / 100;
+        updated.commercial = {
+          ...prev.commercial,
+          baseMinCharge: Math.round((prev.commercial.baseMinCharge + commBaseHike) * 100) / 100
+        };
+      }
+      return updated;
+    });
 
-  // Quick flat peso surcharge adjuster (Base + Per M³)
-  const handleApplyFlatSurcharge = (baseHike: number, perM3Hike: number) => {
-    setFormConfig(prev => ({
-      ...prev,
-      residential: {
-        baseMinCharge: Math.round((prev.residential.baseMinCharge + baseHike) * 100) / 100,
-        tier1_rate: Math.round((prev.residential.tier1_rate + perM3Hike) * 100) / 100,
-        tier2_rate: Math.round((prev.residential.tier2_rate + perM3Hike) * 100) / 100,
-        tier3_rate: Math.round((prev.residential.tier3_rate + perM3Hike) * 100) / 100,
-        tier4_rate: Math.round((prev.residential.tier4_rate + perM3Hike) * 100) / 100,
-      },
-      commercial: {
-        baseMinCharge: Math.round((prev.commercial.baseMinCharge + (baseHike * 2)) * 100) / 100,
-        tier1_rate: Math.round((prev.commercial.tier1_rate + (perM3Hike * 2)) * 100) / 100,
-        tier2_rate: Math.round((prev.commercial.tier2_rate + (perM3Hike * 2)) * 100) / 100,
-        tier3_rate: Math.round((prev.commercial.tier3_rate + (perM3Hike * 2)) * 100) / 100,
-        tier4_rate: Math.round((prev.commercial.tier4_rate + (perM3Hike * 2)) * 100) / 100,
-        tier5_rate: Math.round((prev.commercial.tier5_rate + (perM3Hike * 2)) * 100) / 100,
-      }
-    }));
-    toast.info(`Applied price hike (+₱${baseHike.toFixed(2)} base, +₱${perM3Hike.toFixed(2)}/m³) to every reading.`);
+    if (targetScope === 'Residential') {
+      toast.info(`Applied +₱${baseHike.toFixed(2)} lifeline minimum charge hike to Residential community accounts only.`);
+    } else if (targetScope === 'Commercial') {
+      toast.info(`Applied +₱${baseHike.toFixed(2)} lifeline minimum charge hike to Commercial private accounts only.`);
+    } else {
+      toast.info(`Applied +₱${baseHike.toFixed(2)} lifeline minimum charge hike.`);
+    }
   };
 
   // Reset to default baseline
@@ -209,16 +242,31 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
   const simDiff = Math.round((proposedSimTotal - currentSimTotal) * 100) / 100;
   const simPercentDiff = currentSimTotal > 0 ? Math.round(((proposedSimTotal - currentSimTotal) / currentSimTotal) * 100) : 0;
 
-  // Unpaid readings count
-  const unpaidReadingsCount = readings.filter(r => r.paymentStatus !== 'paid' && r.consumption > 0).length;
+  // Unpaid readings count according to current target scope
+  const isResTargeted = targetScope === 'both' || targetScope === 'Residential';
+  const isCommTargeted = targetScope === 'both' || targetScope === 'Commercial';
 
-  // Commit and Implement Price Hike
+  const targetedUnpaidReadingsCount = readings.filter(r => {
+    if (r.paymentStatus === 'paid' || r.consumption <= 0) return false;
+    const isComm = r.classification === 'Commercial';
+    return (isComm && isCommTargeted) || (!isComm && isResTargeted);
+  }).length;
+
+  const targetedConsumersCount = consumers.filter(c => {
+    if (!c.accountNumber || c.accountNumber.toUpperCase().startsWith('PENDING')) return false;
+    const isComm = c.consumerType === 'Commercial';
+    return (isComm && isCommTargeted) || (!isComm && isResTargeted);
+  }).length;
+
+  // Commit and Implement Price Hike with Identification of Residential vs Commercial
   const handleCommitTariffHike = () => {
     setIsApplying(true);
 
     try {
       const finalConfig: WaterTariffConfig = {
         ...formConfig,
+        residential: isResTargeted ? formConfig.residential : activeTariff.residential,
+        commercial: isCommTargeted ? formConfig.commercial : activeTariff.commercial,
         version: (activeTariff.version || 1) + 1,
         updatedAt: new Date().toISOString(),
         updatedBy: currentUser.name || 'Administrator',
@@ -230,31 +278,36 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
 
       let updatedReadingsCount = 0;
 
-      // 2. Automatically recalculate and implement price hike in consumers' pending/unpaid readings
+      // 2. Automatically recalculate price hike in unbilled readings for targeted classification only
       if (recalculateUnbilledReadings) {
         const allReadings = mockDb.getReadings();
         const updated = allReadings.map(r => {
           if (r.paymentStatus !== 'paid' && r.consumption > 0) {
-            updatedReadingsCount++;
-            const newBasicBill = calculateWaterTariff(r.consumption, r.classification || 'Residential', finalConfig);
-            const newTax = calculateFranchiseTax(newBasicBill, finalConfig);
-            const oldPaid = r.paidAmount || 0;
-            const newTotal = Math.round((newBasicBill + newTax + (r.arrears || 0)) * 100) / 100;
-            const newRemaining = Math.max(0, newTotal - oldPaid);
-            return {
-              ...r,
-              billAmount: newBasicBill,
-              franchiseTax: newTax,
-              totalAmount: newTotal,
-              remainingBalance: newRemaining
-            };
+            const isCommReading = r.classification === 'Commercial';
+            const shouldRecalculate = (isCommReading && isCommTargeted) || (!isCommReading && isResTargeted);
+
+            if (shouldRecalculate) {
+              updatedReadingsCount++;
+              const newBasicBill = calculateWaterTariff(r.consumption, r.classification || 'Residential', finalConfig);
+              const newTax = calculateFranchiseTax(newBasicBill, finalConfig);
+              const oldPaid = r.paidAmount || 0;
+              const newTotal = Math.round((newBasicBill + newTax + (r.arrears || 0)) * 100) / 100;
+              const newRemaining = Math.max(0, newTotal - oldPaid);
+              return {
+                ...r,
+                billAmount: newBasicBill,
+                franchiseTax: newTax,
+                totalAmount: newTotal,
+                remainingBalance: newRemaining
+              };
+            }
           }
           return r;
         });
         mockDb.saveReadings(updated);
         setReadings(updated);
 
-        // Also update each consumer's total outstandingBalance to match their updated readings
+        // Update each consumer's total outstandingBalance to match their updated readings
         const allConsumers = mockDb.getConsumers();
         const consumerBalanceMap: Record<string, number> = {};
         updated.forEach(r => {
@@ -279,44 +332,80 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
         syncBatchToFirestore(COLLECTIONS.CONSUMERS, updatedConsumers, 'id');
       }
 
-      // 3. Automatically notify all registered consumers with price hike advisory
+      // 3. Automatically notify consumers of the targeted classification
       let notifiedConsumersCount = 0;
       if (notifyAllConsumers) {
         const allConsumers = mockDb.getConsumers();
-        notifiedConsumersCount = allConsumers.length;
         const resBase = finalConfig.residential.baseMinCharge;
         const commBase = finalConfig.commercial.baseMinCharge;
         const oldResBase = activeTariff.residential.baseMinCharge;
         const oldCommBase = activeTariff.commercial.baseMinCharge;
 
         allConsumers.forEach(consumer => {
+          if (!consumer.accountNumber || consumer.accountNumber.toUpperCase().startsWith('PENDING')) {
+            return;
+          }
           const isComm = consumer.consumerType === 'Commercial';
-          const newBase = isComm ? commBase : resBase;
-          const oldBase = isComm ? oldCommBase : oldResBase;
-          const tier1Rate = isComm ? finalConfig.commercial.tier1_rate : finalConfig.residential.tier1_rate;
 
-          mockDb.addNotification({
-            accountNumber: consumer.accountNumber,
-            title: `Official Advisory: Water Tariff Price Hike (${finalConfig.resolutionNumber})`,
-            message: `Notice to Account #${consumer.accountNumber} (${consumer.name}): Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Tagoloan Water District has adjusted water rates effective ${finalConfig.effectiveDate}. Your ${isComm ? 'Commercial' : 'Residential'} lifeline base charge (1-10 m³) is adjusted from ₱${oldBase.toFixed(2)} to ₱${newBase.toFixed(2)}, with incremental reading consumption at ₱${tier1Rate.toFixed(2)}/m³. Unbilled readings and upcoming meter reads automatically reflect this approved schedule. Justification: ${finalConfig.memoNotes}`,
-            type: 'billing'
-          });
+          // Strictly filter notification by target classification
+          if (isComm && !isCommTargeted) return;
+          if (!isComm && !isResTargeted) return;
+
+          notifiedConsumersCount++;
+
+          if (isComm) {
+            // Tailored Commercial Private Account Notification
+            mockDb.addNotification({
+              accountNumber: consumer.accountNumber,
+              consumerId: consumer.id,
+              userId: consumer.linkedUserId,
+              consumerEmail: consumer.email,
+              title: `Official Advisory: Commercial Water Tariff Adjustment (${finalConfig.resolutionNumber})`,
+              message: `Notice to Commercial Private Account #${consumer.accountNumber} (${consumer.name}): Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Tagoloan Water District has adjusted commercial private account rates effective ${finalConfig.effectiveDate} to reflect heavy volume water consumption. Your commercial lifeline base charge (1-10 m³) is adjusted from ₱${oldCommBase.toFixed(2)} to ₱${commBase.toFixed(2)}, with Tier 1 consumption at ₱${finalConfig.commercial.tier1_rate.toFixed(2)}/m³. Unbilled commercial readings have been recalculated. Justification: ${finalConfig.memoNotes}`,
+              type: 'billing'
+            });
+          } else {
+            // Tailored Residential Community Household Notification (Individual / Single Account)
+            mockDb.addNotification({
+              accountNumber: consumer.accountNumber,
+              consumerId: consumer.id,
+              userId: consumer.linkedUserId,
+              consumerEmail: consumer.email,
+              title: `Official Advisory: Residential Water Tariff Adjustment (${finalConfig.resolutionNumber})`,
+              message: `Notice to Account #${consumer.accountNumber} (${consumer.name}): Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Tagoloan Water District has adjusted regular Residential community water rates effective ${finalConfig.effectiveDate}. Your Residential lifeline base charge (1-10 m³) is adjusted from ₱${oldResBase.toFixed(2)} to ₱${resBase.toFixed(2)}, with Tier 1 domestic consumption at ₱${finalConfig.residential.tier1_rate.toFixed(2)}/m³. Handled on your individual account holder record. (Commercial private rates remain separate). Justification: ${finalConfig.memoNotes}`,
+              type: 'billing'
+            });
+          }
         });
 
         // Broadcast real-time notification alert to connected consumers
+        const scopeLabel = targetScope === 'Residential' ? 'Residential Community' : targetScope === 'Commercial' ? 'Commercial Private' : 'Residential and Commercial';
         sendRealtimeMessage('notification:new', {
-          title: `Official Advisory: Water Tariff Price Hike (${finalConfig.resolutionNumber})`,
-          message: `Water service rates have been officially updated under ${finalConfig.resolutionNumber} effective ${finalConfig.effectiveDate}.`,
+          title: `Official Advisory: ${scopeLabel} Water Tariff Adjustment (${finalConfig.resolutionNumber})`,
+          message: `Water service rates for ${scopeLabel} accounts have been officially updated under ${finalConfig.resolutionNumber} effective ${finalConfig.effectiveDate}.`,
           type: 'billing'
         });
       }
 
       // 4. Publish official public advisory announcement
       if (postAnnouncement) {
+        let annTitle = `District Advisory: Water Tariff Rate Adjustment (${finalConfig.resolutionNumber})`;
+        let annContent = '';
+
+        if (targetScope === 'Residential') {
+          annTitle = `District Advisory: Residential Water Tariff Adjustment (${finalConfig.resolutionNumber})`;
+          annContent = `Notice to Tagoloan Residential Community Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for regular Residential community accounts under Board Resolution ${finalConfig.resolutionNumber}. Residential Lifeline (1-10 m³): ₱${finalConfig.residential.baseMinCharge.toFixed(2)} (adjusted from ₱${activeTariff.residential.baseMinCharge.toFixed(2)}). Handled per individual single-account holder. Commercial private rates remain unchanged. Justification: ${finalConfig.memoNotes}`;
+        } else if (targetScope === 'Commercial') {
+          annTitle = `District Advisory: Commercial Private Account Tariff Adjustment (${finalConfig.resolutionNumber})`;
+          annContent = `Notice to Tagoloan Commercial & Private Enterprise Accounts: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for Commercial accounts under Board Resolution ${finalConfig.resolutionNumber} to cover high-volume water consumption. Commercial Lifeline (1-10 m³): ₱${finalConfig.commercial.baseMinCharge.toFixed(2)} (adjusted from ₱${activeTariff.commercial.baseMinCharge.toFixed(2)}). Regular Residential community rates remain unchanged. Justification: ${finalConfig.memoNotes}`;
+        } else {
+          annContent = `Notice to all Tagoloan Water District Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff rate adjustment has been implemented under ${finalConfig.resolutionNumber}. Residential Lifeline (1-10 m³): ₱${finalConfig.residential.baseMinCharge.toFixed(2)} | Commercial Lifeline (1-10 m³): ₱${finalConfig.commercial.baseMinCharge.toFixed(2)}. ${finalConfig.memoNotes}`;
+        }
+
         const newAnn: Announcement = {
           id: `ann-tariff-${Date.now()}`,
-          title: `District Advisory: Water Tariff Price Hike (${finalConfig.resolutionNumber})`,
-          content: `Notice to all Tagoloan Water District Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff rate adjustment has been implemented under ${finalConfig.resolutionNumber}. Residential Lifeline (1-10 m³): ₱${finalConfig.residential.baseMinCharge.toFixed(2)} | Commercial Lifeline (1-10 m³): ₱${finalConfig.commercial.baseMinCharge.toFixed(2)}. ${finalConfig.memoNotes}`,
+          title: annTitle,
+          content: annContent,
           date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
           category: 'info',
           postedBy: currentUser.name || 'Board of Directors / General Manager'
@@ -329,12 +418,13 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
       // 5. Real-time WebSocket broadcast to all connected consumers and reader tabs
       if (broadcastWebSocket) {
         sendRealtimeMessage('tariff:updated', {
+          targetScope,
           resolutionNumber: finalConfig.resolutionNumber,
           effectiveDate: finalConfig.effectiveDate,
           residentialBase: finalConfig.residential.baseMinCharge,
           commercialBase: finalConfig.commercial.baseMinCharge,
           updatedBy: currentUser.name,
-          message: `Official price hike implemented under ${finalConfig.resolutionNumber}. All calculations updated.`
+          message: `Official price adjustment implemented for ${targetScope.toUpperCase()} under ${finalConfig.resolutionNumber}.`
         });
       }
 
@@ -343,8 +433,8 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
         currentUser.id,
         currentUser.name,
         'admin',
-        'Water Tariff Price Hike Implemented',
-        `Adjusted water tariff under ${finalConfig.resolutionNumber}. Res Base: ₱${finalConfig.residential.baseMinCharge}, Comm Base: ₱${finalConfig.commercial.baseMinCharge}. Effective ${finalConfig.effectiveDate}. Recalculated ${updatedReadingsCount} readings. Dispatched notifications to ${notifiedConsumersCount} consumers.`
+        `Water Tariff Price Adjustment (${targetScope.toUpperCase()})`,
+        `Adjusted ${targetScope} water tariff under ${finalConfig.resolutionNumber}. Res Base: ₱${finalConfig.residential.baseMinCharge}, Comm Base: ₱${finalConfig.commercial.baseMinCharge}. Effective ${finalConfig.effectiveDate}. Recalculated ${updatedReadingsCount} readings. Dispatched notifications to ${notifiedConsumersCount} ${targetScope} consumers.`
       );
 
       // 7. Dispatch local cross-tab event
@@ -356,8 +446,9 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
       }
 
       setShowConfirmModal(false);
+      const scopeSummary = targetScope === 'Residential' ? 'Residential (Regular Community)' : targetScope === 'Commercial' ? 'Commercial (Private Accounts)' : 'All (Residential & Commercial)';
       toast.success(
-        `Price hike successfully implemented! ${notifiedConsumersCount} consumers notified and ${updatedReadingsCount} active statements updated.`
+        `Price adjustment successfully applied for ${scopeSummary}! ${notifiedConsumersCount} accounts notified and ${updatedReadingsCount} active statements updated.`
       );
     } catch (err: any) {
       toast.error(`Failed to implement price hike: ${err?.message || 'Unknown error'}`);
@@ -449,21 +540,149 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
           </button>
         </div>
 
+        {/* CLASSIFICATION IDENTIFIER: Residential vs Commercial */}
+        <div className="bg-slate-950 p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
+            <div>
+              <div className="flex items-center space-x-2">
+                <Sliders className="h-4 w-4 text-sky-400" />
+                <h4 className="text-xs font-black uppercase text-white tracking-wider">
+                  Identify Target Account Classification for Price Adjustment
+                </h4>
+              </div>
+              <p className="text-[11px] text-slate-300 mt-0.5">
+                Residential and Commercial accounts do not share the same pricing. Commercial accounts are private entities with expensive, high-volume water consumption, while Residential is community use water consumption handled per single individual account holder.
+              </p>
+            </div>
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-900 border border-slate-700 text-[10px] font-black uppercase tracking-wider text-slate-300 shrink-0 self-start sm:self-auto">
+              <span>Active Target:</span>
+              <strong className={targetScope === 'Residential' ? 'text-emerald-400' : targetScope === 'Commercial' ? 'text-blue-400' : 'text-purple-400'}>
+                {targetScope === 'Residential' ? 'Residential (Regular Community)' : targetScope === 'Commercial' ? 'Commercial (Private Accounts)' : 'Both Classifications'}
+              </strong>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+            {/* Option 1: Residential Only */}
+            <button
+              type="button"
+              onClick={() => {
+                setTargetScope('Residential');
+                setSimType('Residential');
+              }}
+              className={`p-3.5 rounded-2xl border text-left transition cursor-pointer relative flex flex-col justify-between ${
+                targetScope === 'Residential'
+                  ? 'bg-emerald-950/70 border-emerald-500 ring-2 ring-emerald-500/30 shadow-md'
+                  : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 opacity-80 hover:opacity-100'
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="inline-flex items-center space-x-1.5 text-xs font-black text-emerald-300">
+                    <Home className="h-4 w-4 text-emerald-400" />
+                    <span>Residential Accounts</span>
+                  </span>
+                  <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-emerald-950 border border-emerald-700 text-emerald-300">
+                    Regular Price
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-snug">
+                  Community use water consumption. Handled with single / individual account persons (not company or group based). Standard affordable domestic rate.
+                </p>
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-emerald-900/60 flex items-center justify-between text-[10px] font-mono text-emerald-200">
+                <span>{residentialConsumersCount} accounts • {residentialUnpaidCount} unbilled</span>
+                <span className="font-bold text-white">₱{formConfig.residential.baseMinCharge.toFixed(2)} Base</span>
+              </div>
+            </button>
+
+            {/* Option 2: Commercial Only */}
+            <button
+              type="button"
+              onClick={() => {
+                setTargetScope('Commercial');
+                setSimType('Commercial');
+              }}
+              className={`p-3.5 rounded-2xl border text-left transition cursor-pointer relative flex flex-col justify-between ${
+                targetScope === 'Commercial'
+                  ? 'bg-blue-950/70 border-blue-500 ring-2 ring-blue-500/30 shadow-md'
+                  : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 opacity-80 hover:opacity-100'
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="inline-flex items-center space-x-1.5 text-xs font-black text-blue-300">
+                    <Building2 className="h-4 w-4 text-blue-400" />
+                    <span>Commercial Accounts</span>
+                  </span>
+                  <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-blue-950 border border-blue-700 text-blue-300">
+                    Private / Heavy Use
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-snug">
+                  Private commercial accounts with the most expensive water consumption rates. Designed for business operations and high volumetric demand.
+                </p>
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-blue-900/60 flex items-center justify-between text-[10px] font-mono text-blue-200">
+                <span>{commercialConsumersCount} accounts • {commercialUnpaidCount} unbilled</span>
+                <span className="font-bold text-white">₱{formConfig.commercial.baseMinCharge.toFixed(2)} Base</span>
+              </div>
+            </button>
+
+            {/* Option 3: Both Residential & Commercial */}
+            <button
+              type="button"
+              onClick={() => {
+                setTargetScope('both');
+              }}
+              className={`p-3.5 rounded-2xl border text-left transition cursor-pointer relative flex flex-col justify-between ${
+                targetScope === 'both'
+                  ? 'bg-purple-950/70 border-purple-500 ring-2 ring-purple-500/30 shadow-md'
+                  : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 opacity-80 hover:opacity-100'
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="inline-flex items-center space-x-1.5 text-xs font-black text-purple-300">
+                    <Layers className="h-4 w-4 text-purple-400" />
+                    <span>Both Classifications</span>
+                  </span>
+                  <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-purple-950 border border-purple-700 text-purple-300">
+                    Dual Scope
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-snug">
+                  Configure and apply price adjustments across both Residential and Commercial tiers simultaneously with distinct rates for each.
+                </p>
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-purple-900/60 flex items-center justify-between text-[10px] font-mono text-purple-200">
+                <span>{consumers.length} total accounts</span>
+                <span className="font-bold text-white">Separate Rates</span>
+              </div>
+            </button>
+          </div>
+        </div>
+
         {/* 3 Quick Action Blocks */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* A. Per-Cubic-Meter Hike on Every Reading */}
+          {/* A. Per-Cubic-Meter Hike */}
           <div className="p-4 bg-slate-950/80 border border-blue-900/60 rounded-2xl space-y-3 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between">
                 <span className="text-xs font-black text-blue-300 flex items-center space-x-1.5">
                   <Zap className="h-3.5 w-3.5 text-blue-400" />
-                  <span>Price Hike on Every Reading (+₱/m³)</span>
+                  <span>Price Hike on Reading (+₱/m³)</span>
                 </span>
                 <span className="text-[10px] font-bold uppercase text-blue-300 bg-blue-950 border border-blue-800 px-2 py-0.5 rounded">Per m³</span>
               </div>
               <p className="text-[11px] text-slate-300 mt-1">
-                Adds a flat rate per cubic meter to every consumption tier.
+                Adds flat amount per cubic meter to progressive tiers.
               </p>
+              <div className="mt-2 text-[10px] font-mono font-bold text-slate-300 bg-slate-900 px-2 py-1 rounded border border-slate-800">
+                Target: <strong className={targetScope === 'Residential' ? 'text-emerald-400' : targetScope === 'Commercial' ? 'text-blue-400' : 'text-purple-400'}>
+                  {targetScope === 'Residential' ? 'Residential Only' : targetScope === 'Commercial' ? 'Commercial Only' : 'Both'}
+                </strong>
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -516,8 +735,13 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
                 <span className="text-[10px] font-bold uppercase text-emerald-300 bg-emerald-950 border border-emerald-800 px-2 py-0.5 rounded">1-10 m³</span>
               </div>
               <p className="text-[11px] text-slate-300 mt-1">
-                Adjusts minimum readiness-to-serve charge for initial 10 m³.
+                Adjusts minimum readiness charge for initial 10 m³.
               </p>
+              <div className="mt-2 text-[10px] font-mono font-bold text-slate-300 bg-slate-900 px-2 py-1 rounded border border-slate-800">
+                Target: <strong className={targetScope === 'Residential' ? 'text-emerald-400' : targetScope === 'Commercial' ? 'text-blue-400' : 'text-purple-400'}>
+                  {targetScope === 'Residential' ? 'Residential Only' : targetScope === 'Commercial' ? 'Commercial Only' : 'Both'}
+                </strong>
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -559,19 +783,24 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
             </div>
           </div>
 
-          {/* C. Percentage Price Hike Across All Reading Tiers */}
+          {/* C. Percentage Price Hike */}
           <div className="p-4 bg-slate-950/80 border border-indigo-900/60 rounded-2xl space-y-3 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between">
                 <span className="text-xs font-black text-indigo-300 flex items-center space-x-1.5">
                   <TrendingUp className="h-3.5 w-3.5 text-indigo-400" />
-                  <span>Percentage Price Hike (+% All Tiers)</span>
+                  <span>Percentage Price Hike (+% Tiers)</span>
                 </span>
                 <span className="text-[10px] font-bold uppercase text-indigo-300 bg-indigo-950 border border-indigo-800 px-2 py-0.5 rounded">Proportional</span>
               </div>
               <p className="text-[11px] text-slate-300 mt-1">
-                Uniformly escalates lifeline base and progressive brackets.
+                Escalates lifeline base and progressive volumetric brackets.
               </p>
+              <div className="mt-2 text-[10px] font-mono font-bold text-slate-300 bg-slate-900 px-2 py-1 rounded border border-slate-800">
+                Target: <strong className={targetScope === 'Residential' ? 'text-emerald-400' : targetScope === 'Commercial' ? 'text-blue-400' : 'text-purple-400'}>
+                  {targetScope === 'Residential' ? 'Residential Only' : targetScope === 'Commercial' ? 'Commercial Only' : 'Both'}
+                </strong>
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -692,22 +921,43 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* RESIDENTIAL TARIFF SCHEDULE */}
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-5 text-slate-100">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div className={`bg-slate-900 border rounded-3xl p-6 shadow-xl space-y-5 text-slate-100 transition-all ${
+          targetScope === 'Residential' ? 'border-emerald-500/80 ring-2 ring-emerald-500/20' : 'border-slate-800'
+        }`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
             <div className="flex items-center space-x-2.5">
               <div className="p-2 bg-emerald-950 text-emerald-400 rounded-xl border border-emerald-800/80">
                 <Home className="h-5 w-5" />
               </div>
               <div>
                 <h4 className="text-sm font-black text-white uppercase tracking-wider">
-                  Residential Tariff Schedule (RES)
+                  Residential Tariff Schedule (Regular Community)
                 </h4>
-                <p className="text-[11px] text-slate-300">Standard domestic connections in Tagoloan</p>
+                <p className="text-[11px] text-slate-300">Single individual / family community consumption</p>
               </div>
             </div>
-            <span className="px-2.5 py-1 bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-black uppercase rounded-lg">
-              Domestic
-            </span>
+            <div className="flex items-center space-x-2">
+              <span className="px-2.5 py-1 bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-black uppercase rounded-lg">
+                Regular Price
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setTargetScope('Residential');
+                  setShowConfirmModal(true);
+                }}
+                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1 shadow-xs"
+                title="Apply changes to Residential community accounts only"
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                <span>Apply Residential</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="p-3 bg-emerald-950/40 border border-emerald-900/60 rounded-2xl text-[11px] text-emerald-200/90 leading-relaxed">
+            <strong className="text-emerald-300 font-bold block mb-0.5">Community Use Water Consumption:</strong>
+            Handled on an individual/single-account person basis (not based on a company or groups). Standard affordable regular pricing under municipal utility regulations.
           </div>
 
           <div className="space-y-4">
@@ -848,22 +1098,43 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
         </div>
 
         {/* COMMERCIAL TARIFF SCHEDULE */}
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-5 text-slate-100">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div className={`bg-slate-900 border rounded-3xl p-6 shadow-xl space-y-5 text-slate-100 transition-all ${
+          targetScope === 'Commercial' ? 'border-blue-500/80 ring-2 ring-blue-500/20' : 'border-slate-800'
+        }`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
             <div className="flex items-center space-x-2.5">
               <div className="p-2 bg-blue-950 text-blue-400 rounded-xl border border-blue-800/80">
                 <Building2 className="h-5 w-5" />
               </div>
               <div>
                 <h4 className="text-sm font-black text-white uppercase tracking-wider">
-                  Commercial Tariff Schedule (COMM)
+                  Commercial Tariff Schedule (Private Accounts)
                 </h4>
-                <p className="text-[11px] text-slate-300">Commercial establishments & industrial accounts</p>
+                <p className="text-[11px] text-slate-300">Private business & heavy-volume water consumption</p>
               </div>
             </div>
-            <span className="px-2.5 py-1 bg-blue-950 text-blue-300 border border-blue-800 text-[10px] font-black uppercase rounded-lg">
-              Commercial
-            </span>
+            <div className="flex items-center space-x-2">
+              <span className="px-2.5 py-1 bg-blue-950 text-blue-300 border border-blue-800 text-[10px] font-black uppercase rounded-lg">
+                Private / Premium
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setTargetScope('Commercial');
+                  setShowConfirmModal(true);
+                }}
+                className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1 shadow-xs"
+                title="Apply changes to Commercial private accounts only"
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                <span>Apply Commercial</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="p-3 bg-blue-950/40 border border-blue-900/60 rounded-2xl text-[11px] text-blue-200/90 leading-relaxed">
+            <strong className="text-blue-300 font-bold block mb-0.5">Private Commercial Accounts:</strong>
+            Commercial users are private accounts with the highest volume and most expensive water consumption rates. Progressive brackets reflect heavier volumetric usage.
           </div>
 
           <div className="space-y-4">
@@ -1180,10 +1451,17 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
 
       {/* 6. Implementation & Notification Options */}
       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4 text-slate-100">
-        <h4 className="text-xs font-black uppercase text-white tracking-wider flex items-center space-x-2">
-          <Bell className="h-4 w-4 text-blue-400" />
-          <span>Automated Consumer Implementation & Notification Actions</span>
-        </h4>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800">
+          <h4 className="text-xs font-black uppercase text-white tracking-wider flex items-center space-x-2">
+            <Bell className="h-4 w-4 text-blue-400" />
+            <span>Automated Implementation & Notification Actions</span>
+          </h4>
+          <span className="text-[10px] font-bold text-slate-400">
+            Applying to: <strong className={targetScope === 'Residential' ? 'text-emerald-400' : targetScope === 'Commercial' ? 'text-blue-400' : 'text-purple-400'}>
+              {targetScope === 'Residential' ? 'Residential (Regular Community)' : targetScope === 'Commercial' ? 'Commercial (Private Accounts)' : 'Both Classifications'}
+            </strong>
+          </span>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <label className="p-4 bg-slate-950/80 border border-blue-900/60 rounded-2xl flex items-start space-x-3 cursor-pointer hover:border-blue-700 transition">
@@ -1195,10 +1473,10 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
             />
             <div>
               <span className="text-xs font-black text-white block">
-                Automatically recalculate all active unpaid & unbilled readings
+                Automatically recalculate targeted unpaid & unbilled readings
               </span>
               <span className="text-[11px] text-slate-300 leading-relaxed block mt-0.5">
-                Instantly recalculates <strong className="text-blue-400">{unpaidReadingsCount} unpaid statements</strong> across the consumer ledger so consumers see updated bills immediately.
+                Instantly recalculates <strong className="text-blue-400">{targetedUnpaidReadingsCount} unpaid {targetScope === 'both' ? 'statements' : `${targetScope} statements`}</strong> across the consumer ledger so accounts see updated bills immediately.
               </span>
             </div>
           </label>
@@ -1212,10 +1490,10 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
             />
             <div>
               <span className="text-xs font-black text-white block">
-                Notify all registered consumers with official Price Hike Notice
+                Notify targeted registered consumers with official Price Notice
               </span>
               <span className="text-[11px] text-slate-300 leading-relaxed block mt-0.5">
-                Dispatches a tailored notification to <strong className="text-emerald-400">{consumers.length} registered consumer accounts</strong> explaining new rates, effective date, and resolution number.
+                Dispatches a tailored notification to <strong className="text-emerald-400">{targetedConsumersCount} registered {targetScope === 'both' ? 'consumer accounts' : `${targetScope} accounts`}</strong> explaining new rates, effective date, and resolution number.
               </span>
             </div>
           </label>
@@ -1258,20 +1536,32 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
         {/* Primary Commit Button */}
         <div className="pt-4 flex flex-col sm:flex-row justify-between items-center gap-4 border-t border-slate-800">
           <div className="text-xs text-slate-400">
-            Current Resolution: <strong className="text-white font-mono">{formConfig.resolutionNumber}</strong> • Effective: <strong className="text-white">{formConfig.effectiveDate}</strong>
+            Resolution: <strong className="text-white font-mono">{formConfig.resolutionNumber}</strong> • Effective: <strong className="text-white">{formConfig.effectiveDate}</strong> • Target: <strong className="text-amber-300 uppercase">{targetScope}</strong>
           </div>
 
           <button
             onClick={() => setShowConfirmModal(true)}
-            className="w-full sm:w-auto px-8 py-3.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-blue-600/30 transition flex items-center justify-center space-x-2 cursor-pointer"
+            className={`w-full sm:w-auto px-8 py-3.5 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg transition flex items-center justify-center space-x-2 cursor-pointer ${
+              targetScope === 'Residential'
+                ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/30'
+                : targetScope === 'Commercial'
+                ? 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/30'
+                : 'bg-purple-600 hover:bg-purple-500 shadow-purple-600/30'
+            }`}
           >
             <ShieldCheck className="h-4.5 w-4.5" />
-            <span>Implement Price Hike & Broadcast to Consumers</span>
+            <span>
+              {targetScope === 'Residential'
+                ? 'Apply Residential Price Adjustment (Community Accounts)'
+                : targetScope === 'Commercial'
+                ? 'Apply Commercial Price Adjustment (Private Accounts)'
+                : 'Implement Both Price Adjustments & Broadcast'}
+            </span>
           </button>
         </div>
       </div>
 
-      {/* 7. Confirmation Modal */}
+      {/* 7. Confirmation Modal with Scope Isolation Details */}
       {showConfirmModal && (
         <div 
           className="fixed inset-0 z-[120] bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fade-in select-none"
@@ -1286,36 +1576,79 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
                 <AlertTriangle className="h-6 w-6" />
               </div>
               <div>
-                <h3 className="text-base font-black text-white tracking-tight">Confirm Water Tariff Price Hike</h3>
+                <h3 className="text-base font-black text-white tracking-tight">Confirm Water Tariff Price Adjustment</h3>
                 <p className="text-xs text-slate-400 font-mono">Mandate: {formConfig.resolutionNumber}</p>
               </div>
             </div>
 
+            {/* Scope Identifier Callout */}
+            <div className={`p-3.5 rounded-2xl border text-xs leading-relaxed ${
+              targetScope === 'Residential'
+                ? 'bg-emerald-950/60 border-emerald-800/80 text-emerald-200'
+                : targetScope === 'Commercial'
+                ? 'bg-blue-950/60 border-blue-800/80 text-blue-200'
+                : 'bg-purple-950/60 border-purple-800/80 text-purple-200'
+            }`}>
+              <div className="font-black uppercase tracking-wider text-[11px] mb-1 flex items-center space-x-1.5">
+                <span>Identified Scope:</span>
+                <span className="underline">
+                  {targetScope === 'Residential'
+                    ? 'Residential Only (Regular Community)'
+                    : targetScope === 'Commercial'
+                    ? 'Commercial Only (Private Accounts)'
+                    : 'Both Residential & Commercial'}
+                </span>
+              </div>
+              {targetScope === 'Residential' && (
+                <p>
+                  This adjustment applies <strong>ONLY</strong> to regular Residential community water consumption (single/individual account persons). Commercial private accounts and their high-consumption pricing will <strong>remain completely unchanged</strong>.
+                </p>
+              )}
+              {targetScope === 'Commercial' && (
+                <p>
+                  This adjustment applies <strong>ONLY</strong> to Commercial private accounts (which have the most expensive water consumption rates). Regular Residential community households and their lifeline rates will <strong>remain completely unchanged</strong>.
+                </p>
+              )}
+              {targetScope === 'both' && (
+                <p>
+                  Both Residential community and Commercial private accounts will be updated under their respective distinct schedules.
+                </p>
+              )}
+            </div>
+
             <div className="p-4 bg-slate-950 border border-slate-800 rounded-2xl space-y-3 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Residential Lifeline:</span>
-                <span className="font-mono font-bold text-white">₱{activeTariff.residential.baseMinCharge.toFixed(2)} → ₱{formConfig.residential.baseMinCharge.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Commercial Lifeline:</span>
-                <span className="font-mono font-bold text-white">₱{activeTariff.commercial.baseMinCharge.toFixed(2)} → ₱{formConfig.commercial.baseMinCharge.toFixed(2)}</span>
-              </div>
+              {(targetScope === 'both' || targetScope === 'Residential') && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Residential Lifeline (1-10 m³):</span>
+                  <span className="font-mono font-bold text-emerald-400">
+                    ₱{activeTariff.residential.baseMinCharge.toFixed(2)} → ₱{formConfig.residential.baseMinCharge.toFixed(2)}
+                  </span>
+                </div>
+              )}
+              {(targetScope === 'both' || targetScope === 'Commercial') && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Commercial Lifeline (1-10 m³):</span>
+                  <span className="font-mono font-bold text-blue-400">
+                    ₱{activeTariff.commercial.baseMinCharge.toFixed(2)} → ₱{formConfig.commercial.baseMinCharge.toFixed(2)}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-slate-400">Effective Date:</span>
                 <span className="font-bold text-white">{formConfig.effectiveDate}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Consumers to Notify:</span>
-                <span className="font-bold text-blue-400">{notifyAllConsumers ? `${consumers.length} accounts` : 'None'}</span>
+                <span className="text-slate-400">Target Accounts to Notify:</span>
+                <span className="font-bold text-sky-400">{notifyAllConsumers ? `${targetedConsumersCount} accounts (${targetScope})` : 'None'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Unpaid Statements Recalculated:</span>
-                <span className="font-bold text-emerald-400">{recalculateUnbilledReadings ? `${unpaidReadingsCount} statements` : 'None'}</span>
+                <span className="font-bold text-emerald-400">{recalculateUnbilledReadings ? `${targetedUnpaidReadingsCount} statements (${targetScope})` : 'None'}</span>
               </div>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              This action will update the active water tariff engine. All subsequent meter readings and unbilled assessments will automatically compute with these rates.
+              This action will update the active water tariff engine. Unbilled statements and subsequent meter readings for the targeted classification will immediately reflect these rates.
             </p>
 
             <div className="flex justify-end space-x-3 pt-2 border-t border-slate-800">
@@ -1329,7 +1662,13 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
               <button
                 onClick={handleCommitTariffHike}
                 disabled={isApplying}
-                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md cursor-pointer flex items-center space-x-2"
+                className={`px-6 py-2.5 disabled:opacity-50 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md cursor-pointer flex items-center space-x-2 ${
+                  targetScope === 'Residential'
+                    ? 'bg-emerald-600 hover:bg-emerald-500'
+                    : targetScope === 'Commercial'
+                    ? 'bg-blue-600 hover:bg-blue-500'
+                    : 'bg-purple-600 hover:bg-purple-500'
+                }`}
               >
                 {isApplying ? (
                   <>
@@ -1339,7 +1678,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
                 ) : (
                   <>
                     <CheckCircle2 className="h-4 w-4" />
-                    <span>Confirm & Implement Hike</span>
+                    <span>Confirm & Apply Price Adjustment</span>
                   </>
                 )}
               </button>

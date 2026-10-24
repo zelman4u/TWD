@@ -302,5 +302,32 @@ export const apiClient = {
   // System Health
   checkHealth: async () => {
     return apiClient.get<{ status: string }>('/api/health', { timeoutMs: 4000, retries: 1, skipLogging: true });
+  },
+
+  // Consumer Service Reports & Admin Replies
+  getReports: async (filters?: { accountNumber?: string; status?: string; category?: string; search?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.accountNumber) params.append('accountNumber', filters.accountNumber);
+    if (filters?.status && filters.status !== 'all') params.append('status', filters.status);
+    if (filters?.category && filters.category !== 'all') params.append('category', filters.category);
+    if (filters?.search) params.append('search', filters.search);
+    const queryString = params.toString() ? `?${params.toString()}` : '';
+    return apiClient.get<{ success: boolean; count?: number; reports: any[]; data: any[] }>(`/api/reports${queryString}`);
+  },
+
+  getReportById: async (id: string) => {
+    return apiClient.get<{ success: boolean; report: any }>(`/api/reports/${encodeURIComponent(id)}`);
+  },
+
+  createReport: async (reportData: any) => {
+    return apiClient.post<{ success: boolean; message: string; report: any }>('/api/reports', reportData);
+  },
+
+  replyToReport: async (id: string, replyData: { senderId: string; senderName: string; senderRole: 'admin' | 'consumer' | 'staff'; message: string; statusUpdate?: string; assignedStaff?: string }) => {
+    return apiClient.post<{ success: boolean; message: string; report: any; reply: any }>(`/api/reports/${encodeURIComponent(id)}/reply`, replyData);
+  },
+
+  updateReportStatus: async (id: string, status: string, assignedStaff?: string) => {
+    return apiClient.patch<{ success: boolean; message: string; report: any }>(`/api/reports/${encodeURIComponent(id)}/status`, { status, assignedStaff });
   }
 };
