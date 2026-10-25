@@ -1271,18 +1271,20 @@ app.get(["/api/consumers", "/api/sync/pull", "/api/sync/consumers"], (req, res) 
     const { search, status, includePending, view, role } = req.query;
     let list = [...syncedConsumers];
 
-    // Determine if request is an Admin dashboard query or Mobile Field Reader sync
-    const isAdminView = (
+    // Determine if request is an Admin/Consumer Web Portal query or Mobile Field Reader sync
+    const isPortalOrAdminView = (
       includePending === "true" || 
       view === "admin" || 
+      view === "portal" ||
       role === "admin" || 
       req.headers["x-portal"] === "admin" ||
+      req.headers["x-portal"] === "consumer" ||
       req.headers["x-role"] === "admin"
     );
 
-    // If NOT explicitly an admin view, strictly filter for field reading:
+    // If NOT explicitly a web portal/admin view, strictly filter for field reading:
     // Only consumers who have official Admin-issued Account # and Meter Serial # are synced to mobile readers
-    if (!isAdminView) {
+    if (!isPortalOrAdminView) {
       list = list.filter(isValidatedConsumerForReader);
     }
 
@@ -1296,9 +1298,12 @@ app.get(["/api/consumers", "/api/sync/pull", "/api/sync/consumers"], (req, res) 
     if (search && typeof search === "string" && search.trim() !== "") {
       const q = search.trim().toLowerCase();
       list = list.filter(c => 
-        c.name.toLowerCase().includes(q) || 
-        c.accountNumber.toLowerCase().includes(q) || 
-        c.meterNumber.toLowerCase().includes(q)
+        (c.name || "").toLowerCase().includes(q) || 
+        (c.accountNumber || "").toLowerCase().includes(q) || 
+        (c.meterNumber || "").toLowerCase().includes(q) ||
+        (c.rfidTag || "").toLowerCase().includes(q) ||
+        (c.email || "").toLowerCase().includes(q) ||
+        (c.linkedUserId || "").toLowerCase().includes(q)
       );
     }
 
@@ -1330,7 +1335,13 @@ app.get(["/api/consumers", "/api/sync/pull", "/api/sync/consumers"], (req, res) 
         status: c.status,
         contactNumber: c.contactNumber,
         email: c.email,
-        rfidTag: c.rfidTag
+        rfidTag: c.rfidTag,
+        linkedUserId: c.linkedUserId,
+        registrationDate: c.registrationDate,
+        householdInfo: c.householdInfo,
+        businessName: c.businessName,
+        businessType: c.businessType,
+        isRegistered: c.isRegistered
       })),
       data: list
     });
@@ -1688,16 +1699,29 @@ app.post("/api/consumers", (req, res) => {
       (cleanName && c.name && c.name.trim().toLowerCase() === cleanName.toLowerCase())
     );
 
+    const prevExisting = idx >= 0 ? { ...syncedConsumers[idx] } : null;
+    const wasPreviouslyValidated = prevExisting ? isValidatedConsumerForReader(prevExisting) : false;
+
     if (idx >= 0) {
       syncedConsumers[idx] = { ...syncedConsumers[idx], ...record };
     } else {
       syncedConsumers.unshift(record);
     }
 
+    const savedConsumer = syncedConsumers[idx >= 0 ? idx : 0];
+    const isNowValidated = isValidatedConsumerForReader(savedConsumer);
+    const didAccountNumberChange = Boolean(
+      prevExisting &&
+      prevExisting.accountNumber &&
+      !prevExisting.accountNumber.toUpperCase().startsWith("PENDING") &&
+      savedConsumer.accountNumber &&
+      prevExisting.accountNumber !== savedConsumer.accountNumber
+    );
+
     // Clean up any remaining pending twin with same email or user id
-    if (record.status === "active" && record.accountNumber && !record.accountNumber.toUpperCase().startsWith("PENDING")) {
+    if (savedConsumer.status === "active" && savedConsumer.accountNumber && !savedConsumer.accountNumber.toUpperCase().startsWith("PENDING")) {
       syncedConsumers = syncedConsumers.filter(c => {
-        if (c === syncedConsumers[idx >= 0 ? idx : 0]) return true;
+        if (c === savedConsumer) return true;
         const isStalePending = (!c.accountNumber || c.accountNumber.toUpperCase().startsWith("PENDING") || c.status === "pending_approval");
         if (isStalePending) {
           if (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) return false;
@@ -1708,16 +1732,56 @@ app.post("/api/consumers", (req, res) => {
       });
     }
 
+    // If Admin just issued official IDs (pending -> active) or updated Account #, auto-confirm & notify Consumer Portal
+    let autoNotification: ServerConsumerNotification | undefined;
+    if (isNowValidated && (!wasPreviouslyValidated || didAccountNumberChange)) {
+      autoNotification = pushServerNotification({
+        accountNumber: savedConsumer.accountNumber,
+        userId: savedConsumer.linkedUserId,
+        consumerEmail: savedConsumer.email,
+        title: didAccountNumberChange
+          ? `Account Number Updated to #${savedConsumer.accountNumber}`
+          : `Official Account Number & Meter Issued!`,
+        message: didAccountNumberChange
+          ? `Your water service account identifier has been officially updated to #${savedConsumer.accountNumber} by Tagoloan Water District Administration. Your physical Meter Tag (${savedConsumer.rfidTag || savedConsumer.meterNumber}) and Meter Serial (#${savedConsumer.meterNumber}) remain permanently assigned.`
+          : `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${savedConsumer.accountNumber} and Meter Serial is #${savedConsumer.meterNumber}. Smart RFID Tag: ${savedConsumer.rfidTag || `RFID-${savedConsumer.meterNumber}`}. Your full dashboard and telemetry are now active.`,
+        type: "account_issue"
+      });
+
+      broadcast("CONSUMER_IDS_ISSUED", {
+        consumer: savedConsumer,
+        notification: autoNotification,
+        accountNumber: savedConsumer.accountNumber,
+        meterNumber: savedConsumer.meterNumber,
+        rfidTag: savedConsumer.rfidTag,
+        email: savedConsumer.email,
+        linkedUserId: savedConsumer.linkedUserId,
+        isUpdate: didAccountNumberChange,
+        message: `Official IDs confirmed for ${savedConsumer.name}: Account #${savedConsumer.accountNumber}, Meter #${savedConsumer.meterNumber}.`
+      });
+
+      broadcast("CONSUMER_ACTIVATED_FOR_READER", {
+        consumer: savedConsumer,
+        accountNumber: savedConsumer.accountNumber,
+        meterNumber: savedConsumer.meterNumber,
+        barangay: savedConsumer.barangay,
+        sitioZone: savedConsumer.sitioZone,
+        message: `Consumer ${savedConsumer.name} is now validated and routed to field readers for ${savedConsumer.barangay}.`
+      });
+    }
+
     // Broadcast update to Admin and Consumer dashboards
     broadcast("CONSUMER_UPDATED", {
-      consumer: record,
-      message: `Consumer record for ${record.name} (${record.accountNumber || "Pending"}) updated.`
+      consumer: savedConsumer,
+      notification: autoNotification,
+      message: `Consumer record for ${savedConsumer.name} (${savedConsumer.accountNumber || "Pending"}) updated.`
     });
 
     res.status(201).json({
       success: true,
       message: "Consumer saved successfully.",
-      consumer: record
+      consumer: savedConsumer,
+      notification: autoNotification
     });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to save consumer." });
@@ -1799,9 +1863,31 @@ app.post(["/api/consumers/:identifier/issue-id", "/api/consumers/:identifier/app
 
     const validatedConsumer = syncedConsumers[idx];
 
-    // Broadcast ID activation event to Admin consoles and mobile reader route streams
+    const issuedNotif = pushServerNotification({
+      accountNumber: validatedConsumer.accountNumber,
+      userId: validatedConsumer.linkedUserId,
+      consumerEmail: validatedConsumer.email,
+      title: `Official Account Number & Meter Issued!`,
+      message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${validatedConsumer.accountNumber} and Meter Serial is #${validatedConsumer.meterNumber}. Smart RFID Tag: ${validatedConsumer.rfidTag}. Your full dashboard and telemetry are now active.`,
+      type: "account_issue"
+    });
+
+    // Broadcast ID activation event to Consumer Portal, Admin consoles, and mobile reader route streams
+    broadcast("CONSUMER_IDS_ISSUED", {
+      consumer: validatedConsumer,
+      notification: issuedNotif,
+      accountNumber: validatedConsumer.accountNumber,
+      meterNumber: validatedConsumer.meterNumber,
+      rfidTag: validatedConsumer.rfidTag,
+      email: validatedConsumer.email,
+      linkedUserId: validatedConsumer.linkedUserId,
+      isUpdate: false,
+      message: `Official IDs issued for ${validatedConsumer.name}: Acct #${validatedConsumer.accountNumber}, Meter #${validatedConsumer.meterNumber}.`
+    });
+
     broadcast("CONSUMER_UPDATED", {
       consumer: validatedConsumer,
+      notification: issuedNotif,
       message: `Official IDs issued for ${validatedConsumer.name}: Acct #${validatedConsumer.accountNumber}, Meter #${validatedConsumer.meterNumber}.`
     });
 
@@ -1816,8 +1902,9 @@ app.post(["/api/consumers/:identifier/issue-id", "/api/consumers/:identifier/app
 
     res.json({
       success: true,
-      message: `Official IDs successfully issued. Consumer is active and synced to mobile field route.`,
-      consumer: validatedConsumer
+      message: `Official IDs successfully issued. Consumer is active and synced to Consumer Portal & mobile field route.`,
+      consumer: validatedConsumer,
+      notification: issuedNotif
     });
   } catch (err) {
     console.error("[API Error] Issue IDs:", err);
@@ -2437,6 +2524,155 @@ app.all(["/api/reports/:id/status"], (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to update report status." });
   }
+});
+
+// ==========================================
+// 7. CONSUMER NOTIFICATIONS SYNC API (/api/notifications)
+// ==========================================
+interface ServerConsumerNotification {
+  id: string;
+  accountNumber: string;
+  consumerId?: string;
+  userId?: string;
+  consumerEmail?: string;
+  title: string;
+  message: string;
+  timestamp: string;
+  type: "payment" | "billing" | "announcement" | "disconnection" | "receipt_upload" | "report" | "account_issue";
+  read: boolean;
+  orNumber?: string;
+  amountPaid?: number;
+  remainingBalance?: number;
+  readingId?: string;
+  billingPeriod?: string;
+  receiptUrl?: string;
+  reportId?: string;
+  ticketNumber?: string;
+}
+
+const inMemoryNotifications: ServerConsumerNotification[] = [];
+
+function pushServerNotification(
+  input: Omit<ServerConsumerNotification, "id" | "timestamp" | "read"> & { id?: string; timestamp?: string; read?: boolean }
+): ServerConsumerNotification {
+  const nowMs = Date.now();
+  const cleanAcc = (input.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
+  const cleanEmail = (input.consumerEmail || "").trim().toLowerCase();
+  const cleanTitle = (input.title || "").trim().toLowerCase();
+
+  // Deduplicate identical notifications emitted within an 8-second window
+  const existing = inMemoryNotifications.find(n => {
+    if (input.id && n.id === input.id) return true;
+    const ageMs = Math.abs(nowMs - new Date(n.timestamp).getTime());
+    if (ageMs > 8000) return false;
+    const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
+    const nEmail = (n.consumerEmail || "").trim().toLowerCase();
+    const nTitle = (n.title || "").trim().toLowerCase();
+    return n.type === input.type && nTitle === cleanTitle && ((cleanAcc && nAcc === cleanAcc) || (cleanEmail && nEmail === cleanEmail));
+  });
+
+  if (existing) {
+    return existing;
+  }
+
+  const created: ServerConsumerNotification = {
+    ...input,
+    id: input.id || `notif-${nowMs}-${Math.floor(Math.random() * 1000)}`,
+    timestamp: input.timestamp || new Date().toISOString(),
+    read: input.read ?? false
+  };
+
+  inMemoryNotifications.unshift(created);
+  if (inMemoryNotifications.length > 500) {
+    inMemoryNotifications.pop();
+  }
+
+  broadcast("CONSUMER_NOTIFICATION_CREATED", {
+    notification: created,
+    accountNumber: created.accountNumber,
+    consumerEmail: created.consumerEmail,
+    userId: created.userId
+  });
+
+  return created;
+}
+
+app.get("/api/notifications", (req, res) => {
+  try {
+    const { accountNumber, userId, email, consumerId, isAdmin } = req.query;
+
+    if (isAdmin === "true" && !accountNumber && !userId && !email && !consumerId) {
+      return res.json({
+        success: true,
+        count: inMemoryNotifications.length,
+        notifications: inMemoryNotifications
+      });
+    }
+
+    const isPlaceholder = (acc?: string) => {
+      if (!acc) return true;
+      const lower = acc.replace(/^#/, "").trim().toLowerCase();
+      return !lower || lower.startsWith("pending") || lower === "unassigned" || lower === "unissued" || lower === "none" || lower === "n/a";
+    };
+
+    const cleanAcc = ((accountNumber as string) || "").replace(/^#/, "").trim().toLowerCase();
+    const cleanUid = ((userId as string) || "").trim().toLowerCase();
+    const cleanEmail = ((email as string) || "").trim().toLowerCase();
+    const cleanCid = ((consumerId as string) || "").trim().toLowerCase();
+    const hasRealAcc = !isPlaceholder(cleanAcc);
+
+    if (!hasRealAcc && !cleanUid && !cleanEmail && !cleanCid) {
+      return res.json({ success: true, count: 0, notifications: [] });
+    }
+
+    const filtered = inMemoryNotifications.filter(n => {
+      const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
+      const nHasRealAcc = !isPlaceholder(n.accountNumber);
+      const nUid = (n.userId || "").trim().toLowerCase();
+      const nEmail = (n.consumerEmail || "").trim().toLowerCase();
+      const nCid = (n.consumerId || "").trim().toLowerCase();
+
+      if (cleanUid && nUid && nUid !== cleanUid) return false;
+      if (cleanEmail && nEmail && nEmail !== cleanEmail) return false;
+      if (cleanCid && nCid && nCid !== cleanCid) return false;
+
+      if (cleanUid && nUid && nUid === cleanUid) return true;
+      if (cleanCid && nCid && nCid === cleanCid) return true;
+      if (cleanEmail && nEmail && nEmail === cleanEmail) return true;
+      if (hasRealAcc && nHasRealAcc && nAcc === cleanAcc) return true;
+      return false;
+    });
+
+    res.json({
+      success: true,
+      count: filtered.length,
+      notifications: filtered
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to fetch notifications." });
+  }
+});
+
+app.post("/api/notifications", (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title || !body.message) {
+      return res.status(400).json({ success: false, message: "Notification title and message are required." });
+    }
+    const saved = pushServerNotification(body);
+    res.status(201).json({ success: true, notification: saved });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to create notification." });
+  }
+});
+
+app.patch("/api/notifications/:id/read", (req, res) => {
+  const { id } = req.params;
+  const found = inMemoryNotifications.find(n => n.id === id);
+  if (found) {
+    found.read = true;
+  }
+  res.json({ success: true });
 });
 
 // WebSocket Connection Management

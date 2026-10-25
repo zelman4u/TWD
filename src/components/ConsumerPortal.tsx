@@ -149,6 +149,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     date: string;
   } | null>(null);
 
+  // Immediate Real-Time Account & Meter ID Issuance Confirmation Banner
+  const [idConfirmedBanner, setIdConfirmedBanner] = useState<{
+    accountNumber: string;
+    meterNumber: string;
+    rfidTag: string;
+    confirmedAt: string;
+    isUpdate?: boolean;
+  } | null>(null);
+
   // Profile Edit States
   const [editName, setEditName] = useState('');
   const [editContact, setEditContact] = useState('');
@@ -203,6 +212,188 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const syncTimeoutRef = useRef<any>(null);
   const debounceDbUpdateRef = useRef<any>(null);
   const alertedOverdueRef = useRef<Set<string>>(new Set());
+  const wasAccountPendingRef = useRef<boolean | null>(null);
+  const lastAnnouncedAccountRef = useRef<string>('');
+
+  // Helper: Check whether a consumer record has officially issued IDs
+  const isConsumerRecordIssued = (rec?: Consumer | null): boolean => {
+    if (!rec) return false;
+    const acc = (rec.accountNumber || '').trim().toUpperCase();
+    const mtr = (rec.meterNumber || '').trim().toUpperCase();
+    if (!acc || acc.startsWith('PENDING') || acc === 'UNASSIGNED' || acc === 'UNISSUED' || acc === 'PENDING ADMIN ISSUANCE') {
+      return false;
+    }
+    if (mtr && mtr.startsWith('PENDING')) {
+      return false;
+    }
+    if (rec.status === 'pending_approval' || (rec.status as string) === 'pending') {
+      return false;
+    }
+    return true;
+  };
+
+  // Helper: Match whether an incoming consumer or notification payload belongs to the logged-in consumer
+  const doesPayloadBelongToCurrentUser = (payload: any): boolean => {
+    if (!payload) return false;
+    const targetConsumer = payload.consumer || payload;
+    const myEmail = (currentUser.email || consumerRecordRef.current?.email || '').trim().toLowerCase();
+    const myUid = (currentUser.id || consumerRecordRef.current?.linkedUserId || '').trim();
+    const myAcc = (currentUser.linkedAccountNumber || consumerRecordRef.current?.accountNumber || '').trim().toUpperCase();
+    const myName = (currentUser.name || consumerRecordRef.current?.name || '').trim().toLowerCase();
+
+    const pEmail = (targetConsumer.email || payload.email || payload.consumerEmail || '').trim().toLowerCase();
+    const pUid = (targetConsumer.linkedUserId || payload.linkedUserId || payload.userId || '').trim();
+    const pAcc = (targetConsumer.accountNumber || payload.accountNumber || '').trim().toUpperCase();
+    const pPrevAcc = (payload.previousAccountNumber || '').trim().toUpperCase();
+    const pName = (targetConsumer.name || '').trim().toLowerCase();
+
+    if (myUid && pUid && myUid === pUid) return true;
+    if (myEmail && pEmail && myEmail === pEmail) return true;
+    if (myAcc && !myAcc.startsWith('PENDING') && ((pAcc && myAcc === pAcc) || (pPrevAcc && myAcc === pPrevAcc))) return true;
+    if (myName && pName && myName === pName && !pEmail && !pUid) return true;
+    return false;
+  };
+
+  // Helper: Persist confirmed consumer + user session + notification and surface instant confirmation UI
+  const applyAutomaticIdConfirmation = (
+    issuedConsumer: Consumer,
+    incomingNotif?: ConsumerNotification,
+    isUpdate = false,
+    triggerBanner = true
+  ) => {
+    if (!issuedConsumer || !isConsumerRecordIssued(issuedConsumer)) return;
+
+    const accNum = issuedConsumer.accountNumber.trim().toUpperCase();
+    const meterNum = (issuedConsumer.meterNumber || `MT-${accNum}`).trim().toUpperCase();
+    const rfid = (issuedConsumer.rfidTag || `RFID-${meterNum}`).trim().toUpperCase();
+
+    const normalizedConsumer: Consumer = {
+      ...consumerRecordRef.current,
+      ...issuedConsumer,
+      accountNumber: accNum,
+      meterNumber: meterNum,
+      rfidTag: rfid,
+      status: issuedConsumer.status && issuedConsumer.status !== 'pending_approval' ? issuedConsumer.status : 'active',
+      isRegistered: true
+    };
+
+    // 1. Update local consumers store & remove any stale pending duplicate
+    const localConsumers = mockDb.getConsumers();
+    let matched = false;
+    const updatedConsumers = localConsumers.map(lc => {
+      const same =
+        (lc.accountNumber && lc.accountNumber.toUpperCase() === accNum) ||
+        (normalizedConsumer.email && lc.email && lc.email.toLowerCase() === normalizedConsumer.email.toLowerCase()) ||
+        (normalizedConsumer.linkedUserId && lc.linkedUserId && lc.linkedUserId === normalizedConsumer.linkedUserId);
+      if (same) {
+        matched = true;
+        return { ...lc, ...normalizedConsumer };
+      }
+      return lc;
+    });
+    if (!matched) {
+      updatedConsumers.unshift(normalizedConsumer);
+    }
+    mockDb.saveConsumers(updatedConsumers);
+
+    // 2. Update local users store & active currentUser session so linkedAccountNumber is permanently bound
+    const localUsers = mockDb.getUsers();
+    const updatedUsers = localUsers.map(u => {
+      const isMe =
+        (currentUser.id && u.id === currentUser.id) ||
+        (normalizedConsumer.linkedUserId && u.id === normalizedConsumer.linkedUserId) ||
+        (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase());
+      if (isMe) {
+        return { ...u, linkedAccountNumber: accNum, status: 'active' as const };
+      }
+      return u;
+    });
+    mockDb.saveUsers(updatedUsers);
+
+    const sessionUser = mockDb.getCurrentUser();
+    if (sessionUser && (sessionUser.id === currentUser.id || (sessionUser.email && currentUser.email && sessionUser.email.toLowerCase() === currentUser.email.toLowerCase()))) {
+      if (sessionUser.linkedAccountNumber !== accNum || sessionUser.status !== 'active') {
+        mockDb.setCurrentUser({
+          ...sessionUser,
+          linkedAccountNumber: accNum,
+          status: 'active'
+        });
+      }
+    }
+
+    // 3. Re-associate prior pending notifications & ensure official account_issue notification exists
+    mockDb.updateConsumerNotifications(
+      {
+        userId: normalizedConsumer.linkedUserId || currentUser.id,
+        email: normalizedConsumer.email || currentUser.email,
+        consumerId: normalizedConsumer.id
+      },
+      {
+        accountNumber: accNum,
+        userId: normalizedConsumer.linkedUserId || currentUser.id,
+        consumerEmail: normalizedConsumer.email || currentUser.email
+      }
+    );
+
+    if (incomingNotif) {
+      mockDb.mergeExternalNotifications([{
+        ...incomingNotif,
+        accountNumber: accNum,
+        userId: incomingNotif.userId || normalizedConsumer.linkedUserId || currentUser.id,
+        consumerEmail: incomingNotif.consumerEmail || normalizedConsumer.email || currentUser.email
+      }]);
+    } else {
+      const existingNotifs = mockDb.getNotifications(accNum, {
+        userId: normalizedConsumer.linkedUserId || currentUser.id,
+        email: normalizedConsumer.email || currentUser.email,
+        consumerId: normalizedConsumer.id
+      });
+      const hasIssuanceNotif = existingNotifs.some(
+        n => n.type === 'account_issue' && (n.accountNumber || '').toUpperCase() === accNum
+      );
+      if (!hasIssuanceNotif) {
+        mockDb.addNotification({
+          accountNumber: accNum,
+          consumerId: normalizedConsumer.id,
+          userId: normalizedConsumer.linkedUserId || currentUser.id,
+          consumerEmail: normalizedConsumer.email || currentUser.email,
+          title: isUpdate ? `Account Number Updated to #${accNum}` : `Official Account Number & Meter Issued!`,
+          message: `Your water service account has been officially confirmed and activated by Tagoloan Water District Administration. Your permanent Account Number is #${accNum} and Meter Serial is #${meterNum}. Smart RFID Tag: ${rfid}.`,
+          type: 'account_issue'
+        });
+      }
+    }
+
+    // 4. Refresh React state immediately so portal unlocks without reload
+    consumerRecordRef.current = normalizedConsumer;
+    setConsumerRecord(normalizedConsumer);
+    wasAccountPendingRef.current = false;
+
+    const refreshedNotifs = mockDb.getNotifications(accNum, {
+      userId: normalizedConsumer.linkedUserId || currentUser.id,
+      email: normalizedConsumer.email || currentUser.email,
+      consumerId: normalizedConsumer.id
+    });
+    notifsRef.current = refreshedNotifs;
+    setNotifications(refreshedNotifs);
+
+    // 5. Announce confirmation banner & toast once per newly confirmed account number
+    if (triggerBanner && lastAnnouncedAccountRef.current !== accNum) {
+      lastAnnouncedAccountRef.current = accNum;
+      setIdConfirmedBanner({
+        accountNumber: accNum,
+        meterNumber: meterNum,
+        rfidTag: rfid,
+        confirmedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isUpdate
+      });
+      toast.success(
+        isUpdate ? `Account Updated to #${accNum}` : 'Official Account Confirmed & Activated!',
+        `Account #${accNum} and Meter #${meterNum} (${rfid}) have been issued by Administration. Your portal and notifications are now live.`,
+        7000
+      );
+    }
+  };
 
   // Tariff calculation helper
   const calculateCostOf = (usage: number, classification: 'Residential' | 'Commercial' = 'Residential') => {
@@ -218,52 +409,45 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
 
     syncTimeoutRef.current = setTimeout(() => {
-      // 1. First attempt to fetch latest live record from backend API
+      // 1. First attempt to fetch latest live record from backend API (including pending & newly confirmed records)
       const searchParam = currentUser.linkedAccountNumber || currentUser.email || currentUser.id;
       if (searchParam) {
-        fetch(`/api/consumers?search=${encodeURIComponent(searchParam)}`)
+        fetch(`/api/consumers?includePending=true&view=portal&search=${encodeURIComponent(searchParam)}`, {
+          headers: { 'x-portal': 'consumer' }
+        })
           .then(res => res.json())
           .then(apiData => {
             if (apiData && (apiData.consumers || apiData.data)) {
               const list: any[] = apiData.consumers || apiData.data || [];
-              const matchedApi = list.find((c: any) => 
-                (c.accountNumber && c.accountNumber === currentUser.linkedAccountNumber) ||
-                (c.email && c.email.toLowerCase() === currentUser.email?.toLowerCase()) ||
-                (c.linkedUserId && c.linkedUserId === currentUser.id)
-              );
+              // Prefer active issued record if multiple exist
+              const matchingApi = list
+                .filter((c: any) =>
+                  (currentUser.linkedAccountNumber && c.accountNumber && c.accountNumber === currentUser.linkedAccountNumber) ||
+                  (currentUser.email && c.email && c.email.toLowerCase() === currentUser.email.toLowerCase()) ||
+                  (currentUser.id && c.linkedUserId && c.linkedUserId === currentUser.id)
+                )
+                .sort((a: any, b: any) => (isConsumerRecordIssued(b) ? 1 : 0) - (isConsumerRecordIssued(a) ? 1 : 0));
+
+              const matchedApi = matchingApi[0];
               if (matchedApi) {
-                const currentLocal = mockDb.getConsumers();
-                const idx = currentLocal.findIndex(lc => 
-                  (matchedApi.accountNumber && lc.accountNumber === matchedApi.accountNumber) ||
-                  (matchedApi.email && lc.email && lc.email.toLowerCase() === matchedApi.email.toLowerCase()) ||
-                  (matchedApi.linkedUserId && lc.linkedUserId === matchedApi.linkedUserId)
-                );
-                let changed = false;
-                if (idx >= 0) {
-                  const local = currentLocal[idx];
-                  const isLocalActiveIssued = Boolean(
-                    local.accountNumber && 
-                    !local.accountNumber.toUpperCase().startsWith('PENDING') && 
-                    local.status === 'active'
-                  );
-                  // Only update if server is not downgrading an active issued local record
-                  if (!isLocalActiveIssued || (matchedApi.accountNumber && matchedApi.status === 'active')) {
-                    if (JSON.stringify(currentLocal[idx]) !== JSON.stringify({ ...currentLocal[idx], ...matchedApi })) {
-                      currentLocal[idx] = { ...currentLocal[idx], ...matchedApi };
-                      changed = true;
-                    }
-                  }
+                const wasPendingBefore = wasAccountPendingRef.current === true || !isConsumerRecordIssued(consumerRecordRef.current);
+                if (isConsumerRecordIssued(matchedApi)) {
+                  applyAutomaticIdConfirmation(matchedApi, undefined, false, wasPendingBefore && wasAccountPendingRef.current === true);
                 } else {
-                  currentLocal.unshift(matchedApi);
-                  changed = true;
-                }
-                if (changed) {
-                  mockDb.saveConsumers(currentLocal);
-                }
-                const targetRecord = idx >= 0 ? currentLocal[idx] : matchedApi;
-                if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(targetRecord)) {
-                  consumerRecordRef.current = targetRecord;
-                  setConsumerRecord(targetRecord);
+                  const currentLocal = mockDb.getConsumers();
+                  const idx = currentLocal.findIndex(lc =>
+                    (matchedApi.accountNumber && lc.accountNumber === matchedApi.accountNumber) ||
+                    (matchedApi.email && lc.email && lc.email.toLowerCase() === matchedApi.email.toLowerCase()) ||
+                    (matchedApi.linkedUserId && lc.linkedUserId === matchedApi.linkedUserId)
+                  );
+                  if (idx < 0) {
+                    currentLocal.unshift(matchedApi);
+                    mockDb.saveConsumers(currentLocal);
+                  }
+                  if (!isConsumerRecordIssued(consumerRecordRef.current)) {
+                    consumerRecordRef.current = idx >= 0 ? currentLocal[idx] : matchedApi;
+                    setConsumerRecord(consumerRecordRef.current);
+                  }
                 }
               }
             }
@@ -322,9 +506,29 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       const record = matching.length > 0 ? matching[0] : null;
 
       if (record) {
-        if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(record)) {
-          consumerRecordRef.current = record;
-          setConsumerRecord(record);
+        const nowIssued = isConsumerRecordIssued(record);
+        const wasPendingBefore = wasAccountPendingRef.current;
+
+        if (nowIssued && wasPendingBefore === true) {
+          applyAutomaticIdConfirmation(record, undefined, false, true);
+        } else {
+          wasAccountPendingRef.current = !nowIssued;
+          if (nowIssued && !lastAnnouncedAccountRef.current) {
+            lastAnnouncedAccountRef.current = record.accountNumber.trim().toUpperCase();
+          }
+          // Ensure active session user stays linked to issued accountNumber
+          if (nowIssued) {
+            const sess = mockDb.getCurrentUser();
+            if (sess && (sess.id === currentUser.id || (sess.email && currentUser.email && sess.email.toLowerCase() === currentUser.email.toLowerCase()))) {
+              if (sess.linkedAccountNumber !== record.accountNumber || sess.status !== 'active') {
+                mockDb.setCurrentUser({ ...sess, linkedAccountNumber: record.accountNumber, status: 'active' });
+              }
+            }
+          }
+          if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(record)) {
+            consumerRecordRef.current = record;
+            setConsumerRecord(record);
+          }
         }
         
         // Filter readings belonging strictly to this customer's valid issued identifiers
@@ -474,7 +678,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         }
         setAllHistoryReadings(allCustomerReads);
 
-        // Load consumer notifications strictly for this consumer account
+        // Load consumer notifications strictly for this consumer account (local + backend API sync)
         const notifs = mockDb.getNotifications(record.accountNumber, {
           userId: record.linkedUserId || currentUser.id,
           email: record.email || currentUser.email,
@@ -484,6 +688,29 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           notifsRef.current = notifs;
           setNotifications(notifs);
         }
+
+        const notifParams = new URLSearchParams();
+        if (record.accountNumber) notifParams.set('accountNumber', record.accountNumber);
+        if (record.linkedUserId || currentUser.id) notifParams.set('userId', record.linkedUserId || currentUser.id);
+        if (record.email || currentUser.email) notifParams.set('email', record.email || currentUser.email || '');
+        if (record.id) notifParams.set('consumerId', record.id);
+        fetch(`/api/notifications?${notifParams.toString()}`)
+          .then(res => res.json())
+          .then(nData => {
+            if (nData?.success && Array.isArray(nData.notifications) && nData.notifications.length > 0) {
+              const mergedChanged = mockDb.mergeExternalNotifications(nData.notifications);
+              if (mergedChanged) {
+                const updatedNotifs = mockDb.getNotifications(record.accountNumber, {
+                  userId: record.linkedUserId || currentUser.id,
+                  email: record.email || currentUser.email,
+                  consumerId: record.id
+                });
+                notifsRef.current = updatedNotifs;
+                setNotifications(updatedNotifs);
+              }
+            }
+          })
+          .catch(() => {});
 
         // Load consumer reports & concerns
         const localReports = mockDb.getReports(record.accountNumber);
@@ -509,6 +736,25 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           notifsRef.current = userNotifs;
           setNotifications(userNotifs);
         }
+        const fallbackParams = new URLSearchParams();
+        if (currentUser.linkedAccountNumber) fallbackParams.set('accountNumber', currentUser.linkedAccountNumber);
+        if (currentUser.id) fallbackParams.set('userId', currentUser.id);
+        if (currentUser.email) fallbackParams.set('email', currentUser.email);
+        fetch(`/api/notifications?${fallbackParams.toString()}`)
+          .then(res => res.json())
+          .then(nData => {
+            if (nData?.success && Array.isArray(nData.notifications) && nData.notifications.length > 0) {
+              if (mockDb.mergeExternalNotifications(nData.notifications)) {
+                const refreshed = mockDb.getNotifications(currentUser.linkedAccountNumber, {
+                  userId: currentUser.id,
+                  email: currentUser.email
+                });
+                notifsRef.current = refreshed;
+                setNotifications(refreshed);
+              }
+            }
+          })
+          .catch(() => {});
       }
 
       const allAnnouncements = mockDb.getAnnouncements();
@@ -564,9 +810,34 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     };
     window.addEventListener('twd_tariff_updated', handleTariffUpdated);
 
-    // 4. Dedicated Live WebSocket Stream for immediate notifications & report updates
+    // 4. Dedicated Live WebSocket Stream for immediate ID confirmation, notifications & report updates
     const cleanupWs = initRealtimeSocket((data) => {
-      if (data.type === 'CONSUMER_REPORT_REPLY' || data.type === 'ADMIN_REPLIED_TO_REPORT') {
+      if (
+        data.type === 'CONSUMER_IDS_ISSUED' ||
+        data.type === 'CONSUMER_ACTIVATED_FOR_READER' ||
+        data.type === 'CONSUMER_UPDATED'
+      ) {
+        const payload = data.payload;
+        if (doesPayloadBelongToCurrentUser(payload)) {
+          const incomingConsumer = payload?.consumer;
+          if (incomingConsumer && isConsumerRecordIssued(incomingConsumer)) {
+            applyAutomaticIdConfirmation(
+              incomingConsumer,
+              payload?.notification,
+              Boolean(payload?.isUpdate),
+              true
+            );
+            return;
+          }
+        }
+        loadConsumerInfo(true);
+      } else if (data.type === 'CONSUMER_NOTIFICATION_CREATED') {
+        const notif = data.payload?.notification;
+        if (notif && doesPayloadBelongToCurrentUser(notif)) {
+          mockDb.mergeExternalNotifications([notif]);
+          loadConsumerInfo(true);
+        }
+      } else if (data.type === 'CONSUMER_REPORT_REPLY' || data.type === 'ADMIN_REPLIED_TO_REPORT') {
         const payload = data.payload;
         if (payload?.accountNumber && consumerRecordRef.current?.accountNumber === payload.accountNumber) {
           toast.info(
@@ -580,8 +851,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         data.type === 'REPORT_STATUS_CHANGED' ||
         data.type === 'CONSUMER_REPORT_CREATED' ||
         data.type === 'READING_APPROVED_BILL_ISSUED' ||
-        data.type === 'bill:issued' ||
-        data.type === 'CONSUMER_UPDATED'
+        data.type === 'bill:issued'
       ) {
         loadConsumerInfo(true);
       }
@@ -956,19 +1226,26 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         <div className="p-4 mx-4 mt-4 bg-slate-800/80 rounded-2xl border border-slate-700/60 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[10px] uppercase font-black tracking-wider text-slate-400">Connected Account</span>
-            <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              <span className="h-1 w-1 rounded-full bg-emerald-400 animate-ping"></span>
-              <span>{consumerRecord.status || 'Active'}</span>
-            </span>
+            {isAccountPending ? (
+              <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                <span>Pending Issuance</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <span className="h-1 w-1 rounded-full bg-emerald-400 animate-ping"></span>
+                <span>Confirmed • {consumerRecord.status === 'active' ? 'Active' : consumerRecord.status}</span>
+              </span>
+            )}
           </div>
           <div>
             <h4 className="text-xs font-black text-white truncate">{consumerRecord.name}</h4>
             <div className="flex items-center gap-1.5 mt-1 font-mono text-[10px]">
               <span className="text-blue-300 bg-blue-950/60 px-1.5 py-0.2 rounded border border-blue-800/50">
-                Acc #{consumerRecord.accountNumber}
+                {isAccountPending ? 'Acc #PENDING' : `Acc #${consumerRecord.accountNumber}`}
               </span>
               <span className="text-slate-300 bg-slate-700/60 px-1.5 py-0.2 rounded">
-                Tag #{consumerRecord.meterNumber || 'PENDING'}
+                Tag #{isAccountPending ? 'PENDING' : (consumerRecord.meterNumber || 'ISSUED')}
               </span>
             </div>
           </div>
@@ -1373,9 +1650,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             </div>
 
             <div className="hidden md:flex items-center space-x-2 px-3 py-1 bg-slate-100 rounded-xl border border-slate-200/80">
-              <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+              <span className={`h-2 w-2 rounded-full ${isAccountPending ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></span>
               <span className="text-[11px] font-mono font-bold text-slate-700">
-                {consumerRecord.accountNumber}
+                {isAccountPending ? 'Pending Issuance' : `#${consumerRecord.accountNumber}`}
               </span>
             </div>
 
@@ -1391,6 +1668,53 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
         {/* Scrollable Body Content */}
         <main className="flex-1 p-4 sm:p-8 space-y-6 max-w-7xl w-full mx-auto">
+
+        {/* IMMEDIATE REAL-TIME ACCOUNT & METER ID CONFIRMATION BANNER */}
+        {idConfirmedBanner && (
+          <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-700 text-white rounded-2xl p-5 shadow-lg border border-emerald-400/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-slide-down">
+            <div className="flex items-start space-x-3.5">
+              <div className="p-2.5 bg-white/20 rounded-xl text-white shrink-0 mt-0.5">
+                <UserCheck className="h-6 w-6" />
+              </div>
+              <div>
+                <h4 className="text-sm font-black uppercase tracking-wider flex flex-wrap items-center gap-2">
+                  <span>{idConfirmedBanner.isUpdate ? 'Account Number Updated & Confirmed!' : 'Official Account & Meter Confirmed!'}</span>
+                  <span className="text-[10px] font-mono font-black bg-white/20 px-2.5 py-0.5 rounded-full">
+                    Account #{idConfirmedBanner.accountNumber}
+                  </span>
+                  <span className="text-[10px] font-mono font-bold bg-black/20 px-2.5 py-0.5 rounded-full">
+                    Meter #{idConfirmedBanner.meterNumber}
+                  </span>
+                  <span className="text-[10px] font-mono font-bold bg-black/20 px-2.5 py-0.5 rounded-full">
+                    {idConfirmedBanner.rfidTag}
+                  </span>
+                </h4>
+                <p className="text-xs text-emerald-50 mt-1 leading-relaxed">
+                  Tagoloan Water District Administration has officially issued and confirmed your water service identifiers ({idConfirmedBanner.confirmedAt}). Your Consumer Portal dashboard, telemetry history, billing ledger, and official activation notification are now active.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+              <button
+                onClick={() => {
+                  setActiveTab('notifications');
+                  setNotifFilter('account_issue');
+                  setIdConfirmedBanner(null);
+                }}
+                className="px-3.5 py-2 bg-white text-emerald-800 hover:bg-emerald-50 rounded-xl text-xs font-black transition cursor-pointer shadow-xs"
+              >
+                View Notification
+              </button>
+              <button
+                onClick={() => setIdConfirmedBanner(null)}
+                className="text-white/80 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition cursor-pointer"
+                aria-label="Dismiss confirmation banner"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* IMMEDIATE REAL-TIME PAYMENT CONFIRMATION BANNER / TOAST */}
         {paymentConfirmationToast && (

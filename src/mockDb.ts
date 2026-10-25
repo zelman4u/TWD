@@ -1186,18 +1186,24 @@ function getStored<T>(key: string, initial: T): T {
       }
       // Ensure authentic example consumers exist and new accounts start without IDs
       let changed = hasMockConsumers;
-      cons.forEach(c => {
-        if (c.email && c.email.toLowerCase() === 'acero@gmail.com') {
-          if (c.accountNumber === 'BRG-01-3117' || c.meterNumber === '150309988' || c.rfidTag === 'MT-88373') {
-            c.accountNumber = '';
-            c.meterNumber = '';
-            c.rfidTag = '';
-            c.status = 'pending_approval';
-            c.outstandingBalance = 0;
-            changed = true;
+      const seedMigratedKey = 'twd_live_v4_acero_seed_migrated';
+      if (!localStorage.getItem(seedMigratedKey)) {
+        cons.forEach(c => {
+          if (c.email && c.email.toLowerCase() === 'acero@gmail.com') {
+            if (c.accountNumber === 'BRG-01-3117' || c.meterNumber === '150309988' || c.rfidTag === 'MT-88373') {
+              c.accountNumber = '';
+              c.meterNumber = '';
+              c.rfidTag = '';
+              c.status = 'pending_approval';
+              c.outstandingBalance = 0;
+              changed = true;
+            }
           }
-        }
-      });
+        });
+        try {
+          localStorage.setItem(seedMigratedKey, '1');
+        } catch {}
+      }
       INITIAL_CONSUMERS.forEach(ic => {
         const exists = cons.some(c => 
           (ic.accountNumber && c.accountNumber === ic.accountNumber) ||
@@ -1747,7 +1753,53 @@ export const mockDb = {
     list.push(newNotif);
     setStored(KEYS.NOTIFICATIONS, list);
     syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, newNotif.id, newNotif as unknown as Record<string, unknown>);
+    if (typeof window !== 'undefined' && typeof fetch === 'function') {
+      fetch('/api/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newNotif)
+      }).catch(() => {});
+    }
     return newNotif;
+  },
+
+  mergeExternalNotifications: (incoming: ConsumerNotification[]): boolean => {
+    if (!Array.isArray(incoming) || incoming.length === 0) return false;
+    const list = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
+    let changed = false;
+
+    incoming.forEach(inc => {
+      if (!inc || !inc.title) return;
+      const incAcc = (inc.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
+      const incEmail = (inc.consumerEmail || '').trim().toLowerCase();
+      const incTitle = (inc.title || '').trim().toLowerCase();
+      const incTime = inc.timestamp ? new Date(inc.timestamp).getTime() : Date.now();
+
+      const duplicate = list.find(existing => {
+        if (inc.id && existing.id === inc.id) return true;
+        const exTime = existing.timestamp ? new Date(existing.timestamp).getTime() : 0;
+        if (Math.abs(incTime - exTime) > 15000) return false;
+        const exAcc = (existing.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
+        const exEmail = (existing.consumerEmail || '').trim().toLowerCase();
+        const exTitle = (existing.title || '').trim().toLowerCase();
+        return existing.type === inc.type && exTitle === incTitle && ((incAcc && exAcc === incAcc) || (incEmail && exEmail === incEmail));
+      });
+
+      if (!duplicate) {
+        list.push({
+          ...inc,
+          id: inc.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          timestamp: inc.timestamp || new Date().toISOString(),
+          read: Boolean(inc.read)
+        });
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      setStored(KEYS.NOTIFICATIONS, list);
+    }
+    return changed;
   },
 
   markNotificationRead: (id: string): void => {
@@ -1755,6 +1807,9 @@ export const mockDb = {
     const updated = list.map(n => n.id === id ? { ...n, read: true } : n);
     setStored(KEYS.NOTIFICATIONS, updated);
     syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, id, { read: true });
+    if (typeof window !== 'undefined' && typeof fetch === 'function') {
+      fetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'PATCH' }).catch(() => {});
+    }
   },
 
   // Consumer Service Reports & Admin Reply Methods

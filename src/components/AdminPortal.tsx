@@ -1307,7 +1307,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         `Updated Account Number from #${previousAccountNumber} to #${newAccNum} for ${updated.name}. Preserved permanent Meter Tag "${preservedTag}" (Meter #${preservedMeterNum}).`
       );
 
-      mockDb.addNotification({
+      const updatedIdNotif = mockDb.addNotification({
         accountNumber: newAccNum,
         consumerId: updated.id,
         userId: updated.linkedUserId,
@@ -1333,11 +1333,25 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         }
       );
 
+      // Push instant WebSocket confirmation + notification to Consumer Portal
+      sendRealtimeMessage('CONSUMER_IDS_ISSUED', {
+        consumer: updated,
+        notification: updatedIdNotif,
+        accountNumber: newAccNum,
+        meterNumber: preservedMeterNum,
+        rfidTag: preservedTag,
+        email: updated.email,
+        linkedUserId: updated.linkedUserId,
+        previousAccountNumber,
+        isUpdate: true
+      });
+
       // 9. Dispatch instant UI sync events
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: 'twd_live_v4_consumers', timestamp: Date.now() } }));
         window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: 'twd_live_v4_users', timestamp: Date.now() } }));
         window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: 'twd_live_v4_readings', timestamp: Date.now() } }));
+        window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: 'twd_live_v4_notifications', timestamp: Date.now() } }));
       }
 
       // 10. Display rich in-modal message banner and toast notification
@@ -1531,7 +1545,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     setReadings(updatedReadings);
 
     // 5. Send Activation Notification strictly to this Consumer
-    mockDb.addNotification({
+    const issuedNotif = mockDb.addNotification({
       accountNumber: newAccNum,
       consumerId: updated.id,
       userId: updated.linkedUserId || selectedConsumerModal.linkedUserId,
@@ -1582,12 +1596,24 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     }
     syncDocToFirestore(COLLECTIONS.CONSUMERS, newAccNum, updated);
 
-    // 7. Sync issued consumer identifiers to backend API
+    // 7. Sync issued consumer identifiers to backend API & broadcast instant WebSocket confirmation
     fetch('/api/consumers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updated)
     }).catch(() => {});
+
+    sendRealtimeMessage('CONSUMER_IDS_ISSUED', {
+      consumer: updated,
+      notification: issuedNotif,
+      accountNumber: newAccNum,
+      meterNumber: newMeterNum,
+      rfidTag: updated.rfidTag,
+      email: updated.email || selectedConsumerModal.email,
+      linkedUserId: updated.linkedUserId || selectedConsumerModal.linkedUserId,
+      previousAccountNumber: previousAccountNumber || '',
+      isUpdate: false
+    });
 
     mockDb.addAuditLog(
       currentUser.id,
@@ -1601,6 +1627,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: 'twd_live_v4_consumers', timestamp: Date.now() } }));
       window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: 'twd_live_v4_users', timestamp: Date.now() } }));
+      window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: 'twd_live_v4_notifications', timestamp: Date.now() } }));
     }
 
     // 8. Show rich in-modal confirmation message card and floating toast
