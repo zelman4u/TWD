@@ -88,9 +88,15 @@ import { OfficialReportsGenerator, RecordsArchiveView, GracePeriodScannerCard, T
 import { TablePagination } from './common/TablePagination';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
-import { syncDocToFirestore, pushIssuedConsumerToFirestore, COLLECTIONS } from '../services/firebaseDb';
+import {
+  syncDocToFirestore,
+  pushIssuedConsumerToFirestore,
+  ensureRealtimeFirestoreListeners,
+  isRealIssuedAccountNumber,
+  COLLECTIONS
+} from '../services/firebaseDb';
 import { initRealtimeSocket, sendRealtimeMessage } from '../services/realtimeSocket';
-import { apiClient } from '../services/apiClient';
+import { apiClient, safeBackendFetch } from '../services/apiClient';
 import { calculateWaterTariff, calculateFranchiseTax, getActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
 import { 
   checkDuplicateAccountNumber, 
@@ -551,8 +557,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     }
 
     // 2. Fetch from Backend / Serverless API for any Mobile App Submissions
-    fetch('/api/readers')
-      .then(res => res.json())
+    safeBackendFetch('/api/readers')
+      .then(res => (res ? res.json() : null))
       .then(data => {
         if (data && (data.readers || data.staff)) {
           const apiReaders = data.readers || data.staff || [];
@@ -660,13 +666,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const localUsersToSync = mockDb.getUsers().filter(u => u.role !== 'admin');
     const localNotifsToSync = mockDb.getAllNotifications().filter(n => n.type === 'account_issue');
 
-    // Also push any locally issued accounts (BRG-* or user-linked) to Cloud Firestore so other devices sync immediately
+    // Also push any locally issued accounts (BRG-*, email-linked, or user-linked) to Cloud Firestore so other devices sync immediately
     localConsumersToSync.forEach(lc => {
       if (
-        lc.accountNumber &&
-        !lc.accountNumber.toUpperCase().startsWith('PENDING') &&
-        lc.status !== 'pending_approval' &&
-        (lc.accountNumber.toUpperCase().startsWith('BRG-') || lc.linkedUserId)
+        isRealIssuedAccountNumber(lc.accountNumber) &&
+        (lc.accountNumber.toUpperCase().startsWith('BRG-') || lc.linkedUserId || lc.email)
       ) {
         const matchedU = localUsersToSync.find(
           u =>
@@ -680,11 +684,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             ((n.accountNumber || '').toUpperCase() === lc.accountNumber.toUpperCase() ||
               (lc.email && n.consumerEmail && n.consumerEmail.toLowerCase() === lc.email.toLowerCase()))
         );
-        pushIssuedConsumerToFirestore(lc, matchedN, matchedU).catch(() => {});
+        pushIssuedConsumerToFirestore(lc, matchedN, matchedU, false).catch(() => {});
       }
     });
 
-    fetch('/api/consumers/reconcile', {
+    safeBackendFetch('/api/consumers/reconcile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-portal': 'admin', 'x-role': 'admin' },
       body: JSON.stringify({
@@ -693,7 +697,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         notifications: localNotifsToSync
       })
     })
-      .then(res => res.json())
+      .then(res => (res ? res.json() : null))
       .then(data => {
         if (data && (data.consumers || data.data)) {
           const apiConsumers: any[] = data.consumers || data.data || [];
@@ -797,8 +801,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       });
 
     // 4. Fetch Reports from Backend API
-    fetch('/api/reports')
-      .then(res => res.json())
+    safeBackendFetch('/api/reports')
+      .then(res => (res ? res.json() : null))
       .then(data => {
         if (data && data.reports && Array.isArray(data.reports)) {
           setReports(data.reports);
@@ -810,8 +814,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       });
 
     // 5. Fetch Mobile App Submitted Readings from Backend API (/api/readings)
-    fetch('/api/readings')
-      .then(res => res.json())
+    safeBackendFetch('/api/readings')
+      .then(res => (res ? res.json() : null))
       .then(data => {
         const apiReadings: any[] = data?.readings || data?.data || [];
         if (Array.isArray(apiReadings) && apiReadings.length > 0) {
@@ -878,6 +882,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   };
 
   useEffect(() => {
+    ensureRealtimeFirestoreListeners();
     loadAllDataFromStore();
 
     // 1. Instantaneous reactive sync when consumer or other components modify data in same window
@@ -1028,16 +1033,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     setModalEditBusinessName(c.businessName || '');
     setModalEditBusinessType(c.businessType || '');
     setModalEditHouseholdInfo(c.householdInfo || '');
-    setModalEditStatus(c.status || 'active');
+    setModalEditStatus(
+      !c.status || c.status === 'pending_approval' ? 'active' : c.status
+    );
 
     // Populate issue IDs fields (generate suggested account number, meter number, and tag if unissued)
-    const isAlreadyOfficiallyIssued = Boolean(
-      c.accountNumber &&
-      c.accountNumber.trim() !== '' &&
-      !c.accountNumber.toUpperCase().startsWith('PENDING') &&
-      c.accountNumber.toUpperCase() !== 'PENDING ADMIN ISSUANCE' &&
-      c.status !== 'pending_approval'
-    );
+    const isAlreadyOfficiallyIssued = isRealIssuedAccountNumber(c.accountNumber);
 
     if (isAlreadyOfficiallyIssued) {
       setModalIssueAccountNumber(c.accountNumber);
@@ -1097,7 +1098,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // Sync deletion with backend API
     const deleteId = c.accountNumber || c.email || c.linkedUserId || '';
     if (deleteId) {
-      fetch(`/api/consumers/${encodeURIComponent(deleteId)}`, {
+      safeBackendFetch(`/api/consumers/${encodeURIComponent(deleteId)}`, {
         method: 'DELETE'
       }).catch(() => {});
     }
@@ -1156,6 +1157,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       return;
     }
 
+    const hasIssuedAccount = isRealIssuedAccountNumber(selectedConsumerModal.accountNumber);
     const updated: Consumer = {
       ...selectedConsumerModal,
       name: modalEditName,
@@ -1166,7 +1168,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       businessName: modalEditConsumerType === 'Commercial' ? modalEditBusinessName : undefined,
       businessType: modalEditConsumerType === 'Commercial' ? modalEditBusinessType : undefined,
       householdInfo: modalEditConsumerType === 'Residential' ? modalEditHouseholdInfo : undefined,
-      status: modalEditStatus
+      status: hasIssuedAccount ? (modalEditStatus || 'active') : 'pending_approval'
     };
 
     const newConsumers = consumers.map(item => {
@@ -1180,8 +1182,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     setConsumers(newConsumers);
     setSelectedConsumerModal(updated);
 
+    if (hasIssuedAccount) {
+      pushIssuedConsumerToFirestore(updated, undefined, undefined, true).catch(() => {});
+    }
+
     // Sync update to backend server
-    fetch('/api/consumers', {
+    safeBackendFetch('/api/consumers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updated)
@@ -1207,10 +1213,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     // Check if account already has an issued active record
     const isAlreadyOfficiallyIssued = Boolean(
-      selectedConsumerModal.accountNumber &&
-      selectedConsumerModal.accountNumber.trim() !== '' &&
-      !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') &&
-      selectedConsumerModal.accountNumber.toUpperCase() !== 'PENDING ADMIN ISSUANCE' &&
+      isRealIssuedAccountNumber(selectedConsumerModal.accountNumber) &&
       selectedConsumerModal.status !== 'pending_approval'
     );
 
@@ -1266,6 +1269,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       mockDb.saveConsumers(newConsumers);
       setConsumers(newConsumers);
       setSelectedConsumerModal(updated);
+      setModalEditStatus('active');
 
       // 2. Cascade Account Number update across historical and active Meter Readings
       const allReadings = mockDb.getReadings();
@@ -1360,7 +1364,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       syncDocToFirestore(COLLECTIONS.CONSUMERS, newAccNum, updated);
 
       // 7. Backend API sync
-      fetch('/api/consumers', {
+      safeBackendFetch('/api/consumers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
@@ -1407,8 +1411,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         (previousEmail && u.email && u.email.trim().toLowerCase() === previousEmail) ||
         u.linkedAccountNumber === newAccNum
       );
-      pushIssuedConsumerToFirestore(updated, updatedIdNotif, matchedUpdatedUser).catch(() => {});
-      fetch('/api/consumers/reconcile', {
+      pushIssuedConsumerToFirestore(updated, updatedIdNotif, matchedUpdatedUser, true, previousAccountNumber).catch(() => {});
+      safeBackendFetch('/api/consumers/reconcile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-portal': 'admin', 'x-role': 'admin' },
         body: JSON.stringify({
@@ -1508,13 +1512,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       isRegistered: true
     };
 
-    // 1. Update consumers list (match by previousAccountNumber, previousEmail, previousUserId, or previousName)
+    // 1. Update consumers list (match by previousAccountNumber, previousEmail, previousUserId, or previousName when email/uid do not conflict)
     let matchedAny = false;
     const newConsumers = consumers.map(item => {
+      const sameNameNoConflict =
+        previousName &&
+        item.name &&
+        item.name.trim().toLowerCase() === previousName &&
+        (!previousEmail || !item.email || item.email.trim().toLowerCase() === previousEmail) &&
+        (!previousUserId || !item.linkedUserId || item.linkedUserId === previousUserId) &&
+        (item.barangay === selectedConsumerModal.barangay || !item.accountNumber || item.accountNumber.toUpperCase().startsWith('PENDING'));
       const isMatch = (previousAccountNumber && item.accountNumber === previousAccountNumber) ||
                       (previousEmail && item.email && item.email.trim().toLowerCase() === previousEmail) ||
                       (previousUserId && item.linkedUserId === previousUserId) ||
-                      (previousName && item.name && item.name.trim().toLowerCase() === previousName && (item.barangay === selectedConsumerModal.barangay || !item.accountNumber || item.accountNumber.toUpperCase().startsWith('PENDING')));
+                      sameNameNoConflict;
       if (isMatch) {
         matchedAny = true;
         return updated;
@@ -1526,13 +1537,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       newConsumers.unshift(updated);
     }
 
-    // Deduplicate any older pending twins
+    // Deduplicate any older pending twins for the SAME applicant
     const deduplicatedConsumers = newConsumers.filter((c, idx, arr) => {
       if ((!c.accountNumber || c.accountNumber.toUpperCase().startsWith('PENDING') || c.status === 'pending_approval') && 
           arr.some(o => o !== c && (
             (c.email && o.email && o.email.toLowerCase() === c.email.toLowerCase() && o.status === 'active') ||
             (c.linkedUserId && o.linkedUserId && o.linkedUserId === c.linkedUserId && o.status === 'active') ||
-            (c.name && o.name && o.name.toLowerCase() === c.name.toLowerCase() && o.status === 'active')
+            (c.name && o.name && o.name.toLowerCase() === c.name.toLowerCase() && (!c.email || !o.email || c.email.toLowerCase() === o.email.toLowerCase()) && (!c.linkedUserId || !o.linkedUserId || c.linkedUserId === o.linkedUserId) && o.status === 'active')
           ))) {
         return false;
       }
@@ -1542,14 +1553,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveConsumers(deduplicatedConsumers);
     setConsumers(deduplicatedConsumers);
     setSelectedConsumerModal(updated);
+    setModalEditStatus('active');
 
     // 2. Update linked User record in users database so consumer login connects to the issued account
     const allUsers = mockDb.getUsers();
     const updatedUsers = allUsers.map(u => {
+      const sameUserNameNoConflict =
+        previousName &&
+        u.name &&
+        u.name.trim().toLowerCase() === previousName &&
+        (!previousEmail || !u.email || u.email.trim().toLowerCase() === previousEmail) &&
+        (!previousUserId || !u.id || u.id === previousUserId);
       const isUserMatch = (previousUserId && u.id === previousUserId) ||
                           (previousEmail && u.email && u.email.trim().toLowerCase() === previousEmail) ||
                           (previousAccountNumber && u.linkedAccountNumber === previousAccountNumber) ||
-                          (previousName && u.name && u.name.trim().toLowerCase() === previousName);
+                          sameUserNameNoConflict;
       if (isUserMatch) {
         return {
           ...u,
@@ -1567,7 +1585,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       const isSessionUserMatch = (previousUserId && activeSessionUser.id === previousUserId) ||
                                  (previousEmail && activeSessionUser.email && activeSessionUser.email.trim().toLowerCase() === previousEmail) ||
                                  (previousAccountNumber && activeSessionUser.linkedAccountNumber === previousAccountNumber) ||
-                                 (previousName && activeSessionUser.name && activeSessionUser.name.trim().toLowerCase() === previousName);
+                                 (previousName && activeSessionUser.name && activeSessionUser.name.trim().toLowerCase() === previousName && (!previousEmail || !activeSessionUser.email || activeSessionUser.email.trim().toLowerCase() === previousEmail));
       if (isSessionUserMatch) {
         mockDb.setCurrentUser({
           ...activeSessionUser,
@@ -1662,15 +1680,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       (previousEmail && u.email && u.email.trim().toLowerCase() === previousEmail) ||
       u.linkedAccountNumber === newAccNum
     );
-    pushIssuedConsumerToFirestore(updated, issuedNotif, matchedIssuedUser).catch(() => {});
+    pushIssuedConsumerToFirestore(updated, issuedNotif, matchedIssuedUser, true, previousAccountNumber).catch(() => {});
 
-    fetch('/api/consumers', {
+    safeBackendFetch('/api/consumers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updated)
     }).catch(() => {});
 
-    fetch('/api/consumers/reconcile', {
+    safeBackendFetch('/api/consumers/reconcile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-portal': 'admin', 'x-role': 'admin' },
       body: JSON.stringify({

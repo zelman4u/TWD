@@ -15,6 +15,7 @@ import { User } from './types';
 import { LoadingProvider, useLoading } from './context/LoadingContext';
 import { ToastProvider, useToast } from './context/ToastContext';
 import { startGracePeriodScanner, stopGracePeriodScanner } from './services/gracePeriodScannerService';
+import { ensureRealtimeFirestoreListeners } from './services/firebaseDb';
 
 const pageMotionVariants = {
   initial: { opacity: 0, y: 10, scale: 0.996 },
@@ -52,6 +53,7 @@ function AppContent() {
     // Initial fetch of session and data
     const initializeApp = async () => {
       try {
+        ensureRealtimeFirestoreListeners();
         mockDb.reconcileIssuedAccounts();
         const activeUser = mockDb.getCurrentUser();
         if (activeUser) {

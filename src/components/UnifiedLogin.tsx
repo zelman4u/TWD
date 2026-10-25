@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { Mail, Lock, LogIn, AlertCircle, RefreshCw, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { User } from '../types';
 import { mockDb } from '../mockDb';
-import { directFindUserInFirestore, resolveConsumerAccountInFirestore } from '../services/firebaseDb';
+import { COLLECTIONS, directFindUserInFirestore, resolveConsumerAccountInFirestore, syncDocToFirestore } from '../services/firebaseDb';
 import { useLoading } from '../context/LoadingContext';
 import { useToast } from '../context/ToastContext';
 
@@ -159,9 +159,14 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
     }
 
     if (!matchedUser && firestoreResolved?.user) {
-      matchedUser = firestoreResolved.user;
+      matchedUser = {
+        ...firestoreResolved.user,
+        password: firestoreResolved.user.password || inputPassword
+      };
       users.push(matchedUser);
       mockDb.saveUsers(users);
+      syncDocToFirestore(COLLECTIONS.USERS, matchedUser.id, matchedUser, true);
+      syncDocToFirestore(COLLECTIONS.USERS, `email_${inputEmail.replace(/[^a-zA-Z0-9_-]/g, '_')}`, matchedUser, true);
     }
 
     if (!matchedUser && serverResolved?.user) {
@@ -171,6 +176,8 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
       } as User;
       users.push(matchedUser);
       mockDb.saveUsers(users);
+      syncDocToFirestore(COLLECTIONS.USERS, matchedUser.id, matchedUser, true);
+      syncDocToFirestore(COLLECTIONS.USERS, `email_${inputEmail.replace(/[^a-zA-Z0-9_-]/g, '_')}`, matchedUser, true);
     }
 
     // If still not found in local cache or server, query live Firestore user collection directly
@@ -191,13 +198,23 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
       return;
     }
 
-    // Upgrade matchedUser if Firestore has an active linkedAccountNumber
-    if (firestoreResolved?.user?.linkedAccountNumber && (!matchedUser.linkedAccountNumber || matchedUser.linkedAccountNumber.toUpperCase().startsWith('PENDING'))) {
+    // Upgrade matchedUser if Firestore or Server has an active linkedAccountNumber
+    const resolvedLinkedAcc =
+      firestoreResolved?.user?.linkedAccountNumber ||
+      (firestoreResolved?.isIssued ? firestoreResolved.consumer?.accountNumber : '') ||
+      serverResolved?.user?.linkedAccountNumber ||
+      (serverResolved?.isIssued ? serverResolved.consumer?.accountNumber : '');
+
+    if (
+      resolvedLinkedAcc &&
+      !resolvedLinkedAcc.toUpperCase().startsWith('PENDING') &&
+      (!matchedUser.linkedAccountNumber || matchedUser.linkedAccountNumber.toUpperCase().startsWith('PENDING'))
+    ) {
       matchedUser = {
         ...matchedUser,
-        linkedAccountNumber: firestoreResolved.user.linkedAccountNumber,
+        linkedAccountNumber: resolvedLinkedAcc.trim().toUpperCase(),
         status: 'active',
-        password: matchedUser.password || firestoreResolved.user.password
+        password: matchedUser.password || firestoreResolved?.user?.password || serverResolved?.user?.password
       };
     }
 

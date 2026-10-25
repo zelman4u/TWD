@@ -36,36 +36,22 @@ try {
 
 export const db = firestoreInstance;
 
-export const QUOTA_STORAGE_KEY = 'twd_firestore_quota_v2';
+export const QUOTA_STORAGE_KEY = 'twd_firestore_quota_v3';
 
-// Purge legacy sticky quota lock so cross-device real-time sync is active
+// Purge all legacy sticky quota locks so cross-device real-time sync is always active on boot
 try {
   if (typeof window !== 'undefined') {
-    localStorage.removeItem('twd_firestore_quota_exceeded');
-    sessionStorage.removeItem('twd_firestore_quota_exceeded');
-
-    const rawQuota = localStorage.getItem(QUOTA_STORAGE_KEY) || sessionStorage.getItem(QUOTA_STORAGE_KEY);
-    let activeQuotaBlock = false;
-    if (rawQuota) {
-      try {
-        const parsed = JSON.parse(rawQuota);
-        if (parsed?.timestamp && Date.now() - parsed.timestamp < 4 * 60 * 60 * 1000) {
-          activeQuotaBlock = true;
-        } else {
-          localStorage.removeItem(QUOTA_STORAGE_KEY);
-          sessionStorage.removeItem(QUOTA_STORAGE_KEY);
-        }
-      } catch {
-        localStorage.removeItem(QUOTA_STORAGE_KEY);
-        sessionStorage.removeItem(QUOTA_STORAGE_KEY);
-      }
-    }
-
-    if (activeQuotaBlock) {
-      disableNetwork(db).catch(() => {});
-    } else {
-      enableNetwork(db).catch(() => {});
-    }
+    const legacyQuotaKeys = [
+      'twd_firestore_quota_exceeded',
+      'twd_firestore_quota_exceeded_v1',
+      'twd_firestore_quota_v2',
+      QUOTA_STORAGE_KEY,
+    ];
+    legacyQuotaKeys.forEach((k) => {
+      localStorage.removeItem(k);
+      sessionStorage.removeItem(k);
+    });
+    enableNetwork(db).catch(() => {});
   }
 } catch {}
 

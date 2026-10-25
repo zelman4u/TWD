@@ -189,10 +189,12 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
       
       // 3. Consumer registers WITHOUT official account or meter identifiers (issued exclusively by Admin)
       const officialName = fullName.trim();
+      const normalizedEmail = email.trim().toLowerCase();
+      const emailDocKey = `email_${normalizedEmail.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
       const newUserId = `user-${Date.now()}`;
       const newUser: User = {
         id: newUserId,
-        email: email.trim(),
+        email: normalizedEmail,
         name: officialName,
         role: 'consumer',
         status: 'pending_approval',
@@ -207,7 +209,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         barangay: matchedBarangay.name,
         sitioZone: sitioZone.trim(),
         contactNumber: cleanPhone,
-        email: email.trim(),
+        email: normalizedEmail,
         meterNumber: '',
         rfidTag: '',
         status: 'pending_approval',
@@ -222,10 +224,11 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
       mockDb.saveUsers([newUser, ...users]);
       mockDb.saveConsumers([newConsumer, ...consumers]);
 
-      // Direct instant write to Firestore collections
-      syncDocToFirestore(COLLECTIONS.USERS, newUserId, newUser);
-      syncDocToFirestore(COLLECTIONS.USERS, `email_${email.trim().toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}`, newUser);
-      syncDocToFirestore(COLLECTIONS.CONSUMERS, newUserId, newConsumer);
+      // Direct guaranteed write to Cloud Firestore collections (bypassing batch cache)
+      syncDocToFirestore(COLLECTIONS.USERS, newUserId, newUser, true);
+      syncDocToFirestore(COLLECTIONS.USERS, emailDocKey, newUser, true);
+      syncDocToFirestore(COLLECTIONS.CONSUMERS, newUserId, newConsumer, true);
+      syncDocToFirestore(COLLECTIONS.CONSUMERS, emailDocKey, newConsumer, true);
 
       // Submit to backend server to ensure instant visibility across all admin devices
       fetch('/api/consumers/register', {
@@ -234,7 +237,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         body: JSON.stringify({
           name: officialName,
           fullName: officialName,
-          email: email.trim(),
+          email: normalizedEmail,
           contactNumber: cleanPhone,
           address: fullAddress,
           barangay: matchedBarangay.name,

@@ -65,6 +65,69 @@ function recordLog(entry: ApiLogEntry) {
   }
 }
 
+// Track API endpoints that returned 404 on static-only deployments to prevent console polling spam
+const unavailableApiRoutes = new Map<string, number>();
+let backendStaticOnlyUntil = 0;
+
+const CORE_BACKEND_ROUTES = new Set([
+  '/api/readings',
+  '/api/reports',
+  '/api/readers',
+  '/api/notifications',
+  '/api/consumers',
+  '/api/consumers/reconcile',
+  '/api/consumers/resolve-account',
+  '/api/health',
+]);
+
+function normalizeApiRouteKey(url: string): string {
+  return url.split('?')[0].replace(/\/+$/, '') || url;
+}
+
+function isRouteTemporarilyUnavailable(url: string): boolean {
+  const now = Date.now();
+  if (backendStaticOnlyUntil > now && url.startsWith('/api')) {
+    return true;
+  }
+  const routeKey = normalizeApiRouteKey(url);
+  const cooldownUntil = unavailableApiRoutes.get(routeKey);
+  return Boolean(cooldownUntil && cooldownUntil > now);
+}
+
+function markRoute404(url: string, contentType: string) {
+  const routeKey = normalizeApiRouteKey(url);
+  const cooldownMs = 15 * 60 * 1000; // 15 minutes
+  unavailableApiRoutes.set(routeKey, Date.now() + cooldownMs);
+  if (CORE_BACKEND_ROUTES.has(routeKey) || !contentType.includes('application/json')) {
+    backendStaticOnlyUntil = Date.now() + cooldownMs;
+  }
+}
+
+/**
+ * Safe wrapper around fetch('/api/...') that respects static-host 404 circuit breaking
+ * so background sync falls back silently to Cloud Firestore without spamming 404 errors.
+ */
+export async function safeBackendFetch(url: string, options?: RequestInit): Promise<Response | null> {
+  if (typeof window === 'undefined' || typeof fetch !== 'function') return null;
+  if (isRouteTemporarilyUnavailable(url)) {
+    return null;
+  }
+  try {
+    const res = await fetch(url, options);
+    if (res.status === 404) {
+      markRoute404(url, res.headers.get('content-type') || '');
+      return null;
+    }
+    if (res.ok && url.startsWith('/api')) {
+      unavailableApiRoutes.delete(normalizeApiRouteKey(url));
+      backendStaticOnlyUntil = 0;
+    }
+    return res;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Executes an HTTP fetch request with timeout, retries, and exponential backoff
  */
@@ -77,7 +140,16 @@ async function requestWithRetry<T = any>(url: string, options: RequestOptions = 
     ...fetchOptions
   } = options;
 
-  const method = fetchOptions.method || 'GET';
+  const method = (fetchOptions.method || 'GET').toUpperCase();
+  const routeKey = normalizeApiRouteKey(url);
+
+  if (isRouteTemporarilyUnavailable(url)) {
+    const cachedErr: any = new Error('Endpoint temporarily unavailable on static host');
+    cachedErr.status = 404;
+    cachedErr.noRetry = true;
+    throw cachedErr;
+  }
+
   const startTime = Date.now();
   let attempt = 0;
   let lastError: any = null;
@@ -120,6 +192,10 @@ async function requestWithRetry<T = any>(url: string, options: RequestOptions = 
 
       // Success
       if (response.ok) {
+        unavailableApiRoutes.delete(routeKey);
+        if (url.startsWith('/api')) {
+          backendStaticOnlyUntil = 0;
+        }
         if (!skipLogging) {
           recordLog({
             id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -136,6 +212,10 @@ async function requestWithRetry<T = any>(url: string, options: RequestOptions = 
         return data as T;
       }
 
+      if (response.status === 404) {
+        markRoute404(url, contentType);
+      }
+
       // HTTP Error status
       const isRetryable = response.status >= 500 && response.status < 600;
       lastError = new Error(`HTTP ${response.status}: ${data?.message || response.statusText || 'Server error'}`);
@@ -144,7 +224,7 @@ async function requestWithRetry<T = any>(url: string, options: RequestOptions = 
 
       if (!isRetryable || attempt >= retries) {
         (lastError as any).noRetry = true;
-        if (!skipLogging) {
+        if (!skipLogging && response.status !== 404) {
           recordLog({
             id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             timestamp: new Date().toISOString(),

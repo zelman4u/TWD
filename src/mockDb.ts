@@ -20,8 +20,11 @@ import {
   isAccountTerminated,
   addTerminatedAccountKeys,
   removeTerminatedAccountKeys,
+  isRealIssuedAccountNumber,
+  normalizeConsumerRecord,
   COLLECTIONS 
 } from './services/firebaseDb';
+import { safeBackendFetch } from './services/apiClient';
 
 
 // Purge all legacy storage keys containing old mock data
@@ -168,40 +171,9 @@ const INITIAL_USERS: User[] = [
     status: 'active',
     password: 'AdminWater2025!',
   },
-  {
-    id: 'user-acero',
-    email: 'acero@gmail.com',
-    name: 'Bruce Acero',
-    role: 'consumer',
-    status: 'pending_approval',
-    password: 'Password123!',
-    registrationDate: '2026-08-25',
-  }
 ];
 
 const INITIAL_CONSUMERS: Consumer[] = [
-  {
-    accountNumber: '',
-    name: 'Bruce Acero',
-    address: 'PUROK 3, POBLACION',
-    barangay: 'Poblacion',
-    barangayId: 'BRG-01',
-    sitioZone: 'Purok 3',
-    contactNumber: '+63 917 888 2345',
-    email: 'acero@gmail.com',
-    meterNumber: '',
-    status: 'pending_approval',
-    isRegistered: true,
-    registrationDate: '2026-08-25',
-    createdAt: 1724630400000,
-    consumerType: 'Residential',
-    meterSize: '1/2"',
-    householdInfo: '4 members',
-    outstandingBalance: 0,
-    rfidTag: '',
-    sequenceNo: 138,
-    linkedUserId: 'user-acero',
-  },
   {
     accountNumber: '011-102-056',
     name: 'FIGUEROA, GINA O.',
@@ -1185,26 +1157,42 @@ function getStored<T>(key: string, initial: T): T {
       if (hasMockConsumers) {
         cons = cons.filter(c => c.accountNumber !== '1001-A' && c.accountNumber !== '1002-B' && c.accountNumber !== '1003-C');
       }
-      // Ensure authentic example consumers exist and new accounts start without IDs
+      // Ensure authentic baseline utility consumers exist without reverting issued accounts back to pending
       let changed = hasMockConsumers;
-      const seedMigratedKey = 'twd_live_v4_acero_seed_migrated';
-      if (!localStorage.getItem(seedMigratedKey)) {
-        cons.forEach(c => {
-          if (c.email && c.email.toLowerCase() === 'acero@gmail.com') {
-            if (c.accountNumber === 'BRG-01-3117' || c.meterNumber === '150309988' || c.rfidTag === 'MT-88373') {
-              c.accountNumber = '';
-              c.meterNumber = '';
-              c.rfidTag = '';
-              c.status = 'pending_approval';
-              c.outstandingBalance = 0;
-              changed = true;
-            }
+      let storedUsersList: User[] = [];
+      try {
+        const rawUsers = localStorage.getItem(KEYS.USERS);
+        if (rawUsers) storedUsersList = JSON.parse(rawUsers) as User[];
+      } catch {}
+
+      cons = cons.map(c => {
+        if (isRealIssuedAccountNumber(c.accountNumber)) {
+          const norm = normalizeConsumerRecord(c);
+          if (norm.status !== c.status || norm.accountNumber !== c.accountNumber || norm.meterNumber !== c.meterNumber) {
+            changed = true;
           }
-        });
-        try {
-          localStorage.setItem(seedMigratedKey, '1');
-        } catch {}
-      }
+          return norm;
+        }
+        // Upgrade unissued consumer if matching user in localStorage already has an issued linkedAccountNumber
+        const cEmail = (c.email || '').trim().toLowerCase();
+        const cUid = (c.linkedUserId || '').trim();
+        const matchedU = storedUsersList.find(
+          u =>
+            u.role !== 'admin' &&
+            isRealIssuedAccountNumber(u.linkedAccountNumber) &&
+            ((cEmail && u.email && u.email.trim().toLowerCase() === cEmail) || (cUid && u.id === cUid))
+        );
+        if (matchedU && matchedU.linkedAccountNumber) {
+          changed = true;
+          return normalizeConsumerRecord({
+            ...c,
+            accountNumber: matchedU.linkedAccountNumber,
+            status: 'active',
+          });
+        }
+        return c;
+      });
+
       INITIAL_CONSUMERS.forEach(ic => {
         const exists = cons.some(c => 
           (ic.accountNumber && c.accountNumber === ic.accountNumber) ||
@@ -1212,7 +1200,7 @@ function getStored<T>(key: string, initial: T): T {
           (ic.linkedUserId && c.linkedUserId && c.linkedUserId === ic.linkedUserId)
         );
         if (!exists) {
-          cons.unshift(ic);
+          cons.push(ic);
           changed = true;
         }
       });
@@ -1225,10 +1213,7 @@ function getStored<T>(key: string, initial: T): T {
         if (d.length === 10 && d.startsWith('9')) d = '0' + d;
         return d;
       };
-      const isIssuedRec = (c: Consumer) => {
-        const acc = (c.accountNumber || '').trim().toUpperCase();
-        return Boolean(acc && !acc.startsWith('PENDING') && acc !== 'UNASSIGNED' && acc !== 'UNISSUED' && c.status !== 'pending_approval');
-      };
+      const isIssuedRec = (c: Consumer) => isRealIssuedAccountNumber(c.accountNumber);
       const beforeLen = cons.length;
       cons = cons.filter((c, _idx, arr) => {
         if (isIssuedRec(c)) return true;
@@ -1396,11 +1381,23 @@ export const mockDb = {
 
   // State Updates
   setCurrentUser: (user: User | null): void => {
-    if (user) {
-      localStorage.setItem(KEYS.CURRENT_USER, JSON.stringify(user));
-    } else {
-      localStorage.removeItem(KEYS.CURRENT_USER);
-    }
+    try {
+      const prevRaw = localStorage.getItem(KEYS.CURRENT_USER);
+      if (user) {
+        const nextJson = JSON.stringify(user);
+        if (prevRaw === nextJson) return;
+        localStorage.setItem(KEYS.CURRENT_USER, nextJson);
+      } else {
+        if (prevRaw === null) return;
+        localStorage.removeItem(KEYS.CURRENT_USER);
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: KEYS.CURRENT_USER, timestamp: Date.now() } }));
+        try {
+          localStorage.setItem('twd_sync_ping', `${Date.now()}_${KEYS.CURRENT_USER}`);
+        } catch {}
+      }
+    } catch {}
   },
 
   saveUsers: (users: User[]): void => {
@@ -1408,14 +1405,15 @@ export const mockDb = {
     syncBatchToFirestore(COLLECTIONS.USERS, users, 'id');
   },
   saveConsumers: (consumers: Consumer[]): void => {
-    // Deduplicate consumers: if an active record with issued accountNumber exists, drop stale pending placeholders for same user/email/name
-    const deduplicated = consumers.filter((c, idx, arr) => {
-      const isPending = !c.accountNumber || c.accountNumber.toUpperCase().startsWith('PENDING') || c.status === 'pending_approval';
+    const normalizedList = consumers.map(c => normalizeConsumerRecord(c));
+    // Deduplicate consumers: if an issued record exists, drop stale pending placeholders for same user/email/phone/name
+    const deduplicated = normalizedList.filter((c, _idx, arr) => {
+      const isPending = !isRealIssuedAccountNumber(c.accountNumber) || c.status === 'pending_approval';
       if (isPending) {
-        const hasActiveTwin = arr.some(o => o !== c && (
-          (c.linkedUserId && o.linkedUserId && o.linkedUserId === c.linkedUserId && o.status === 'active') ||
-          (c.email && o.email && o.email.toLowerCase() === c.email.toLowerCase() && o.status === 'active') ||
-          (c.name && o.name && o.name.toLowerCase() === c.name.toLowerCase() && c.barangay === o.barangay && o.status === 'active')
+        const hasActiveTwin = arr.some(o => o !== c && isRealIssuedAccountNumber(o.accountNumber) && (
+          (c.linkedUserId && o.linkedUserId && o.linkedUserId === c.linkedUserId) ||
+          (c.email && o.email && o.email.toLowerCase() === c.email.toLowerCase()) ||
+          (c.name && o.name && o.name.toLowerCase() === c.name.toLowerCase() && (!c.email || !o.email || c.email.toLowerCase() === o.email.toLowerCase()) && (!c.barangay || !o.barangay || c.barangay.toLowerCase() === o.barangay.toLowerCase()))
         ));
         if (hasActiveTwin) return false;
       }
@@ -1787,13 +1785,11 @@ export const mockDb = {
     list.push(newNotif);
     setStored(KEYS.NOTIFICATIONS, list);
     syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, newNotif.id, newNotif as unknown as Record<string, unknown>);
-    if (typeof window !== 'undefined' && typeof fetch === 'function') {
-      fetch('/api/notifications', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newNotif)
-      }).catch(() => {});
-    }
+    safeBackendFetch('/api/notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newNotif)
+    }).catch(() => {});
     return newNotif;
   },
 
@@ -1845,9 +1841,7 @@ export const mockDb = {
     const updated = list.map(n => n.id === id ? { ...n, read: true } : n);
     setStored(KEYS.NOTIFICATIONS, updated);
     syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, id, { read: true });
-    if (typeof window !== 'undefined' && typeof fetch === 'function') {
-      fetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'PATCH' }).catch(() => {});
-    }
+    safeBackendFetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'PATCH' }).catch(() => {});
   },
 
   // Consumer Service Reports & Admin Reply Methods
@@ -2100,9 +2094,18 @@ export const mockDb = {
       let notifsChanged = false;
 
       consumers.forEach(c => {
-        if (!isRealAcc(c.accountNumber) || c.status === 'pending_approval') return;
+        if (!isRealAcc(c.accountNumber)) return;
 
-        const acc = c.accountNumber.trim().toUpperCase();
+        if (c.status === 'pending_approval' || (c.status as string) === 'pending') {
+          c.status = 'active';
+          consumersChanged = true;
+        }
+
+        const acc = c.accountNumber.replace(/^#/, '').trim().toUpperCase();
+        if (c.accountNumber !== acc) {
+          c.accountNumber = acc;
+          consumersChanged = true;
+        }
         if (!c.meterNumber || c.meterNumber.toUpperCase().startsWith('PENDING')) {
           c.meterNumber = `MT-${acc}`;
           consumersChanged = true;
@@ -2226,13 +2229,11 @@ export const mockDb = {
             notifications.unshift(issuedConfirmationNotif);
             notifsChanged = true;
 
-            if (typeof window !== 'undefined' && typeof fetch === 'function') {
-              fetch('/api/notifications', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(issuedConfirmationNotif)
-              }).catch(() => {});
-            }
+            safeBackendFetch('/api/notifications', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(issuedConfirmationNotif)
+            }).catch(() => {});
           }
 
           // Push issued consumer, linked user activation, and confirmation notification to Cloud Firestore (deduplicated)
@@ -2240,7 +2241,24 @@ export const mockDb = {
         }
       });
 
-      if (consumersChanged) setStored(KEYS.CONSUMERS, consumers);
+      // Remove any remaining unissued pending twins for consumers who already have an issued record
+      const cleanedConsumers = consumers.filter((item, _idx, arr) => {
+        if (isRealAcc(item.accountNumber)) return true;
+        const iEmail = (item.email || '').trim().toLowerCase();
+        const iUid = (item.linkedUserId || '').trim();
+        const iName = (item.name || '').trim().toLowerCase();
+        const hasIssued = arr.some(o => o !== item && isRealAcc(o.accountNumber) && (
+          (iEmail && o.email && o.email.trim().toLowerCase() === iEmail) ||
+          (iUid && o.linkedUserId === iUid) ||
+          (iName && o.name && o.name.trim().toLowerCase() === iName && (!iEmail || !o.email || o.email.trim().toLowerCase() === iEmail))
+        ));
+        return !hasIssued;
+      });
+      if (cleanedConsumers.length !== consumers.length) {
+        consumersChanged = true;
+      }
+
+      if (consumersChanged) setStored(KEYS.CONSUMERS, cleanedConsumers);
       if (usersChanged) setStored(KEYS.USERS, users);
       if (notifsChanged) setStored(KEYS.NOTIFICATIONS, notifications);
     } catch (err) {

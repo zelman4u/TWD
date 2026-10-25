@@ -139,9 +139,38 @@ export function isRealIssuedAccountNumber(acc?: string | null): boolean {
   return true;
 }
 
+export function normalizeConsumerRecord(c: Consumer): Consumer {
+  if (!c) return c;
+  if (isRealIssuedAccountNumber(c.accountNumber)) {
+    const accNum = String(c.accountNumber).replace(/^#/, '').trim().toUpperCase();
+    const meterNum =
+      c.meterNumber && !String(c.meterNumber).toUpperCase().startsWith('PENDING')
+        ? String(c.meterNumber).trim()
+        : `MT-${accNum}`;
+    const rfidTag =
+      c.rfidTag && !String(c.rfidTag).toUpperCase().startsWith('PENDING')
+        ? String(c.rfidTag).trim()
+        : `RFID-${meterNum}`;
+    const rawStatus = String(c.status || '');
+    const normalizedStatus: Consumer['status'] =
+      !rawStatus || rawStatus === 'pending_approval' || rawStatus === 'pending'
+        ? 'active'
+        : c.status;
+    return {
+      ...c,
+      accountNumber: accNum,
+      meterNumber: meterNum,
+      rfidTag,
+      status: normalizedStatus,
+      isRegistered: c.isRegistered ?? true,
+    };
+  }
+  return c;
+}
+
 export function isIssuedActiveConsumer(c?: Partial<Consumer> | null): boolean {
   if (!c) return false;
-  return isRealIssuedAccountNumber(c.accountNumber) && c.status !== 'pending_approval';
+  return isRealIssuedAccountNumber(c.accountNumber);
 }
 
 function normalizePhone11(phone?: string | null): string {
@@ -160,8 +189,36 @@ function sanitizeDocId(rawId: string): string {
   return rawId.trim().replace(/\//g, '_').slice(0, 120);
 }
 
-function sanitizeForFirestore<T>(input: T): T {
+const STRING_SCHEMA_KEYS: Record<string, number> = {
+  id: 128,
+  email: 256,
+  name: 200,
+  role: 64,
+  status: 64,
+  linkedAccountNumber: 64,
+  password: 256,
+  accountNumber: 64,
+  address: 500,
+  barangay: 128,
+  barangayId: 64,
+  sitioZone: 200,
+  contactNumber: 64,
+  meterNumber: 64,
+  rfidTag: 64,
+  linkedUserId: 128,
+  consumerType: 64,
+  userId: 128,
+  consumerEmail: 256,
+  title: 300,
+  message: 2900,
+  type: 64,
+};
+
+function sanitizeForFirestore<T>(input: T, keyName?: string): T {
   if (input === null || input === undefined) return input;
+  if (keyName && STRING_SCHEMA_KEYS[keyName] !== undefined) {
+    return String(input).slice(0, STRING_SCHEMA_KEYS[keyName]) as unknown as T;
+  }
   if (typeof input === 'string') {
     return (input.length > 2900 ? input.slice(0, 2900) : input) as unknown as T;
   }
@@ -176,7 +233,7 @@ function sanitizeForFirestore<T>(input: T): T {
     const entries = Object.entries(input as Record<string, unknown>).slice(0, 58);
     for (const [k, v] of entries) {
       if (v !== undefined) {
-        out[k] = sanitizeForFirestore(v);
+        out[k] = sanitizeForFirestore(v, k);
       }
     }
     return out as T;
@@ -184,21 +241,23 @@ function sanitizeForFirestore<T>(input: T): T {
   return input;
 }
 
-// Payload hash deduplication cache so identical records are never re-written redundantly
+// Payload hash deduplication cache: ONLY marked AFTER Firestore write/read succeeds
 const syncedPayloadCache = new Map<string, string>();
 
-function shouldWritePayload(collectionName: string, docId: string, payload: unknown): boolean {
+function isPayloadAlreadySynced(collectionName: string, docId: string, payload: unknown): boolean {
   try {
     const cacheKey = `${collectionName}/${docId}`;
-    const serialized = JSON.stringify(payload);
-    if (syncedPayloadCache.get(cacheKey) === serialized) {
-      return false;
-    }
-    syncedPayloadCache.set(cacheKey, serialized);
-    return true;
+    return syncedPayloadCache.get(cacheKey) === JSON.stringify(payload);
   } catch {
-    return true;
+    return false;
   }
+}
+
+function markPayloadSynced(collectionName: string, docId: string, payload: unknown): void {
+  try {
+    const cacheKey = `${collectionName}/${docId}`;
+    syncedPayloadCache.set(cacheKey, JSON.stringify(payload));
+  } catch {}
 }
 
 export function getTerminatedAccountKeys(): Set<string> {
@@ -267,32 +326,22 @@ function triggerLocalUpdateEvent(key: string) {
 // FIRESTORE QUOTA CIRCUIT BREAKER (DEFAULT ENABLED FOR LIVE CROSS-DEVICE SYNC)
 // ============================================================================
 let memoryQuotaExceeded = false;
+let quotaCooldownUntil = 0;
+
 try {
   if (typeof window !== 'undefined') {
-    localStorage.removeItem('twd_firestore_quota_exceeded');
-    sessionStorage.removeItem('twd_firestore_quota_exceeded');
-    const raw = localStorage.getItem(QUOTA_STORAGE_KEY) || sessionStorage.getItem(QUOTA_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed?.timestamp && Date.now() - parsed.timestamp < 4 * 60 * 60 * 1000) {
-        memoryQuotaExceeded = true;
-      } else {
-        localStorage.removeItem(QUOTA_STORAGE_KEY);
-        sessionStorage.removeItem(QUOTA_STORAGE_KEY);
-      }
-    }
+    [
+      'twd_firestore_quota_exceeded',
+      'twd_firestore_quota_exceeded_v1',
+      'twd_firestore_quota_v2',
+      QUOTA_STORAGE_KEY,
+    ].forEach((k) => {
+      localStorage.removeItem(k);
+      sessionStorage.removeItem(k);
+    });
+    enableNetwork(db).catch(() => {});
   }
 } catch {}
-
-if (memoryQuotaExceeded) {
-  try {
-    disableNetwork(db).catch(() => {});
-  } catch {}
-} else {
-  try {
-    enableNetwork(db).catch(() => {});
-  } catch {}
-}
 
 export function isQuotaError(err: any): boolean {
   if (!err) return false;
@@ -309,48 +358,24 @@ export function isQuotaError(err: any): boolean {
 }
 
 export function isFirestoreQuotaExceeded(): boolean {
-  if (typeof window === 'undefined') return false;
   if (!memoryQuotaExceeded) return false;
-  try {
-    const raw = localStorage.getItem(QUOTA_STORAGE_KEY) || sessionStorage.getItem(QUOTA_STORAGE_KEY);
-    if (!raw) {
-      memoryQuotaExceeded = false;
-      return false;
-    }
-    const parsed = JSON.parse(raw);
-    if (!parsed?.timestamp || Date.now() - parsed.timestamp > 4 * 60 * 60 * 1000) {
-      localStorage.removeItem(QUOTA_STORAGE_KEY);
-      sessionStorage.removeItem(QUOTA_STORAGE_KEY);
-      memoryQuotaExceeded = false;
+  if (Date.now() >= quotaCooldownUntil) {
+    memoryQuotaExceeded = false;
+    quotaCooldownUntil = 0;
+    try {
       enableNetwork(db).catch(() => {});
-      return false;
-    }
-    return true;
-  } catch {
-    return memoryQuotaExceeded;
+    } catch {}
+    return false;
   }
+  return true;
 }
 
-export function markFirestoreQuotaExceeded(err?: any) {
+export function markFirestoreQuotaExceeded(_err?: any) {
   if (!memoryQuotaExceeded) {
-    console.warn('[Firestore] Daily quota reached. Falling back to API + local storage.');
+    console.warn('[Firestore] Temporary rate limit reached; pausing background batch sync for 45s.');
   }
   memoryQuotaExceeded = true;
-  stopRealtimeFirestoreListeners();
-  try {
-    disableNetwork(db).catch(() => {});
-  } catch {}
-  try {
-    if (typeof window !== 'undefined') {
-      const payload = JSON.stringify({
-        exceeded: true,
-        timestamp: Date.now(),
-        reason: err?.message || 'Quota limit exceeded',
-      });
-      localStorage.setItem(QUOTA_STORAGE_KEY, payload);
-      sessionStorage.setItem(QUOTA_STORAGE_KEY, payload);
-    }
-  } catch {}
+  quotaCooldownUntil = Date.now() + 45 * 1000;
 }
 
 /**
@@ -449,6 +474,11 @@ function mergeConsumerPair(existing: Consumer, incoming: Consumer): Consumer {
 // Active Firestore Realtime Unsubscribe handles
 let realtimeUnsubscribes: Unsubscribe[] = [];
 
+export function ensureRealtimeFirestoreListeners() {
+  if (realtimeUnsubscribes.length > 0) return;
+  startRealtimeFirestoreListeners();
+}
+
 /**
  * Starts live real-time two-way Firestore synchronization across all devices
  */
@@ -468,6 +498,10 @@ export function startRealtimeFirestoreListeners() {
           snapshot.forEach((d) => {
             const u = d.data() as User;
             if (!u.id) u.id = d.id;
+            if (isRealIssuedAccountNumber(u.linkedAccountNumber) && u.status === 'pending_approval') {
+              u.status = 'active';
+            }
+            markPayloadSynced(COLLECTIONS.USERS, d.id, sanitizeForFirestore(u));
             if (!isAccountTerminated(u)) {
               cloudUsers.push(u);
             }
@@ -475,7 +509,20 @@ export function startRealtimeFirestoreListeners() {
 
           const localRaw = localStorage.getItem(KEYS.USERS);
           const localUsers: User[] = localRaw ? JSON.parse(localRaw) : [];
-          const activeLocalUsers = localUsers.filter((u) => !isAccountTerminated(u));
+          // Only retain local users that aren't stale pending ghosts superseded by cloudUsers
+          const activeLocalUsers = localUsers.filter((u) => {
+            if (isAccountTerminated(u)) return false;
+            if (u.role === 'admin') return true;
+            if (!isRealIssuedAccountNumber(u.linkedAccountNumber) && u.status === 'pending_approval') {
+              const existsInCloud = cloudUsers.some(
+                (cu) =>
+                  (u.email && cu.email && u.email.toLowerCase() === cu.email.toLowerCase()) ||
+                  (u.id && cu.id === u.id)
+              );
+              return existsInCloud;
+            }
+            return true;
+          });
           const mergedMap = new Map<string, User>();
 
           const adminUser: User = {
@@ -553,20 +600,92 @@ export function startRealtimeFirestoreListeners() {
         if (!snapshot.empty) {
           const cloudConsumers: Consumer[] = [];
           snapshot.forEach((d) => {
-            const cData = d.data() as Consumer;
+            const rawData = d.data() as Consumer;
+            const cData = normalizeConsumerRecord(rawData);
+            markPayloadSynced(COLLECTIONS.CONSUMERS, d.id, sanitizeForFirestore(cData));
             if (!isAccountTerminated(cData)) {
               cloudConsumers.push(cData);
             }
           });
 
+          const localUsersRaw = localStorage.getItem(KEYS.USERS);
+          const localUsersAll: User[] = localUsersRaw ? JSON.parse(localUsersRaw) : [];
+
           const localRaw = localStorage.getItem(KEYS.CONSUMERS);
           const localConsumers: Consumer[] = localRaw ? JSON.parse(localRaw) : [];
-          const activeLocal = localConsumers.filter((c) => !isAccountTerminated(c));
+
+          // Filter out stale local pending records that no longer exist as pending in Cloud Firestore
+          const nowMs = Date.now();
+          const activeLocal = localConsumers
+            .filter((c) => !isAccountTerminated(c))
+            .map((c) => normalizeConsumerRecord(c))
+            .filter((lc) => {
+              if (isIssuedActiveConsumer(lc)) return true;
+
+              const lcEmail = (lc.email || '').trim().toLowerCase();
+              const lcUid = (lc.linkedUserId || '').trim();
+              const lcPhone = normalizePhone11(lc.contactNumber);
+              const lcName = (lc.name || '').trim().toLowerCase();
+
+              // Drop immediately if Cloud Firestore already has an issued record for this person
+              const cloudHasIssued = cloudConsumers.some((cc) => {
+                if (!isIssuedActiveConsumer(cc)) return false;
+                const ccEmail = (cc.email || '').trim().toLowerCase();
+                const ccUid = (cc.linkedUserId || '').trim();
+                const ccPhone = normalizePhone11(cc.contactNumber);
+                const ccName = (cc.name || '').trim().toLowerCase();
+                if (lcEmail && ccEmail && lcEmail === ccEmail) return true;
+                if (lcUid && ccUid && lcUid === ccUid) return true;
+                if (lcPhone && ccPhone && lcPhone === ccPhone) return true;
+                if (lcName && ccName && lcName === ccName && (!lcEmail || !ccEmail || lcEmail === ccEmail)) return true;
+                return false;
+              });
+              if (cloudHasIssued) return false;
+
+              // Keep local pending record ONLY if it still exists as pending in Cloud Firestore OR was just created locally (<45s ago)
+              const stillPendingInCloud = cloudConsumers.some((cc) => {
+                if (isIssuedActiveConsumer(cc)) return false;
+                const ccEmail = (cc.email || '').trim().toLowerCase();
+                const ccUid = (cc.linkedUserId || '').trim();
+                const ccPhone = normalizePhone11(cc.contactNumber);
+                const ccName = (cc.name || '').trim().toLowerCase();
+                return (
+                  (lcEmail && ccEmail && lcEmail === ccEmail) ||
+                  (lcUid && ccUid && lcUid === ccUid) ||
+                  (lcPhone && ccPhone && lcPhone === ccPhone) ||
+                  (lcName && ccName && lcName === ccName)
+                );
+              });
+              if (stillPendingInCloud) return true;
+
+              const isFreshlyCreatedLocally = Boolean(lc.createdAt && nowMs - lc.createdAt < 45000);
+              return isFreshlyCreatedLocally;
+            });
 
           const allList = [...cloudConsumers, ...activeLocal];
           const mergedList: Consumer[] = [];
 
-          for (const c of allList) {
+          for (const rawItem of allList) {
+            // Also upgrade unissued consumer if linked User in localUsersAll already has an issued accountNumber
+            let c = normalizeConsumerRecord(rawItem);
+            if (!isIssuedActiveConsumer(c)) {
+              const cEmail = (c.email || '').trim().toLowerCase();
+              const cUid = (c.linkedUserId || '').trim();
+              const matchedActiveUser = localUsersAll.find(
+                (u) =>
+                  u.role !== 'admin' &&
+                  isRealIssuedAccountNumber(u.linkedAccountNumber) &&
+                  ((cEmail && u.email && u.email.trim().toLowerCase() === cEmail) || (cUid && u.id === cUid))
+              );
+              if (matchedActiveUser && matchedActiveUser.linkedAccountNumber) {
+                c = normalizeConsumerRecord({
+                  ...c,
+                  accountNumber: matchedActiveUser.linkedAccountNumber,
+                  status: 'active',
+                });
+              }
+            }
+
             const cAcc = isRealIssuedAccountNumber(c.accountNumber) ? c.accountNumber.trim().toUpperCase() : '';
             const cEmail = (c.email || '').trim().toLowerCase();
             const cUid = (c.linkedUserId || '').trim();
@@ -583,8 +702,14 @@ export function startRealtimeFirestoreListeners() {
               if (cAcc && mAcc && cAcc === mAcc) return true;
               if (cEmail && mEmail && cEmail === mEmail) return true;
               if (cUid && mUid && cUid === mUid) return true;
-              if (cPhone && mPhone && cPhone === mPhone) return true;
-              if (cName && mName && cName === mName && (!cEmail || !mEmail || cEmail === mEmail)) {
+              if (cPhone && mPhone && cPhone === mPhone && (!cEmail || !mEmail || cEmail === mEmail)) return true;
+              if (
+                cName &&
+                mName &&
+                cName === mName &&
+                (!cEmail || !mEmail || cEmail === mEmail) &&
+                (!cUid || !mUid || cUid === mUid || !cAcc || !mAcc)
+              ) {
                 if (!c.barangay || !m.barangay || c.barangay.toLowerCase() === m.barangay.toLowerCase()) {
                   return true;
                 }
@@ -595,11 +720,109 @@ export function startRealtimeFirestoreListeners() {
             if (existingIdx === -1) {
               mergedList.push(c);
             } else {
-              mergedList[existingIdx] = mergeConsumerPair(mergedList[existingIdx], c);
+              mergedList[existingIdx] = normalizeConsumerRecord(mergeConsumerPair(mergedList[existingIdx], c));
             }
           }
 
-          localStorage.setItem(KEYS.CONSUMERS, JSON.stringify(mergedList));
+          // Final strict deduplication: ensure zero unissued pending records survive alongside an issued twin
+          const finalMergedConsumers = mergedList.filter((item, _i, arr) => {
+            if (isIssuedActiveConsumer(item)) return true;
+            const iEmail = (item.email || '').trim().toLowerCase();
+            const iUid = (item.linkedUserId || '').trim();
+            const iPhone = normalizePhone11(item.contactNumber);
+            const iName = (item.name || '').trim().toLowerCase();
+            const hasIssuedTwin = arr.some((o) => {
+              if (o === item || !isIssuedActiveConsumer(o)) return false;
+              const oEmail = (o.email || '').trim().toLowerCase();
+              const oUid = (o.linkedUserId || '').trim();
+              const oPhone = normalizePhone11(o.contactNumber);
+              const oName = (o.name || '').trim().toLowerCase();
+              if (iEmail && oEmail && iEmail === oEmail) return true;
+              if (iUid && oUid && iUid === oUid) return true;
+              if (iPhone && oPhone && iPhone === oPhone) return true;
+              if (iName && oName && iName === oName && (!iEmail || !oEmail || iEmail === oEmail)) return true;
+              return false;
+            });
+            return !hasIssuedTwin;
+          });
+
+          // Upgrade active session user if their consumer record in finalMergedConsumers is now issued
+          try {
+            const currentRaw = localStorage.getItem(KEYS.CURRENT_USER);
+            if (currentRaw) {
+              const currentSession: User = JSON.parse(currentRaw);
+              if (currentSession && currentSession.role !== 'admin') {
+                const sEmail = (currentSession.email || '').trim().toLowerCase();
+                const sUid = (currentSession.id || '').trim();
+                const matchedIssuedConsumer = finalMergedConsumers.find(
+                  (mc) =>
+                    isIssuedActiveConsumer(mc) &&
+                    ((sEmail && mc.email && mc.email.trim().toLowerCase() === sEmail) ||
+                      (sUid && mc.linkedUserId === sUid))
+                );
+                if (
+                  matchedIssuedConsumer &&
+                  (currentSession.linkedAccountNumber !== matchedIssuedConsumer.accountNumber ||
+                    currentSession.status !== 'active')
+                ) {
+                  localStorage.setItem(
+                    KEYS.CURRENT_USER,
+                    JSON.stringify({
+                      ...currentSession,
+                      linkedAccountNumber: matchedIssuedConsumer.accountNumber,
+                      status: 'active',
+                    })
+                  );
+                }
+              }
+            }
+          } catch {}
+
+          // Auto-heal Cloud Firestore if localStorage has an Admin-issued consumer that still has pending twins in Cloud Firestore
+          const localNotifsRaw = localStorage.getItem(KEYS.NOTIFICATIONS);
+          const localNotifsAll: ConsumerNotification[] = localNotifsRaw ? JSON.parse(localNotifsRaw) : [];
+
+          finalMergedConsumers.forEach((lc) => {
+            if (!isIssuedActiveConsumer(lc)) return;
+            const lcAcc = lc.accountNumber.trim().toUpperCase();
+            const lcEmail = (lc.email || '').trim().toLowerCase();
+            const lcUid = (lc.linkedUserId || '').trim();
+            if (!lcEmail && !lcUid && !lcAcc.startsWith('BRG-')) return;
+
+            const cloudHasIssuedAcc = cloudConsumers.some(
+              (cc) =>
+                isIssuedActiveConsumer(cc) &&
+                cc.accountNumber.trim().toUpperCase() === lcAcc &&
+                cc.status !== 'pending_approval'
+            );
+            const cloudHasStalePendingTwin = snapshot.docs.some((d) => {
+              const raw = d.data() as Consumer;
+              const isRawPending = !isRealIssuedAccountNumber(raw.accountNumber) || raw.status === 'pending_approval';
+              if (!isRawPending) return false;
+              const rEmail = (raw.email || '').trim().toLowerCase();
+              const rUid = (raw.linkedUserId || '').trim();
+              return (lcUid && rUid === lcUid) || (lcEmail && rEmail === lcEmail) || raw.accountNumber === lcAcc;
+            });
+
+            if (!cloudHasIssuedAcc || cloudHasStalePendingTwin) {
+              const matchedU = localUsersAll.find(
+                (u) =>
+                  (lcUid && u.id === lcUid) ||
+                  (lcEmail && (u.email || '').trim().toLowerCase() === lcEmail) ||
+                  u.linkedAccountNumber === lcAcc
+              );
+              const matchedN = localNotifsAll.find(
+                (n) =>
+                  n.type === 'account_issue' &&
+                  !(n.title || '').toLowerCase().includes('registration application submitted') &&
+                  ((n.accountNumber || '').toUpperCase() === lcAcc ||
+                    (lcEmail && (n.consumerEmail || '').trim().toLowerCase() === lcEmail))
+              );
+              pushIssuedConsumerToFirestore(lc, matchedN, matchedU, true).catch(() => {});
+            }
+          });
+
+          localStorage.setItem(KEYS.CONSUMERS, JSON.stringify(finalMergedConsumers));
           triggerLocalUpdateEvent(KEYS.CONSUMERS);
         }
       },
@@ -887,8 +1110,8 @@ export function stopRealtimeFirestoreListeners() {
  * so password AND issued linkedAccountNumber are both preserved.
  */
 export async function directFindUserInFirestore(emailOrId: string): Promise<User | null> {
-  if (isFirestoreQuotaExceeded()) return null;
-  const cleanSearch = emailOrId.trim().toLowerCase();
+  const rawInput = emailOrId.trim();
+  const cleanSearch = rawInput.toLowerCase();
   if (!cleanSearch) return null;
 
   try {
@@ -901,10 +1124,10 @@ export async function directFindUserInFirestore(emailOrId: string): Promise<User
     }
 
     // 2. Check direct doc ID
-    const directDoc = await getDoc(doc(db, COLLECTIONS.USERS, sanitizeDocId(cleanSearch)));
+    const directDoc = await getDoc(doc(db, COLLECTIONS.USERS, sanitizeDocId(rawInput)));
     if (directDoc.exists()) candidates.push(directDoc.data() as User);
 
-    // 3. Query by email field (fetch all matching docs to merge user-... and email_...)
+    // 3. Query by email field (lowercase + raw casing if different)
     const q = query(collection(db, COLLECTIONS.USERS), where('email', '==', cleanSearch), limit(5));
     const snap = await getDocs(q);
     snap.forEach((d) => {
@@ -912,6 +1135,28 @@ export async function directFindUserInFirestore(emailOrId: string): Promise<User
       if (!u.id) u.id = d.id;
       candidates.push(u);
     });
+
+    if (rawInput.includes('@') && rawInput !== cleanSearch) {
+      const qRaw = query(collection(db, COLLECTIONS.USERS), where('email', '==', rawInput), limit(5));
+      const snapRaw = await getDocs(qRaw);
+      snapRaw.forEach((d) => {
+        const u = d.data() as User;
+        if (!u.id) u.id = d.id;
+        candidates.push(u);
+      });
+    }
+
+    // 4. Case-insensitive fallback scan across users if still empty
+    if (candidates.length === 0 && cleanSearch.includes('@')) {
+      const allUsersSnap = await getDocs(query(collection(db, COLLECTIONS.USERS), limit(250)));
+      allUsersSnap.forEach((d) => {
+        const u = d.data() as User;
+        if ((u.email || '').trim().toLowerCase() === cleanSearch) {
+          if (!u.id) u.id = d.id;
+          candidates.push(u);
+        }
+      });
+    }
 
     if (candidates.length === 0) return null;
     return candidates.reduce((acc, item) => mergeUserPair(acc, item));
@@ -933,12 +1178,14 @@ export async function directFindUserInFirestore(emailOrId: string): Promise<User
 export async function pushIssuedConsumerToFirestore(
   consumer: Consumer,
   notification?: ConsumerNotification,
-  matchedUser?: Partial<User>
+  matchedUser?: Partial<User>,
+  force: boolean = false,
+  previousAccountNumber?: string
 ): Promise<void> {
-  if (isFirestoreQuotaExceeded()) return;
+  if (!force && isFirestoreQuotaExceeded()) return;
   if (!isRealIssuedAccountNumber(consumer.accountNumber)) return;
 
-  const accNum = consumer.accountNumber.trim().toUpperCase();
+  const accNum = consumer.accountNumber.replace(/^#/, '').trim().toUpperCase();
   const meterNum =
     consumer.meterNumber && !consumer.meterNumber.toUpperCase().startsWith('PENDING')
       ? consumer.meterNumber.trim()
@@ -949,13 +1196,19 @@ export async function pushIssuedConsumerToFirestore(
       : `RFID-${meterNum}`;
   const cleanEmail = (consumer.email || matchedUser?.email || '').trim().toLowerCase();
   const linkedUid = (consumer.linkedUserId || matchedUser?.id || '').trim();
+  const cleanPhone = normalizePhone11(consumer.contactNumber);
+  const cleanName = (consumer.name || matchedUser?.name || '').trim().toLowerCase();
+  const cleanPrevAcc = (previousAccountNumber || '').replace(/^#/, '').trim().toUpperCase();
 
   const normalizedConsumer: Consumer = sanitizeForFirestore({
     ...consumer,
     accountNumber: accNum,
     meterNumber: meterNum,
     rfidTag,
-    status: consumer.status === 'pending_approval' ? 'active' : consumer.status || 'active',
+    status:
+      !consumer.status || consumer.status === 'pending_approval' || (consumer.status as string) === 'pending'
+        ? 'active'
+        : consumer.status,
     email: cleanEmail || consumer.email || '',
     linkedUserId: linkedUid || consumer.linkedUserId,
     isRegistered: true,
@@ -972,12 +1225,91 @@ export async function pushIssuedConsumerToFirestore(
     }
 
     for (const cDocId of consumerDocIds) {
-      if (shouldWritePayload(COLLECTIONS.CONSUMERS, cDocId, normalizedConsumer)) {
+      if (force || !isPayloadAlreadySynced(COLLECTIONS.CONSUMERS, cDocId, normalizedConsumer)) {
         await setDoc(doc(db, COLLECTIONS.CONSUMERS, cDocId), normalizedConsumer, { merge: true });
+        markPayloadSynced(COLLECTIONS.CONSUMERS, cDocId, normalizedConsumer);
       }
     }
 
-    // 2. Activate linked User docs in Firestore (preserving password via merge: true)
+    // 1b. Purge any stale pending or previousAccountNumber duplicate docs in Firestore `consumers`
+    if (cleanPrevAcc && cleanPrevAcc !== accNum) {
+      const prevDocId = sanitizeDocId(cleanPrevAcc);
+      if (!consumerDocIds.has(prevDocId)) {
+        syncedPayloadCache.delete(`${COLLECTIONS.CONSUMERS}/${prevDocId}`);
+        await deleteDoc(doc(db, COLLECTIONS.CONSUMERS, prevDocId)).catch(() => {});
+      }
+    }
+
+    const twinCleanupQueries = [];
+    if (cleanEmail) {
+      twinCleanupQueries.push(query(collection(db, COLLECTIONS.CONSUMERS), where('email', '==', cleanEmail), limit(15)));
+    }
+    if (linkedUid) {
+      twinCleanupQueries.push(
+        query(collection(db, COLLECTIONS.CONSUMERS), where('linkedUserId', '==', linkedUid), limit(15))
+      );
+    }
+
+    for (const tq of twinCleanupQueries) {
+      try {
+        const snap = await getDocs(tq);
+        for (const d of snap.docs) {
+          if (consumerDocIds.has(d.id)) continue;
+          const dData = d.data() as Consumer;
+          const dAcc = (dData.accountNumber || '').trim().toUpperCase();
+          const isStaleOrPending =
+            !isRealIssuedAccountNumber(dAcc) ||
+            dData.status === 'pending_approval' ||
+            (cleanPrevAcc && dAcc === cleanPrevAcc) ||
+            d.id.startsWith('user-') ||
+            d.id.startsWith('email_');
+          if (isStaleOrPending) {
+            syncedPayloadCache.delete(`${COLLECTIONS.CONSUMERS}/${d.id}`);
+            await deleteDoc(d.ref).catch(() => {});
+          }
+        }
+      } catch {}
+    }
+
+    // When force === true (explicit Admin ID issuance or auto-heal), also purge any case-insensitive / phone / name pending twins
+    if (force && (cleanEmail || cleanPhone || cleanName)) {
+      try {
+        const allConsSnap = await getDocs(query(collection(db, COLLECTIONS.CONSUMERS), limit(300)));
+        for (const d of allConsSnap.docs) {
+          if (consumerDocIds.has(d.id)) continue;
+          const dData = d.data() as Consumer;
+          const dAcc = (dData.accountNumber || '').trim().toUpperCase();
+          const dIsPending = !isRealIssuedAccountNumber(dAcc) || dData.status === 'pending_approval';
+          if (!dIsPending) continue;
+
+          const dEmail = (dData.email || '').trim().toLowerCase();
+          const dUid = (dData.linkedUserId || '').trim();
+          const dPhone = normalizePhone11(dData.contactNumber);
+          const dName = (dData.name || '').trim().toLowerCase();
+
+          const sameApplicant =
+            (cleanEmail && dEmail && cleanEmail === dEmail) ||
+            (linkedUid && dUid && linkedUid === dUid) ||
+            (cleanPhone && dPhone && cleanPhone === dPhone && (!cleanEmail || !dEmail || cleanEmail === dEmail)) ||
+            (cleanName &&
+              dName &&
+              cleanName === dName &&
+              (!cleanEmail || !dEmail || cleanEmail === dEmail) &&
+              (!consumer.barangay || !dData.barangay || consumer.barangay.toLowerCase() === dData.barangay.toLowerCase()));
+
+          if (sameApplicant) {
+            if (dAcc === accNum) {
+              await setDoc(d.ref, normalizedConsumer, { merge: true }).catch(() => {});
+            } else {
+              syncedPayloadCache.delete(`${COLLECTIONS.CONSUMERS}/${d.id}`);
+              await deleteDoc(d.ref).catch(() => {});
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // 2. Activate ALL matching User docs in Firestore (preserving password via merge: true)
     const userPatch: Record<string, unknown> = sanitizeForFirestore({
       ...(matchedUser?.id ? { id: matchedUser.id } : linkedUid ? { id: linkedUid } : {}),
       ...(cleanEmail ? { email: cleanEmail } : {}),
@@ -988,39 +1320,69 @@ export async function pushIssuedConsumerToFirestore(
       ...(matchedUser?.password ? { password: matchedUser.password } : {}),
     });
 
-    if (linkedUid) {
+    if (linkedUid && !linkedUid.startsWith('email_')) {
       const uidDoc = sanitizeDocId(linkedUid);
-      if (shouldWritePayload(COLLECTIONS.USERS, uidDoc, userPatch)) {
+      if (force || !isPayloadAlreadySynced(COLLECTIONS.USERS, uidDoc, userPatch)) {
         await setDoc(doc(db, COLLECTIONS.USERS, uidDoc), userPatch, { merge: true });
+        markPayloadSynced(COLLECTIONS.USERS, uidDoc, userPatch);
       }
     }
     if (cleanEmail) {
       const emailDoc = sanitizeEmailDocId(cleanEmail);
-      if (shouldWritePayload(COLLECTIONS.USERS, emailDoc, userPatch)) {
+      if (force || !isPayloadAlreadySynced(COLLECTIONS.USERS, emailDoc, userPatch)) {
         await setDoc(doc(db, COLLECTIONS.USERS, emailDoc), userPatch, { merge: true });
+        markPayloadSynced(COLLECTIONS.USERS, emailDoc, userPatch);
+      }
+      // Also update any additional user-* documents sharing this email so every device session gets activated
+      if (force) {
+        try {
+          const uSnap = await getDocs(query(collection(db, COLLECTIONS.USERS), where('email', '==', cleanEmail), limit(10)));
+          for (const ud of uSnap.docs) {
+            const uData = ud.data() as User;
+            if (uData.role === 'admin') continue;
+            if (uData.linkedAccountNumber !== accNum || uData.status !== 'active') {
+              await setDoc(
+                ud.ref,
+                sanitizeForFirestore({
+                  status: 'active',
+                  linkedAccountNumber: accNum,
+                }),
+                { merge: true }
+              ).catch(() => {});
+            }
+          }
+        } catch {}
       }
     }
 
     // 3. Ensure official Account Issuance Notification exists in Firestore
     const deterministicNotifId = `notif-issued-${accNum.replace(/[^a-zA-Z0-9]/g, '')}`;
     const notifToSync: ConsumerNotification = sanitizeForFirestore(
-      notification || {
-        id: deterministicNotifId,
-        accountNumber: accNum,
-        consumerId: consumer.id,
-        userId: linkedUid || undefined,
-        consumerEmail: cleanEmail || undefined,
-        title: 'Official Account Number & Meter Issued!',
-        message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${accNum} and Meter Serial is #${meterNum}. Smart RFID Tag: ${rfidTag}. Your full dashboard and telemetry are now active.`,
-        timestamp: new Date().toISOString(),
-        type: 'account_issue',
-        read: false,
-      }
+      notification
+        ? {
+            ...notification,
+            consumerEmail: notification.consumerEmail
+              ? notification.consumerEmail.trim().toLowerCase()
+              : cleanEmail || undefined,
+          }
+        : {
+            id: deterministicNotifId,
+            accountNumber: accNum,
+            consumerId: consumer.id,
+            userId: linkedUid || undefined,
+            consumerEmail: cleanEmail || undefined,
+            title: 'Official Account Number & Meter Issued!',
+            message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${accNum} and Meter Serial is #${meterNum}. Smart RFID Tag: ${rfidTag}. Your full dashboard and telemetry are now active.`,
+            timestamp: new Date().toISOString(),
+            type: 'account_issue',
+            read: false,
+          }
     );
 
     const nDocId = sanitizeDocId(notifToSync.id || deterministicNotifId);
-    if (shouldWritePayload(COLLECTIONS.NOTIFICATIONS, nDocId, notifToSync)) {
+    if (force || !isPayloadAlreadySynced(COLLECTIONS.NOTIFICATIONS, nDocId, notifToSync)) {
       await setDoc(doc(db, COLLECTIONS.NOTIFICATIONS, nDocId), notifToSync, { merge: true });
+      markPayloadSynced(COLLECTIONS.NOTIFICATIONS, nDocId, notifToSync);
     }
   } catch (error: any) {
     if (isQuotaError(error)) {
@@ -1049,9 +1411,8 @@ export async function resolveConsumerAccountInFirestore(params: {
   consumer: Consumer | null;
   notifications: ConsumerNotification[];
 } | null> {
-  if (isFirestoreQuotaExceeded()) return null;
-
-  const cleanEmail = (params.email || '').trim().toLowerCase();
+  const rawEmail = (params.email || '').trim();
+  const cleanEmail = rawEmail.toLowerCase();
   const cleanUid = (params.userId || '').trim();
   const cleanAcc = isRealIssuedAccountNumber(params.accountNumber)
     ? params.accountNumber!.replace(/^#/, '').trim().toUpperCase()
@@ -1064,8 +1425,8 @@ export async function resolveConsumerAccountInFirestore(params: {
   try {
     // 1. Resolve User docs
     let resolvedUser: User | null = null;
-    if (cleanEmail) {
-      resolvedUser = await directFindUserInFirestore(cleanEmail);
+    if (rawEmail) {
+      resolvedUser = await directFindUserInFirestore(rawEmail);
     } else if (cleanUid) {
       resolvedUser = await directFindUserInFirestore(cleanUid);
     }
@@ -1095,6 +1456,11 @@ export async function resolveConsumerAccountInFirestore(params: {
       const qEmail = query(collection(db, COLLECTIONS.CONSUMERS), where('email', '==', effectiveEmail), limit(5));
       const snapEmail = await getDocs(qEmail);
       snapEmail.forEach((d) => candidates.push(d.data() as Consumer));
+      if (rawEmail && rawEmail !== effectiveEmail) {
+        const qRawEmail = query(collection(db, COLLECTIONS.CONSUMERS), where('email', '==', rawEmail), limit(5));
+        const snapRawEmail = await getDocs(qRawEmail);
+        snapRawEmail.forEach((d) => candidates.push(d.data() as Consumer));
+      }
     }
 
     if (effectiveUid) {
@@ -1105,14 +1471,20 @@ export async function resolveConsumerAccountInFirestore(params: {
       snapUid.forEach((d) => candidates.push(d.data() as Consumer));
     }
 
-    if (candidates.length === 0 && (cleanName || cleanPhone)) {
-      const allSnap = await getDocs(query(collection(db, COLLECTIONS.CONSUMERS), limit(150)));
+    // Case-insensitive scan across consumers if no active issued candidate found yet (handles mixed-case emails & name/phone links)
+    const foundIssuedAlready = candidates.some((c) => isIssuedActiveConsumer(c));
+    if (!foundIssuedAlready && (effectiveEmail || cleanName || cleanPhone || effectiveUid)) {
+      const allSnap = await getDocs(query(collection(db, COLLECTIONS.CONSUMERS), limit(300)));
       allSnap.forEach((d) => {
         const c = d.data() as Consumer;
         const cEmail = (c.email || '').trim().toLowerCase();
         const cPhone = normalizePhone11(c.contactNumber);
         const cName = (c.name || '').trim().toLowerCase();
-        if (cleanPhone && cPhone && cleanPhone === cPhone) {
+        if (effectiveEmail && cEmail && cEmail === effectiveEmail) {
+          candidates.push(c);
+        } else if (effectiveUid && c.linkedUserId && c.linkedUserId === effectiveUid) {
+          candidates.push(c);
+        } else if (cleanPhone && cPhone && cleanPhone === cPhone) {
           candidates.push(c);
         } else if (cleanName && cName === cleanName && (!effectiveEmail || !cEmail || effectiveEmail === cEmail)) {
           candidates.push(c);
@@ -1120,7 +1492,7 @@ export async function resolveConsumerAccountInFirestore(params: {
       });
     }
 
-    // Also check if resolvedUser had a linkedAccountNumber whose consumer wasn't fetched yet
+    // Also fetch any referenced issued account doc
     for (const cand of [...candidates]) {
       if (isRealIssuedAccountNumber(cand.accountNumber)) {
         const cAcc = cand.accountNumber.trim().toUpperCase();
@@ -1133,7 +1505,6 @@ export async function resolveConsumerAccountInFirestore(params: {
 
     let resolvedConsumer: Consumer | null = null;
     if (candidates.length > 0) {
-      // Sort active/issued first, then merge all matching candidates
       candidates.sort((a, b) => (isIssuedActiveConsumer(b) ? 1 : 0) - (isIssuedActiveConsumer(a) ? 1 : 0));
       resolvedConsumer = candidates.reduce((acc, item) => mergeConsumerPair(acc, item));
     }
@@ -1158,6 +1529,19 @@ export async function resolveConsumerAccountInFirestore(params: {
     const isIssued = isIssuedActiveConsumer(resolvedConsumer);
     const finalAcc = isIssued && resolvedConsumer ? resolvedConsumer.accountNumber.trim().toUpperCase() : effectiveAcc;
 
+    // Synthesize User profile if Consumer exists in Firestore `consumers` while `users` doc was missing
+    if (!resolvedUser && resolvedConsumer && (effectiveEmail || resolvedConsumer.email || resolvedConsumer.linkedUserId)) {
+      resolvedUser = {
+        id: resolvedConsumer.linkedUserId || effectiveUid || `user-${Date.now()}`,
+        email: (resolvedConsumer.email || effectiveEmail || '').trim().toLowerCase(),
+        name: resolvedConsumer.name,
+        role: 'consumer',
+        status: isIssued ? 'active' : 'pending_approval',
+        linkedAccountNumber: isIssued ? finalAcc : undefined,
+        registrationDate: resolvedConsumer.registrationDate,
+      };
+    }
+
     // 3. Fetch Notifications for this consumer from Firestore
     const notifMap = new Map<string, ConsumerNotification>();
     const addNotifSnap = (snap: Awaited<ReturnType<typeof getDocs>>) => {
@@ -1180,10 +1564,18 @@ export async function resolveConsumerAccountInFirestore(params: {
           query(collection(db, COLLECTIONS.NOTIFICATIONS), where('consumerEmail', '==', effectiveEmail), limit(30))
         )
       );
+      if (rawEmail && rawEmail !== effectiveEmail) {
+        addNotifSnap(
+          await getDocs(
+            query(collection(db, COLLECTIONS.NOTIFICATIONS), where('consumerEmail', '==', rawEmail), limit(30))
+          )
+        );
+      }
     }
-    if (effectiveUid) {
+    const targetNotifUid = effectiveUid || resolvedConsumer?.linkedUserId || '';
+    if (targetNotifUid) {
       addNotifSnap(
-        await getDocs(query(collection(db, COLLECTIONS.NOTIFICATIONS), where('userId', '==', effectiveUid), limit(30)))
+        await getDocs(query(collection(db, COLLECTIONS.NOTIFICATIONS), where('userId', '==', targetNotifUid), limit(30)))
       );
     }
 
@@ -1201,8 +1593,8 @@ export async function resolveConsumerAccountInFirestore(params: {
           id: `notif-issued-${finalAcc.replace(/[^a-zA-Z0-9]/g, '')}`,
           accountNumber: finalAcc,
           consumerId: resolvedConsumer.id,
-          userId: effectiveUid || resolvedConsumer.linkedUserId,
-          consumerEmail: effectiveEmail || resolvedConsumer.email,
+          userId: targetNotifUid || undefined,
+          consumerEmail: (effectiveEmail || resolvedConsumer.email || '').trim().toLowerCase() || undefined,
           title: 'Official Account Number & Meter Issued!',
           message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${finalAcc} and Meter Serial is #${resolvedConsumer.meterNumber}. Smart RFID Tag: ${resolvedConsumer.rfidTag}. Your full dashboard and telemetry are now active.`,
           timestamp: new Date().toISOString(),
@@ -1227,7 +1619,7 @@ export async function resolveConsumerAccountInFirestore(params: {
     return {
       isIssued,
       user: resolvedUser,
-      consumer: resolvedConsumer,
+      consumer: resolvedConsumer ? normalizeConsumerRecord(resolvedConsumer) : null,
       notifications,
     };
   } catch (error) {
@@ -1240,6 +1632,126 @@ export async function resolveConsumerAccountInFirestore(params: {
     }
     return null;
   }
+}
+
+/**
+ * Attaches targeted real-time Cloud Firestore push listeners for a specific logged-in Consumer
+ * so that the instant Admin issues IDs on any other device/browser (including Vercel serverless),
+ * this Consumer Portal receives sub-second push confirmation without waiting for polling or WebSockets.
+ */
+export function subscribeToConsumerIdentityInFirestore(
+  params: {
+    userId?: string;
+    email?: string;
+    accountNumber?: string;
+    name?: string;
+    contactNumber?: string;
+  },
+  onResolved: (data: {
+    isIssued: boolean;
+    user: User | null;
+    consumer: Consumer | null;
+    notifications: ConsumerNotification[];
+  }) => void
+): () => void {
+  if (isFirestoreQuotaExceeded()) return () => {};
+
+  const cleanEmail = (params.email || '').trim().toLowerCase();
+  const cleanUid = (params.userId || '').trim();
+  const unsubs: Unsubscribe[] = [];
+  let resolveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const triggerResolve = () => {
+    if (resolveTimer) clearTimeout(resolveTimer);
+    resolveTimer = setTimeout(() => {
+      resolveConsumerAccountInFirestore(params)
+        .then((res) => {
+          if (res) onResolved(res);
+        })
+        .catch(() => {});
+    }, 120);
+  };
+
+  try {
+    if (cleanUid && !cleanUid.startsWith('email_')) {
+      unsubs.push(
+        onSnapshot(
+          doc(db, COLLECTIONS.USERS, sanitizeDocId(cleanUid)),
+          (snap) => {
+            if (snap.exists()) triggerResolve();
+          },
+          () => {}
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          doc(db, COLLECTIONS.CONSUMERS, sanitizeDocId(cleanUid)),
+          (snap) => {
+            if (snap.exists()) triggerResolve();
+          },
+          () => {}
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, COLLECTIONS.CONSUMERS), where('linkedUserId', '==', cleanUid), limit(5)),
+          (snap) => {
+            if (!snap.empty) triggerResolve();
+          },
+          () => {}
+        )
+      );
+    }
+
+    if (cleanEmail) {
+      const emailDocId = sanitizeEmailDocId(cleanEmail);
+      unsubs.push(
+        onSnapshot(
+          doc(db, COLLECTIONS.USERS, emailDocId),
+          (snap) => {
+            if (snap.exists()) triggerResolve();
+          },
+          () => {}
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          doc(db, COLLECTIONS.CONSUMERS, emailDocId),
+          (snap) => {
+            if (snap.exists()) triggerResolve();
+          },
+          () => {}
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, COLLECTIONS.CONSUMERS), where('email', '==', cleanEmail), limit(5)),
+          (snap) => {
+            if (!snap.empty) triggerResolve();
+          },
+          () => {}
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, COLLECTIONS.NOTIFICATIONS), where('consumerEmail', '==', cleanEmail), limit(15)),
+          (snap) => {
+            if (!snap.empty) triggerResolve();
+          },
+          () => {}
+        )
+      );
+    }
+  } catch {}
+
+  return () => {
+    if (resolveTimer) clearTimeout(resolveTimer);
+    unsubs.forEach((u) => {
+      try {
+        u();
+      } catch {}
+    });
+  };
 }
 
 /**
@@ -1332,16 +1844,18 @@ export async function initializeFirestoreSeed(initialData: {
 export async function syncDocToFirestore<T extends object>(
   collectionName: string,
   docId: string,
-  data: T
+  data: T,
+  force: boolean = false
 ): Promise<void> {
   if (!docId || docId.trim() === '') return;
-  if (isFirestoreQuotaExceeded()) return;
+  if (!force && isFirestoreQuotaExceeded()) return;
   const cleanId = sanitizeDocId(docId);
   const cleanData = sanitizeForFirestore(data);
-  if (!shouldWritePayload(collectionName, cleanId, cleanData)) return;
+  if (!force && isPayloadAlreadySynced(collectionName, cleanId, cleanData)) return;
 
   try {
     await setDoc(doc(db, collectionName, cleanId), cleanData, { merge: true });
+    markPayloadSynced(collectionName, cleanId, cleanData);
   } catch (error: any) {
     if (isQuotaError(error)) {
       markFirestoreQuotaExceeded(error);
@@ -1354,7 +1868,7 @@ export async function syncDocToFirestore<T extends object>(
 }
 
 /**
- * Asynchronously batch save changed documents to Firestore
+ * Asynchronously batch save changed documents to Firestore (marking cache ONLY after commit succeeds)
  */
 export async function syncBatchToFirestore<T extends object>(
   collectionName: string,
@@ -1363,45 +1877,61 @@ export async function syncBatchToFirestore<T extends object>(
 ): Promise<void> {
   if (!items || items.length === 0) return;
   if (isFirestoreQuotaExceeded()) return;
+
+  const staged: Array<{ cleanId: string; cleanItem: T }> = [];
+  items.forEach((item) => {
+    if (staged.length >= 400) return;
+    const rec = item as Record<string, unknown>;
+    const rawId = rec[idKey];
+    const validRawId =
+      (typeof rawId === 'string' && rawId.trim() !== '') || typeof rawId === 'number' ? String(rawId) : null;
+    const validId = typeof rec.id === 'string' && rec.id.trim() !== '' ? rec.id : null;
+    const validLinkedUser =
+      typeof rec.linkedUserId === 'string' && rec.linkedUserId.trim() !== '' ? rec.linkedUserId : null;
+    const validMeter =
+      typeof rec.meterNumber === 'string' && rec.meterNumber.trim() !== '' ? rec.meterNumber : null;
+    const validEmail =
+      typeof rec.email === 'string' && rec.email.trim() !== '' ? sanitizeEmailDocId(rec.email) : null;
+    const validAcc =
+      typeof rec.accountNumber === 'string' && rec.accountNumber.trim() !== '' ? rec.accountNumber : null;
+
+    const docId = validRawId || validId || validAcc || validLinkedUser || validMeter || validEmail;
+    if (docId && String(docId).trim() !== '') {
+      const cleanId = sanitizeDocId(String(docId));
+      const cleanItem = sanitizeForFirestore(item);
+      if (!isPayloadAlreadySynced(collectionName, cleanId, cleanItem)) {
+        staged.push({ cleanId, cleanItem });
+      }
+    }
+  });
+
+  if (staged.length === 0) return;
+
   try {
     const batch = writeBatch(db);
-    let count = 0;
-    items.forEach((item) => {
-      if (count >= 400) return;
-      const rec = item as Record<string, unknown>;
-      const rawId = rec[idKey];
-      const validRawId =
-        (typeof rawId === 'string' && rawId.trim() !== '') || typeof rawId === 'number' ? String(rawId) : null;
-      const validId = typeof rec.id === 'string' && rec.id.trim() !== '' ? rec.id : null;
-      const validLinkedUser =
-        typeof rec.linkedUserId === 'string' && rec.linkedUserId.trim() !== '' ? rec.linkedUserId : null;
-      const validMeter =
-        typeof rec.meterNumber === 'string' && rec.meterNumber.trim() !== '' ? rec.meterNumber : null;
-      const validEmail =
-        typeof rec.email === 'string' && rec.email.trim() !== '' ? sanitizeEmailDocId(rec.email) : null;
-      const validAcc =
-        typeof rec.accountNumber === 'string' && rec.accountNumber.trim() !== '' ? rec.accountNumber : null;
-
-      const docId = validRawId || validId || validAcc || validLinkedUser || validMeter || validEmail;
-      if (docId && String(docId).trim() !== '') {
-        const cleanId = sanitizeDocId(String(docId));
-        const cleanItem = sanitizeForFirestore(item);
-        if (shouldWritePayload(collectionName, cleanId, cleanItem)) {
-          batch.set(doc(db, collectionName, cleanId), cleanItem, { merge: true });
-          count++;
-        }
-      }
+    staged.forEach(({ cleanId, cleanItem }) => {
+      batch.set(doc(db, collectionName, cleanId), cleanItem, { merge: true });
     });
-    if (count > 0) {
-      await batch.commit();
-    }
+    await batch.commit();
+    staged.forEach(({ cleanId, cleanItem }) => {
+      markPayloadSynced(collectionName, cleanId, cleanItem);
+    });
   } catch (error: any) {
     if (isQuotaError(error)) {
       markFirestoreQuotaExceeded(error);
-    } else if (isPermissionDeniedError(error)) {
+      return;
+    }
+    // Fallback: write changed items individually so one legacy invalid record never blocks new users/IDs
+    for (const { cleanId, cleanItem } of staged) {
       try {
-        handleFirestoreError(error, OperationType.WRITE, collectionName);
-      } catch {}
+        await setDoc(doc(db, collectionName, cleanId), cleanItem, { merge: true });
+        markPayloadSynced(collectionName, cleanId, cleanItem);
+      } catch (innerErr: any) {
+        if (isQuotaError(innerErr)) {
+          markFirestoreQuotaExceeded(innerErr);
+          break;
+        }
+      }
     }
   }
 }

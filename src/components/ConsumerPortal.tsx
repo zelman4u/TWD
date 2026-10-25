@@ -78,9 +78,15 @@ import { ConsumerReportsSection } from './consumer/ConsumerReportsSection';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
 import { calculateWaterTariff, getActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
-import { apiClient } from '../services/apiClient';
+import { apiClient, safeBackendFetch } from '../services/apiClient';
 import { initRealtimeSocket } from '../services/realtimeSocket';
-import { resolveConsumerAccountInFirestore, pushIssuedConsumerToFirestore } from '../services/firebaseDb';
+import {
+  resolveConsumerAccountInFirestore,
+  pushIssuedConsumerToFirestore,
+  ensureRealtimeFirestoreListeners,
+  subscribeToConsumerIdentityInFirestore,
+  isRealIssuedAccountNumber
+} from '../services/firebaseDb';
 import { TablePagination } from './common/TablePagination';
 
 interface ConsumerPortalProps {
@@ -218,15 +224,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Helper: Check whether a consumer record has officially issued IDs
   const isConsumerRecordIssued = (rec?: Consumer | null): boolean => {
     if (!rec) return false;
-    const acc = (rec.accountNumber || '').trim().toUpperCase();
+    if (!isRealIssuedAccountNumber(rec.accountNumber)) {
+      return false;
+    }
     const mtr = (rec.meterNumber || '').trim().toUpperCase();
-    if (!acc || acc.startsWith('PENDING') || acc === 'UNASSIGNED' || acc === 'UNISSUED' || acc === 'PENDING ADMIN ISSUANCE') {
-      return false;
-    }
     if (mtr && mtr.startsWith('PENDING')) {
-      return false;
-    }
-    if (rec.status === 'pending_approval' || (rec.status as string) === 'pending') {
       return false;
     }
     return true;
@@ -481,12 +483,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         .catch(() => {});
 
       // 1b. Authoritative account & notification resolution against backend API
-      fetch('/api/consumers/resolve-account', {
+      safeBackendFetch('/api/consumers/resolve-account', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-portal': 'consumer' },
         body: JSON.stringify(resolvePayload)
       })
-        .then(res => res.json())
+        .then(res => (res ? res.json() : null))
         .then(resolvedData => {
           if (resolvedData?.success) applyRemoteResolution(resolvedData);
         })
@@ -536,13 +538,55 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       // Sort matching so active issued record always takes top precedence over stale pending records
       matching.sort((a, b) => (isConsumerRecordIssued(b) ? 1 : 0) - (isConsumerRecordIssued(a) ? 1 : 0));
 
-      const record = matching.length > 0 ? matching[0] : null;
+      const userLinkedAcc = isRealIssuedAccountNumber(liveUser?.linkedAccountNumber)
+        ? liveUser!.linkedAccountNumber!.trim().toUpperCase()
+        : isRealIssuedAccountNumber(currentUser.linkedAccountNumber)
+          ? currentUser.linkedAccountNumber!.trim().toUpperCase()
+          : '';
+
+      let record = matching.length > 0 ? matching[0] : null;
+
+      // Upgrade unissued record or synthesize record if user session already carries an Admin-issued linkedAccountNumber
+      if (userLinkedAcc && (!record || !isConsumerRecordIssued(record))) {
+        record = {
+          ...(record || {
+            name: liveUser?.name || currentUser.name,
+            address: 'Tagoloan, Misamis Oriental',
+            barangay: 'Poblacion',
+            barangayId: 'BRG-01',
+            sitioZone: 'Zone 1',
+            contactNumber: '',
+            email: liveUser?.email || currentUser.email || '',
+            consumerType: 'Residential',
+            meterSize: '1/2"',
+            outstandingBalance: 0,
+            isRegistered: true,
+            linkedUserId: liveUser?.id || currentUser.id,
+          }),
+          accountNumber: userLinkedAcc,
+          meterNumber:
+            record?.meterNumber && !record.meterNumber.toUpperCase().startsWith('PENDING')
+              ? record.meterNumber
+              : `MT-${userLinkedAcc}`,
+          rfidTag:
+            record?.rfidTag && !record.rfidTag.toUpperCase().startsWith('PENDING')
+              ? record.rfidTag
+              : `RFID-MT-${userLinkedAcc}`,
+          status: 'active',
+        };
+      }
 
       if (record) {
         const nowIssued = isConsumerRecordIssued(record);
         const wasPendingBefore = wasAccountPendingRef.current;
 
         if (nowIssued) {
+          const normalizedRecord: Consumer =
+            record.status === 'pending_approval' || (record.status as string) === 'pending'
+              ? { ...record, status: 'active' }
+              : record;
+          record = normalizedRecord;
+
           // Check if consumer's issuance notification is already present; if session was unlinked or notification missing, apply full confirmation
           const existingLocalNotifs = mockDb.getNotifications(record.accountNumber, {
             userId: record.linkedUserId || currentUser.id,
@@ -575,7 +619,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
           pushIssuedConsumerToFirestore(record, accountIssueNotifs[0], liveUser || currentUser).catch(() => {});
 
-          fetch('/api/consumers/reconcile', {
+          safeBackendFetch('/api/consumers/reconcile', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-portal': 'consumer' },
             body: JSON.stringify({
@@ -754,16 +798,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         if (record.linkedUserId || currentUser.id) notifParams.set('userId', record.linkedUserId || currentUser.id);
         if (record.email || currentUser.email) notifParams.set('email', record.email || currentUser.email || '');
         if (record.id) notifParams.set('consumerId', record.id);
-        fetch(`/api/notifications?${notifParams.toString()}`)
-          .then(res => res.json())
+        safeBackendFetch(`/api/notifications?${notifParams.toString()}`)
+          .then(res => (res ? res.json() : null))
           .then(nData => {
             if (nData?.success && Array.isArray(nData.notifications) && nData.notifications.length > 0) {
               const mergedChanged = mockDb.mergeExternalNotifications(nData.notifications);
               if (mergedChanged) {
-                const updatedNotifs = mockDb.getNotifications(record.accountNumber, {
-                  userId: record.linkedUserId || currentUser.id,
-                  email: record.email || currentUser.email,
-                  consumerId: record.id
+                const updatedNotifs = mockDb.getNotifications(record!.accountNumber, {
+                  userId: record!.linkedUserId || currentUser.id,
+                  email: record!.email || currentUser.email,
+                  consumerId: record!.id
                 });
                 notifsRef.current = updatedNotifs;
                 setNotifications(updatedNotifs);
@@ -800,8 +844,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         if (currentUser.linkedAccountNumber) fallbackParams.set('accountNumber', currentUser.linkedAccountNumber);
         if (currentUser.id) fallbackParams.set('userId', currentUser.id);
         if (currentUser.email) fallbackParams.set('email', currentUser.email);
-        fetch(`/api/notifications?${fallbackParams.toString()}`)
-          .then(res => res.json())
+        safeBackendFetch(`/api/notifications?${fallbackParams.toString()}`)
+          .then(res => (res ? res.json() : null))
           .then(nData => {
             if (nData?.success && Array.isArray(nData.notifications) && nData.notifications.length > 0) {
               if (mockDb.mergeExternalNotifications(nData.notifications)) {
@@ -841,7 +885,39 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     prevReadingsRef.current = [];
     alertedOverdueRef.current.clear();
 
+    ensureRealtimeFirestoreListeners();
     loadConsumerInfo();
+
+    // 0. Live Cloud Firestore Push Subscription for instant cross-device ID confirmation (works on Vercel & mobile)
+    const cleanupFirestoreIdentity = subscribeToConsumerIdentityInFirestore(
+      {
+        userId: currentUser.id,
+        email: currentUser.email,
+        accountNumber: currentUser.linkedAccountNumber,
+        name: currentUser.name,
+      },
+      (resolved) => {
+        if (resolved.notifications && resolved.notifications.length > 0) {
+          mockDb.mergeExternalNotifications(resolved.notifications);
+        }
+        if (resolved.isIssued && resolved.consumer && isConsumerRecordIssued(resolved.consumer)) {
+          const prevAcc = (consumerRecordRef.current?.accountNumber || '').trim().toUpperCase();
+          const nextAcc = resolved.consumer.accountNumber.trim().toUpperCase();
+          const wasUnissued = !isConsumerRecordIssued(consumerRecordRef.current);
+          const isAccChanged = Boolean(prevAcc && prevAcc !== nextAcc);
+          const issuanceNotif = resolved.notifications?.find(
+            (n) =>
+              n.type === 'account_issue' &&
+              !(n.title || '').toLowerCase().includes('registration application submitted')
+          );
+          if (wasUnissued || isAccChanged) {
+            applyAutomaticIdConfirmation(resolved.consumer, issuanceNotif, isAccChanged, true);
+          } else {
+            loadConsumerInfo(true);
+          }
+        }
+      }
+    );
 
     // 1. Instantaneous reactive sync with debounce to prevent state loops
     const handleDbUpdate = () => {
@@ -927,6 +1003,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('twd_tariff_updated', handleTariffUpdated);
       clearInterval(interval);
+      cleanupFirestoreIdentity();
       cleanupWs();
       if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
       if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
@@ -948,17 +1025,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   }, [consumerRecord]);
 
   // Check Account Setup Pending Status (Awaiting Admin Account & Meter Issuance)
-  const isAccountPending = Boolean(
-    !consumerRecord ||
-    !consumerRecord.accountNumber ||
-    consumerRecord.accountNumber.trim() === '' ||
-    consumerRecord.accountNumber.toUpperCase().startsWith('PENDING') ||
-    consumerRecord.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' ||
-    consumerRecord.accountNumber.toUpperCase() === 'UNASSIGNED' ||
-    consumerRecord.accountNumber.toUpperCase() === 'UNISSUED' ||
-    consumerRecord.status === 'pending_approval' ||
-    (consumerRecord.meterNumber && consumerRecord.meterNumber.toUpperCase().startsWith('PENDING'))
-  );
+  const isAccountPending = !isConsumerRecordIssued(consumerRecord) && !isRealIssuedAccountNumber(currentUser.linkedAccountNumber);
 
   // Compute Account Metrics & Arrears
   const latestRead = (readings && readings.length > 0) ? readings[0] : null;

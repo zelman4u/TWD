@@ -1,6 +1,72 @@
 {
-  "updatedAt": "2026-10-25T10:07:46.003Z",
+  "updatedAt": "2026-10-25T11:21:35.880Z",
   "consumers": [
+    {
+      "accountNumber": "BRG-07-6022",
+      "name": "Juan Dela Cruz Jr.",
+      "address": "Zone - 3A, Gracia, Tagoloan, Misamis Oriental",
+      "barangay": "Gracia",
+      "barangayId": "BRG-07",
+      "sitioZone": "Zone - 3A",
+      "meterNumber": "MT-76113",
+      "previousReading": 0,
+      "lastReadingDate": "2026-10-25",
+      "consumerType": "Residential",
+      "status": "active",
+      "contactNumber": "09623754810",
+      "email": "delacruz@gmail.com",
+      "rfidTag": "RFID-50789",
+      "registrationDate": "2026-10-25",
+      "linkedUserId": "user-1792920928405",
+      "isRegistered": true,
+      "outstandingBalance": 0,
+      "createdAt": 1792920928405
+    },
+    {
+      "accountNumber": "BRG-01-7909",
+      "name": "Bruce Acero",
+      "address": "Zone 6, Poblacion, Tagoloan, Misamis Oriental",
+      "barangay": "Poblacion",
+      "barangayId": "BRG-01",
+      "sitioZone": "Zone 6",
+      "meterNumber": "MT-BRG-01-7909",
+      "previousReading": 0,
+      "lastReadingDate": "2026-10-25",
+      "consumerType": "Residential",
+      "status": "active",
+      "contactNumber": "09956678294",
+      "email": "bruceacero2002@gmail.com",
+      "rfidTag": "RFID-MT-BRG-01-7909",
+      "registrationDate": "2026-09-07",
+      "linkedUserId": "user-1788783787909",
+      "isRegistered": true,
+      "outstandingBalance": 0,
+      "blockReason": "Exceeded 3-month payment grace period (40 days overdue, 3 unpaid cycles). Disconnection Notice issued.",
+      "unpaidCyclesCount": 3,
+      "gracePeriodOverdueDays": 40,
+      "disconnectionNoticeDate": "2026-10-25T11:20:26.842Z"
+    },
+    {
+      "accountNumber": "BRG-03-5182",
+      "name": "elmar funcion",
+      "address": "Zone-3 Gremar, Baluarte, Tagoloan, Misamis Oriental",
+      "barangay": "Baluarte",
+      "barangayId": "BRG-03",
+      "sitioZone": "Zone-3 Gremar",
+      "meterNumber": "MT-46368",
+      "previousReading": 0,
+      "lastReadingDate": "2026-10-25",
+      "consumerType": "Commercial",
+      "status": "active",
+      "contactNumber": "09678711372",
+      "email": "elmarf@gmail.com",
+      "rfidTag": "RFID-85004",
+      "registrationDate": "2026-10-25",
+      "linkedUserId": "user-1792920610725",
+      "isRegistered": true,
+      "createdAt": 1792920861667,
+      "outstandingBalance": 0
+    },
     {
       "accountNumber": "",
       "name": "FULL SYNC CONSUMER 2",
@@ -158,7 +224,7 @@
       "isRegistered": true,
       "blockReason": "Exceeded 3-month payment grace period (238 days overdue, 1 unpaid cycles). Disconnection Notice issued.",
       "disconnectionNoticeDate": "2026-09-25T01:43:19.699Z",
-      "gracePeriodOverdueDays": 267,
+      "gracePeriodOverdueDays": 268,
       "outstandingBalance": 622.45,
       "unpaidCyclesCount": 1
     },
@@ -269,8 +335,8 @@
       "averageConsumption": 15,
       "category": "Residential",
       "gpsCoordinates": {
-        "lat": 8.5398,
-        "lng": 124.7523
+        "lng": 124.7523,
+        "lat": 8.5398
       },
       "id": "WDT-ACC-14841",
       "lastSyncDate": "2026-08-24T03:01:54.841Z",
@@ -354,7 +420,7 @@
       "sitioZone": "Zone-2 Sto Nino.",
       "meterNumber": "MT-58137",
       "previousReading": 0,
-      "lastReadingDate": "2026-10-25",
+      "lastReadingDate": "2026-09-06",
       "consumerType": "Residential",
       "status": "active",
       "contactNumber": "097986786378",
@@ -363,7 +429,22 @@
       "registrationDate": "2026-09-05",
       "linkedUserId": "user-1788597980114",
       "isRegistered": true,
-      "outstandingBalance": 322.45
+      "outstandingBalance": 322.45,
+      "meterSize": "1/2\"",
+      "meterSerial": "MTR-7542046",
+      "lastSyncDate": "2026-08-24T03:01:54.841Z",
+      "routeCode": "RT-POB-01",
+      "sequenceNo": 13,
+      "id": "WDT-ACC-14841",
+      "gpsCoordinates": {
+        "lng": 124.7523,
+        "lat": 8.5398
+      },
+      "category": "Residential",
+      "previousReadingDate": "2026-08-24",
+      "householdInfo": "4",
+      "averageConsumption": 15,
+      "rateCode": "RES-01"
     },
     {
       "accountNumber": "BRG-01-6900",
@@ -618,12 +699,12 @@
       "email": "aidalin.llera@gmail.com",
       "rfidTag": "RFID-121111102",
       "registrationDate": "2024-03-05",
-      "linkedUserId": "",
+      "linkedUserId": "email_aidalin_llera_gmail_com",
       "householdInfo": "3 members",
       "isRegistered": true,
       "blockReason": "Exceeded 3-month payment grace period (652 days overdue, 1 unpaid cycles). Disconnection Notice issued.",
       "disconnectionNoticeDate": "2026-09-25T01:43:19.655Z",
-      "gracePeriodOverdueDays": 681,
+      "gracePeriodOverdueDays": 682,
       "meterBrand": "EVJET",
       "outstandingBalance": 95.92,
       "sequenceNo": 137,
@@ -810,24 +891,33 @@
       "outstandingBalance": 0
     },
     {
-      "accountNumber": "",
+      "accountNumber": "BRG-01-2689",
       "name": "Bruce Acero",
-      "address": "PUROK 3, POBLACION",
+      "address": "sitio bungol bungol, Poblacion, Tagoloan, Misamis Oriental",
       "barangay": "Poblacion",
       "barangayId": "BRG-01",
-      "sitioZone": "Purok 3",
-      "meterNumber": "",
+      "sitioZone": "sitio bungol bungol",
+      "meterNumber": "150309988",
       "previousReading": 0,
-      "lastReadingDate": "2026-08-25",
+      "lastReadingDate": "2026-08-21",
       "consumerType": "Residential",
-      "status": "pending_approval",
-      "contactNumber": "+63 917 888 2345",
+      "status": "Disconnection Notice",
+      "contactNumber": "0969696969",
       "email": "acero@gmail.com",
-      "rfidTag": "",
-      "registrationDate": "2026-08-25",
+      "rfidTag": "MT-88373",
+      "registrationDate": "2026-08-21",
       "linkedUserId": "user-acero",
-      "householdInfo": "4 members",
-      "isRegistered": true
+      "householdInfo": "3",
+      "isRegistered": true,
+      "meterBrand": "EVER",
+      "meterSize": "1/2 inch",
+      "outstandingBalance": 0,
+      "sequenceNo": 138,
+      "createdAt": 1724630400000,
+      "disconnectionNoticeDate": "2026-10-25T10:10:47.141Z",
+      "gracePeriodOverdueDays": 40,
+      "unpaidCyclesCount": 3,
+      "blockReason": "Exceeded 3-month payment grace period (40 days overdue, 3 unpaid cycles). Disconnection Notice issued."
     },
     {
       "accountNumber": "011-102-056",
@@ -847,7 +937,7 @@
       "isRegistered": true,
       "blockReason": "Exceeded 3-month payment grace period (681 days overdue, 1 unpaid cycles). Disconnection Notice issued.",
       "disconnectionNoticeDate": "2026-10-24T02:56:21.791Z",
-      "gracePeriodOverdueDays": 681,
+      "gracePeriodOverdueDays": 682,
       "householdInfo": "4 members",
       "meterBrand": "EVER",
       "meterSize": "1/2\"",
@@ -855,7 +945,7 @@
       "registrationDate": "2024-01-15",
       "sequenceNo": 135,
       "unpaidCyclesCount": 1,
-      "linkedUserId": ""
+      "linkedUserId": "email_gina_figueroa_gmail_com"
     },
     {
       "accountNumber": "011-302-053",
@@ -877,14 +967,14 @@
       "businessName": "Ello Enterprise / Store",
       "businessType": "Retail & Commercial",
       "disconnectionNoticeDate": "2026-10-24T02:56:21.796Z",
-      "gracePeriodOverdueDays": 681,
+      "gracePeriodOverdueDays": 682,
       "meterBrand": "EVER",
       "meterSize": "3/4\"",
       "outstandingBalance": 0,
       "registrationDate": "2024-02-10",
       "sequenceNo": 136,
       "unpaidCyclesCount": 1,
-      "linkedUserId": ""
+      "linkedUserId": "email_carmen_ello_gmail_com"
     },
     {
       "accountNumber": "022-204-118",
@@ -904,7 +994,11 @@
       "isRegistered": true,
       "linkedUserId": "user-1788138155453",
       "outstandingBalance": 108.16,
-      "registrationDate": "2026-08-31"
+      "registrationDate": "2026-08-31",
+      "meterSize": "1/2\"",
+      "sequenceNo": 201,
+      "meterBrand": "EVER",
+      "householdInfo": "4 members"
     },
     {
       "accountNumber": "022-501-094",
@@ -924,7 +1018,12 @@
       "isRegistered": true,
       "linkedUserId": "user-1788138164130",
       "outstandingBalance": 189.8,
-      "registrationDate": "2026-08-31"
+      "registrationDate": "2026-08-31",
+      "meterSize": "3/4\"",
+      "sequenceNo": 202,
+      "meterBrand": "EVJET",
+      "businessType": "General Merchandise",
+      "businessName": "Magpale Trading"
     },
     {
       "accountNumber": "033-101-077",
@@ -944,7 +1043,11 @@
       "isRegistered": true,
       "linkedUserId": "user-1788138166144",
       "outstandingBalance": 120.41,
-      "registrationDate": "2026-08-31"
+      "registrationDate": "2026-08-31",
+      "meterSize": "1/2\"",
+      "householdInfo": "5 members",
+      "sequenceNo": 301,
+      "meterBrand": "EVER"
     },
     {
       "accountNumber": "066-202-045",
@@ -964,7 +1067,12 @@
       "isRegistered": true,
       "linkedUserId": "user-1788138177398",
       "outstandingBalance": 0,
-      "registrationDate": "2026-08-31"
+      "registrationDate": "2026-08-31",
+      "businessType": "Industrial / Commercial",
+      "meterSize": "1\"",
+      "businessName": "Daganato Metalworks & Hardware",
+      "sequenceNo": 601,
+      "meterBrand": "EVJET"
     },
     {
       "accountNumber": "033-202-088",
@@ -987,7 +1095,13 @@
       "createdAt": 1792111771186,
       "outstandingBalance": 0,
       "gracePeriodOverdueDays": 0,
-      "unpaidCyclesCount": 0
+      "unpaidCyclesCount": 0,
+      "businessName": "Ranises Beachside Resort",
+      "businessType": "Hospitality / Commercial",
+      "meterBrand": "EVJET",
+      "meterSize": "1\"",
+      "sequenceNo": 802,
+      "householdInfo": "6 members"
     },
     {
       "accountNumber": "044-101-019",
@@ -1000,11 +1114,21 @@
       "previousReading": 1220,
       "lastReadingDate": "2024-10-15",
       "consumerType": "Residential",
-      "status": "Disconnection Notice",
+      "status": "active",
       "contactNumber": "+63 922 666 4411",
       "email": "ramon.valdez@gmail.com",
       "rfidTag": "RFID-180601345",
-      "isRegistered": true
+      "isRegistered": true,
+      "meterBrand": "EVER",
+      "registrationDate": "2024-02-01",
+      "meterSize": "1/2\"",
+      "householdInfo": "3 members",
+      "outstandingBalance": 145.25,
+      "sequenceNo": 401,
+      "createdAt": 1792111771186,
+      "gracePeriodOverdueDays": 0,
+      "unpaidCyclesCount": 0,
+      "linkedUserId": "email_ramon_valdez_gmail_com"
     },
     {
       "accountNumber": "044-202-044",
@@ -1017,11 +1141,22 @@
       "previousReading": 2430,
       "lastReadingDate": "2024-10-15",
       "consumerType": "Commercial",
-      "status": "Disconnection Notice",
+      "status": "active",
       "contactNumber": "+63 923 777 5522",
       "email": "merlita.pacana@gmail.com",
       "rfidTag": "RFID-180602456",
-      "isRegistered": true
+      "isRegistered": true,
+      "meterBrand": "EVJET",
+      "registrationDate": "2024-03-12",
+      "businessName": "Pacaña Eatery & Refreshment",
+      "businessType": "Food & Beverage",
+      "meterSize": "3/4\"",
+      "outstandingBalance": 0,
+      "sequenceNo": 402,
+      "linkedUserId": "email_merlita_pacana_gmail_com",
+      "gracePeriodOverdueDays": 0,
+      "createdAt": 1792111771186,
+      "unpaidCyclesCount": 0
     },
     {
       "accountNumber": "055-101-032",
@@ -1034,11 +1169,21 @@
       "previousReading": 1980,
       "lastReadingDate": "2024-10-15",
       "consumerType": "Residential",
-      "status": "Disconnection Notice",
+      "status": "active",
       "contactNumber": "+63 925 888 6633",
       "email": "danilo.ybanez@gmail.com",
       "rfidTag": "RFID-190701567",
-      "isRegistered": true
+      "isRegistered": true,
+      "meterBrand": "EVER",
+      "registrationDate": "2024-01-28",
+      "meterSize": "1/2\"",
+      "householdInfo": "4 members",
+      "outstandingBalance": 210,
+      "sequenceNo": 501,
+      "linkedUserId": "email_danilo_ybanez_gmail_com",
+      "gracePeriodOverdueDays": 0,
+      "unpaidCyclesCount": 0,
+      "createdAt": 1792111771186
     },
     {
       "accountNumber": "055-202-061",
@@ -1051,11 +1196,21 @@
       "previousReading": 1450,
       "lastReadingDate": "2024-10-15",
       "consumerType": "Residential",
-      "status": "Disconnection Notice",
+      "status": "active",
       "contactNumber": "+63 926 999 7744",
       "email": "rowena.casino@gmail.com",
       "rfidTag": "RFID-190702678",
-      "isRegistered": true
+      "isRegistered": true,
+      "meterBrand": "EVJET",
+      "registrationDate": "2024-02-18",
+      "meterSize": "1/2\"",
+      "householdInfo": "5 members",
+      "outstandingBalance": 0,
+      "sequenceNo": 502,
+      "unpaidCyclesCount": 0,
+      "linkedUserId": "email_rowena_casino_gmail_com",
+      "createdAt": 1792111771186,
+      "gracePeriodOverdueDays": 0
     },
     {
       "accountNumber": "066-101-089",
@@ -1068,11 +1223,21 @@
       "previousReading": 970,
       "lastReadingDate": "2024-10-15",
       "consumerType": "Residential",
-      "status": "Disconnection Notice",
+      "status": "active",
       "contactNumber": "+63 927 111 8855",
       "email": "eleuterio.jadman@gmail.com",
       "rfidTag": "RFID-180603789",
-      "isRegistered": true
+      "isRegistered": true,
+      "meterBrand": "EVER",
+      "registrationDate": "2024-03-15",
+      "meterSize": "1/2\"",
+      "householdInfo": "3 members",
+      "outstandingBalance": 0,
+      "sequenceNo": 602,
+      "unpaidCyclesCount": 0,
+      "linkedUserId": "email_eleuterio_jadman_gmail_com",
+      "createdAt": 1792111771186,
+      "gracePeriodOverdueDays": 0
     },
     {
       "accountNumber": "077-101-023",
@@ -1085,11 +1250,21 @@
       "previousReading": 1650,
       "lastReadingDate": "2024-10-15",
       "consumerType": "Residential",
-      "status": "Disconnection Notice",
+      "status": "active",
       "contactNumber": "+63 928 222 9966",
       "email": "federico.rivera@gmail.com",
       "rfidTag": "RFID-200801122",
-      "isRegistered": true
+      "isRegistered": true,
+      "meterBrand": "EVER",
+      "registrationDate": "2024-01-30",
+      "meterSize": "1/2\"",
+      "householdInfo": "4 members",
+      "outstandingBalance": 0,
+      "sequenceNo": 701,
+      "createdAt": 1792111771186,
+      "linkedUserId": "email_federico_rivera_gmail_com",
+      "gracePeriodOverdueDays": 0,
+      "unpaidCyclesCount": 0
     },
     {
       "accountNumber": "077-202-054",
@@ -1102,11 +1277,21 @@
       "previousReading": 1110,
       "lastReadingDate": "2024-10-15",
       "consumerType": "Residential",
-      "status": "Disconnection Notice",
+      "status": "active",
       "contactNumber": "+63 929 333 0077",
       "email": "isidra.gorres@gmail.com",
       "rfidTag": "RFID-200802233",
-      "isRegistered": true
+      "isRegistered": true,
+      "meterBrand": "EVJET",
+      "registrationDate": "2024-02-28",
+      "meterSize": "1/2\"",
+      "householdInfo": "2 members",
+      "outstandingBalance": 120,
+      "sequenceNo": 702,
+      "linkedUserId": "email_isidra_gorres_gmail_com",
+      "unpaidCyclesCount": 0,
+      "gracePeriodOverdueDays": 0,
+      "createdAt": 1792111771186
     },
     {
       "accountNumber": "088-101-011",
@@ -1119,11 +1304,21 @@
       "previousReading": 2240,
       "lastReadingDate": "2024-10-15",
       "consumerType": "Residential",
-      "status": "Disconnection Notice",
+      "status": "active",
       "contactNumber": "+63 930 444 1188",
       "email": "gregorio.labis@gmail.com",
       "rfidTag": "RFID-210901344",
-      "isRegistered": true
+      "isRegistered": true,
+      "meterBrand": "EVER",
+      "registrationDate": "2024-02-05",
+      "meterSize": "1/2\"",
+      "householdInfo": "6 members",
+      "outstandingBalance": 245,
+      "sequenceNo": 801,
+      "gracePeriodOverdueDays": 0,
+      "createdAt": 1792111771186,
+      "linkedUserId": "email_gregorio_labis_gmail_com",
+      "unpaidCyclesCount": 0
     },
     {
       "accountNumber": "088-202-076",
@@ -1136,11 +1331,22 @@
       "previousReading": 3890,
       "lastReadingDate": "2024-10-15",
       "consumerType": "Commercial",
-      "status": "Disconnection Notice",
+      "status": "active",
       "contactNumber": "+63 931 555 2299",
       "email": "emma.ranises@gmail.com",
       "rfidTag": "RFID-210902455",
-      "isRegistered": true
+      "isRegistered": true,
+      "meterBrand": "EVJET",
+      "registrationDate": "2024-03-01",
+      "businessName": "Ranises Beachside Resort",
+      "businessType": "Hospitality / Commercial",
+      "meterSize": "1\"",
+      "outstandingBalance": 0,
+      "sequenceNo": 802,
+      "linkedUserId": "email_emma_ranises_gmail_com",
+      "createdAt": 1792111771186,
+      "gracePeriodOverdueDays": 0,
+      "unpaidCyclesCount": 0
     },
     {
       "accountNumber": "099-101-098",
@@ -1150,20 +1356,24 @@
       "barangayId": "BRG-09",
       "sitioZone": "Zone 33",
       "meterNumber": "221001566",
-      "previousReading": 1340,
-      "lastReadingDate": "2024-10-15",
+      "previousReading": 0,
+      "lastReadingDate": "2026-10-25",
       "consumerType": "Residential",
       "status": "active",
       "contactNumber": "+63 932 666 3300",
       "email": "crisanto.zambrano@gmail.com",
       "rfidTag": "RFID-221001566",
       "isRegistered": true,
-      "registrationDate": "2026-10-16",
-      "linkedUserId": "user-1792111771187",
-      "createdAt": 1792111771187,
+      "meterSize": "1/2\"",
+      "registrationDate": "2024-01-18",
+      "linkedUserId": "email_crisanto_zambrano_gmail_com",
+      "householdInfo": "4 members",
+      "meterBrand": "EVER",
       "outstandingBalance": 0,
+      "sequenceNo": 901,
       "gracePeriodOverdueDays": 0,
-      "unpaidCyclesCount": 0
+      "unpaidCyclesCount": 0,
+      "createdAt": 1792111771187
     },
     {
       "accountNumber": "099-202-033",
@@ -1176,10 +1386,39 @@
       "previousReading": 1340,
       "lastReadingDate": "2024-10-15",
       "consumerType": "Residential",
-      "status": "Disconnection Notice",
+      "status": "active",
       "contactNumber": "+63 933 777 4411",
       "email": "alicia.beja@gmail.com",
       "rfidTag": "RFID-221002677",
+      "isRegistered": true,
+      "registrationDate": "2024-02-14",
+      "linkedUserId": "user-1792111771187",
+      "createdAt": 1792111771187,
+      "outstandingBalance": 165.75,
+      "gracePeriodOverdueDays": 0,
+      "unpaidCyclesCount": 0,
+      "meterBrand": "EVJET",
+      "meterSize": "1/2\"",
+      "householdInfo": "3 members",
+      "sequenceNo": 902
+    },
+    {
+      "accountNumber": "",
+      "name": "Dovan Ray G Salcedo",
+      "address": "Zone 2A, Baluarte, Tagoloan, Misamis Oriental",
+      "barangay": "Baluarte",
+      "barangayId": "BRG-03",
+      "sitioZone": "Zone 2A",
+      "meterNumber": "",
+      "previousReading": 0,
+      "lastReadingDate": "2026-10-25",
+      "consumerType": "Residential",
+      "status": "pending_approval",
+      "contactNumber": "09756261740",
+      "email": "dovansalcedo@gmail.com",
+      "rfidTag": "",
+      "registrationDate": "2026-10-25",
+      "linkedUserId": "user-1792919551841",
       "isRegistered": true
     }
   ],
@@ -1192,7 +1431,8 @@
       "role": "consumer",
       "status": "active",
       "contactNumber": "09178882345",
-      "registrationDate": "2026-08-25"
+      "registrationDate": "2026-08-25",
+      "linkedAccountNumber": "BRG-01-2689"
     },
     {
       "id": "user-1787281714170",
@@ -1210,7 +1450,7 @@
       "password": "bruce200211",
       "role": "consumer",
       "status": "active",
-      "linkedAccountNumber": "BRG-01-3117"
+      "linkedAccountNumber": "BRG-01-7909"
     },
     {
       "id": "user-1788059767125",
@@ -1287,7 +1527,7 @@
       "id": "user-1787540374513",
       "email": "salsal@gmail.com",
       "name": "Dovan Ray Salcedo",
-      "password": "12345678",
+      "password": "123456",
       "role": "consumer",
       "status": "active",
       "linkedAccountNumber": "BRG-04-9057"
@@ -1309,9 +1549,397 @@
       "role": "consumer",
       "status": "active",
       "linkedAccountNumber": "BRG-01-5603"
+    },
+    {
+      "id": "user-1788655058895",
+      "email": "active.id.consumer@example.com",
+      "name": "ACTIVE ID CONSUMER",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "ACTIVE-ID-001"
+    },
+    {
+      "id": "email_aidalin_llera_gmail_com",
+      "email": "aidalin.llera@gmail.com",
+      "name": "OKLAND AIDALIN 1 / LLERA",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "011-102-042"
+    },
+    {
+      "id": "user-1792111771187",
+      "email": "alicia.beja@gmail.com",
+      "name": "BEJA, ALICIA N.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "099-202-033"
+    },
+    {
+      "id": "user-1792111771186",
+      "email": "aniceto.mercado@gmail.com",
+      "name": "MERCADO, ANICETO C.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "033-202-088"
+    },
+    {
+      "id": "user-1788602501351",
+      "email": "approval.test2.consumer@example.com",
+      "name": "APPROVAL TEST CONSUMER 2",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "APPROVAL-002"
+    },
+    {
+      "id": "user-1788601304994",
+      "email": "approval.test.consumer@example.com",
+      "name": "APPROVAL TEST CONSUMER",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "APPROVAL-001"
+    },
+    {
+      "id": "user-1788599541257",
+      "email": "area.test.consumer@example.com",
+      "name": "AREA TEST CONSUMER",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "AREA-001"
+    },
+    {
+      "id": "email_carmen_ello_gmail_com",
+      "email": "carmen.ello@gmail.com",
+      "name": "ELLO, CARMEN",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "011-302-053"
+    },
+    {
+      "id": "user-1788059767124",
+      "email": "e2e.consumer@example.com",
+      "name": "E2E TEST CONSUMER",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "E2E-001"
+    },
+    {
+      "id": "user-1788138155453",
+      "email": "eduardo.sabio@gmail.com",
+      "name": "SABIO, EDUARDO P.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "022-204-118"
+    },
+    {
+      "id": "email_gina_figueroa_gmail_com",
+      "email": "gina.figueroa@gmail.com",
+      "name": "FIGUEROA, GINA O.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "011-102-056"
+    },
+    {
+      "id": "user-1788138166144",
+      "email": "rolando.caballes@gmail.com",
+      "name": "CABALLES, ROLANDO B.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "033-101-077"
+    },
+    {
+      "id": "user-1788651904071",
+      "email": "sync.a@example.com",
+      "name": "SYNC TEST A",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "SYNC-A"
+    },
+    {
+      "id": "user-1788651902265",
+      "email": "sync.b@example.com",
+      "name": "SYNC TEST B",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "SYNC-B"
+    },
+    {
+      "id": "user-1788138164130",
+      "email": "teresita.magpale@gmail.com",
+      "name": "MAGPALE, TERESITA L.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "022-501-094"
+    },
+    {
+      "id": "user-1788597567402",
+      "email": "verify.consumer@example.com",
+      "name": "VERIFY CONSUMER",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "VERIFY-001"
+    },
+    {
+      "id": "user-1788138177398",
+      "email": "vicente.daganato@gmail.com",
+      "name": "DAGANATO, VICENTE K.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "066-202-045"
+    },
+    {
+      "id": "user-1787481079500",
+      "email": "",
+      "name": "AMORATO, VICENTE G.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "01-042-0091"
+    },
+    {
+      "id": "user-1787481326401",
+      "email": "",
+      "name": "CABALLERO, MA. ELENA S.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "01-042-0092"
+    },
+    {
+      "id": "user-1787481327355",
+      "email": "",
+      "name": "TAGOLOAN GRAIN MILL & TRADING",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "02-019-0115"
+    },
+    {
+      "id": "user-1787481327777",
+      "email": "",
+      "name": "RODRIGUEZ, BENJAMIN T.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "01-088-0044"
+    },
+    {
+      "id": "user-1787481328643",
+      "email": "",
+      "name": "PHIVIDEC AGRO-INDUSTRIAL FABRICATION CORP.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "03-005-0012"
+    },
+    {
+      "id": "user-1787481329091",
+      "email": "",
+      "name": "TAGOLOAN CENTRAL ELEMENTARY SCHOOL",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "01-012-0059"
+    },
+    {
+      "id": "user-1787481329936",
+      "email": "",
+      "name": "VALDEZ, DANILO P.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "01-099-0128"
+    },
+    {
+      "id": "user-1787481330440",
+      "email": "",
+      "name": "MACASARTE, ROLANDO E.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "01-042-0199"
+    },
+    {
+      "id": "user-1787481330959",
+      "email": "",
+      "name": "LUMANGCAS, CORAZON B.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "01-073-0041"
+    },
+    {
+      "id": "user-1787481331832",
+      "email": "",
+      "name": "SEAFOODS RESTO & BAKERY",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "02-088-0311"
+    },
+    {
+      "id": "user-1787481332701",
+      "email": "",
+      "name": "QUILATON, EDGARDO M.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "01-061-0083"
+    },
+    {
+      "id": "user-1787481334278",
+      "email": "",
+      "name": "YAP, FORTUNATO L.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "01-042-0310"
+    },
+    {
+      "id": "user-1787481335831",
+      "email": "",
+      "name": "Test Consumer",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "TEST-001"
+    },
+    {
+      "id": "user-1787518456991",
+      "email": "",
+      "name": "Final Consumer Test",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "TWD-FINAL-001"
+    },
+    {
+      "id": "user-1792920610725",
+      "email": "elmarf@gmail.com",
+      "name": "elmar funcion",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "BRG-03-5182"
+    },
+    {
+      "id": "email_ramon_valdez_gmail_com",
+      "email": "ramon.valdez@gmail.com",
+      "name": "VALDEZ, RAMON S.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "044-101-019"
+    },
+    {
+      "id": "email_merlita_pacana_gmail_com",
+      "email": "merlita.pacana@gmail.com",
+      "name": "PACAÑA, MERLITA G.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "044-202-044"
+    },
+    {
+      "id": "email_danilo_ybanez_gmail_com",
+      "email": "danilo.ybanez@gmail.com",
+      "name": "YBAÑEZ, DANILO M.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "055-101-032"
+    },
+    {
+      "id": "email_rowena_casino_gmail_com",
+      "email": "rowena.casino@gmail.com",
+      "name": "CASIÑO, ROWENA T.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "055-202-061"
+    },
+    {
+      "id": "email_eleuterio_jadman_gmail_com",
+      "email": "eleuterio.jadman@gmail.com",
+      "name": "JADMAN, ELEUTERIO R.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "066-101-089"
+    },
+    {
+      "id": "email_federico_rivera_gmail_com",
+      "email": "federico.rivera@gmail.com",
+      "name": "RIVERA, FEDERICO D.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "077-101-023"
+    },
+    {
+      "id": "email_isidra_gorres_gmail_com",
+      "email": "isidra.gorres@gmail.com",
+      "name": "GORRES, ISIDRA M.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "077-202-054"
+    },
+    {
+      "id": "email_gregorio_labis_gmail_com",
+      "email": "gregorio.labis@gmail.com",
+      "name": "LABIS, GREGORIO F.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "088-101-011"
+    },
+    {
+      "id": "email_emma_ranises_gmail_com",
+      "email": "emma.ranises@gmail.com",
+      "name": "RANISES, EMMA L.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "088-202-076"
+    },
+    {
+      "id": "email_crisanto_zambrano_gmail_com",
+      "email": "crisanto.zambrano@gmail.com",
+      "name": "ZAMBRANO, CRISANTO P.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "099-101-098"
+    },
+    {
+      "id": "user-1792920928405",
+      "email": "delacruz@gmail.com",
+      "name": "Juan Dela Cruz Jr.",
+      "role": "consumer",
+      "status": "active",
+      "linkedAccountNumber": "BRG-07-6022"
     }
   ],
   "notifications": [
+    {
+      "id": "notif-issued-BRG017909",
+      "accountNumber": "BRG-01-7909",
+      "userId": "user-1788783787909",
+      "consumerEmail": "bruceacero2002@gmail.com",
+      "title": "Official Account Number & Meter Issued!",
+      "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #BRG-01-7909 and Meter Serial is #MT-BRG-01-7909. Smart RFID Tag: RFID-MT-BRG-01-7909. Your full dashboard and telemetry are now active.",
+      "timestamp": "2026-10-25T11:20:43.973Z",
+      "type": "account_issue",
+      "read": false
+    },
+    {
+      "id": "notif-issued-BRG076022",
+      "accountNumber": "BRG-07-6022",
+      "userId": "user-1792920928405",
+      "consumerEmail": "delaCruz@gmail.com",
+      "title": "Official Account Number & Meter Issued!",
+      "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #BRG-07-6022 and Meter Serial is #MT-76113. Smart RFID Tag: RFID-50789. Your full dashboard and telemetry are now active.",
+      "timestamp": "2026-10-25T10:33:52.241Z",
+      "type": "account_issue",
+      "read": false
+    },
+    {
+      "id": "notif-issued-BRG012689",
+      "accountNumber": "BRG-01-2689",
+      "userId": "user-acero",
+      "consumerEmail": "acero@gmail.com",
+      "title": "Official Account Number & Meter Issued!",
+      "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #BRG-01-2689 and Meter Serial is #150309988. Smart RFID Tag: MT-88373. Your full dashboard and telemetry are now active.",
+      "timestamp": "2026-10-25T10:10:45.986Z",
+      "type": "account_issue",
+      "read": false
+    },
+    {
+      "id": "notif-issued-BRG035182",
+      "accountNumber": "BRG-03-5182",
+      "userId": "user-1792920610725",
+      "consumerEmail": "elmarf@gmail.com",
+      "title": "Official Account Number & Meter Issued!",
+      "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #BRG-03-5182 and Meter Serial is #MT-46368. Smart RFID Tag: RFID-85004. Your full dashboard and telemetry are now active.",
+      "timestamp": "2026-10-25T10:14:24.764Z",
+      "type": "account_issue",
+      "read": false
+    },
     {
       "accountNumber": "TWD-FINAL-001",
       "userId": "user-1787518456991",
@@ -1487,7 +2115,7 @@
     },
     {
       "accountNumber": "044-202-044",
-      "userId": "user-1792111771186",
+      "userId": "email_merlita_pacana_gmail_com",
       "consumerEmail": "merlita.pacana@gmail.com",
       "title": "Official Account Number & Meter Issued!",
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #044-202-044 and Meter Serial is #180602456. Smart RFID Tag: RFID-180602456. Your full dashboard and telemetry are now active.",
@@ -1498,7 +2126,7 @@
     },
     {
       "accountNumber": "088-202-076",
-      "userId": "user-1792111771186",
+      "userId": "email_emma_ranises_gmail_com",
       "consumerEmail": "emma.ranises@gmail.com",
       "title": "Official Account Number & Meter Issued!",
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #088-202-076 and Meter Serial is #210902455. Smart RFID Tag: RFID-210902455. Your full dashboard and telemetry are now active.",
@@ -1759,7 +2387,8 @@
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #011-302-053 and Meter Serial is #E180103545. Smart RFID Tag: RFID-E180103545. Your full dashboard and telemetry are now active.",
       "timestamp": "2026-10-25T09:47:27.030Z",
       "type": "account_issue",
-      "read": false
+      "read": false,
+      "userId": "email_carmen_ello_gmail_com"
     },
     {
       "id": "notif-issued-011102056",
@@ -1769,12 +2398,13 @@
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #011-102-056 and Meter Serial is #150307143. Smart RFID Tag: RFID-150307143. Your full dashboard and telemetry are now active.",
       "timestamp": "2026-10-25T09:47:27.029Z",
       "type": "account_issue",
-      "read": false
+      "read": false,
+      "userId": "email_gina_figueroa_gmail_com"
     },
     {
       "id": "notif-issued-066101089",
       "accountNumber": "066-101-089",
-      "userId": "user-1792111771186",
+      "userId": "email_eleuterio_jadman_gmail_com",
       "consumerEmail": "eleuterio.jadman@gmail.com",
       "title": "Official Account Number & Meter Issued!",
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #066-101-089 and Meter Serial is #180603789. Smart RFID Tag: RFID-180603789. Your full dashboard and telemetry are now active.",
@@ -1790,12 +2420,13 @@
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #011-102-042 and Meter Serial is #121111102. Smart RFID Tag: RFID-121111102. Your full dashboard and telemetry are now active.",
       "timestamp": "2026-10-25T09:47:27.029Z",
       "type": "account_issue",
-      "read": false
+      "read": false,
+      "userId": "email_aidalin_llera_gmail_com"
     },
     {
       "id": "notif-issued-044101019",
       "accountNumber": "044-101-019",
-      "userId": "user-1792111771186",
+      "userId": "email_ramon_valdez_gmail_com",
       "consumerEmail": "ramon.valdez@gmail.com",
       "title": "Official Account Number & Meter Issued!",
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #044-101-019 and Meter Serial is #180601345. Smart RFID Tag: RFID-180601345. Your full dashboard and telemetry are now active.",
@@ -1806,7 +2437,7 @@
     {
       "id": "notif-issued-055101032",
       "accountNumber": "055-101-032",
-      "userId": "user-1792111771186",
+      "userId": "email_danilo_ybanez_gmail_com",
       "consumerEmail": "danilo.ybanez@gmail.com",
       "title": "Official Account Number & Meter Issued!",
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #055-101-032 and Meter Serial is #190701567. Smart RFID Tag: RFID-190701567. Your full dashboard and telemetry are now active.",
@@ -1817,7 +2448,7 @@
     {
       "id": "notif-issued-055202061",
       "accountNumber": "055-202-061",
-      "userId": "user-1792111771186",
+      "userId": "email_rowena_casino_gmail_com",
       "consumerEmail": "rowena.casino@gmail.com",
       "title": "Official Account Number & Meter Issued!",
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #055-202-061 and Meter Serial is #190702678. Smart RFID Tag: RFID-190702678. Your full dashboard and telemetry are now active.",
@@ -1828,7 +2459,7 @@
     {
       "id": "notif-issued-077101023",
       "accountNumber": "077-101-023",
-      "userId": "user-1792111771186",
+      "userId": "email_federico_rivera_gmail_com",
       "consumerEmail": "federico.rivera@gmail.com",
       "title": "Official Account Number & Meter Issued!",
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #077-101-023 and Meter Serial is #200801122. Smart RFID Tag: RFID-200801122. Your full dashboard and telemetry are now active.",
@@ -1839,7 +2470,7 @@
     {
       "id": "notif-issued-077202054",
       "accountNumber": "077-202-054",
-      "userId": "user-1792111771186",
+      "userId": "email_isidra_gorres_gmail_com",
       "consumerEmail": "isidra.gorres@gmail.com",
       "title": "Official Account Number & Meter Issued!",
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #077-202-054 and Meter Serial is #200802233. Smart RFID Tag: RFID-200802233. Your full dashboard and telemetry are now active.",
@@ -1850,7 +2481,7 @@
     {
       "id": "notif-issued-088101011",
       "accountNumber": "088-101-011",
-      "userId": "user-1792111771186",
+      "userId": "email_gregorio_labis_gmail_com",
       "consumerEmail": "gregorio.labis@gmail.com",
       "title": "Official Account Number & Meter Issued!",
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #088-101-011 and Meter Serial is #210901344. Smart RFID Tag: RFID-210901344. Your full dashboard and telemetry are now active.",
@@ -1861,7 +2492,7 @@
     {
       "id": "notif-issued-099101098",
       "accountNumber": "099-101-098",
-      "userId": "user-1792111771187",
+      "userId": "email_crisanto_zambrano_gmail_com",
       "consumerEmail": "crisanto.zambrano@gmail.com",
       "title": "Official Account Number & Meter Issued!",
       "message": "Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #099-101-098 and Meter Serial is #221001566. Smart RFID Tag: RFID-221001566. Your full dashboard and telemetry are now active.",

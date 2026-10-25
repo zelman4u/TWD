@@ -102,6 +102,10 @@ function flushOutboundQueue() {
  * Queues the message if the connection is currently reconnecting.
  */
 export function sendRealtimeMessage(type: string, payload?: any): boolean {
+  if (!getRealtimeSocketUrl()) {
+    return false;
+  }
+
   const msg: WebSocketMessage = {
     type,
     payload,
@@ -120,7 +124,6 @@ export function sendRealtimeMessage(type: string, payload?: any): boolean {
   // Queue message for delivery once reconnected
   if (outboundQueue.length < MAX_QUEUE_SIZE) {
     outboundQueue.push(msg);
-    console.info(`[WebSocket Client] Queued outbound message "${type}" (waiting for reconnect).`);
   }
   return false;
 }
@@ -277,10 +280,10 @@ function getCloseReason(code: number): string {
   }
 }
 
-// Online/Offline & Visibility Handlers for instant recovery
+// Online/Offline & Visibility Handlers for instant recovery (only when WebSocket endpoint is enabled)
 if (typeof window !== 'undefined') {
   window.addEventListener('online', () => {
-    console.info('[WebSocket Client] Internet connectivity restored. Initiating immediate reconnect.');
+    if (!getRealtimeSocketUrl()) return;
     if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectAttempts = 0;
@@ -289,14 +292,14 @@ if (typeof window !== 'undefined') {
   });
 
   window.addEventListener('offline', () => {
-    console.warn('[WebSocket Client] Internet connection offline. Awaiting network restoration.');
+    if (!getRealtimeSocketUrl()) return;
     updateState('disconnected');
   });
 
   document.addEventListener('visibilitychange', () => {
+    if (!getRealtimeSocketUrl()) return;
     if (document.visibilityState === 'visible') {
       if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
-        console.info('[WebSocket Client] Browser tab active. Refreshing WebSocket connection.');
         if (reconnectTimer) clearTimeout(reconnectTimer);
         connect();
       }
