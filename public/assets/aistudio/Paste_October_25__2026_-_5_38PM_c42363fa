@@ -1,0 +1,874 @@
+Access to fetch at 'https://www.useblackbox.io/tlm' from origin 'https://twd-zeta.vercel.app' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+www.useblackbox.io/tlm:1  Failed to load resource: net::ERR_FAILED
+index.iife.js:123   Uncaught (in promise) TypeError: Failed to fetch
+    at ds (index.iife.js:123:39008)
+index-D4QmW7xJ.js:4156 [WebSocket Client] Browser tab active. Refreshing WebSocket connection.
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+reports:1  Failed to load resource: the server responded with a status of 404 ()
+readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (308ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 908ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1541ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1321ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3589ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3590ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (337ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 974ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1712ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1293ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3329ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3330ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (304ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 902ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1518ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1269ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3101ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3101ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (338ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 852ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1532ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1382ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (11445ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (11469ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (5928ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 888ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (646ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 897ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (40539ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1203ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (948ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 972ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4156 [WebSocket Client] Browser tab active. Refreshing WebSocket connection.
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (9685ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1287ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (46793ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (46794ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (7125ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1274ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1383ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 940ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (11313ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (11313ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (2669ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1367ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (9105ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (9108ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (612ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 848ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (4344ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (4345ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1928ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1225ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3460ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3460ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (354ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 869ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (364ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 947ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1781ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1366ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1672ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1223ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3469ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3482ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3262ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3263ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (388ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 831ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1532ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1253ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3101ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3101ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (353ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 817ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1488ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1348ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (310ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 993ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3531ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3556ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1610ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1304ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (310ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 891ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3265ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3266ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1562ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1280ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3175ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3178ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (327ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 846ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1494ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1292ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3100ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3101ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (314ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 950ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1588ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1272ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3170ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3170ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (302ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 815ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1441ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1231ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3001ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3002ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (311ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 997ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1660ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1207ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3190ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3190ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (334ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 882ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1569ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1227ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3114ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3116ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (309ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 932ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1559ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1362ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3257ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3258ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (311ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 873ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1852ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1345ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3523ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3523ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (306ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 847ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1585ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1212ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3145ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3147ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (303ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 871ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1489ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1325ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3583ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3584ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (319ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 817ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1482ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1347ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3497ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3499ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (303ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 954ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1592ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1290ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3195ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3196ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (313ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 968ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1704ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1267ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3323ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3325ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (378ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 911ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1912ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1239ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3473ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3474ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (333ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 838ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1520ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1296ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3133ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3134ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (333ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 872ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1574ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1306ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3191ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3193ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (308ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 877ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1522ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1213ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3056ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3058ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (325ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 983ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1675ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1395ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3372ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3373ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (306ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 868ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1516ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1307ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3129ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3130ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (352ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 812ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1490ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1344ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3154ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3155ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (311ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 870ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1626ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1216ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3202ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3203ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (297ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 890ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1509ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1223ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3050ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3050ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (321ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 986ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1679ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1271ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3252ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3253ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (311ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 958ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1649ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1255ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3223ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3224ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (307ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 977ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1605ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1295ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3235ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3236ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (344ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 894ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1575ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1347ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3246ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3247ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (319ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 828ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1495ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1284ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3094ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3095ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (305ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 920ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1821ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1289ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3507ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3509ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (418ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 847ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1647ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1241ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3584ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3585ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (313ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 821ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1443ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1264ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3041ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3042ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (322ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 819ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1477ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1205ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3032ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3034ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (332ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 972ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1630ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1396ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3339ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3340ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (368ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 941ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1628ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1260ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3233ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3233ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (321ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 995ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1667ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1311ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3311ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3312ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (310ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 913ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1543ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1315ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3312ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3313ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (312ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 832ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1519ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1276ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3102ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3103ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (316ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 969ms (attempt 1/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (1620ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client Retry] GET /api/reports?accountNumber=BRG-03-5182 failed. Retrying in 1214ms (attempt 2/2)...
+Yb @ index-D4QmW7xJ.js:4163
+/api/reports?accountNumber=BRG-03-5182:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 404 (3574ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+index-D4QmW7xJ.js:4163 [API Client ✗] GET /api/reports?accountNumber=BRG-03-5182 ERR (3575ms) - HTTP 404: Server error
+DE @ index-D4QmW7xJ.js:4163
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4156 [WebSocket Client] Browser tab active. Refreshing WebSocket connection.
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/reports:1  Failed to load resource: the server responded with a status of 404 ()
+/api/readings:1  Failed to load resource: the server responded with a status of 404 ()
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/reports 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/readings 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/readings 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/reports 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/readings 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/reports 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/reports 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/readings 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/readings 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/reports 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/reports 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/readings 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/reports 404 (Not Found)
+Er @ index-D4QmW7xJ.js:4164
+(anonymous) @ index-D4QmW7xJ.js:4164
+index-D4QmW7xJ.js:4164  GET https://twd-zeta.vercel.app/api/readings 404 (Not Found)

@@ -52,6 +52,7 @@ function AppContent() {
     // Initial fetch of session and data
     const initializeApp = async () => {
       try {
+        mockDb.reconcileIssuedAccounts();
         const activeUser = mockDb.getCurrentUser();
         if (activeUser) {
           if (activeUser.email && activeUser.email.toLowerCase() === 'admin@tagoloanwater.gov.ph') {
@@ -90,7 +91,10 @@ function AppContent() {
       if (liveCurrent) {
         setCurrentUser(prev => {
           if (!prev) return liveCurrent;
-          if (prev.id === liveCurrent.id && (prev.linkedAccountNumber !== liveCurrent.linkedAccountNumber || prev.status !== liveCurrent.status)) {
+          const sameIdentity =
+            prev.id === liveCurrent.id ||
+            Boolean(prev.email && liveCurrent.email && prev.email.toLowerCase() === liveCurrent.email.toLowerCase());
+          if (sameIdentity && (prev.linkedAccountNumber !== liveCurrent.linkedAccountNumber || prev.status !== liveCurrent.status || prev.id !== liveCurrent.id)) {
             return { ...prev, ...liveCurrent };
           }
           return prev;

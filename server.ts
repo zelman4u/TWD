@@ -7,6 +7,7 @@
 process.env.DISABLE_HMR = "true";
 
 import express from "express";
+import fs from "fs";
 import path from "path";
 import { createServer as createHttpServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -239,10 +240,56 @@ interface MobileConsumerSync {
   isRegistered?: boolean;
 }
 
+interface PortalSyncUser {
+  id: string;
+  email: string;
+  name: string;
+  password?: string;
+  role: "admin" | "consumer" | "staff" | "cashier" | "meter_reader";
+  status: "active" | "inactive" | "pending_approval";
+  linkedAccountNumber?: string;
+  contactNumber?: string;
+  registrationDate?: string;
+}
+
+function normalizePhone11Server(raw?: string): string {
+  if (!raw) return "";
+  let digits = String(raw).replace(/\D/g, "");
+  if (digits.startsWith("63") && digits.length === 12) {
+    digits = "0" + digits.slice(2);
+  }
+  if (digits.length === 10 && digits.startsWith("9")) {
+    digits = "0" + digits;
+  }
+  return digits;
+}
+
+function isIssuedAccountNumberServer(acc?: string): boolean {
+  if (!acc) return false;
+  const clean = acc.replace(/^#/, "").trim().toUpperCase();
+  if (!clean || clean.startsWith("PENDING") || clean === "UNASSIGNED" || clean === "UNISSUED" || clean === "NONE" || clean === "N/A") {
+    return false;
+  }
+  return true;
+}
+
+let syncedPortalUsers: PortalSyncUser[] = [
+  {
+    id: "user-acero",
+    email: "acero@gmail.com",
+    name: "Bruce Acero",
+    password: "Password123!",
+    role: "consumer",
+    status: "pending_approval",
+    contactNumber: "09178882345",
+    registrationDate: "2026-08-25"
+  }
+];
+
 let syncedConsumers: MobileConsumerSync[] = [
   {
     accountNumber: "",
-    name: "ACERO, MARIEL S.",
+    name: "Bruce Acero",
     address: "PUROK 3, POBLACION",
     barangay: "Poblacion",
     barangayId: "BRG-01",
@@ -1439,7 +1486,8 @@ app.post("/api/consumers/register", (req, res) => {
       householdInfo,
       businessName,
       businessType,
-      linkedUserId
+      linkedUserId,
+      password
     } = req.body;
 
     const consumerName = (name || fullName || "").trim();
@@ -1520,10 +1568,46 @@ app.post("/api/consumers/register", (req, res) => {
     };
 
     if (existingIdx >= 0) {
-      syncedConsumers[existingIdx] = { ...syncedConsumers[existingIdx], ...record };
+      // Never downgrade an already-issued consumer record back to pending
+      if (isValidatedConsumerForReader(syncedConsumers[existingIdx])) {
+        syncedConsumers[existingIdx] = {
+          ...record,
+          ...syncedConsumers[existingIdx],
+          email: cleanEmail || syncedConsumers[existingIdx].email,
+          contactNumber: cleanPhone || syncedConsumers[existingIdx].contactNumber
+        };
+      } else {
+        syncedConsumers[existingIdx] = { ...syncedConsumers[existingIdx], ...record };
+      }
     } else {
       syncedConsumers.unshift(record); // Add to top so Admin sees it immediately
     }
+
+    const activeConsumerRecord = syncedConsumers[existingIdx >= 0 ? existingIdx : 0];
+    const hasIssuedAcc = isValidatedConsumerForReader(activeConsumerRecord);
+
+    // Also persist portal login account on server for cross-browser / cross-device consumer login
+    const uIdx = syncedPortalUsers.findIndex(
+      u => (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) || u.id === userId
+    );
+    const portalUserEntry: PortalSyncUser = {
+      id: activeConsumerRecord.linkedUserId || userId,
+      email: cleanEmail,
+      name: consumerName,
+      password: password ? String(password) : (uIdx >= 0 ? syncedPortalUsers[uIdx].password : undefined),
+      role: "consumer",
+      status: hasIssuedAcc ? "active" : "pending_approval",
+      linkedAccountNumber: hasIssuedAcc ? activeConsumerRecord.accountNumber : undefined,
+      contactNumber: cleanPhone,
+      registrationDate: activeConsumerRecord.registrationDate
+    };
+    if (uIdx >= 0) {
+      syncedPortalUsers[uIdx] = { ...syncedPortalUsers[uIdx], ...portalUserEntry };
+    } else {
+      syncedPortalUsers.unshift(portalUserEntry);
+    }
+
+    savePortalSyncStore();
 
     // Broadcast live event to all connected Admin dashboards
     broadcast("CONSUMER_REGISTERED", {
@@ -1770,6 +1854,13 @@ app.post("/api/consumers", (req, res) => {
       });
     }
 
+    // Sync linked portal user status & accountNumber on server
+    if (isNowValidated) {
+      syncConsumerToServerPortalUser(savedConsumer);
+    }
+
+    savePortalSyncStore();
+
     // Broadcast update to Admin and Consumer dashboards
     broadcast("CONSUMER_UPDATED", {
       consumer: savedConsumer,
@@ -1811,6 +1902,11 @@ app.patch("/api/consumers/:identifier", (req, res) => {
       ...syncedConsumers[idx],
       ...updates
     };
+
+    if (isValidatedConsumerForReader(syncedConsumers[idx])) {
+      syncConsumerToServerPortalUser(syncedConsumers[idx]);
+    }
+    savePortalSyncStore();
 
     broadcast("CONSUMER_UPDATED", {
       consumer: syncedConsumers[idx],
@@ -1862,6 +1958,7 @@ app.post(["/api/consumers/:identifier/issue-id", "/api/consumers/:identifier/app
     };
 
     const validatedConsumer = syncedConsumers[idx];
+    syncConsumerToServerPortalUser(validatedConsumer);
 
     const issuedNotif = pushServerNotification({
       accountNumber: validatedConsumer.accountNumber,
@@ -1871,6 +1968,7 @@ app.post(["/api/consumers/:identifier/issue-id", "/api/consumers/:identifier/app
       message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${validatedConsumer.accountNumber} and Meter Serial is #${validatedConsumer.meterNumber}. Smart RFID Tag: ${validatedConsumer.rfidTag}. Your full dashboard and telemetry are now active.`,
       type: "account_issue"
     });
+    savePortalSyncStore();
 
     // Broadcast ID activation event to Consumer Portal, Admin consoles, and mobile reader route streams
     broadcast("CONSUMER_IDS_ISSUED", {
@@ -1923,6 +2021,13 @@ app.delete("/api/consumers/:identifier", (req, res) => {
       c.linkedUserId !== identifier
     );
 
+    syncedPortalUsers = syncedPortalUsers.filter(u =>
+      u.linkedAccountNumber !== identifier &&
+      (!u.email || u.email.toLowerCase() !== identifier.toLowerCase()) &&
+      u.id !== identifier
+    );
+    savePortalSyncStore();
+
     broadcast("CONSUMER_DELETED", {
       identifier,
       message: `Consumer ${identifier} removed from registry.`
@@ -1935,6 +2040,293 @@ app.delete("/api/consumers/:identifier", (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to delete consumer." });
+  }
+});
+
+// POST /api/consumers/reconcile - Retroactively syncs all previously issued IDs, consumer users & notifications across sessions
+app.post("/api/consumers/reconcile", (req, res) => {
+  try {
+    const incomingConsumers: any[] = Array.isArray(req.body?.consumers) ? req.body.consumers : [];
+    const incomingUsers: any[] = Array.isArray(req.body?.users) ? req.body.users : [];
+    const incomingNotifs: any[] = Array.isArray(req.body?.notifications) ? req.body.notifications : [];
+
+    // 1. Merge incoming consumer users (preserve passwords & upgrade active linked accounts)
+    incomingUsers.forEach(iu => {
+      if (!iu || iu.role === "admin") return;
+      const cleanEmail = (iu.email || "").trim().toLowerCase();
+      const cleanId = (iu.id || "").trim();
+      if (!cleanEmail && !cleanId) return;
+
+      const uIdx = syncedPortalUsers.findIndex(u =>
+        (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) ||
+        (cleanId && u.id === cleanId)
+      );
+
+      const incomingHasAcc = isIssuedAccountNumberServer(iu.linkedAccountNumber);
+      if (uIdx >= 0) {
+        const existing = syncedPortalUsers[uIdx];
+        const existingHasAcc = isIssuedAccountNumberServer(existing.linkedAccountNumber);
+        syncedPortalUsers[uIdx] = {
+          ...existing,
+          name: iu.name || existing.name,
+          email: cleanEmail || existing.email,
+          password: iu.password || existing.password,
+          contactNumber: iu.contactNumber || existing.contactNumber,
+          linkedAccountNumber: incomingHasAcc
+            ? String(iu.linkedAccountNumber).trim().toUpperCase()
+            : existingHasAcc
+              ? existing.linkedAccountNumber
+              : undefined,
+          status: (incomingHasAcc || existingHasAcc) ? "active" : (iu.status || existing.status || "pending_approval")
+        };
+      } else {
+        syncedPortalUsers.push({
+          id: cleanId || `user-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          email: cleanEmail,
+          name: iu.name || "Consumer",
+          password: iu.password,
+          role: "consumer",
+          status: incomingHasAcc ? "active" : (iu.status || "pending_approval"),
+          linkedAccountNumber: incomingHasAcc ? String(iu.linkedAccountNumber).trim().toUpperCase() : undefined,
+          contactNumber: iu.contactNumber,
+          registrationDate: iu.registrationDate
+        });
+      }
+    });
+
+    // 2. Merge incoming notifications first (without duplicating)
+    incomingNotifs.forEach(n => {
+      if (!n || !n.title || !n.message) return;
+      pushServerNotification(n, false);
+    });
+
+    // 3. Merge incoming consumers — ISSUED records ALWAYS supersede pending records
+    const newlyConfirmedBroadcasts: Array<{ consumer: MobileConsumerSync; notification?: ServerConsumerNotification }> = [];
+
+    incomingConsumers.forEach(ic => {
+      if (!ic || !ic.name) return;
+      const icAcc = (ic.accountNumber || "").trim().toUpperCase();
+      const icIssued = isIssuedAccountNumberServer(icAcc) && ic.status !== "pending_approval" && ic.status !== "pending";
+      const icEmail = (ic.email || "").trim().toLowerCase();
+      const icPhone = normalizePhone11Server(ic.contactNumber);
+      const icUid = (ic.linkedUserId || "").trim();
+      const icName = String(ic.name || "").trim().toLowerCase();
+
+      const matchIdx = syncedConsumers.findIndex(sc => {
+        const scAcc = (sc.accountNumber || "").trim().toUpperCase();
+        const scEmail = (sc.email || "").trim().toLowerCase();
+        const scPhone = normalizePhone11Server(sc.contactNumber);
+        const scUid = (sc.linkedUserId || "").trim();
+        const scName = (sc.name || "").trim().toLowerCase();
+
+        if (icIssued && isIssuedAccountNumberServer(scAcc) && icAcc === scAcc) return true;
+        if (icEmail && scEmail && icEmail === scEmail) return true;
+        if (icUid && scUid && icUid === scUid) return true;
+        if (icPhone && scPhone && icPhone.length === 11 && icPhone === scPhone) return true;
+        if (icName && scName && icName === scName && (!icEmail || !scEmail || icEmail === scEmail)) return true;
+        return false;
+      });
+
+      if (matchIdx >= 0) {
+        const existing = syncedConsumers[matchIdx];
+        const existingIssued = isValidatedConsumerForReader(existing);
+
+        if (icIssued) {
+          const meterNum = (ic.meterNumber || existing.meterNumber || `MT-${icAcc}`).toString().trim().toUpperCase();
+          const rfid = (ic.rfidTag || existing.rfidTag || `RFID-${meterNum}`).toString().trim().toUpperCase();
+          const merged: MobileConsumerSync = {
+            ...existing,
+            ...ic,
+            accountNumber: icAcc,
+            meterNumber: meterNum,
+            rfidTag: rfid,
+            email: icEmail || existing.email || "",
+            contactNumber: ic.contactNumber || existing.contactNumber || "",
+            linkedUserId: existing.linkedUserId || icUid,
+            status: (ic.status && ic.status !== "pending_approval" && ic.status !== "pending") ? ic.status : "active",
+            isRegistered: true
+          };
+          syncedConsumers[matchIdx] = merged;
+          const ensuredNotif = ensureIssuedConsumerNotificationServer(merged);
+          syncConsumerToServerPortalUser(merged);
+
+          if (!existingIssued || existing.accountNumber.toUpperCase() !== icAcc) {
+            newlyConfirmedBroadcasts.push({ consumer: merged, notification: ensuredNotif });
+          }
+        } else if (!existingIssued) {
+          syncedConsumers[matchIdx] = {
+            ...existing,
+            email: existing.email || icEmail,
+            contactNumber: existing.contactNumber || ic.contactNumber,
+            linkedUserId: existing.linkedUserId || icUid
+          };
+        }
+      } else {
+        const meterNum = icIssued
+          ? (ic.meterNumber || `MT-${icAcc}`).toString().trim().toUpperCase()
+          : "";
+        const rfid = icIssued
+          ? (ic.rfidTag || `RFID-${meterNum}`).toString().trim().toUpperCase()
+          : "";
+        const added: MobileConsumerSync = {
+          accountNumber: icIssued ? icAcc : "",
+          name: String(ic.name).trim(),
+          address: ic.address || "Tagoloan, Misamis Oriental",
+          barangay: ic.barangay || "Poblacion",
+          barangayId: ic.barangayId || "BRG-01",
+          sitioZone: ic.sitioZone || "Zone 1",
+          meterNumber: meterNum,
+          previousReading: Number(ic.previousReading) || 0,
+          lastReadingDate: ic.lastReadingDate || new Date().toISOString().split("T")[0],
+          meterSize: ic.meterSize,
+          consumerType: ic.consumerType === "Commercial" ? "Commercial" : "Residential",
+          status: icIssued ? (ic.status && ic.status !== "pending_approval" ? ic.status : "active") : "pending_approval",
+          contactNumber: ic.contactNumber || "",
+          email: icEmail,
+          rfidTag: rfid,
+          registrationDate: ic.registrationDate || new Date().toISOString().split("T")[0],
+          linkedUserId: icUid || undefined,
+          householdInfo: ic.householdInfo,
+          businessName: ic.businessName,
+          businessType: ic.businessType,
+          isRegistered: true
+        };
+        syncedConsumers.push(added);
+        if (icIssued) {
+          const ensuredNotif = ensureIssuedConsumerNotificationServer(added);
+          syncConsumerToServerPortalUser(added);
+          newlyConfirmedBroadcasts.push({ consumer: added, notification: ensuredNotif });
+        }
+      }
+    });
+
+    // 4. Deduplicate stale pending twins on server & align all issued consumers with their portal users + notifications
+    reconcileAllServerConsumersAndUsers();
+    savePortalSyncStore();
+
+    // 5. Broadcast newly reconciled ID confirmations so open Consumer Portals update immediately
+    newlyConfirmedBroadcasts.forEach(({ consumer, notification }) => {
+      broadcast("CONSUMER_IDS_ISSUED", {
+        consumer,
+        notification,
+        accountNumber: consumer.accountNumber,
+        meterNumber: consumer.meterNumber,
+        rfidTag: consumer.rfidTag,
+        email: consumer.email,
+        linkedUserId: consumer.linkedUserId,
+        isUpdate: false,
+        message: `Official IDs confirmed for ${consumer.name}: Account #${consumer.accountNumber}, Meter #${consumer.meterNumber}.`
+      });
+    });
+
+    res.json({
+      success: true,
+      consumersCount: syncedConsumers.length,
+      consumers: syncedConsumers,
+      users: syncedPortalUsers.map(({ password: _pw, ...safeUser }) => safeUser),
+      notificationsCount: inMemoryNotifications.length
+    });
+  } catch (err) {
+    console.error("[API Error] POST /api/consumers/reconcile:", err);
+    res.status(500).json({ success: false, message: "Failed to reconcile consumer accounts." });
+  }
+});
+
+// POST /api/consumers/resolve-account - Authoritative consumer account + notification resolver for Consumer Portal & Login
+app.post("/api/consumers/resolve-account", (req, res) => {
+  try {
+    const { email, userId, accountNumber, name, contactNumber, password, verifyPassword } = req.body || {};
+    const cleanEmail = (email || "").trim().toLowerCase();
+    const cleanUid = (userId || "").trim();
+    const cleanAcc = (accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const hasValidAcc = isIssuedAccountNumberServer(cleanAcc);
+    const cleanName = (name || "").trim().toLowerCase();
+    const cleanPhone = normalizePhone11Server(contactNumber);
+
+    // Ensure server store is internally consistent first
+    reconcileAllServerConsumersAndUsers();
+
+    // 1. Match Portal User if present
+    const matchedUser = syncedPortalUsers.find(u =>
+      (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) ||
+      (cleanUid && u.id === cleanUid) ||
+      (hasValidAcc && u.linkedAccountNumber && u.linkedAccountNumber.toUpperCase() === cleanAcc)
+    );
+
+    if (verifyPassword && matchedUser && matchedUser.password && password !== undefined) {
+      if (String(password).trim() !== matchedUser.password) {
+        return res.status(401).json({
+          success: false,
+          authFailed: true,
+          message: "Incorrect account password. Please try again."
+        });
+      }
+    }
+
+    // 2. Match Consumer record(s) — strictly prefer issued active records over pending ones
+    const candidateConsumers = syncedConsumers.filter(c => {
+      const cAcc = (c.accountNumber || "").trim().toUpperCase();
+      const cEmail = (c.email || "").trim().toLowerCase();
+      const cUid = (c.linkedUserId || "").trim();
+      const cPhone = normalizePhone11Server(c.contactNumber);
+      const cName = (c.name || "").trim().toLowerCase();
+
+      const targetAcc = hasValidAcc ? cleanAcc : (matchedUser?.linkedAccountNumber || "").trim().toUpperCase();
+      const targetEmail = cleanEmail || (matchedUser?.email || "").trim().toLowerCase();
+      const targetUid = cleanUid || (matchedUser?.id || "").trim();
+      const targetName = cleanName || (matchedUser?.name || "").trim().toLowerCase();
+
+      if (isIssuedAccountNumberServer(targetAcc) && isIssuedAccountNumberServer(cAcc) && targetAcc === cAcc) return true;
+      if (targetEmail && cEmail && targetEmail === cEmail) return true;
+      if (targetUid && cUid && targetUid === cUid) return true;
+      if (cleanPhone && cPhone && cleanPhone.length === 11 && cleanPhone === cPhone) return true;
+      if (targetName && cName && targetName === cName && (!targetEmail || !cEmail || targetEmail === cEmail)) return true;
+      return false;
+    });
+
+    candidateConsumers.sort((a, b) => (isValidatedConsumerForReader(b) ? 1 : 0) - (isValidatedConsumerForReader(a) ? 1 : 0));
+    const resolvedConsumer = candidateConsumers[0] || null;
+    const isIssued = resolvedConsumer ? isValidatedConsumerForReader(resolvedConsumer) : false;
+
+    if (resolvedConsumer && isIssued) {
+      ensureIssuedConsumerNotificationServer(resolvedConsumer);
+      syncConsumerToServerPortalUser(resolvedConsumer);
+      savePortalSyncStore();
+    }
+
+    // 3. Gather all notifications belonging to this consumer
+    const effectiveAcc = (resolvedConsumer?.accountNumber || matchedUser?.linkedAccountNumber || (hasValidAcc ? cleanAcc : "")).trim().toLowerCase();
+    const effectiveHasAcc = isIssuedAccountNumberServer(effectiveAcc);
+    const effectiveEmail = (resolvedConsumer?.email || matchedUser?.email || cleanEmail).trim().toLowerCase();
+    const effectiveUid = (resolvedConsumer?.linkedUserId || matchedUser?.id || cleanUid).trim().toLowerCase();
+
+    const consumerNotifs = inMemoryNotifications.filter(n => {
+      const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
+      const nHasAcc = isIssuedAccountNumberServer(nAcc);
+      const nEmail = (n.consumerEmail || "").trim().toLowerCase();
+      const nUid = (n.userId || "").trim().toLowerCase();
+
+      if (effectiveEmail && nEmail) return effectiveEmail === nEmail;
+      if (effectiveHasAcc && nHasAcc) return effectiveAcc === nAcc;
+      if (effectiveUid && nUid && effectiveUid === nUid) return true;
+      return false;
+    });
+
+    const refreshedUser = syncedPortalUsers.find(u =>
+      (effectiveEmail && u.email && u.email.toLowerCase() === effectiveEmail) ||
+      (effectiveUid && u.id.toLowerCase() === effectiveUid)
+    ) || matchedUser || null;
+
+    res.json({
+      success: true,
+      isIssued,
+      consumer: resolvedConsumer,
+      user: refreshedUser,
+      notifications: consumerNotifs
+    });
+  } catch (err) {
+    console.error("[API Error] POST /api/consumers/resolve-account:", err);
+    res.status(500).json({ success: false, message: "Failed to resolve consumer account." });
   }
 });
 
@@ -2550,28 +2942,260 @@ interface ServerConsumerNotification {
   ticketNumber?: string;
 }
 
-const inMemoryNotifications: ServerConsumerNotification[] = [];
+let inMemoryNotifications: ServerConsumerNotification[] = [];
+
+// ==========================================
+// PERSISTENT PORTAL SYNC STORE (.data/portal_sync_store.json)
+// Preserves issued consumer IDs, registered consumer users & notifications across server restarts
+// ==========================================
+const PORTAL_SYNC_DIR = path.join(process.cwd(), ".data");
+const PORTAL_SYNC_FILE = path.join(PORTAL_SYNC_DIR, "portal_sync_store.json");
+
+function savePortalSyncStore(): void {
+  try {
+    if (!fs.existsSync(PORTAL_SYNC_DIR)) {
+      fs.mkdirSync(PORTAL_SYNC_DIR, { recursive: true });
+    }
+    const payload = {
+      updatedAt: new Date().toISOString(),
+      consumers: syncedConsumers,
+      users: syncedPortalUsers,
+      notifications: inMemoryNotifications
+    };
+    fs.writeFileSync(PORTAL_SYNC_FILE, JSON.stringify(payload, null, 2), "utf8");
+  } catch (err) {
+    console.warn("[PortalSyncStore] Could not write sync store:", err);
+  }
+}
+
+function syncConsumerToServerPortalUser(consumer: MobileConsumerSync): void {
+  if (!consumer || !isIssuedAccountNumberServer(consumer.accountNumber)) return;
+  const acc = consumer.accountNumber.trim().toUpperCase();
+  const cEmail = (consumer.email || "").trim().toLowerCase();
+  const cUid = (consumer.linkedUserId || "").trim();
+  const cName = (consumer.name || "").trim().toLowerCase();
+  const cPhone = normalizePhone11Server(consumer.contactNumber);
+
+  const uIdx = syncedPortalUsers.findIndex(u => {
+    if (u.role === "admin") return false;
+    const uEmail = (u.email || "").trim().toLowerCase();
+    const uPhone = normalizePhone11Server(u.contactNumber);
+    const uName = (u.name || "").trim().toLowerCase();
+    if (cEmail && uEmail && cEmail === uEmail) return true;
+    if (cUid && u.id === cUid) return true;
+    if (u.linkedAccountNumber && u.linkedAccountNumber.toUpperCase() === acc) return true;
+    if (cPhone && uPhone && cPhone.length === 11 && cPhone === uPhone) return true;
+    if (cName && uName && cName === uName && (!cEmail || !uEmail || cEmail === uEmail)) return true;
+    return false;
+  });
+
+  if (uIdx >= 0) {
+    const matchedUser = syncedPortalUsers[uIdx];
+    syncedPortalUsers[uIdx] = {
+      ...matchedUser,
+      linkedAccountNumber: acc,
+      status: "active",
+      email: matchedUser.email || consumer.email || ""
+    };
+    // Heal synthetic linkedUserId on consumer & notifications so IDs match cleanly
+    if (matchedUser.id && consumer.linkedUserId !== matchedUser.id) {
+      const oldUid = consumer.linkedUserId;
+      consumer.linkedUserId = matchedUser.id;
+      inMemoryNotifications.forEach(n => {
+        const sameEmail = cEmail && n.consumerEmail && n.consumerEmail.toLowerCase() === cEmail;
+        const sameAcc = n.accountNumber && n.accountNumber.replace(/^#/, "").trim().toUpperCase() === acc;
+        const sameOldUid = oldUid && n.userId === oldUid;
+        if (sameEmail || sameAcc || sameOldUid) {
+          n.userId = matchedUser.id;
+          n.accountNumber = acc;
+          if (!n.consumerEmail && cEmail) n.consumerEmail = cEmail;
+        }
+      });
+    }
+  }
+}
+
+function ensureIssuedConsumerNotificationServer(consumer: MobileConsumerSync): ServerConsumerNotification | undefined {
+  if (!consumer || !isIssuedAccountNumberServer(consumer.accountNumber)) return undefined;
+  const acc = consumer.accountNumber.trim().toUpperCase();
+  const meter = (consumer.meterNumber || `MT-${acc}`).trim().toUpperCase();
+  const rfid = (consumer.rfidTag || `RFID-${meter}`).trim().toUpperCase();
+  const cEmail = (consumer.email || "").trim().toLowerCase();
+
+  // Re-associate any old PENDING notifications for this consumer's email/userId to their issued accountNumber
+  inMemoryNotifications.forEach(n => {
+    const nEmail = (n.consumerEmail || "").trim().toLowerCase();
+    const nUid = (n.userId || "").trim();
+    if ((cEmail && nEmail && cEmail === nEmail) || (consumer.linkedUserId && nUid && consumer.linkedUserId === nUid)) {
+      if (!isIssuedAccountNumberServer(n.accountNumber)) {
+        n.accountNumber = acc;
+      }
+      if (!n.consumerEmail && cEmail) {
+        n.consumerEmail = cEmail;
+      }
+    }
+  });
+
+  const existing = inMemoryNotifications.find(n => {
+    if (n.type !== "account_issue") return false;
+    const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const nTitle = (n.title || "").toLowerCase();
+    if (nTitle.includes("registration application submitted")) return false;
+    if (nAcc === acc) return true;
+    if (cEmail && n.consumerEmail && n.consumerEmail.trim().toLowerCase() === cEmail && isIssuedAccountNumberServer(nAcc)) return true;
+    return false;
+  });
+
+  if (existing) {
+    existing.accountNumber = acc;
+    if (cEmail && !existing.consumerEmail) existing.consumerEmail = cEmail;
+    if (consumer.linkedUserId) existing.userId = consumer.linkedUserId;
+    return existing;
+  }
+
+  return pushServerNotification(
+    {
+      accountNumber: acc,
+      userId: consumer.linkedUserId,
+      consumerEmail: cEmail || undefined,
+      title: `Official Account Number & Meter Issued!`,
+      message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${acc} and Meter Serial is #${meter}. Smart RFID Tag: ${rfid}. Your full dashboard and telemetry are now active.`,
+      type: "account_issue"
+    },
+    false
+  );
+}
+
+function reconcileAllServerConsumersAndUsers(): void {
+  // Drop stale pending twins if an issued consumer record exists for the same email, userId, phone, or name
+  syncedConsumers = syncedConsumers.filter((c, _idx, arr) => {
+    const isPending = !isValidatedConsumerForReader(c);
+    if (!isPending) return true;
+    const cEmail = (c.email || "").trim().toLowerCase();
+    const cUid = (c.linkedUserId || "").trim();
+    const cPhone = normalizePhone11Server(c.contactNumber);
+    const cName = (c.name || "").trim().toLowerCase();
+
+    const activeTwin = arr.find(o => {
+      if (o === c || !isValidatedConsumerForReader(o)) return false;
+      const oEmail = (o.email || "").trim().toLowerCase();
+      const oUid = (o.linkedUserId || "").trim();
+      const oPhone = normalizePhone11Server(o.contactNumber);
+      const oName = (o.name || "").trim().toLowerCase();
+      if (cEmail && oEmail && cEmail === oEmail) return true;
+      if (cUid && oUid && cUid === oUid) return true;
+      if (cPhone && oPhone && cPhone.length === 11 && cPhone === oPhone) return true;
+      if (cName && oName && cName === oName && (!cEmail || !oEmail || cEmail === oEmail)) return true;
+      return false;
+    });
+
+    if (activeTwin) {
+      if (!activeTwin.email && c.email) activeTwin.email = c.email;
+      if (!activeTwin.linkedUserId && c.linkedUserId) activeTwin.linkedUserId = c.linkedUserId;
+      if (!activeTwin.contactNumber && c.contactNumber) activeTwin.contactNumber = c.contactNumber;
+      return false;
+    }
+    return true;
+  });
+
+  // Ensure every issued consumer with a portal user or email has synced user status & issuance notification
+  syncedConsumers.forEach(c => {
+    if (isValidatedConsumerForReader(c)) {
+      syncConsumerToServerPortalUser(c);
+      const hasPortalUser = syncedPortalUsers.some(
+        u => (c.email && u.email && u.email.toLowerCase() === c.email.toLowerCase()) ||
+             (c.linkedUserId && u.id === c.linkedUserId) ||
+             (u.linkedAccountNumber && u.linkedAccountNumber.toUpperCase() === c.accountNumber.toUpperCase())
+      );
+      if (hasPortalUser) {
+        ensureIssuedConsumerNotificationServer(c);
+      }
+    }
+  });
+}
+
+function loadPortalSyncStore(): void {
+  try {
+    if (!fs.existsSync(PORTAL_SYNC_FILE)) return;
+    const raw = fs.readFileSync(PORTAL_SYNC_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+
+    if (Array.isArray(parsed?.users)) {
+      parsed.users.forEach((pu: PortalSyncUser) => {
+        if (!pu || (!pu.email && !pu.id)) return;
+        const idx = syncedPortalUsers.findIndex(
+          u => (pu.email && u.email && u.email.toLowerCase() === pu.email.toLowerCase()) || (pu.id && u.id === pu.id)
+        );
+        if (idx >= 0) {
+          syncedPortalUsers[idx] = { ...syncedPortalUsers[idx], ...pu };
+        } else {
+          syncedPortalUsers.push(pu);
+        }
+      });
+    }
+
+    if (Array.isArray(parsed?.notifications)) {
+      inMemoryNotifications = parsed.notifications;
+    }
+
+    if (Array.isArray(parsed?.consumers) && parsed.consumers.length > 0) {
+      parsed.consumers.forEach((pc: MobileConsumerSync) => {
+        if (!pc || !pc.name) return;
+        const pcEmail = (pc.email || "").trim().toLowerCase();
+        const pcAcc = (pc.accountNumber || "").trim().toUpperCase();
+        const pcUid = (pc.linkedUserId || "").trim();
+        const idx = syncedConsumers.findIndex(sc =>
+          (isIssuedAccountNumberServer(pcAcc) && sc.accountNumber && sc.accountNumber.toUpperCase() === pcAcc) ||
+          (pcEmail && sc.email && sc.email.toLowerCase() === pcEmail) ||
+          (pcUid && sc.linkedUserId && sc.linkedUserId === pcUid)
+        );
+        if (idx >= 0) {
+          if (isValidatedConsumerForReader(pc) || !isValidatedConsumerForReader(syncedConsumers[idx])) {
+            syncedConsumers[idx] = { ...syncedConsumers[idx], ...pc };
+          }
+        } else {
+          syncedConsumers.unshift(pc);
+        }
+      });
+    }
+
+    reconcileAllServerConsumersAndUsers();
+  } catch (err) {
+    console.warn("[PortalSyncStore] Could not load persisted store:", err);
+  }
+}
 
 function pushServerNotification(
-  input: Omit<ServerConsumerNotification, "id" | "timestamp" | "read"> & { id?: string; timestamp?: string; read?: boolean }
+  input: Omit<ServerConsumerNotification, "id" | "timestamp" | "read"> & { id?: string; timestamp?: string; read?: boolean },
+  shouldBroadcastAndPersist = true
 ): ServerConsumerNotification {
   const nowMs = Date.now();
   const cleanAcc = (input.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
   const cleanEmail = (input.consumerEmail || "").trim().toLowerCase();
   const cleanTitle = (input.title || "").trim().toLowerCase();
 
-  // Deduplicate identical notifications emitted within an 8-second window
+  // Deduplicate identical notifications (strictly permanent dedupe for same account_issue confirmation, 8s window for others)
   const existing = inMemoryNotifications.find(n => {
     if (input.id && n.id === input.id) return true;
-    const ageMs = Math.abs(nowMs - new Date(n.timestamp).getTime());
-    if (ageMs > 8000) return false;
     const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
     const nEmail = (n.consumerEmail || "").trim().toLowerCase();
     const nTitle = (n.title || "").trim().toLowerCase();
-    return n.type === input.type && nTitle === cleanTitle && ((cleanAcc && nAcc === cleanAcc) || (cleanEmail && nEmail === cleanEmail));
+    const sameTarget = (isIssuedAccountNumberServer(cleanAcc) && nAcc === cleanAcc) || (cleanEmail && nEmail === cleanEmail);
+    if (input.type === "account_issue" && n.type === "account_issue" && nTitle === cleanTitle && sameTarget) {
+      return true;
+    }
+    const ageMs = Math.abs(nowMs - new Date(n.timestamp).getTime());
+    if (ageMs > 8000) return false;
+    return n.type === input.type && nTitle === cleanTitle && sameTarget;
   });
 
   if (existing) {
+    if (isIssuedAccountNumberServer(cleanAcc) && !isIssuedAccountNumberServer(existing.accountNumber)) {
+      existing.accountNumber = input.accountNumber;
+    }
+    if (cleanEmail && !existing.consumerEmail) {
+      existing.consumerEmail = cleanEmail;
+    }
     return existing;
   }
 
@@ -2587,15 +3211,21 @@ function pushServerNotification(
     inMemoryNotifications.pop();
   }
 
-  broadcast("CONSUMER_NOTIFICATION_CREATED", {
-    notification: created,
-    accountNumber: created.accountNumber,
-    consumerEmail: created.consumerEmail,
-    userId: created.userId
-  });
+  if (shouldBroadcastAndPersist) {
+    savePortalSyncStore();
+    broadcast("CONSUMER_NOTIFICATION_CREATED", {
+      notification: created,
+      accountNumber: created.accountNumber,
+      consumerEmail: created.consumerEmail,
+      userId: created.userId
+    });
+  }
 
   return created;
 }
+
+// Hydrate persisted consumers, users & notifications on boot
+loadPortalSyncStore();
 
 app.get("/api/notifications", (req, res) => {
   try {
@@ -2609,11 +3239,7 @@ app.get("/api/notifications", (req, res) => {
       });
     }
 
-    const isPlaceholder = (acc?: string) => {
-      if (!acc) return true;
-      const lower = acc.replace(/^#/, "").trim().toLowerCase();
-      return !lower || lower.startsWith("pending") || lower === "unassigned" || lower === "unissued" || lower === "none" || lower === "n/a";
-    };
+    const isPlaceholder = (acc?: string) => !isIssuedAccountNumberServer(acc);
 
     const cleanAcc = ((accountNumber as string) || "").replace(/^#/, "").trim().toLowerCase();
     const cleanUid = ((userId as string) || "").trim().toLowerCase();
@@ -2632,14 +3258,16 @@ app.get("/api/notifications", (req, res) => {
       const nEmail = (n.consumerEmail || "").trim().toLowerCase();
       const nCid = (n.consumerId || "").trim().toLowerCase();
 
-      if (cleanUid && nUid && nUid !== cleanUid) return false;
-      if (cleanEmail && nEmail && nEmail !== cleanEmail) return false;
-      if (cleanCid && nCid && nCid !== cleanCid) return false;
-
-      if (cleanUid && nUid && nUid === cleanUid) return true;
-      if (cleanCid && nCid && nCid === cleanCid) return true;
-      if (cleanEmail && nEmail && nEmail === cleanEmail) return true;
-      if (hasRealAcc && nHasRealAcc && nAcc === cleanAcc) return true;
+      // Email is the strongest personal identifier: match if equal, exclude if explicitly different
+      if (cleanEmail && nEmail) {
+        return cleanEmail === nEmail;
+      }
+      // Real issued Account Number match: match if equal, exclude if explicitly different real account
+      if (hasRealAcc && nHasRealAcc) {
+        return cleanAcc === nAcc;
+      }
+      if (cleanUid && nUid && cleanUid === nUid) return true;
+      if (cleanCid && nCid && cleanCid === nCid) return true;
       return false;
     });
 
@@ -2671,6 +3299,7 @@ app.patch("/api/notifications/:id/read", (req, res) => {
   const found = inMemoryNotifications.find(n => n.id === id);
   if (found) {
     found.read = true;
+    savePortalSyncStore();
   }
   res.json({ success: true });
 });

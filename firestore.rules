@@ -1,10 +1,155 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Tagoloan Water District Municipal Cloud Collections
+    // Global default-deny safety net for unmapped paths
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isBoundedPayload(data) {
+      return data.keys().size() <= 60;
+    }
+
+    function optStr(data, key, maxLen) {
+      return !(key in data) || data[key] == null || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function isValidUser(data) {
+      return isBoundedPayload(data)
+        && optStr(data, 'id', 128)
+        && optStr(data, 'email', 256)
+        && optStr(data, 'name', 200)
+        && optStr(data, 'role', 64)
+        && optStr(data, 'status', 64)
+        && optStr(data, 'linkedAccountNumber', 64)
+        && optStr(data, 'password', 256);
+    }
+
+    function isValidConsumer(data) {
+      return isBoundedPayload(data)
+        && optStr(data, 'accountNumber', 64)
+        && optStr(data, 'name', 200)
+        && optStr(data, 'address', 500)
+        && optStr(data, 'barangay', 128)
+        && optStr(data, 'barangayId', 64)
+        && optStr(data, 'sitioZone', 200)
+        && optStr(data, 'contactNumber', 64)
+        && optStr(data, 'email', 256)
+        && optStr(data, 'meterNumber', 64)
+        && optStr(data, 'rfidTag', 64)
+        && optStr(data, 'status', 64)
+        && optStr(data, 'linkedUserId', 128)
+        && optStr(data, 'consumerType', 64);
+    }
+
+    function isValidNotification(data) {
+      return isBoundedPayload(data)
+        && optStr(data, 'id', 128)
+        && optStr(data, 'accountNumber', 64)
+        && optStr(data, 'userId', 128)
+        && optStr(data, 'consumerEmail', 256)
+        && optStr(data, 'title', 300)
+        && optStr(data, 'message', 3000)
+        && optStr(data, 'type', 64);
+    }
+
+    match /test/{testId} {
+      allow get: if isValidId(testId);
+      allow list: if true;
+      allow create, update: if isValidId(testId) && isBoundedPayload(incoming());
+      allow delete: if isValidId(testId);
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId);
+      allow list: if true;
+      allow create, update: if isValidId(userId) && isValidUser(incoming());
+      allow delete: if isValidId(userId);
+    }
+
+    match /consumers/{consumerId} {
+      allow get: if isValidId(consumerId);
+      allow list: if true;
+      allow create, update: if isValidId(consumerId) && isValidConsumer(incoming());
+      allow delete: if isValidId(consumerId);
+    }
+
+    match /readers/{readerId} {
+      allow get: if isValidId(readerId);
+      allow list: if true;
+      allow create, update: if isValidId(readerId) && isBoundedPayload(incoming());
+      allow delete: if isValidId(readerId);
+    }
+
+    match /meters/{meterId} {
+      allow get: if isValidId(meterId);
+      allow list: if true;
+      allow create, update: if isValidId(meterId) && isBoundedPayload(incoming());
+      allow delete: if isValidId(meterId);
+    }
+
+    match /readings/{readingId} {
+      allow get: if isValidId(readingId);
+      allow list: if true;
+      allow create, update: if isValidId(readingId) && isBoundedPayload(incoming());
+      allow delete: if isValidId(readingId);
+    }
+
+    match /routes/{routeId} {
+      allow get: if isValidId(routeId);
+      allow list: if true;
+      allow create, update: if isValidId(routeId) && isBoundedPayload(incoming());
+      allow delete: if isValidId(routeId);
+    }
+
+    match /announcements/{announcementId} {
+      allow get: if isValidId(announcementId);
+      allow list: if true;
+      allow create, update: if isValidId(announcementId) && isBoundedPayload(incoming());
+      allow delete: if isValidId(announcementId);
+    }
+
+    match /audit_logs/{logId} {
+      allow get: if isValidId(logId);
+      allow list: if true;
+      allow create, update: if isValidId(logId) && isBoundedPayload(incoming());
+      allow delete: if isValidId(logId);
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId);
+      allow list: if true;
+      allow create, update: if isValidId(notificationId) && isValidNotification(incoming());
+      allow delete: if isValidId(notificationId);
+    }
+
+    match /barangays/{barangayId} {
+      allow get: if isValidId(barangayId);
+      allow list: if true;
+      allow create, update: if isValidId(barangayId) && isBoundedPayload(incoming());
+      allow delete: if isValidId(barangayId);
+    }
+
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if true;
+      allow create, update: if isValidId(settingId) && isBoundedPayload(incoming());
+      allow delete: if isValidId(settingId);
+    }
+
+    match /consumer_reports/{reportId} {
+      allow get: if isValidId(reportId);
+      allow list: if true;
+      allow create, update: if isValidId(reportId) && isBoundedPayload(incoming());
+      allow delete: if isValidId(reportId);
     }
   }
 }
-

@@ -88,7 +88,7 @@ import { OfficialReportsGenerator, RecordsArchiveView, GracePeriodScannerCard, T
 import { TablePagination } from './common/TablePagination';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
-import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
+import { syncDocToFirestore, pushIssuedConsumerToFirestore, COLLECTIONS } from '../services/firebaseDb';
 import { initRealtimeSocket, sendRealtimeMessage } from '../services/realtimeSocket';
 import { apiClient } from '../services/apiClient';
 import { calculateWaterTariff, calculateFranchiseTax, getActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
@@ -529,7 +529,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       setIsRefreshing(true);
     }
     
-    // 1. Load Local State
+    // 1. Reconcile any previously issued consumer IDs locally & load state
+    mockDb.reconcileIssuedAccounts();
     setConsumers(mockDb.getConsumers());
     setReaders(mockDb.getReaders());
     setMeters(mockDb.getMeters());
@@ -652,26 +653,84 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         // Fallback gracefully if running purely client-side
       });
 
-    // 3. Fetch from Backend / Serverless API for any Consumer Registrations from Mobile or Other Devices
-    fetch('/api/consumers?includePending=true', {
-      headers: { 'x-portal': 'admin', 'x-role': 'admin' }
+    // 3. Bidirectional Reconciliation with Backend Server:
+    // Pushes ALL locally issued consumer IDs, consumer users & issuance notifications to server
+    // AND pulls any newly registered consumers from other browsers/devices
+    const localConsumersToSync = mockDb.getConsumers();
+    const localUsersToSync = mockDb.getUsers().filter(u => u.role !== 'admin');
+    const localNotifsToSync = mockDb.getAllNotifications().filter(n => n.type === 'account_issue');
+
+    // Also push any locally issued accounts (BRG-* or user-linked) to Cloud Firestore so other devices sync immediately
+    localConsumersToSync.forEach(lc => {
+      if (
+        lc.accountNumber &&
+        !lc.accountNumber.toUpperCase().startsWith('PENDING') &&
+        lc.status !== 'pending_approval' &&
+        (lc.accountNumber.toUpperCase().startsWith('BRG-') || lc.linkedUserId)
+      ) {
+        const matchedU = localUsersToSync.find(
+          u =>
+            (lc.email && u.email && lc.email.toLowerCase() === u.email.toLowerCase()) ||
+            (lc.linkedUserId && u.id === lc.linkedUserId) ||
+            u.linkedAccountNumber === lc.accountNumber
+        );
+        const matchedN = localNotifsToSync.find(
+          n =>
+            !(n.title || '').toLowerCase().includes('registration application submitted') &&
+            ((n.accountNumber || '').toUpperCase() === lc.accountNumber.toUpperCase() ||
+              (lc.email && n.consumerEmail && n.consumerEmail.toLowerCase() === lc.email.toLowerCase()))
+        );
+        pushIssuedConsumerToFirestore(lc, matchedN, matchedU).catch(() => {});
+      }
+    });
+
+    fetch('/api/consumers/reconcile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-portal': 'admin', 'x-role': 'admin' },
+      body: JSON.stringify({
+        consumers: localConsumersToSync,
+        users: localUsersToSync,
+        notifications: localNotifsToSync
+      })
     })
       .then(res => res.json())
       .then(data => {
         if (data && (data.consumers || data.data)) {
           const apiConsumers: any[] = data.consumers || data.data || [];
           const currentLocal = mockDb.getConsumers();
+          const currentUsers = mockDb.getUsers();
           let hasChanges = false;
 
           apiConsumers.forEach(ac => {
-            const existsIdx = currentLocal.findIndex(lc => 
-              (ac.accountNumber && lc.accountNumber === ac.accountNumber) ||
-              (ac.email && lc.email && lc.email.toLowerCase() === ac.email.toLowerCase()) ||
-              (ac.linkedUserId && lc.linkedUserId === ac.linkedUserId)
-            );
+            const acAcc = (ac.accountNumber || '').trim().toUpperCase();
+            const acHasIssuedAcc = Boolean(acAcc && !acAcc.startsWith('PENDING') && acAcc !== 'UNASSIGNED' && acAcc !== 'UNISSUED');
+            const acEmail = (ac.email || '').trim().toLowerCase();
+            const acPhone = normalizePhoneNumber(ac.contactNumber || '');
+            const acName = (ac.name || '').trim().toLowerCase();
+
+            const existsIdx = currentLocal.findIndex(lc => {
+              const lcAcc = (lc.accountNumber || '').trim().toUpperCase();
+              const lcEmail = (lc.email || '').trim().toLowerCase();
+              const lcPhone = normalizePhoneNumber(lc.contactNumber || '');
+              const lcName = (lc.name || '').trim().toLowerCase();
+              return (
+                (acHasIssuedAcc && lcAcc && acAcc === lcAcc) ||
+                (acEmail && lcEmail && acEmail === lcEmail) ||
+                (ac.linkedUserId && lc.linkedUserId && ac.linkedUserId === lc.linkedUserId) ||
+                (acPhone && lcPhone && acPhone.length === 11 && acPhone === lcPhone) ||
+                (acName && lcName && acName === lcName && (!acEmail || !lcEmail || acEmail === lcEmail))
+              );
+            });
 
             if (existsIdx < 0) {
-              // Add new consumer registration to local store
+              // Match real user ID if registered locally rather than inventing a synthetic timestamp ID
+              const matchedLocalUser = currentUsers.find(u =>
+                u.role !== 'admin' && (
+                  (acEmail && u.email && u.email.toLowerCase() === acEmail) ||
+                  (ac.linkedUserId && u.id === ac.linkedUserId)
+                )
+              );
+
               const newConsumerObj: Consumer = {
                 accountNumber: ac.accountNumber || '',
                 name: ac.name,
@@ -680,7 +739,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 barangay: ac.barangay || 'Poblacion',
                 sitioZone: ac.sitioZone || 'Zone 1',
                 meterNumber: ac.meterNumber || '',
-                status: ac.status || (ac.accountNumber ? 'active' : 'pending_approval'),
+                status: ac.status || (acHasIssuedAcc ? 'active' : 'pending_approval'),
                 contactNumber: ac.contactNumber || '',
                 email: ac.email || '',
                 consumerType: ac.consumerType === 'Commercial' ? 'Commercial' : 'Residential',
@@ -688,7 +747,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 businessName: ac.businessName,
                 businessType: ac.businessType,
                 registrationDate: ac.registrationDate || new Date().toISOString().split('T')[0],
-                linkedUserId: ac.linkedUserId || `user-${Date.now()}`,
+                linkedUserId: matchedLocalUser?.id || ac.linkedUserId || undefined,
                 isRegistered: true,
                 rfidTag: ac.rfidTag || '',
                 createdAt: (ac as any).createdAt || Date.now(),
@@ -700,19 +759,27 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               // Sync status or account number if issued on server
               const existing = currentLocal[existsIdx];
               const isLocallyIssuedAndActive = Boolean(
-                existing.accountNumber && 
-                !existing.accountNumber.toUpperCase().startsWith('PENDING') && 
-                existing.status === 'active'
+                existing.accountNumber &&
+                !existing.accountNumber.toUpperCase().startsWith('PENDING') &&
+                existing.status !== 'pending_approval'
               );
 
-              if (ac.accountNumber && (!existing.accountNumber || existing.accountNumber.toUpperCase().startsWith('PENDING'))) {
+              if (acHasIssuedAcc && (!existing.accountNumber || existing.accountNumber.toUpperCase().startsWith('PENDING') || existing.status === 'pending_approval')) {
                 existing.accountNumber = ac.accountNumber;
                 existing.meterNumber = ac.meterNumber || `MT-${ac.accountNumber}`;
-                existing.status = ac.status || 'active';
-                existing.rfidTag = ac.rfidTag || `RFID-${ac.accountNumber}`;
+                existing.status = ac.status && ac.status !== 'pending_approval' ? ac.status : 'active';
+                existing.rfidTag = ac.rfidTag || `RFID-${existing.meterNumber}`;
                 hasChanges = true;
               } else if (!isLocallyIssuedAndActive && ac.status && ac.status !== existing.status) {
                 existing.status = ac.status;
+                hasChanges = true;
+              }
+              if (!existing.email && ac.email) {
+                existing.email = ac.email;
+                hasChanges = true;
+              }
+              if (ac.linkedUserId && !existing.linkedUserId) {
+                existing.linkedUserId = ac.linkedUserId;
                 hasChanges = true;
               }
             }
@@ -720,7 +787,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
           if (hasChanges) {
             mockDb.saveConsumers([...currentLocal]);
-            setConsumers([...currentLocal]);
+            mockDb.reconcileIssuedAccounts();
+            setConsumers(mockDb.getConsumers());
           }
         }
       })
@@ -1333,6 +1401,23 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         }
       );
 
+      // Ensure Cloud Firestore & Backend Reconcile Store receive updated consumer, active user, and notification across all devices
+      const matchedUpdatedUser = updatedUsers.find(u =>
+        (previousUserId && u.id === previousUserId) ||
+        (previousEmail && u.email && u.email.trim().toLowerCase() === previousEmail) ||
+        u.linkedAccountNumber === newAccNum
+      );
+      pushIssuedConsumerToFirestore(updated, updatedIdNotif, matchedUpdatedUser).catch(() => {});
+      fetch('/api/consumers/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-portal': 'admin', 'x-role': 'admin' },
+        body: JSON.stringify({
+          consumers: [updated],
+          users: matchedUpdatedUser ? [matchedUpdatedUser] : [],
+          notifications: [updatedIdNotif]
+        })
+      }).catch(() => {});
+
       // Push instant WebSocket confirmation + notification to Consumer Portal
       sendRealtimeMessage('CONSUMER_IDS_ISSUED', {
         consumer: updated,
@@ -1571,36 +1656,28 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       }
     );
 
-    // 6. Direct Firestore sync to all possible doc IDs to overwrite stale pending docs
-    if (selectedConsumerModal.linkedUserId) {
-      syncDocToFirestore(COLLECTIONS.CONSUMERS, selectedConsumerModal.linkedUserId, updated);
-      syncDocToFirestore(COLLECTIONS.USERS, selectedConsumerModal.linkedUserId, {
-        id: selectedConsumerModal.linkedUserId,
-        email: selectedConsumerModal.email,
-        name: selectedConsumerModal.name,
-        role: 'consumer',
-        status: 'active',
-        linkedAccountNumber: newAccNum
-      });
-    }
-    if (selectedConsumerModal.email) {
-      const emailDocId = `email_${selectedConsumerModal.email.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-      syncDocToFirestore(COLLECTIONS.CONSUMERS, emailDocId, updated);
-      syncDocToFirestore(COLLECTIONS.USERS, emailDocId, {
-        email: selectedConsumerModal.email,
-        name: selectedConsumerModal.name,
-        role: 'consumer',
-        status: 'active',
-        linkedAccountNumber: newAccNum
-      });
-    }
-    syncDocToFirestore(COLLECTIONS.CONSUMERS, newAccNum, updated);
+    // 6. Authoritative Cloud Firestore + Backend Reconcile sync across all lookup keys so every device confirms immediately
+    const matchedIssuedUser = updatedUsers.find(u =>
+      (previousUserId && u.id === previousUserId) ||
+      (previousEmail && u.email && u.email.trim().toLowerCase() === previousEmail) ||
+      u.linkedAccountNumber === newAccNum
+    );
+    pushIssuedConsumerToFirestore(updated, issuedNotif, matchedIssuedUser).catch(() => {});
 
-    // 7. Sync issued consumer identifiers to backend API & broadcast instant WebSocket confirmation
     fetch('/api/consumers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updated)
+    }).catch(() => {});
+
+    fetch('/api/consumers/reconcile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-portal': 'admin', 'x-role': 'admin' },
+      body: JSON.stringify({
+        consumers: [updated],
+        users: matchedIssuedUser ? [matchedIssuedUser] : [],
+        notifications: [issuedNotif]
+      })
     }).catch(() => {});
 
     sendRealtimeMessage('CONSUMER_IDS_ISSUED', {

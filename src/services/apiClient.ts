@@ -143,6 +143,7 @@ async function requestWithRetry<T = any>(url: string, options: RequestOptions = 
       (lastError as any).data = data;
 
       if (!isRetryable || attempt >= retries) {
+        (lastError as any).noRetry = true;
         if (!skipLogging) {
           recordLog({
             id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -161,6 +162,9 @@ async function requestWithRetry<T = any>(url: string, options: RequestOptions = 
       }
     } catch (err: any) {
       clearTimeout(timeoutId);
+      if (err?.noRetry) {
+        throw err;
+      }
       lastError = err;
       const durationMs = Date.now() - startTime;
 

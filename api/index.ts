@@ -1,25 +1,131 @@
 import express from "express";
+import { initializeApp, getApps, getApp } from "firebase/app";
+import {
+  getFirestore,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  deleteDoc,
+  query,
+  where,
+  limit,
+} from "firebase/firestore";
+import firebaseConfig from "../firebase-applet-config.json";
 
 const app = express();
+
+// Initialize Cloud Firestore for stateless multi-device persistence on Vercel Serverless
+const fbApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const fsDb = firebaseConfig.firestoreDatabaseId
+  ? getFirestore(fbApp, firebaseConfig.firestoreDatabaseId)
+  : getFirestore(fbApp);
+
+const FS_COLLECTIONS = {
+  USERS: "users",
+  CONSUMERS: "consumers",
+  READERS: "readers",
+  METERS: "meters",
+  READINGS: "readings",
+  NOTIFICATIONS: "notifications",
+  REPORTS: "consumer_reports",
+  SETTINGS: "settings",
+};
 
 // Express JSON and URL-encoded body parsing with high limit
 app.use(express.json({ limit: "25mb" }));
 app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
-// Enable CORS for Mobile App and External API clients
+// Enable CORS for Mobile App, Consumer Portal, and Admin Portal clients
 app.use((req, res, next) => {
+  if (req.url.startsWith("/api/api/")) {
+    req.url = req.url.replace(/^\/api\/api\//, "/api/");
+  }
   res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-portal, x-role, x-client-version, x-app-id, x-reader-id, x-employee-id, x-user-id, Cache-Control, Pragma"
+  );
   if (req.method === "OPTIONS") {
     return res.sendStatus(200);
   }
   next();
 });
 
+// ==========================================
+// HELPERS & TYPES
+// ==========================================
+function sanitizeDocId(rawId: string): string {
+  return String(rawId || "").trim().replace(/\//g, "_").slice(0, 120);
+}
+
+function sanitizeEmailDocId(email: string): string {
+  return `email_${email.trim().toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "_")}`.slice(0, 120);
+}
+
+function sanitizePayload<T>(input: T): T {
+  if (input === null || input === undefined) return input;
+  if (typeof input === "string") {
+    return (input.length > 2900 ? input.slice(0, 2900) : input) as unknown as T;
+  }
+  if (Array.isArray(input)) {
+    return input
+      .filter((v) => v !== undefined)
+      .slice(0, 100)
+      .map((v) => sanitizePayload(v)) as unknown as T;
+  }
+  if (typeof input === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(input as Record<string, unknown>).slice(0, 58)) {
+      if (v !== undefined) {
+        out[k] = sanitizePayload(v);
+      }
+    }
+    return out as T;
+  }
+  return input;
+}
+
+function isRealAccountNumber(acc?: string | null): boolean {
+  if (!acc) return false;
+  const clean = String(acc).replace(/^#/, "").trim().toUpperCase();
+  if (!clean) return false;
+  return (
+    !clean.startsWith("PENDING") &&
+    clean !== "UNASSIGNED" &&
+    clean !== "UNISSUED" &&
+    clean !== "NONE" &&
+    clean !== "N/A" &&
+    clean !== "NULL" &&
+    clean !== "UNDEFINED"
+  );
+}
+
+function isValidatedConsumerForReader(c?: Partial<MobileConsumerRecord> | null): boolean {
+  if (!c) return false;
+  return (
+    isRealAccountNumber(c.accountNumber) &&
+    c.status !== "pending_approval" &&
+    c.status !== "pending" &&
+    Boolean(c.meterNumber && !c.meterNumber.toUpperCase().startsWith("PENDING"))
+  );
+}
+
+function normalizePhone(phone?: string | null): string {
+  if (!phone) return "";
+  const digits = String(phone).replace(/\D/g, "");
+  if (digits.length === 12 && digits.startsWith("639")) return "0" + digits.slice(2);
+  if (digits.length === 10 && digits.startsWith("9")) return "0" + digits;
+  return digits.length === 11 ? digits : "";
+}
+
 interface MobileReader {
   id: string;
+  employeeId?: string;
   username: string;
+  email?: string;
   name: string;
   pin?: string;
   role: string;
@@ -30,21 +136,6 @@ interface MobileReader {
   approvedAt?: string;
   assignedRoutes: string[];
 }
-
-let registeredStaff: MobileReader[] = [
-  {
-    id: "MR-101",
-    username: "reader.poblacion@tagoloanwater.gov.ph",
-    name: "Ramon Valderrama",
-    pin: "1234",
-    role: "Senior Meter Officer",
-    zone: "Poblacion",
-    contactNumber: "0917-555-0191",
-    employmentStatus: "active",
-    registeredAt: "2026-08-01T08:00:00.000Z",
-    assignedRoutes: ["Poblacion", "Natumolan"]
-  }
-];
 
 export interface MobileConsumerRecord {
   id?: string;
@@ -69,10 +160,38 @@ export interface MobileConsumerRecord {
   businessName?: string;
   businessType?: string;
   isRegistered?: boolean;
+  outstandingBalance?: number;
 }
 
-// Initial Tagoloan Water District Municipal Consumer Registry
-let syncedConsumers: MobileConsumerRecord[] = [];
+interface PortalSyncUser {
+  id: string;
+  email: string;
+  name: string;
+  password?: string;
+  role: string;
+  status: string;
+  linkedAccountNumber?: string;
+  contactNumber?: string;
+  registrationDate?: string;
+}
+
+interface PortalNotification {
+  id: string;
+  accountNumber: string;
+  consumerId?: string;
+  userId?: string;
+  consumerEmail?: string;
+  title: string;
+  message: string;
+  timestamp: string;
+  type: string;
+  read: boolean;
+  readingId?: string;
+  billingPeriod?: string;
+  remainingBalance?: number;
+  reportId?: string;
+  ticketNumber?: string;
+}
 
 interface MobileReadingSubmission {
   id: string;
@@ -87,91 +206,577 @@ interface MobileReadingSubmission {
   readerId: string;
   readerName: string;
   route: string;
-  status: "pending_approval" | "approved" | "rejected";
+  status: "pending_approval" | "pending" | "approved" | "verified" | "rejected";
+  paymentStatus?: "paid" | "unpaid" | "partial";
+  paidAmount?: number;
   photoUrl?: string;
   coordinates?: { latitude: number; longitude: number };
   notes?: string;
   submittedAt: string;
 }
 
-let pendingMobileReadings: MobileReadingSubmission[] = [];
+interface ServerReportReply {
+  id: string;
+  reportId: string;
+  senderId: string;
+  senderName: string;
+  senderRole: "admin" | "consumer" | "staff";
+  message: string;
+  timestamp: string;
+  statusUpdate?: string;
+}
 
-// ==========================================
-// 1. PRIMARY CONSUMER ENDPOINTS (MOBILE SYNC)
-// ==========================================
+interface ServerConsumerReport {
+  id: string;
+  ticketNumber: string;
+  accountNumber: string;
+  consumerName: string;
+  consumerEmail?: string;
+  consumerPhone?: string;
+  barangay?: string;
+  address?: string;
+  meterNumber?: string;
+  category: string;
+  title: string;
+  description: string;
+  urgency: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+  assignedStaff?: string;
+  photoUrl?: string;
+  replies: ServerReportReply[];
+  hasUnreadAdminReply?: boolean;
+  hasUnreadConsumerUpdate?: boolean;
+}
 
-// GET /api/consumers - Supports query filters & returns clean JSON
-app.get("/api/consumers", (req, res) => {
+// Warm in-memory caches synced with Cloud Firestore
+let registeredStaff: MobileReader[] = [
+  {
+    id: "MR-101",
+    username: "reader.poblacion@tagoloanwater.gov.ph",
+    name: "Ramon Valderrama",
+    pin: "1234",
+    role: "Senior Meter Officer",
+    zone: "Poblacion",
+    contactNumber: "0917-555-0191",
+    employmentStatus: "active",
+    registeredAt: "2026-08-01T08:00:00.000Z",
+    assignedRoutes: ["Poblacion", "Natumolan"],
+  },
+];
+
+let syncedConsumers: MobileConsumerRecord[] = [];
+let syncedUsers: PortalSyncUser[] = [];
+let syncedNotifications: PortalNotification[] = [];
+let syncedReadings: MobileReadingSubmission[] = [];
+let syncedReports: ServerConsumerReport[] = [];
+
+function mergeConsumersList(items: MobileConsumerRecord[]): MobileConsumerRecord[] {
+  const merged: MobileConsumerRecord[] = [];
+  for (const c of items) {
+    if (!c || !c.name) continue;
+    const cAcc = isRealAccountNumber(c.accountNumber) ? c.accountNumber.trim().toUpperCase() : "";
+    const cEmail = (c.email || "").trim().toLowerCase();
+    const cUid = (c.linkedUserId || "").trim();
+    const cPhone = normalizePhone(c.contactNumber);
+    const cName = (c.name || "").trim().toLowerCase();
+
+    const idx = merged.findIndex((m) => {
+      const mAcc = isRealAccountNumber(m.accountNumber) ? m.accountNumber.trim().toUpperCase() : "";
+      const mEmail = (m.email || "").trim().toLowerCase();
+      const mUid = (m.linkedUserId || "").trim();
+      const mPhone = normalizePhone(m.contactNumber);
+      const mName = (m.name || "").trim().toLowerCase();
+
+      if (cAcc && mAcc && cAcc === mAcc) return true;
+      if (cEmail && mEmail && cEmail === mEmail) return true;
+      if (cUid && mUid && cUid === mUid) return true;
+      if (cPhone && mPhone && cPhone === mPhone) return true;
+      if (cName && mName && cName === mName && (!cEmail || !mEmail || cEmail === mEmail)) {
+        if (!c.barangay || !m.barangay || c.barangay.toLowerCase() === m.barangay.toLowerCase()) return true;
+      }
+      return false;
+    });
+
+    if (idx === -1) {
+      merged.push(c);
+    } else {
+      const ex = merged[idx];
+      const exIssued = isValidatedConsumerForReader(ex) || (isRealAccountNumber(ex.accountNumber) && ex.status !== "pending_approval");
+      const inIssued = isValidatedConsumerForReader(c) || (isRealAccountNumber(c.accountNumber) && c.status !== "pending_approval");
+      const primary = inIssued && !exIssued ? c : exIssued && !inIssued ? ex : { ...ex, ...c };
+      const secondary = primary === c ? ex : c;
+      const finalAcc = isRealAccountNumber(primary.accountNumber)
+        ? primary.accountNumber.trim().toUpperCase()
+        : isRealAccountNumber(secondary.accountNumber)
+          ? secondary.accountNumber.trim().toUpperCase()
+          : primary.accountNumber || secondary.accountNumber || "";
+      merged[idx] = {
+        ...secondary,
+        ...primary,
+        accountNumber: finalAcc,
+        meterNumber:
+          primary.meterNumber && !primary.meterNumber.toUpperCase().startsWith("PENDING")
+            ? primary.meterNumber
+            : secondary.meterNumber && !secondary.meterNumber.toUpperCase().startsWith("PENDING")
+              ? secondary.meterNumber
+              : finalAcc
+                ? `MT-${finalAcc}`
+                : "",
+        rfidTag:
+          primary.rfidTag && !primary.rfidTag.toUpperCase().startsWith("PENDING")
+            ? primary.rfidTag
+            : secondary.rfidTag && !secondary.rfidTag.toUpperCase().startsWith("PENDING")
+              ? secondary.rfidTag
+              : finalAcc
+                ? `RFID-MT-${finalAcc}`
+                : "",
+        status: isRealAccountNumber(finalAcc) ? (primary.status === "pending_approval" ? "active" : primary.status || "active") : primary.status || "pending_approval",
+        email: primary.email || secondary.email || "",
+        linkedUserId: primary.linkedUserId || secondary.linkedUserId,
+        contactNumber: primary.contactNumber || secondary.contactNumber || "",
+      };
+    }
+  }
+  return merged;
+}
+
+async function fetchAllConsumersFromFirestore(): Promise<MobileConsumerRecord[]> {
   try {
-    const { zone, barangay, search, status } = req.query;
-    let list = [...syncedConsumers];
+    const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), limit(400)));
+    const fsList: MobileConsumerRecord[] = [];
+    snap.forEach((d) => fsList.push(d.data() as MobileConsumerRecord));
+    syncedConsumers = mergeConsumersList([...fsList, ...syncedConsumers]);
+  } catch {}
+  return syncedConsumers;
+}
+
+async function saveConsumerToFirestore(record: MobileConsumerRecord, userPatch?: Partial<PortalSyncUser>, notif?: PortalNotification): Promise<void> {
+  const cleanRecord = sanitizePayload(record);
+  const acc = isRealAccountNumber(record.accountNumber) ? record.accountNumber.trim().toUpperCase() : "";
+  const cleanEmail = (record.email || "").trim().toLowerCase();
+  const uid = (record.linkedUserId || "").trim();
+
+  const docIds = new Set<string>();
+  if (acc) docIds.add(sanitizeDocId(acc));
+  if (uid && !uid.startsWith("email_")) docIds.add(sanitizeDocId(uid));
+  if (cleanEmail) docIds.add(sanitizeEmailDocId(cleanEmail));
+  if (docIds.size === 0) docIds.add(`consumer_${Date.now()}`);
+
+  const writes: Promise<unknown>[] = [];
+  for (const id of docIds) {
+    writes.push(setDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, id), cleanRecord, { merge: true }).catch(() => {}));
+  }
+
+  if (userPatch && (uid || cleanEmail)) {
+    const cleanUser = sanitizePayload(userPatch);
+    if (uid) writes.push(setDoc(doc(fsDb, FS_COLLECTIONS.USERS, sanitizeDocId(uid)), cleanUser, { merge: true }).catch(() => {}));
+    if (cleanEmail) writes.push(setDoc(doc(fsDb, FS_COLLECTIONS.USERS, sanitizeEmailDocId(cleanEmail)), cleanUser, { merge: true }).catch(() => {}));
+  }
+
+  if (notif && notif.id) {
+    writes.push(
+      setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(notif.id)), sanitizePayload(notif), { merge: true }).catch(() => {})
+    );
+  }
+
+  await Promise.all(writes);
+}
+
+// ==========================================
+// 1. PRIMARY CONSUMER ENDPOINTS (PORTAL & MOBILE SYNC)
+// ==========================================
+
+app.get("/api/consumers", async (req, res) => {
+  try {
+    const { zone, barangay, search, status, includePending } = req.query;
+    const portalHeader = String(req.headers["x-portal"] || "").toLowerCase();
+    const roleHeader = String(req.headers["x-role"] || "").toLowerCase();
+    const isPortalAdminOrConsumer =
+      portalHeader === "admin" ||
+      portalHeader === "consumer" ||
+      roleHeader === "admin" ||
+      includePending === "true" ||
+      status === "pending_approval";
+
+    let list = await fetchAllConsumersFromFirestore();
+
+    // Mobile Meter Reader App strictly receives validated consumers with issued IDs & meters
+    if (!isPortalAdminOrConsumer) {
+      list = list.filter(isValidatedConsumerForReader);
+    }
 
     if (barangay && typeof barangay === "string" && barangay.trim() !== "" && barangay !== "All") {
       const bFilter = barangay.trim().toLowerCase();
-      list = list.filter(c => c.barangay.toLowerCase() === bFilter);
+      list = list.filter((c) => (c.barangay || "").toLowerCase() === bFilter);
     } else if (zone && typeof zone === "string" && zone.trim() !== "" && zone !== "All") {
-      const zFilter = zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim().toLowerCase();
-      list = list.filter(c => c.barangay.toLowerCase().includes(zFilter) || c.address.toLowerCase().includes(zFilter));
+      const zFilter = zone.replace(/^Zone\s*\d+\s*[-:]\s*/i, "").trim().toLowerCase();
+      list = list.filter(
+        (c) => (c.barangay || "").toLowerCase().includes(zFilter) || (c.address || "").toLowerCase().includes(zFilter)
+      );
     }
 
     if (search && typeof search === "string" && search.trim() !== "") {
       const q = search.trim().toLowerCase();
-      list = list.filter(c => 
-        c.name.toLowerCase().includes(q) || 
-        c.accountNumber.toLowerCase().includes(q) || 
-        c.meterNumber.toLowerCase().includes(q)
+      list = list.filter(
+        (c) =>
+          (c.name || "").toLowerCase().includes(q) ||
+          (c.accountNumber || "").toLowerCase().includes(q) ||
+          (c.meterNumber || "").toLowerCase().includes(q) ||
+          (c.email || "").toLowerCase().includes(q)
       );
     }
 
-    if (status && typeof status === "string" && status.trim() !== "") {
-      list = list.filter(c => c.status === status);
+    if (status && typeof status === "string" && status.trim() !== "" && status !== "all") {
+      list = list.filter((c) => c.status === status);
     }
 
-    // Return format compatible with both direct arrays and wrapped payload models
     res.json({
       success: true,
       count: list.length,
       consumers: list,
-      data: list
+      data: list,
     });
-  } catch (err: unknown) {
-    console.error("[API Error] /api/consumers:", err);
+  } catch (err) {
     res.status(200).json({
       success: true,
       count: syncedConsumers.length,
       consumers: syncedConsumers,
-      data: syncedConsumers
+      data: syncedConsumers,
     });
   }
 });
 
+// POST /api/consumers/reconcile - Bidirectional Multi-Device Sync
+app.post("/api/consumers/reconcile", async (req, res) => {
+  try {
+    const incomingConsumers: MobileConsumerRecord[] = Array.isArray(req.body?.consumers) ? req.body.consumers : [];
+    const incomingUsers: PortalSyncUser[] = Array.isArray(req.body?.users) ? req.body.users : [];
+    const incomingNotifs: PortalNotification[] = Array.isArray(req.body?.notifications) ? req.body.notifications : [];
+
+    // Persist any issued consumer accounts & notifications pushed by Admin or Consumer browser
+    const writeTasks: Promise<unknown>[] = [];
+
+    for (const c of incomingConsumers) {
+      if (isRealAccountNumber(c.accountNumber) && c.status !== "pending_approval") {
+        const acc = c.accountNumber.trim().toUpperCase();
+        const isUserLinked = Boolean(c.linkedUserId || acc.startsWith("BRG-"));
+        if (isUserLinked) {
+          const matchedU = incomingUsers.find(
+            (u) =>
+              (c.email && u.email && u.email.toLowerCase() === c.email.toLowerCase()) ||
+              (c.linkedUserId && u.id === c.linkedUserId) ||
+              u.linkedAccountNumber === acc
+          );
+          const matchedN = incomingNotifs.find(
+            (n) =>
+              n.type === "account_issue" &&
+              !(n.title || "").toLowerCase().includes("registration application submitted") &&
+              ((n.accountNumber || "").toUpperCase() === acc ||
+                (c.email && n.consumerEmail && n.consumerEmail.toLowerCase() === c.email.toLowerCase()))
+          );
+          const fallbackNotif: PortalNotification = matchedN || {
+            id: `notif-issued-${acc.replace(/[^a-zA-Z0-9]/g, "")}`,
+            accountNumber: acc,
+            consumerId: c.id,
+            userId: c.linkedUserId || matchedU?.id,
+            consumerEmail: (c.email || matchedU?.email || "").toLowerCase() || undefined,
+            title: "Official Account Number & Meter Issued!",
+            message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${acc} and Meter Serial is #${c.meterNumber || `MT-${acc}`}. Smart RFID Tag: ${c.rfidTag || `RFID-MT-${acc}`}. Your full dashboard and telemetry are now active.`,
+            timestamp: new Date().toISOString(),
+            type: "account_issue",
+            read: false,
+          };
+          const userPatch: Partial<PortalSyncUser> | undefined =
+            c.linkedUserId || c.email || matchedU
+              ? {
+                  ...(matchedU || {}),
+                  id: matchedU?.id || c.linkedUserId || "",
+                  email: (c.email || matchedU?.email || "").toLowerCase(),
+                  name: c.name || matchedU?.name || "Consumer",
+                  role: "consumer",
+                  status: "active",
+                  linkedAccountNumber: acc,
+                }
+              : undefined;
+
+          writeTasks.push(saveConsumerToFirestore(c, userPatch, fallbackNotif));
+        }
+      }
+    }
+
+    for (const n of incomingNotifs) {
+      if (n && n.id && n.title) {
+        writeTasks.push(
+          setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(n.id)), sanitizePayload(n), { merge: true }).catch(() => {})
+        );
+      }
+    }
+
+    if (writeTasks.length > 0) {
+      await Promise.all(writeTasks);
+    }
+
+    syncedConsumers = mergeConsumersList([...incomingConsumers, ...syncedConsumers]);
+    const mergedAll = await fetchAllConsumersFromFirestore();
+
+    res.json({
+      success: true,
+      count: mergedAll.length,
+      consumers: mergedAll,
+      data: mergedAll,
+    });
+  } catch (err) {
+    res.status(200).json({
+      success: true,
+      count: syncedConsumers.length,
+      consumers: syncedConsumers,
+      data: syncedConsumers,
+    });
+  }
+});
+
+// POST /api/consumers/resolve-account - Authoritative Cross-Device Account & ID Resolution
+app.post("/api/consumers/resolve-account", async (req, res) => {
+  try {
+    const { email, userId, accountNumber, name, contactNumber, password, verifyPassword } = req.body || {};
+    const cleanEmail = (email || "").trim().toLowerCase();
+    const cleanUid = (userId || "").trim();
+    const cleanAcc = isRealAccountNumber(accountNumber) ? String(accountNumber).replace(/^#/, "").trim().toUpperCase() : "";
+    const cleanName = (name || "").trim().toLowerCase();
+    const cleanPhone = normalizePhone(contactNumber);
+
+    // 1. Resolve User from Firestore
+    const userCandidates: PortalSyncUser[] = [];
+    if (cleanEmail) {
+      const eDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.USERS, sanitizeEmailDocId(cleanEmail))).catch(() => null);
+      if (eDoc && eDoc.exists()) userCandidates.push(eDoc.data() as PortalSyncUser);
+      const uSnap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.USERS), where("email", "==", cleanEmail), limit(5))).catch(() => null);
+      if (uSnap) uSnap.forEach((d) => userCandidates.push({ id: d.id, ...(d.data() as PortalSyncUser) }));
+    }
+    if (cleanUid) {
+      const idDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.USERS, sanitizeDocId(cleanUid))).catch(() => null);
+      if (idDoc && idDoc.exists()) userCandidates.push(idDoc.data() as PortalSyncUser);
+    }
+    const memUser = syncedUsers.find(
+      (u) => (cleanEmail && u.email?.toLowerCase() === cleanEmail) || (cleanUid && u.id === cleanUid)
+    );
+    if (memUser) userCandidates.push(memUser);
+
+    let resolvedUser: PortalSyncUser | null = null;
+    for (const u of userCandidates) {
+      if (!resolvedUser) {
+        resolvedUser = { ...u };
+      } else {
+        const hasAcc = isRealAccountNumber(u.linkedAccountNumber);
+        const prevAcc = isRealAccountNumber(resolvedUser.linkedAccountNumber);
+        resolvedUser = {
+          ...resolvedUser,
+          ...u,
+          id: resolvedUser.id && !resolvedUser.id.startsWith("email_") ? resolvedUser.id : u.id,
+          linkedAccountNumber: hasAcc ? u.linkedAccountNumber : prevAcc ? resolvedUser.linkedAccountNumber : u.linkedAccountNumber,
+          status: hasAcc || prevAcc || u.status === "active" || resolvedUser.status === "active" ? "active" : u.status || resolvedUser.status,
+          password: resolvedUser.password || u.password,
+        };
+      }
+    }
+
+    if (verifyPassword && resolvedUser?.password && password !== undefined && resolvedUser.password !== String(password).trim()) {
+      return res.status(401).json({
+        success: false,
+        authFailed: true,
+        message: "Incorrect account password.",
+      });
+    }
+
+    const effectiveAcc =
+      cleanAcc ||
+      (resolvedUser && isRealAccountNumber(resolvedUser.linkedAccountNumber)
+        ? resolvedUser.linkedAccountNumber!.trim().toUpperCase()
+        : "");
+    const effectiveEmail = cleanEmail || (resolvedUser?.email || "").trim().toLowerCase();
+    const effectiveUid = cleanUid || (resolvedUser?.id || "").trim();
+
+    // 2. Resolve Consumer from Firestore
+    const consumerCandidates: MobileConsumerRecord[] = [];
+    if (effectiveAcc) {
+      const aDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeDocId(effectiveAcc))).catch(() => null);
+      if (aDoc && aDoc.exists()) consumerCandidates.push(aDoc.data() as MobileConsumerRecord);
+      const aSnap = await getDocs(
+        query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), where("accountNumber", "==", effectiveAcc), limit(3))
+      ).catch(() => null);
+      if (aSnap) aSnap.forEach((d) => consumerCandidates.push(d.data() as MobileConsumerRecord));
+    }
+    if (effectiveEmail) {
+      const eDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeEmailDocId(effectiveEmail))).catch(() => null);
+      if (eDoc && eDoc.exists()) consumerCandidates.push(eDoc.data() as MobileConsumerRecord);
+      const eSnap = await getDocs(
+        query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), where("email", "==", effectiveEmail), limit(5))
+      ).catch(() => null);
+      if (eSnap) eSnap.forEach((d) => consumerCandidates.push(d.data() as MobileConsumerRecord));
+    }
+    if (effectiveUid) {
+      const uDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeDocId(effectiveUid))).catch(() => null);
+      if (uDoc && uDoc.exists()) consumerCandidates.push(uDoc.data() as MobileConsumerRecord);
+      const uSnap = await getDocs(
+        query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), where("linkedUserId", "==", effectiveUid), limit(5))
+      ).catch(() => null);
+      if (uSnap) uSnap.forEach((d) => consumerCandidates.push(d.data() as MobileConsumerRecord));
+    }
+
+    // Check in-memory fallback too
+    syncedConsumers.forEach((c) => {
+      const cEmail = (c.email || "").trim().toLowerCase();
+      const cPhone = normalizePhone(c.contactNumber);
+      if (
+        (effectiveAcc && c.accountNumber?.toUpperCase() === effectiveAcc) ||
+        (effectiveEmail && cEmail === effectiveEmail) ||
+        (effectiveUid && c.linkedUserId === effectiveUid) ||
+        (cleanPhone && cPhone && cleanPhone === cPhone) ||
+        (cleanName && c.name?.toLowerCase() === cleanName && (!effectiveEmail || !cEmail || effectiveEmail === cEmail))
+      ) {
+        consumerCandidates.push(c);
+      }
+    });
+
+    const mergedConsumers = mergeConsumersList(consumerCandidates);
+    mergedConsumers.sort((a, b) => {
+      const aIss = isRealAccountNumber(a.accountNumber) && a.status !== "pending_approval" ? 1 : 0;
+      const bIss = isRealAccountNumber(b.accountNumber) && b.status !== "pending_approval" ? 1 : 0;
+      return bIss - aIss;
+    });
+
+    let resolvedConsumer = mergedConsumers[0] || null;
+    if (resolvedConsumer && !isRealAccountNumber(resolvedConsumer.accountNumber) && effectiveAcc) {
+      resolvedConsumer = {
+        ...resolvedConsumer,
+        accountNumber: effectiveAcc,
+        meterNumber:
+          resolvedConsumer.meterNumber && !resolvedConsumer.meterNumber.toUpperCase().startsWith("PENDING")
+            ? resolvedConsumer.meterNumber
+            : `MT-${effectiveAcc}`,
+        rfidTag:
+          resolvedConsumer.rfidTag && !resolvedConsumer.rfidTag.toUpperCase().startsWith("PENDING")
+            ? resolvedConsumer.rfidTag
+            : `RFID-MT-${effectiveAcc}`,
+        status: "active",
+      };
+    }
+
+    const isIssued = Boolean(
+      resolvedConsumer && isRealAccountNumber(resolvedConsumer.accountNumber) && resolvedConsumer.status !== "pending_approval"
+    );
+    const finalAcc = isIssued && resolvedConsumer ? resolvedConsumer.accountNumber.trim().toUpperCase() : effectiveAcc;
+
+    // 3. Resolve Notifications from Firestore
+    const notifMap = new Map<string, PortalNotification>();
+    const collectNotifs = async (field: string, value: string) => {
+      if (!value) return;
+      const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.NOTIFICATIONS), where(field, "==", value), limit(30))).catch(
+        () => null
+      );
+      if (snap) {
+        snap.forEach((d) => {
+          const n = d.data() as PortalNotification;
+          if (n && n.title) notifMap.set(n.id || d.id, { ...n, id: n.id || d.id });
+        });
+      }
+    };
+
+    await Promise.all([
+      collectNotifs("accountNumber", finalAcc),
+      collectNotifs("consumerEmail", effectiveEmail),
+      collectNotifs("userId", effectiveUid),
+    ]);
+
+    const notifications = Array.from(notifMap.values());
+
+    // Self-heal issuance notification & active user link in Firestore if issued
+    if (isIssued && resolvedConsumer) {
+      const hasIssuanceNotif = notifications.some(
+        (n) => n.type === "account_issue" && !(n.title || "").toLowerCase().includes("registration application submitted")
+      );
+      let backfilledNotif: PortalNotification | undefined;
+      if (!hasIssuanceNotif) {
+        backfilledNotif = {
+          id: `notif-issued-${finalAcc.replace(/[^a-zA-Z0-9]/g, "")}`,
+          accountNumber: finalAcc,
+          consumerId: resolvedConsumer.id,
+          userId: effectiveUid || resolvedConsumer.linkedUserId,
+          consumerEmail: effectiveEmail || resolvedConsumer.email,
+          title: "Official Account Number & Meter Issued!",
+          message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${finalAcc} and Meter Serial is #${resolvedConsumer.meterNumber}. Smart RFID Tag: ${resolvedConsumer.rfidTag}. Your full dashboard and telemetry are now active.`,
+          timestamp: new Date().toISOString(),
+          type: "account_issue",
+          read: false,
+        };
+        notifications.unshift(backfilledNotif);
+      }
+
+      if (resolvedUser) {
+        resolvedUser = {
+          ...resolvedUser,
+          linkedAccountNumber: finalAcc,
+          status: "active",
+        };
+      }
+
+      await saveConsumerToFirestore(resolvedConsumer, resolvedUser || undefined, backfilledNotif);
+    }
+
+    const safeUser = resolvedUser
+      ? (() => {
+          const { password: _pw, ...rest } = resolvedUser;
+          return rest;
+        })()
+      : null;
+
+    res.json({
+      success: true,
+      isIssued,
+      user: safeUser,
+      consumer: resolvedConsumer,
+      notifications,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to resolve consumer account." });
+  }
+});
+
 // GET /api/consumers/:accountNumber
-app.get("/api/consumers/:accountNumber", (req, res) => {
+app.get("/api/consumers/:accountNumber", async (req, res) => {
   try {
     const { accountNumber } = req.params;
-    const consumer = syncedConsumers.find(
-      c => c.accountNumber === accountNumber || c.meterNumber === accountNumber
+    const all = await fetchAllConsumersFromFirestore();
+    const consumer = all.find(
+      (c) =>
+        c.accountNumber === accountNumber ||
+        c.meterNumber === accountNumber ||
+        c.linkedUserId === accountNumber ||
+        (c.email && c.email.toLowerCase() === accountNumber.toLowerCase())
     );
 
     if (!consumer) {
       return res.status(404).json({
         success: false,
-        message: `Consumer account ${accountNumber} not found.`
+        message: `Consumer account ${accountNumber} not found.`,
       });
     }
 
     res.json({
       success: true,
       consumer,
-      data: consumer
+      data: consumer,
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ success: false, message: "Failed to retrieve consumer record." });
   }
 });
 
 // POST /api/consumers/register - Self-Registration endpoint for Consumers from any device
-app.post("/api/consumers/register", (req, res) => {
+app.post("/api/consumers/register", async (req, res) => {
   try {
     const {
       name,
@@ -187,40 +792,50 @@ app.post("/api/consumers/register", (req, res) => {
       householdInfo,
       businessName,
       businessType,
-      linkedUserId
+      linkedUserId,
+      password,
     } = req.body;
 
     const consumerName = (name || fullName || "").trim();
     if (!consumerName) {
       return res.status(400).json({
         success: false,
-        message: "Consumer full name is required for registration."
+        message: "Consumer full name is required for registration.",
       });
     }
 
     const cleanEmail = (email || "").trim().toLowerCase();
     const userId = linkedUserId || `user-${Date.now()}`;
+    const cleanPhone = normalizePhone(contactNumber) || contactNumber || "";
 
-    // Check if consumer already registered by email
-    const existingIdx = syncedConsumers.findIndex(
-      c => (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) ||
-           (c.linkedUserId && c.linkedUserId === userId)
+    const allExisting = await fetchAllConsumersFromFirestore();
+    const existing = allExisting.find(
+      (c) => (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) || (c.linkedUserId && c.linkedUserId === userId)
     );
 
+    // Never downgrade an already-issued consumer record back to pending
+    if (existing && isRealAccountNumber(existing.accountNumber) && existing.status !== "pending_approval") {
+      return res.status(200).json({
+        success: true,
+        message: "Account already registered and active.",
+        consumer: existing,
+      });
+    }
+
     const record: MobileConsumerRecord = {
-      accountNumber: "", // Empty until issued by Administrator
+      accountNumber: "",
       name: consumerName,
       address: address || `${sitioZone || "Zone 1"}, ${barangay || "Poblacion"}, Tagoloan, Misamis Oriental`,
       barangay: barangay || "Poblacion",
       barangayId: barangayId || "BRG-01",
       sitioZone: sitioZone || "Zone 1",
-      meterNumber: "", // Empty until issued by Administrator
+      meterNumber: "",
       previousReading: 0,
       lastReadingDate: new Date().toISOString().split("T")[0],
       meterSize: meterSize || "1/2 inch",
       consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
       status: "pending_approval",
-      contactNumber: contactNumber || "",
+      contactNumber: cleanPhone,
       email: cleanEmail,
       rfidTag: "",
       registrationDate: new Date().toISOString().split("T")[0],
@@ -228,30 +843,53 @@ app.post("/api/consumers/register", (req, res) => {
       householdInfo: householdInfo || undefined,
       businessName: businessName || undefined,
       businessType: businessType || undefined,
-      isRegistered: true
+      isRegistered: true,
     };
 
-    if (existingIdx >= 0) {
-      syncedConsumers[existingIdx] = { ...syncedConsumers[existingIdx], ...record };
-    } else {
-      syncedConsumers.unshift(record); // Add to beginning so Admin sees it immediately
-    }
+    const userRecord: PortalSyncUser = {
+      id: userId,
+      email: cleanEmail,
+      name: consumerName,
+      password: password ? String(password) : undefined,
+      role: "consumer",
+      status: "pending_approval",
+      contactNumber: cleanPhone,
+      registrationDate: record.registrationDate,
+    };
+
+    const welcomeNotif: PortalNotification = {
+      id: `notif-reg-${userId}`,
+      accountNumber: "PENDING",
+      userId,
+      consumerEmail: cleanEmail,
+      title: "Registration Application Submitted",
+      message: `Your registration application for Barangay ${record.barangay}, ${record.sitioZone} has been submitted. The administration office will review and issue your official Account Number and Meter Tag shortly.`,
+      timestamp: new Date().toISOString(),
+      type: "account_issue",
+      read: false,
+    };
+
+    syncedConsumers.unshift(record);
+    syncedUsers.unshift(userRecord);
+    syncedNotifications.unshift(welcomeNotif);
+
+    await saveConsumerToFirestore(record, userRecord, welcomeNotif);
 
     res.status(201).json({
       success: true,
       message: "Registration application received. Waiting for admin approval.",
-      consumer: record
+      consumer: record,
     });
   } catch (err) {
-    console.error("[API Error] POST /api/consumers/register:", err);
     res.status(500).json({ success: false, message: "Failed to submit registration application." });
   }
 });
 
-// POST /api/consumers - Add or Sync Consumer Record
-app.post("/api/consumers", (req, res) => {
+// POST /api/consumers - Add or Sync Consumer Record (including Admin ID Issuance)
+app.post("/api/consumers", async (req, res) => {
   try {
     const {
+      id,
       accountNumber,
       name,
       address,
@@ -272,196 +910,598 @@ app.post("/api/consumers", (req, res) => {
       householdInfo,
       businessName,
       businessType,
-      isRegistered
+      isRegistered,
     } = req.body;
 
     if (!name) {
       return res.status(400).json({
         success: false,
-        message: "name is required."
+        message: "name is required.",
       });
     }
 
-    const cleanAcc = (accountNumber || "").trim();
+    const cleanAcc = isRealAccountNumber(accountNumber) ? String(accountNumber).trim().toUpperCase() : "";
     const cleanEmail = (email || "").trim().toLowerCase();
+    const resolvedMeter = meterNumber && !String(meterNumber).toUpperCase().startsWith("PENDING")
+      ? String(meterNumber).trim()
+      : cleanAcc
+        ? `MT-${cleanAcc}`
+        : "";
+    const resolvedRfid = rfidTag && !String(rfidTag).toUpperCase().startsWith("PENDING")
+      ? String(rfidTag).trim()
+      : resolvedMeter
+        ? `RFID-${resolvedMeter}`
+        : "";
 
     const record: MobileConsumerRecord = {
+      id,
       accountNumber: cleanAcc,
       name: String(name).trim(),
       address: address || "Tagoloan, Misamis Oriental",
       barangay: barangay || "Poblacion",
-      barangayId: barangayId,
+      barangayId,
       sitioZone: sitioZone || "Zone 1",
-      meterNumber: meterNumber || (cleanAcc ? `MT-${cleanAcc}` : ""),
+      meterNumber: resolvedMeter,
       previousReading: Number(previousReading) || 0,
       lastReadingDate: lastReadingDate || new Date().toISOString().split("T")[0],
       meterSize: meterSize || "1/2 inch",
       consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
-      status: status || (cleanAcc ? "active" : "pending_approval"),
+      status: cleanAcc ? (status === "pending_approval" ? "active" : status || "active") : status || "pending_approval",
       contactNumber: contactNumber || "",
       email: cleanEmail,
-      rfidTag: rfidTag || "",
+      rfidTag: resolvedRfid,
       registrationDate: registrationDate || new Date().toISOString().split("T")[0],
-      linkedUserId: linkedUserId,
-      householdInfo: householdInfo,
-      businessName: businessName,
-      businessType: businessType,
-      isRegistered: isRegistered !== undefined ? isRegistered : true
+      linkedUserId,
+      householdInfo,
+      businessName,
+      businessType,
+      isRegistered: isRegistered !== undefined ? isRegistered : true,
     };
 
-    // Find existing by AccountNumber OR Email OR linkedUserId
-    const idx = syncedConsumers.findIndex(c => 
-      (cleanAcc && c.accountNumber === cleanAcc) ||
-      (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) ||
-      (linkedUserId && c.linkedUserId === linkedUserId)
-    );
+    syncedConsumers = mergeConsumersList([record, ...syncedConsumers]);
 
-    if (idx >= 0) {
-      syncedConsumers[idx] = { ...syncedConsumers[idx], ...record };
-    } else {
-      syncedConsumers.unshift(record);
+    let userPatch: Partial<PortalSyncUser> | undefined;
+    let issuedNotif: PortalNotification | undefined;
+
+    if (cleanAcc && record.status !== "pending_approval") {
+      userPatch = {
+        ...(linkedUserId ? { id: linkedUserId } : {}),
+        ...(cleanEmail ? { email: cleanEmail } : {}),
+        name: record.name,
+        role: "consumer",
+        status: "active",
+        linkedAccountNumber: cleanAcc,
+      };
+      issuedNotif = {
+        id: `notif-issued-${cleanAcc.replace(/[^a-zA-Z0-9]/g, "")}`,
+        accountNumber: cleanAcc,
+        consumerId: record.id,
+        userId: linkedUserId,
+        consumerEmail: cleanEmail || undefined,
+        title: "Official Account Number & Meter Issued!",
+        message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${cleanAcc} and Meter Serial is #${resolvedMeter}. Smart RFID Tag: ${resolvedRfid}. Your full dashboard and telemetry are now active.`,
+        timestamp: new Date().toISOString(),
+        type: "account_issue",
+        read: false,
+      };
     }
+
+    await saveConsumerToFirestore(record, userPatch, issuedNotif);
 
     res.status(201).json({
       success: true,
       message: "Consumer saved successfully.",
-      consumer: record
+      consumer: record,
+      notification: issuedNotif,
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ success: false, message: "Failed to save consumer." });
   }
 });
 
-// PATCH /api/consumers/:identifier - Update / Issue IDs for Consumer
-app.patch("/api/consumers/:identifier", (req, res) => {
+// POST /api/consumers/:identifier/issue-id & PATCH /api/consumers/:identifier
+app.all(["/api/consumers/:identifier/issue-id", "/api/consumers/:identifier"], async (req, res, next) => {
+  if (req.method === "GET" || req.method === "DELETE") return next();
+  if (req.method !== "PATCH" && req.method !== "POST" && req.method !== "PUT") {
+    return res.status(405).json({ success: false, message: "Method Not Allowed" });
+  }
+
   try {
     const { identifier } = req.params;
-    const updates = req.body;
-
-    const idx = syncedConsumers.findIndex(c => 
-      c.accountNumber === identifier || 
-      (c.email && c.email.toLowerCase() === identifier.toLowerCase()) ||
-      c.linkedUserId === identifier
+    const updates = req.body || {};
+    const all = await fetchAllConsumersFromFirestore();
+    const existing = all.find(
+      (c) =>
+        c.accountNumber === identifier ||
+        (c.email && c.email.toLowerCase() === identifier.toLowerCase()) ||
+        c.linkedUserId === identifier ||
+        c.id === identifier
     );
 
-    if (idx < 0) {
+    if (!existing && !updates.name) {
       return res.status(404).json({
         success: false,
-        message: `Consumer ${identifier} not found in registry.`
+        message: `Consumer ${identifier} not found in registry.`,
       });
     }
 
-    syncedConsumers[idx] = {
-      ...syncedConsumers[idx],
-      ...updates
+    const updated: MobileConsumerRecord = {
+      ...(existing || ({} as MobileConsumerRecord)),
+      ...updates,
     };
+
+    const cleanAcc = isRealAccountNumber(updated.accountNumber) ? updated.accountNumber.trim().toUpperCase() : "";
+    if (cleanAcc) {
+      updated.accountNumber = cleanAcc;
+      updated.meterNumber =
+        updated.meterNumber && !updated.meterNumber.toUpperCase().startsWith("PENDING")
+          ? updated.meterNumber
+          : `MT-${cleanAcc}`;
+      updated.rfidTag =
+        updated.rfidTag && !updated.rfidTag.toUpperCase().startsWith("PENDING")
+          ? updated.rfidTag
+          : `RFID-${updated.meterNumber}`;
+      if (!updated.status || updated.status === "pending_approval") {
+        updated.status = "active";
+      }
+    }
+
+    let userPatch: Partial<PortalSyncUser> | undefined;
+    let issuedNotif: PortalNotification | undefined;
+    if (cleanAcc && updated.status !== "pending_approval") {
+      userPatch = {
+        ...(updated.linkedUserId ? { id: updated.linkedUserId } : {}),
+        ...(updated.email ? { email: updated.email.toLowerCase() } : {}),
+        name: updated.name,
+        role: "consumer",
+        status: "active",
+        linkedAccountNumber: cleanAcc,
+      };
+      issuedNotif = {
+        id: `notif-issued-${cleanAcc.replace(/[^a-zA-Z0-9]/g, "")}`,
+        accountNumber: cleanAcc,
+        consumerId: updated.id,
+        userId: updated.linkedUserId,
+        consumerEmail: updated.email?.toLowerCase(),
+        title: "Official Account Number & Meter Issued!",
+        message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${cleanAcc} and Meter Serial is #${updated.meterNumber}. Smart RFID Tag: ${updated.rfidTag}. Your full dashboard and telemetry are now active.`,
+        timestamp: new Date().toISOString(),
+        type: "account_issue",
+        read: false,
+      };
+    }
+
+    syncedConsumers = mergeConsumersList([updated, ...syncedConsumers]);
+    await saveConsumerToFirestore(updated, userPatch, issuedNotif);
 
     res.json({
       success: true,
       message: `Consumer ${identifier} updated successfully.`,
-      consumer: syncedConsumers[idx]
+      consumer: updated,
+      notification: issuedNotif,
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ success: false, message: "Failed to update consumer." });
   }
 });
 
 // DELETE /api/consumers/:identifier
-app.delete("/api/consumers/:identifier", (req, res) => {
+app.delete("/api/consumers/:identifier", async (req, res) => {
   try {
     const { identifier } = req.params;
-    const initialLen = syncedConsumers.length;
-    syncedConsumers = syncedConsumers.filter(c => 
-      c.accountNumber !== identifier && 
-      (!c.email || c.email.toLowerCase() !== identifier.toLowerCase()) &&
-      c.linkedUserId !== identifier
+    syncedConsumers = syncedConsumers.filter(
+      (c) =>
+        c.accountNumber !== identifier &&
+        (!c.email || c.email.toLowerCase() !== identifier.toLowerCase()) &&
+        c.linkedUserId !== identifier
     );
-
+    await deleteDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeDocId(identifier))).catch(() => {});
+    if (identifier.includes("@")) {
+      await deleteDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeEmailDocId(identifier))).catch(() => {});
+    }
     res.json({
       success: true,
       message: `Consumer ${identifier} removed.`,
-      removed: syncedConsumers.length < initialLen
+      removed: true,
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ success: false, message: "Failed to delete consumer." });
   }
 });
 
 // ==========================================
-// 2. METER READER AUTH & REGISTRATION
+// 2. NOTIFICATIONS ENDPOINTS (CROSS-DEVICE)
 // ==========================================
-
-// POST /api/readers/register or /api/auth/register
-app.post(["/api/auth/register", "/api/readers/register"], (req, res) => {
+app.get("/api/notifications", async (req, res) => {
   try {
-    const { id, username, name, pin, role, zone, contactNumber, registeredAt } = req.body;
+    const accountNumber = String(req.query.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const userId = String(req.query.userId || "").trim();
+    const email = String(req.query.email || "").trim().toLowerCase();
 
-    if (!name || !username) {
-      return res.status(400).json({
-        success: false,
-        message: "Reader name and username are required for registration."
-      });
-    }
-
-    const readerId = id || `WDT-MR${Math.floor(10 + Math.random() * 90)}`;
-    const cleanZone = zone ? zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim() : "Poblacion";
-
-    const newReader: MobileReader = {
-      id: readerId,
-      username: username.trim(),
-      name: name.trim(),
-      pin: pin || "1234",
-      role: role || "Meter Reader I",
-      zone: cleanZone,
-      contactNumber: contactNumber || "",
-      employmentStatus: "pending",
-      registeredAt: registeredAt || new Date().toISOString(),
-      assignedRoutes: [cleanZone]
+    const notifMap = new Map<string, PortalNotification>();
+    const collect = async (field: string, val: string) => {
+      if (!val || val.startsWith("PENDING")) return;
+      const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.NOTIFICATIONS), where(field, "==", val), limit(40))).catch(
+        () => null
+      );
+      if (snap) {
+        snap.forEach((d) => {
+          const n = d.data() as PortalNotification;
+          if (n && n.title) notifMap.set(n.id || d.id, { ...n, id: n.id || d.id });
+        });
+      }
     };
 
-    const existingIdx = registeredStaff.findIndex(s => s.username === newReader.username || s.id === newReader.id);
-    if (existingIdx >= 0) {
-      registeredStaff[existingIdx] = { ...registeredStaff[existingIdx], ...newReader };
-    } else {
-      registeredStaff.push(newReader);
+    await Promise.all([
+      collect("accountNumber", accountNumber),
+      collect("consumerEmail", email),
+      collect("userId", userId),
+    ]);
+
+    const list = Array.from(notifMap.values()).sort(
+      (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+    );
+
+    res.json({
+      success: true,
+      count: list.length,
+      notifications: list,
+      data: list,
+    });
+  } catch {
+    res.json({ success: true, count: 0, notifications: [], data: [] });
+  }
+});
+
+app.post("/api/notifications", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const notif: PortalNotification = {
+      ...body,
+      id: body.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      accountNumber: body.accountNumber ? String(body.accountNumber).replace(/^#/, "").trim().toUpperCase() : "PENDING",
+      consumerEmail: body.consumerEmail ? String(body.consumerEmail).trim().toLowerCase() : undefined,
+      timestamp: body.timestamp || new Date().toISOString(),
+      read: Boolean(body.read),
+    };
+    syncedNotifications.unshift(notif);
+    await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(notif.id)), sanitizePayload(notif), { merge: true }).catch(
+      () => {}
+    );
+    res.status(201).json({ success: true, notification: notif });
+  } catch {
+    res.status(500).json({ success: false, message: "Failed to save notification." });
+  }
+});
+
+app.patch("/api/notifications/:id/read", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(id)), { read: true }, { merge: true }).catch(() => {});
+    res.json({ success: true });
+  } catch {
+    res.json({ success: true });
+  }
+});
+
+// ==========================================
+// 3. CONSUMER SERVICE REPORTS & ADMIN REPLIES
+// ==========================================
+async function loadReportsFromFirestore(): Promise<ServerConsumerReport[]> {
+  try {
+    const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.REPORTS), limit(200)));
+    const map = new Map<string, ServerConsumerReport>();
+    syncedReports.forEach((r) => {
+      if (r.id) map.set(r.id, r);
+    });
+    snap.forEach((d) => {
+      const r = d.data() as ServerConsumerReport;
+      if (r && r.id) map.set(r.id, r);
+    });
+    syncedReports = Array.from(map.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+  } catch {}
+  return syncedReports;
+}
+
+app.get("/api/reports", async (req, res) => {
+  try {
+    const { accountNumber, status, category, search } = req.query;
+    let list = await loadReportsFromFirestore();
+
+    if (accountNumber && typeof accountNumber === "string" && accountNumber.trim() !== "") {
+      const target = accountNumber.trim().toLowerCase();
+      list = list.filter(
+        (r) =>
+          (r.accountNumber || "").toLowerCase() === target ||
+          (r.consumerEmail || "").toLowerCase() === target
+      );
     }
+    if (status && typeof status === "string" && status !== "all") {
+      list = list.filter((r) => r.status === status);
+    }
+    if (category && typeof category === "string" && category !== "all") {
+      list = list.filter((r) => r.category === category);
+    }
+    if (search && typeof search === "string" && search.trim() !== "") {
+      const q = search.trim().toLowerCase();
+      list = list.filter(
+        (r) =>
+          (r.ticketNumber || "").toLowerCase().includes(q) ||
+          (r.title || "").toLowerCase().includes(q) ||
+          (r.consumerName || "").toLowerCase().includes(q) ||
+          (r.accountNumber || "").toLowerCase().includes(q)
+      );
+    }
+
+    res.json({
+      success: true,
+      count: list.length,
+      reports: list,
+      data: list,
+    });
+  } catch {
+    res.json({ success: true, count: 0, reports: [], data: [] });
+  }
+});
+
+app.get("/api/reports/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const list = await loadReportsFromFirestore();
+    const report = list.find((r) => r.id === id || r.ticketNumber === id);
+    if (!report) {
+      return res.status(404).json({ success: false, message: "Report not found." });
+    }
+    res.json({ success: true, report, data: report });
+  } catch {
+    res.status(500).json({ success: false, message: "Failed to fetch report." });
+  }
+});
+
+app.post("/api/reports", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const now = new Date().toISOString();
+    const id = body.id || `REP-${Date.now()}`;
+    const ticketNumber = body.ticketNumber || `TWD-CR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const replies: ServerReportReply[] = Array.isArray(body.replies) && body.replies.length > 0
+      ? body.replies
+      : body.description
+        ? [
+            {
+              id: `REP-MSG-${Date.now()}`,
+              reportId: id,
+              senderId: body.accountNumber || "consumer",
+              senderName: body.consumerName || "Consumer",
+              senderRole: "consumer",
+              message: body.description,
+              timestamp: now,
+            },
+          ]
+        : [];
+
+    const report: ServerConsumerReport = {
+      id,
+      ticketNumber,
+      accountNumber: body.accountNumber || "",
+      consumerName: body.consumerName || "Consumer",
+      consumerEmail: body.consumerEmail,
+      consumerPhone: body.consumerPhone,
+      barangay: body.barangay,
+      address: body.address,
+      meterNumber: body.meterNumber,
+      category: body.category || "other",
+      title: body.title || "Consumer Inquiry",
+      description: body.description || "",
+      urgency: body.urgency || "normal",
+      status: body.status || "pending",
+      createdAt: body.createdAt || now,
+      updatedAt: now,
+      replies,
+      hasUnreadAdminReply: false,
+      hasUnreadConsumerUpdate: true,
+    };
+
+    syncedReports.unshift(report);
+    await setDoc(doc(fsDb, FS_COLLECTIONS.REPORTS, sanitizeDocId(id)), sanitizePayload(report), { merge: true }).catch(() => {});
 
     res.status(201).json({
       success: true,
-      message: "Registration received successfully. Account is pending Admin approval.",
-      reader: {
-        id: newReader.id,
-        username: newReader.username,
-        name: newReader.name,
-        role: newReader.role,
-        zone: newReader.zone,
-        employmentStatus: newReader.employmentStatus,
-        assignedRoutes: newReader.assignedRoutes
-      }
+      message: "Service report submitted successfully.",
+      report,
+      data: report,
     });
-  } catch (err) {
-    res.status(500).json({ success: false, message: "Registration error." });
+  } catch {
+    res.status(500).json({ success: false, message: "Failed to create report." });
   }
 });
 
-// GET /api/staff or /api/readers
-app.get(["/api/staff", "/api/readers"], (req, res) => {
+app.post("/api/reports/:id/reply", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { senderId, senderName, senderRole, message, statusUpdate, assignedStaff } = req.body || {};
+    const list = await loadReportsFromFirestore();
+    const idx = list.findIndex((r) => r.id === id || r.ticketNumber === id);
+    if (idx < 0) {
+      return res.status(404).json({ success: false, message: "Report not found." });
+    }
+
+    const now = new Date().toISOString();
+    const existing = list[idx];
+    const reply: ServerReportReply = {
+      id: `REP-MSG-${Date.now()}`,
+      reportId: existing.id,
+      senderId: senderId || "admin-1",
+      senderName: senderName || "TWD Operations",
+      senderRole: senderRole || "admin",
+      message: message || "",
+      timestamp: now,
+      statusUpdate,
+    };
+
+    const nextStatus = statusUpdate || existing.status;
+    const updated: ServerConsumerReport = {
+      ...existing,
+      status: nextStatus,
+      updatedAt: now,
+      resolvedAt: nextStatus === "resolved" ? existing.resolvedAt || now : existing.resolvedAt,
+      assignedStaff: assignedStaff !== undefined ? assignedStaff : existing.assignedStaff,
+      replies: [...(existing.replies || []), reply],
+      hasUnreadAdminReply: reply.senderRole === "admin",
+      hasUnreadConsumerUpdate: reply.senderRole === "consumer",
+    };
+
+    syncedReports[idx] = updated;
+    await setDoc(doc(fsDb, FS_COLLECTIONS.REPORTS, sanitizeDocId(existing.id)), sanitizePayload(updated), { merge: true }).catch(
+      () => {}
+    );
+
+    if (reply.senderRole === "admin" && updated.accountNumber) {
+      const notif: PortalNotification = {
+        id: `notif-rep-${Date.now()}`,
+        accountNumber: updated.accountNumber.toUpperCase(),
+        consumerEmail: updated.consumerEmail?.toLowerCase(),
+        title: `Official Reply on Concern #${updated.ticketNumber}`,
+        message: `Admin ${reply.senderName} replied: "${reply.message.slice(0, 90)}" (Status: ${nextStatus.toUpperCase()})`,
+        timestamp: now,
+        type: "report",
+        read: false,
+        reportId: updated.id,
+        ticketNumber: updated.ticketNumber,
+      };
+      await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(notif.id)), sanitizePayload(notif), { merge: true }).catch(
+        () => {}
+      );
+    }
+
+    res.json({ success: true, message: "Reply posted.", report: updated, reply });
+  } catch {
+    res.status(500).json({ success: false, message: "Failed to reply to report." });
+  }
+});
+
+app.patch("/api/reports/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, assignedStaff } = req.body || {};
+    const list = await loadReportsFromFirestore();
+    const idx = list.findIndex((r) => r.id === id || r.ticketNumber === id);
+    if (idx < 0) {
+      return res.status(404).json({ success: false, message: "Report not found." });
+    }
+    const now = new Date().toISOString();
+    const existing = list[idx];
+    const updated: ServerConsumerReport = {
+      ...existing,
+      status: status || existing.status,
+      updatedAt: now,
+      resolvedAt: status === "resolved" ? now : existing.resolvedAt,
+      assignedStaff: assignedStaff !== undefined ? assignedStaff : existing.assignedStaff,
+      hasUnreadAdminReply: true,
+    };
+    syncedReports[idx] = updated;
+    await setDoc(doc(fsDb, FS_COLLECTIONS.REPORTS, sanitizeDocId(existing.id)), sanitizePayload(updated), { merge: true }).catch(
+      () => {}
+    );
+    res.json({ success: true, message: "Report status updated.", report: updated });
+  } catch {
+    res.status(500).json({ success: false, message: "Failed to update report status." });
+  }
+});
+
+// ==========================================
+// 4. METER READER AUTH & REGISTRATION
+// ==========================================
+async function loadReadersFromFirestore(): Promise<MobileReader[]> {
+  try {
+    const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.READERS), limit(100)));
+    const map = new Map<string, MobileReader>();
+    registeredStaff.forEach((r) => map.set(r.id, r));
+    snap.forEach((d) => {
+      const r = d.data() as MobileReader;
+      if (r && (r.id || d.id)) {
+        map.set(r.id || d.id, { ...r, id: r.id || d.id });
+      }
+    });
+    registeredStaff = Array.from(map.values());
+  } catch {}
+  return registeredStaff;
+}
+
+app.post(
+  ["/api/auth/register", "/api/readers/register", "/api/readers", "/api/auth/register-reader", "/api/staff/register", "/api/staff"],
+  async (req, res) => {
+    try {
+      const { id, username, name, pin, role, zone, contactNumber, registeredAt, assignedRoutes } = req.body || {};
+      const rName = (name || username || "").toString().trim();
+      const rUser = (username || name || "").toString().trim();
+
+      if (!rName || !rUser) {
+        return res.status(400).json({
+          success: false,
+          message: "Reader name and username are required for registration.",
+        });
+      }
+
+      const readerId = id || `WDT-MR${Math.floor(10 + Math.random() * 90)}`;
+      const cleanZone = zone ? String(zone).replace(/^Zone\s*\d+\s*-\s*/i, "").trim() : "Poblacion";
+      const routes = Array.isArray(assignedRoutes) && assignedRoutes.length > 0 ? assignedRoutes : [cleanZone];
+
+      const newReader: MobileReader = {
+        id: readerId,
+        employeeId: readerId,
+        username: rUser,
+        name: rName,
+        pin: pin || "1234",
+        role: role || "Meter Reader I",
+        zone: cleanZone,
+        contactNumber: contactNumber || "",
+        employmentStatus: "pending",
+        registeredAt: registeredAt || new Date().toISOString(),
+        assignedRoutes: routes,
+      };
+
+      const existingIdx = registeredStaff.findIndex((s) => s.username === newReader.username || s.id === newReader.id);
+      if (existingIdx >= 0) {
+        registeredStaff[existingIdx] = { ...registeredStaff[existingIdx], ...newReader };
+      } else {
+        registeredStaff.push(newReader);
+      }
+
+      await setDoc(doc(fsDb, FS_COLLECTIONS.READERS, sanitizeDocId(readerId)), sanitizePayload(newReader), { merge: true }).catch(
+        () => {}
+      );
+
+      res.status(201).json({
+        success: true,
+        message: "Registration received successfully. Account is pending Admin approval.",
+        reader: newReader,
+      });
+    } catch {
+      res.status(500).json({ success: false, message: "Registration error." });
+    }
+  }
+);
+
+app.get(["/api/staff", "/api/readers"], async (_req, res) => {
+  const list = await loadReadersFromFirestore();
   res.json({
     success: true,
-    count: registeredStaff.length,
-    staff: registeredStaff,
-    readers: registeredStaff
+    count: list.length,
+    staff: list,
+    readers: list,
   });
 });
 
-// GET /api/readers/check-status/:id
-app.get("/api/readers/check-status/:id", (req, res) => {
+app.get("/api/readers/check-status/:id", async (req, res) => {
   const { id } = req.params;
-  const reader = registeredStaff.find(s => s.id === id || s.username?.toLowerCase() === id?.toLowerCase());
+  const list = await loadReadersFromFirestore();
+  const reader = list.find((s) => s.id === id || s.username?.toLowerCase() === id?.toLowerCase());
   if (!reader) {
     return res.status(404).json({ success: false, message: "Meter reader not found." });
   }
-
   res.json({
     success: true,
     readerId: reader.id,
@@ -470,54 +1510,63 @@ app.get("/api/readers/check-status/:id", (req, res) => {
     status: reader.employmentStatus,
     employmentStatus: reader.employmentStatus,
     assignedRoutes: reader.assignedRoutes,
-    approvedAt: reader.approvedAt
+    approvedAt: reader.approvedAt,
   });
 });
 
-// PATCH/POST /api/staff/:id/status or /api/readers/:id/approve
-app.all(["/api/staff/:id/status", "/api/staff/:id", "/api/readers/:id/approve"], (req, res) => {
+app.all(["/api/staff/:id/status", "/api/staff/:id", "/api/readers/:id/approve", "/api/readers/:id"], async (req, res) => {
+  if (req.method === "DELETE") {
+    const { id } = req.params;
+    registeredStaff = registeredStaff.filter((s) => s.id !== id && s.username !== id);
+    await deleteDoc(doc(fsDb, FS_COLLECTIONS.READERS, sanitizeDocId(id))).catch(() => {});
+    return res.json({ success: true });
+  }
   if (req.method !== "PATCH" && req.method !== "POST" && req.method !== "PUT") {
     return res.status(405).json({ success: false, message: "Method Not Allowed" });
   }
 
   const { id } = req.params;
-  const { status, assignedRoutes } = req.body;
-
-  const reader = registeredStaff.find(s => s.id === id || s.username === id);
+  const { status, employmentStatus, assignedRoutes } = req.body || {};
+  const list = await loadReadersFromFirestore();
+  const reader = list.find((s) => s.id === id || s.username === id);
   if (!reader) {
     return res.status(404).json({ success: false, message: "Meter reader not found." });
   }
 
-  const targetStatus = status || "active";
+  const targetStatus = employmentStatus || status || "active";
   reader.employmentStatus = targetStatus;
   if (targetStatus === "active") {
     reader.approvedAt = new Date().toISOString();
   }
-
   if (assignedRoutes && Array.isArray(assignedRoutes)) {
     reader.assignedRoutes = assignedRoutes;
   }
 
+  await setDoc(doc(fsDb, FS_COLLECTIONS.READERS, sanitizeDocId(reader.id)), sanitizePayload(reader), { merge: true }).catch(
+    () => {}
+  );
+
   res.json({
     success: true,
     message: `Meter reader ${reader.name} status updated to ${reader.employmentStatus}.`,
-    reader
+    reader,
   });
 });
 
 // ==========================================
-// 3. ROUTE & SYNC DATA PULL
+// 5. ROUTE & SYNC DATA PULL + READINGS
 // ==========================================
-
-// GET /api/sync/pull
-app.get("/api/sync/pull", (req, res) => {
+app.get("/api/sync/pull", async (req, res) => {
   try {
     const { zone } = req.query;
-    let consumers = [...syncedConsumers];
+    const all = await fetchAllConsumersFromFirestore();
+    let consumers = all.filter(isValidatedConsumerForReader);
 
     if (zone && typeof zone === "string" && zone.trim() !== "" && zone !== "All") {
-      const cleanZone = zone.replace(/^Zone\s*\d+\s*-\s*/i, "").trim().toLowerCase();
-      consumers = consumers.filter(c => c.barangay.toLowerCase().includes(cleanZone) || c.address.toLowerCase().includes(cleanZone));
+      const cleanZone = zone.replace(/^Zone\s*\d+\s*[-:]\s*/i, "").trim().toLowerCase();
+      consumers = consumers.filter(
+        (c) => (c.barangay || "").toLowerCase().includes(cleanZone) || (c.address || "").toLowerCase().includes(cleanZone)
+      );
     }
 
     res.json({
@@ -525,27 +1574,74 @@ app.get("/api/sync/pull", (req, res) => {
       timestamp: new Date().toISOString(),
       zone: zone || "all",
       count: consumers.length,
-      consumers
+      consumers,
     });
-  } catch (err) {
+  } catch {
     res.json({
       success: true,
       timestamp: new Date().toISOString(),
       zone: "all",
-      count: syncedConsumers.length,
-      consumers: syncedConsumers
+      count: 0,
+      consumers: [],
     });
   }
 });
 
-// ==========================================
-// 4. FIELD READING SUBMISSION & BATCH SYNC
-// ==========================================
+async function loadReadingsFromFirestore(): Promise<MobileReadingSubmission[]> {
+  try {
+    const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.READINGS), limit(400)));
+    const map = new Map<string, MobileReadingSubmission>();
+    syncedReadings.forEach((r) => {
+      if (r.id) map.set(r.id, r);
+    });
+    snap.forEach((d) => {
+      const r = d.data() as MobileReadingSubmission;
+      if (r && (r.id || d.id)) map.set(r.id || d.id, { ...r, id: r.id || d.id });
+    });
+    syncedReadings = Array.from(map.values()).sort(
+      (a, b) => new Date(b.readingDate || b.submittedAt || 0).getTime() - new Date(a.readingDate || a.submittedAt || 0).getTime()
+    );
+  } catch {}
+  return syncedReadings;
+}
 
-// POST /api/readings/submit or /api/sync/push
-app.post(["/api/sync/push", "/api/readings/submit"], (req, res) => {
+app.get("/api/readings", async (req, res) => {
+  try {
+    const { accountNumber, status } = req.query;
+    let list = await loadReadingsFromFirestore();
+    if (accountNumber && typeof accountNumber === "string" && accountNumber.trim() !== "") {
+      const acc = accountNumber.trim().toUpperCase();
+      list = list.filter((r) => (r.accountNumber || "").toUpperCase() === acc);
+    }
+    if (status && typeof status === "string" && status !== "all") {
+      list = list.filter((r) => r.status === status);
+    }
+    res.json({
+      success: true,
+      count: list.length,
+      readings: list,
+      data: list,
+    });
+  } catch {
+    res.json({ success: true, count: 0, readings: [], data: [] });
+  }
+});
+
+app.get("/api/readings/pending", async (_req, res) => {
+  const list = await loadReadingsFromFirestore();
+  const pending = list.filter((r) => r.status === "pending_approval" || r.status === "pending");
+  res.json({
+    success: true,
+    count: pending.length,
+    readings: pending,
+    data: pending,
+  });
+});
+
+app.post(["/api/readings", "/api/sync/push", "/api/readings/submit"], async (req, res) => {
   try {
     const {
+      id,
       accountNumber,
       meterNumber,
       currentReading,
@@ -556,72 +1652,76 @@ app.post(["/api/sync/push", "/api/readings/submit"], (req, res) => {
       billingPeriod,
       photoUrl,
       coordinates,
-      notes
-    } = req.body;
+      notes,
+      status,
+    } = req.body || {};
 
     if (!accountNumber || currentReading === undefined) {
       return res.status(400).json({
         success: false,
-        message: "Account number and current reading are mandatory."
+        message: "Account number and current reading are mandatory.",
       });
     }
 
-    const matchedConsumer = syncedConsumers.find(
-      c => c.accountNumber === accountNumber || c.meterNumber === meterNumber
+    const allConsumers = await fetchAllConsumersFromFirestore();
+    const matchedConsumer = allConsumers.find(
+      (c) => c.accountNumber === accountNumber || (meterNumber && c.meterNumber === meterNumber)
     );
 
-    const prev = previousReading !== undefined ? Number(previousReading) : (matchedConsumer ? matchedConsumer.previousReading : 0);
+    const prev = previousReading !== undefined ? Number(previousReading) : matchedConsumer ? matchedConsumer.previousReading : 0;
     const curr = Number(currentReading);
     const consumption = Math.max(0, curr - prev);
 
     const submission: MobileReadingSubmission = {
-      id: `READ-${Math.floor(10000 + Math.random() * 90000)}`,
+      id: id || `READ-${Math.floor(10000 + Math.random() * 90000)}`,
       accountNumber: matchedConsumer ? matchedConsumer.accountNumber : accountNumber,
-      consumerName: matchedConsumer ? matchedConsumer.name : (req.body.consumerName || "Consumer Account"),
+      consumerName: matchedConsumer ? matchedConsumer.name : req.body.consumerName || "Consumer Account",
       meterNumber: meterNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG"),
-      billingPeriod: billingPeriod || "August 2026",
-      readingDate: new Date().toISOString().split("T")[0],
+      billingPeriod: billingPeriod || "October 2026",
+      readingDate: req.body.readingDate || new Date().toISOString().split("T")[0],
       previousReading: prev,
       currentReading: curr,
       consumption,
       readerId: readerId || "WDT-FIELD",
       readerName: readerName || "Field Meter Officer",
       route: route || (matchedConsumer ? matchedConsumer.barangay : "Poblacion"),
-      status: "pending_approval",
+      status: status || "pending_approval",
+      paymentStatus: req.body.paymentStatus || "unpaid",
       photoUrl: photoUrl || "",
       coordinates: coordinates || { latitude: 8.5372, longitude: 124.7523 },
-      notes: notes || "Scanned and submitted via Tagoloan Mobile Field App",
-      submittedAt: new Date().toISOString()
+      notes: notes || "Submitted via Tagoloan Water District System",
+      submittedAt: new Date().toISOString(),
     };
 
-    pendingMobileReadings.unshift(submission);
+    syncedReadings.unshift(submission);
+    await setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(submission.id)), sanitizePayload(submission), {
+      merge: true,
+    }).catch(() => {});
 
     res.status(201).json({
       success: true,
-      message: "Reading submitted successfully and routed to Admin Verification Queue.",
+      message: "Reading submitted successfully.",
       submissionId: submission.id,
+      reading: submission,
       consumption: submission.consumption,
-      status: "pending_approval"
+      status: submission.status,
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ success: false, message: "Failed to submit reading." });
   }
 });
 
-// POST /api/readings/batch
-app.post("/api/readings/batch", (req, res) => {
+app.post("/api/readings/batch", async (req, res) => {
   try {
-    const readingsList = Array.isArray(req.body) ? req.body : (req.body.readings || []);
-
+    const readingsList = Array.isArray(req.body) ? req.body : req.body?.readings || [];
     if (!readingsList || readingsList.length === 0) {
       return res.status(400).json({
         success: false,
-        message: "No readings payload provided in batch upload."
+        message: "No readings payload provided in batch upload.",
       });
     }
 
     const processed: MobileReadingSubmission[] = [];
-
     for (const item of readingsList) {
       const prev = item.previousReading !== undefined ? Number(item.previousReading) : 0;
       const curr = Number(item.currentReading || 0);
@@ -632,7 +1732,7 @@ app.post("/api/readings/batch", (req, res) => {
         accountNumber: item.accountNumber || "UNKNOWN",
         consumerName: item.consumerName || "Consumer",
         meterNumber: item.meterNumber || "MT-TAG",
-        billingPeriod: item.billingPeriod || "August 2026",
+        billingPeriod: item.billingPeriod || "October 2026",
         readingDate: item.readingDate || new Date().toISOString().split("T")[0],
         previousReading: prev,
         currentReading: curr,
@@ -640,62 +1740,92 @@ app.post("/api/readings/batch", (req, res) => {
         readerId: item.readerId || "WDT-FIELD",
         readerName: item.readerName || "Field Meter Officer",
         route: item.route || item.barangay || "Poblacion",
-        status: "pending_approval",
+        status: item.status || "pending_approval",
+        paymentStatus: item.paymentStatus || "unpaid",
         photoUrl: item.photoUrl || item.dialPhotoUrl || "",
         coordinates: item.coordinates || { latitude: 8.5372, longitude: 124.7523 },
         notes: item.notes || "Batch synced from Mobile Offline Queue",
-        submittedAt: new Date().toISOString()
+        submittedAt: new Date().toISOString(),
       };
 
-      pendingMobileReadings.unshift(submission);
+      syncedReadings.unshift(submission);
       processed.push(submission);
+      await setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(submission.id)), sanitizePayload(submission), {
+        merge: true,
+      }).catch(() => {});
     }
 
     res.status(201).json({
       success: true,
       message: `Successfully processed and synced ${processed.length} field readings.`,
       count: processed.length,
-      syncedIds: processed.map(p => p.id)
+      processed: processed.length,
+      readings: processed,
+      syncedIds: processed.map((p) => p.id),
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ success: false, message: "Batch sync error." });
   }
 });
 
-// GET /api/readings/pending
-app.get("/api/readings/pending", (req, res) => {
-  res.json({
-    success: true,
-    count: pendingMobileReadings.length,
-    readings: pendingMobileReadings
-  });
+app.post("/api/readings/:id/approve", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(id)), { status: "verified" }, { merge: true }).catch(() => {});
+    const idx = syncedReadings.findIndex((r) => r.id === id);
+    if (idx >= 0) syncedReadings[idx].status = "verified";
+    res.json({ success: true, message: `Reading ${id} approved.` });
+  } catch {
+    res.status(500).json({ success: false, message: "Failed to approve reading." });
+  }
 });
 
-// GET /api/barangays
-app.get("/api/barangays", (req, res) => {
+// ==========================================
+// 6. TARIFF CONFIG, BARANGAYS & HEALTH
+// ==========================================
+app.get("/api/tariff-config", async (_req, res) => {
+  try {
+    const tDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.SETTINGS, "tariff_config")).catch(() => null);
+    if (tDoc && tDoc.exists()) {
+      return res.json({ success: true, config: tDoc.data() });
+    }
+  } catch {}
+  res.json({ success: true, config: null });
+});
+
+app.post("/api/tariff-config", async (req, res) => {
+  try {
+    const cfg = req.body || {};
+    await setDoc(doc(fsDb, FS_COLLECTIONS.SETTINGS, "tariff_config"), sanitizePayload(cfg), { merge: true }).catch(() => {});
+    res.json({ success: true, config: cfg });
+  } catch {
+    res.status(500).json({ success: false, message: "Failed to save tariff config." });
+  }
+});
+
+app.get("/api/barangays", (_req, res) => {
   const barangays = [
-    { id: "BRG-01", name: "Poblacion", code: "PB-01", ratePerM3: 24.50 },
-    { id: "BRG-02", name: "Natumolan", code: "NT-02", ratePerM3: 24.50 },
-    { id: "BRG-03", name: "Baluarte", code: "BL-03", ratePerM3: 24.50 },
-    { id: "BRG-04", name: "Sta. Ana", code: "SA-04", ratePerM3: 24.50 },
-    { id: "BRG-05", name: "Sta. Cruz", code: "SC-05", ratePerM3: 24.50 },
-    { id: "BRG-06", name: "Mohon", code: "MH-06", ratePerM3: 24.50 },
-    { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 24.50 },
-    { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 24.50 },
-    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 24.50 }
+    { id: "BRG-01", name: "Poblacion", code: "PB-01", ratePerM3: 24.5 },
+    { id: "BRG-02", name: "Natumolan", code: "NT-02", ratePerM3: 24.5 },
+    { id: "BRG-03", name: "Baluarte", code: "BL-03", ratePerM3: 24.5 },
+    { id: "BRG-04", name: "Sta. Ana", code: "SA-04", ratePerM3: 24.5 },
+    { id: "BRG-05", name: "Sta. Cruz", code: "SC-05", ratePerM3: 24.5 },
+    { id: "BRG-06", name: "Mohon", code: "MH-06", ratePerM3: 24.5 },
+    { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 24.5 },
+    { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 24.5 },
+    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 24.5 },
   ];
   res.json({ success: true, count: barangays.length, barangays, data: barangays });
 });
 
-// Health check
-app.get(["/api/health", "/api/status"], (req, res) => {
+app.get(["/api/health", "/api/status", "/api/ws", "/ws"], (_req, res) => {
   res.json({
     status: "ok",
     connected: true,
-    service: "Tagoloan Water District Live Gateway",
+    service: "Tagoloan Water District Live Cloud Gateway",
     timestamp: new Date().toISOString(),
     consumersCount: syncedConsumers.length,
-    staffCount: registeredStaff.length
+    staffCount: registeredStaff.length,
   });
 });
 

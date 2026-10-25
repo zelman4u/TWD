@@ -16,6 +16,7 @@ import {
   syncDocToFirestore, 
   deleteDocFromFirestore, 
   eraseAccountFromFirestore,
+  pushIssuedConsumerToFirestore,
   isAccountTerminated,
   addTerminatedAccountKeys,
   removeTerminatedAccountKeys,
@@ -1215,6 +1216,50 @@ function getStored<T>(key: string, initial: T): T {
           changed = true;
         }
       });
+
+      // Deduplicate stale pending placeholders if an active issued consumer record exists for the same email, userId, phone, or name
+      const normPhone = (raw?: string) => {
+        if (!raw) return '';
+        let d = String(raw).replace(/\D/g, '');
+        if (d.startsWith('63') && d.length === 12) d = '0' + d.slice(2);
+        if (d.length === 10 && d.startsWith('9')) d = '0' + d;
+        return d;
+      };
+      const isIssuedRec = (c: Consumer) => {
+        const acc = (c.accountNumber || '').trim().toUpperCase();
+        return Boolean(acc && !acc.startsWith('PENDING') && acc !== 'UNASSIGNED' && acc !== 'UNISSUED' && c.status !== 'pending_approval');
+      };
+      const beforeLen = cons.length;
+      cons = cons.filter((c, _idx, arr) => {
+        if (isIssuedRec(c)) return true;
+        const cEmail = (c.email || '').trim().toLowerCase();
+        const cUid = (c.linkedUserId || '').trim();
+        const cPhone = normPhone(c.contactNumber);
+        const cName = (c.name || '').trim().toLowerCase();
+        const activeTwin = arr.find(o => {
+          if (o === c || !isIssuedRec(o)) return false;
+          const oEmail = (o.email || '').trim().toLowerCase();
+          const oUid = (o.linkedUserId || '').trim();
+          const oPhone = normPhone(o.contactNumber);
+          const oName = (o.name || '').trim().toLowerCase();
+          if (cEmail && oEmail && cEmail === oEmail) return true;
+          if (cUid && oUid && cUid === oUid) return true;
+          if (cPhone && oPhone && cPhone.length === 11 && cPhone === oPhone) return true;
+          if (cName && oName && cName === oName && (!cEmail || !oEmail || cEmail === oEmail)) return true;
+          return false;
+        });
+        if (activeTwin) {
+          if (!activeTwin.email && c.email) activeTwin.email = c.email;
+          if (!activeTwin.linkedUserId && c.linkedUserId) activeTwin.linkedUserId = c.linkedUserId;
+          if (!activeTwin.contactNumber && c.contactNumber) activeTwin.contactNumber = c.contactNumber;
+          return false;
+        }
+        return true;
+      });
+      if (cons.length !== beforeLen) {
+        changed = true;
+      }
+
       if (changed) {
         localStorage.setItem(key, JSON.stringify(cons));
         return cons as unknown as T;
@@ -1584,7 +1629,7 @@ export const mockDb = {
   },
   saveAuditLogs: (logs: AuditLog[]): void => {
     setStored(KEYS.AUDIT_LOGS, logs);
-    syncBatchToFirestore(COLLECTIONS.AUDIT_LOGS, logs, 'id');
+    syncBatchToFirestore(COLLECTIONS.AUDIT_LOGS, logs.slice(-15), 'id');
   },
   saveBarangays: (barangays: Barangay[]): void => {
     setStored(KEYS.BARANGAYS, barangays);
@@ -1666,36 +1711,21 @@ export const mockDb = {
       const nEmail = (n.consumerEmail || '').trim().toLowerCase();
       const nConsumerId = (n.consumerId || '').trim().toLowerCase();
 
-      // STRICT CONFLICT EXCLUSION: If notification is explicitly tagged to a different User ID, do NOT match
-      if (cleanUserId && nUserId && nUserId !== cleanUserId) {
-        return false;
-      }
-      // STRICT CONFLICT EXCLUSION: If notification is explicitly tagged to a different Email, do NOT match
-      if (cleanEmail && nEmail && nEmail !== cleanEmail) {
-        return false;
-      }
-      // STRICT CONFLICT EXCLUSION: If notification is explicitly tagged to a different Consumer ID, do NOT match
-      if (cleanConsumerId && nConsumerId && nConsumerId !== cleanConsumerId) {
-        return false;
+      // 1. Email is the authoritative personal identity: match if equal, exclude if explicitly a different email
+      if (cleanEmail && nEmail) {
+        return cleanEmail === nEmail;
       }
 
-      // 1. Exact User ID Match
+      // 2. Real issued Account Number match: match if equal, exclude if explicitly a different issued account
+      if (hasRealAccount && nHasRealAcc) {
+        return cleanAccount === nCleanAcc;
+      }
+
+      // 3. Exact User ID or Consumer ID Match (when email/account do not conflict)
       if (cleanUserId && nUserId && nUserId === cleanUserId) {
         return true;
       }
-
-      // 2. Exact Consumer ID Match
       if (cleanConsumerId && nConsumerId && nConsumerId === cleanConsumerId) {
-        return true;
-      }
-
-      // 3. Exact Email Match
-      if (cleanEmail && nEmail && nEmail === cleanEmail) {
-        return true;
-      }
-
-      // 4. Real Account Number Match (ONLY if neither is a placeholder!)
-      if (hasRealAccount && nHasRealAcc && nCleanAcc === cleanAccount) {
         return true;
       }
 
@@ -1704,6 +1734,10 @@ export const mockDb = {
     });
 
     return filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  },
+
+  getAllNotifications: (): ConsumerNotification[] => {
+    return getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
   },
 
   updateConsumerNotifications: (
@@ -1777,12 +1811,16 @@ export const mockDb = {
 
       const duplicate = list.find(existing => {
         if (inc.id && existing.id === inc.id) return true;
-        const exTime = existing.timestamp ? new Date(existing.timestamp).getTime() : 0;
-        if (Math.abs(incTime - exTime) > 15000) return false;
         const exAcc = (existing.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
         const exEmail = (existing.consumerEmail || '').trim().toLowerCase();
         const exTitle = (existing.title || '').trim().toLowerCase();
-        return existing.type === inc.type && exTitle === incTitle && ((incAcc && exAcc === incAcc) || (incEmail && exEmail === incEmail));
+        const sameTarget = (incAcc && !incAcc.startsWith('pending') && exAcc === incAcc) || (incEmail && exEmail === incEmail);
+        if (inc.type === 'account_issue' && existing.type === 'account_issue' && exTitle === incTitle && sameTarget) {
+          return true;
+        }
+        const exTime = existing.timestamp ? new Date(existing.timestamp).getTime() : 0;
+        if (Math.abs(incTime - exTime) > 15000) return false;
+        return existing.type === inc.type && exTitle === incTitle && sameTarget;
       });
 
       if (!duplicate) {
@@ -2044,6 +2082,172 @@ export const mockDb = {
     });
   },
 
+  // Retroactively heals & links any previously issued consumer IDs across users, active session, and notifications
+  reconcileIssuedAccounts: (): void => {
+    try {
+      const consumers = getStored<Consumer[]>(KEYS.CONSUMERS, INITIAL_CONSUMERS);
+      const users = getStored<User[]>(KEYS.USERS, INITIAL_USERS);
+      const notifications = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
+
+      const isRealAcc = (acc?: string) => {
+        if (!acc) return false;
+        const c = acc.replace(/^#/, '').trim().toUpperCase();
+        return Boolean(c && !c.startsWith('PENDING') && c !== 'UNASSIGNED' && c !== 'UNISSUED' && c !== 'NONE' && c !== 'N/A');
+      };
+
+      let consumersChanged = false;
+      let usersChanged = false;
+      let notifsChanged = false;
+
+      consumers.forEach(c => {
+        if (!isRealAcc(c.accountNumber) || c.status === 'pending_approval') return;
+
+        const acc = c.accountNumber.trim().toUpperCase();
+        if (!c.meterNumber || c.meterNumber.toUpperCase().startsWith('PENDING')) {
+          c.meterNumber = `MT-${acc}`;
+          consumersChanged = true;
+        }
+        if (!c.rfidTag || c.rfidTag.toUpperCase().startsWith('PENDING')) {
+          c.rfidTag = `RFID-${c.meterNumber}`;
+          consumersChanged = true;
+        }
+
+        const cEmail = (c.email || '').trim().toLowerCase();
+        const cUid = (c.linkedUserId || '').trim();
+        const cName = (c.name || '').trim().toLowerCase();
+
+        // Match corresponding Consumer User account
+        const matchedUser = users.find(u => {
+          if (u.role === 'admin') return false;
+          const uEmail = (u.email || '').trim().toLowerCase();
+          const uName = (u.name || '').trim().toLowerCase();
+          if (cEmail && uEmail && cEmail === uEmail) return true;
+          if (cUid && u.id === cUid) return true;
+          if (u.linkedAccountNumber && u.linkedAccountNumber.toUpperCase() === acc) return true;
+          if (cName && uName && cName === uName && (!cEmail || !uEmail || cEmail === uEmail)) return true;
+          return false;
+        });
+
+        if (matchedUser) {
+          if (matchedUser.linkedAccountNumber !== acc || matchedUser.status !== 'active') {
+            matchedUser.linkedAccountNumber = acc;
+            matchedUser.status = 'active';
+            usersChanged = true;
+          }
+          // Heal mismatched synthetic linkedUserId on consumer record
+          if (matchedUser.id && c.linkedUserId !== matchedUser.id) {
+            c.linkedUserId = matchedUser.id;
+            consumersChanged = true;
+          }
+          if (!c.email && matchedUser.email) {
+            c.email = matchedUser.email;
+            consumersChanged = true;
+          }
+        }
+
+        // Heal active currentUser session if currently logged in as this consumer
+        const currentSession = mockDb.getCurrentUser();
+        if (currentSession && currentSession.role !== 'admin') {
+          const sEmail = (currentSession.email || '').trim().toLowerCase();
+          const sName = (currentSession.name || '').trim().toLowerCase();
+          const isCurrentMatch =
+            (cEmail && sEmail && cEmail === sEmail) ||
+            (c.linkedUserId && currentSession.id === c.linkedUserId) ||
+            (currentSession.linkedAccountNumber && currentSession.linkedAccountNumber.toUpperCase() === acc) ||
+            (cName && sName && cName === sName && (!cEmail || !sEmail || cEmail === sEmail));
+
+          if (isCurrentMatch && (currentSession.linkedAccountNumber !== acc || currentSession.status !== 'active')) {
+            mockDb.setCurrentUser({
+              ...currentSession,
+              linkedAccountNumber: acc,
+              status: 'active'
+            });
+          }
+        }
+
+        // Heal notifications belonging to this consumer & backfill missing account_issue confirmation for portal users
+        const effectiveEmail = (c.email || matchedUser?.email || '').trim().toLowerCase();
+        const effectiveUid = (c.linkedUserId || matchedUser?.id || '').trim();
+
+        notifications.forEach(n => {
+          const nEmail = (n.consumerEmail || '').trim().toLowerCase();
+          const nAcc = (n.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+          const samePerson =
+            (effectiveEmail && nEmail && effectiveEmail === nEmail) ||
+            (nAcc === acc) ||
+            (effectiveUid && n.userId === effectiveUid);
+
+          if (samePerson) {
+            if (!isRealAcc(n.accountNumber)) {
+              n.accountNumber = acc;
+              notifsChanged = true;
+            }
+            if (effectiveEmail && !n.consumerEmail) {
+              n.consumerEmail = effectiveEmail;
+              notifsChanged = true;
+            }
+            if (effectiveUid && n.userId !== effectiveUid) {
+              n.userId = effectiveUid;
+              notifsChanged = true;
+            }
+          }
+        });
+
+        const hasPortalIdentity = Boolean(
+          matchedUser ||
+          c.linkedUserId ||
+          acc.startsWith('BRG-') ||
+          notifications.some(n => effectiveEmail && n.consumerEmail && n.consumerEmail.toLowerCase() === effectiveEmail)
+        );
+
+        if (hasPortalIdentity) {
+          let issuedConfirmationNotif = notifications.find(n => {
+            if (n.type !== 'account_issue') return false;
+            const nTitle = (n.title || '').toLowerCase();
+            if (nTitle.includes('registration application submitted')) return false;
+            const nAcc = (n.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+            const nEmail = (n.consumerEmail || '').trim().toLowerCase();
+            return nAcc === acc || (effectiveEmail && nEmail === effectiveEmail && isRealAcc(n.accountNumber));
+          });
+
+          if (!issuedConfirmationNotif) {
+            issuedConfirmationNotif = {
+              id: `notif-issued-${acc.replace(/[^a-zA-Z0-9]/g, '')}`,
+              accountNumber: acc,
+              consumerId: c.id,
+              userId: effectiveUid || undefined,
+              consumerEmail: effectiveEmail || undefined,
+              title: `Official Account Number & Meter Issued!`,
+              message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${acc} and Meter Serial is #${c.meterNumber}. Smart RFID Tag: ${c.rfidTag}. Your full dashboard and telemetry are now active.`,
+              timestamp: new Date().toISOString(),
+              type: 'account_issue',
+              read: false
+            };
+            notifications.unshift(issuedConfirmationNotif);
+            notifsChanged = true;
+
+            if (typeof window !== 'undefined' && typeof fetch === 'function') {
+              fetch('/api/notifications', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(issuedConfirmationNotif)
+              }).catch(() => {});
+            }
+          }
+
+          // Push issued consumer, linked user activation, and confirmation notification to Cloud Firestore (deduplicated)
+          pushIssuedConsumerToFirestore(c, issuedConfirmationNotif, matchedUser).catch(() => {});
+        }
+      });
+
+      if (consumersChanged) setStored(KEYS.CONSUMERS, consumers);
+      if (usersChanged) setStored(KEYS.USERS, users);
+      if (notifsChanged) setStored(KEYS.NOTIFICATIONS, notifications);
+    } catch (err) {
+      console.warn('[mockDb] reconcileIssuedAccounts warning:', err);
+    }
+  },
+
   resetDatabase: (): void => {
     localStorage.removeItem(KEYS.USERS);
     localStorage.removeItem(KEYS.CONSUMERS);
@@ -2061,5 +2265,7 @@ export const mockDb = {
   }
 };
 
-// Auto initialize Firestore baseline data
+// Auto initialize Firestore baseline data & self-heal previously issued consumer accounts
 mockDb.initFirestore();
+mockDb.reconcileIssuedAccounts();
+

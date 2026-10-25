@@ -75,12 +75,12 @@ import { UploadReceiptModal } from './consumer/UploadReceiptModal';
 import { MonthlyUsageReportModal } from './consumer/MonthlyUsageReportModal';
 import { BillDetails } from './consumer/BillDetails';
 import { ConsumerReportsSection } from './consumer/ConsumerReportsSection';
-import { DistrictProfileSection } from './common/DistrictProfileSection';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
 import { calculateWaterTariff, getActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
 import { apiClient } from '../services/apiClient';
 import { initRealtimeSocket } from '../services/realtimeSocket';
+import { resolveConsumerAccountInFirestore, pushIssuedConsumerToFirestore } from '../services/firebaseDb';
 import { TablePagination } from './common/TablePagination';
 
 interface ConsumerPortalProps {
@@ -409,51 +409,88 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
 
     syncTimeoutRef.current = setTimeout(() => {
-      // 1. First attempt to fetch latest live record from backend API (including pending & newly confirmed records)
-      const searchParam = currentUser.linkedAccountNumber || currentUser.email || currentUser.id;
-      if (searchParam) {
-        fetch(`/api/consumers?includePending=true&view=portal&search=${encodeURIComponent(searchParam)}`, {
-          headers: { 'x-portal': 'consumer' }
-        })
-          .then(res => res.json())
-          .then(apiData => {
-            if (apiData && (apiData.consumers || apiData.data)) {
-              const list: any[] = apiData.consumers || apiData.data || [];
-              // Prefer active issued record if multiple exist
-              const matchingApi = list
-                .filter((c: any) =>
-                  (currentUser.linkedAccountNumber && c.accountNumber && c.accountNumber === currentUser.linkedAccountNumber) ||
-                  (currentUser.email && c.email && c.email.toLowerCase() === currentUser.email.toLowerCase()) ||
-                  (currentUser.id && c.linkedUserId && c.linkedUserId === currentUser.id)
-                )
-                .sort((a: any, b: any) => (isConsumerRecordIssued(b) ? 1 : 0) - (isConsumerRecordIssued(a) ? 1 : 0));
+      // Detect whether the active consumer session was still unlinked before reconciliation
+      const sessionBefore = mockDb.getCurrentUser();
+      const sessionWasUnlinked = Boolean(
+        !sessionBefore?.linkedAccountNumber ||
+        sessionBefore.linkedAccountNumber.toUpperCase().startsWith('PENDING') ||
+        sessionBefore.status === 'pending_approval' ||
+        !currentUser.linkedAccountNumber ||
+        currentUser.linkedAccountNumber.toUpperCase().startsWith('PENDING') ||
+        currentUser.status === 'pending_approval'
+      );
 
-              const matchedApi = matchingApi[0];
-              if (matchedApi) {
-                const wasPendingBefore = wasAccountPendingRef.current === true || !isConsumerRecordIssued(consumerRecordRef.current);
-                if (isConsumerRecordIssued(matchedApi)) {
-                  applyAutomaticIdConfirmation(matchedApi, undefined, false, wasPendingBefore && wasAccountPendingRef.current === true);
-                } else {
-                  const currentLocal = mockDb.getConsumers();
-                  const idx = currentLocal.findIndex(lc =>
-                    (matchedApi.accountNumber && lc.accountNumber === matchedApi.accountNumber) ||
-                    (matchedApi.email && lc.email && lc.email.toLowerCase() === matchedApi.email.toLowerCase()) ||
-                    (matchedApi.linkedUserId && lc.linkedUserId === matchedApi.linkedUserId)
-                  );
-                  if (idx < 0) {
-                    currentLocal.unshift(matchedApi);
-                    mockDb.saveConsumers(currentLocal);
-                  }
-                  if (!isConsumerRecordIssued(consumerRecordRef.current)) {
-                    consumerRecordRef.current = idx >= 0 ? currentLocal[idx] : matchedApi;
-                    setConsumerRecord(consumerRecordRef.current);
-                  }
-                }
+      // Heal any locally stored issued accounts & notifications first
+      mockDb.reconcileIssuedAccounts();
+
+      const resolvePayload = {
+        email: currentUser.email || consumerRecordRef.current?.email,
+        userId: currentUser.id || consumerRecordRef.current?.linkedUserId,
+        accountNumber: currentUser.linkedAccountNumber || consumerRecordRef.current?.accountNumber,
+        name: currentUser.name || consumerRecordRef.current?.name,
+        contactNumber: consumerRecordRef.current?.contactNumber
+      };
+
+      const applyRemoteResolution = (resolvedData: { isIssued?: boolean; consumer?: Consumer | null; notifications?: ConsumerNotification[] } | null) => {
+        if (!resolvedData) return;
+        if (Array.isArray(resolvedData.notifications) && resolvedData.notifications.length > 0) {
+          const notifMerged = mockDb.mergeExternalNotifications(resolvedData.notifications);
+          if (notifMerged) {
+            const refreshedNotifs = mockDb.getNotifications(
+              resolvedData.consumer?.accountNumber || consumerRecordRef.current?.accountNumber || currentUser.linkedAccountNumber,
+              {
+                userId: resolvedData.consumer?.linkedUserId || currentUser.id,
+                email: resolvedData.consumer?.email || currentUser.email,
+                consumerId: resolvedData.consumer?.id
               }
+            );
+            notifsRef.current = refreshedNotifs;
+            setNotifications(refreshedNotifs);
+          }
+        }
+
+        const matchedRemote = resolvedData.consumer;
+        if (matchedRemote) {
+          if (isConsumerRecordIssued(matchedRemote)) {
+            const shouldShowBanner = wasAccountPendingRef.current === true || sessionWasUnlinked;
+            applyAutomaticIdConfirmation(matchedRemote, undefined, false, shouldShowBanner);
+          } else {
+            const currentLocal = mockDb.getConsumers();
+            const idx = currentLocal.findIndex(lc =>
+              (matchedRemote.accountNumber && lc.accountNumber === matchedRemote.accountNumber) ||
+              (matchedRemote.email && lc.email && lc.email.toLowerCase() === matchedRemote.email.toLowerCase()) ||
+              (matchedRemote.linkedUserId && lc.linkedUserId === matchedRemote.linkedUserId)
+            );
+            if (idx < 0) {
+              currentLocal.unshift(matchedRemote);
+              mockDb.saveConsumers(currentLocal);
             }
-          })
-          .catch(() => {});
-      }
+            if (!isConsumerRecordIssued(consumerRecordRef.current)) {
+              consumerRecordRef.current = idx >= 0 ? currentLocal[idx] : matchedRemote;
+              setConsumerRecord(consumerRecordRef.current);
+            }
+          }
+        }
+      };
+
+      // 1a. Direct Cloud Firestore resolution (works across all devices, browsers, and Vercel deployments)
+      resolveConsumerAccountInFirestore(resolvePayload)
+        .then(fsResolved => {
+          if (fsResolved) applyRemoteResolution(fsResolved);
+        })
+        .catch(() => {});
+
+      // 1b. Authoritative account & notification resolution against backend API
+      fetch('/api/consumers/resolve-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-portal': 'consumer' },
+        body: JSON.stringify(resolvePayload)
+      })
+        .then(res => res.json())
+        .then(resolvedData => {
+          if (resolvedData?.success) applyRemoteResolution(resolvedData);
+        })
+        .catch(() => {});
 
       const consumers = mockDb.getConsumers();
       const allReadings = mockDb.getReadings();
@@ -463,15 +500,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       const liveUser = allUsers.find(
         u => (currentUser.id && u.id === currentUser.id) ||
              (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase()) ||
-             (currentUser.linkedAccountNumber && u.linkedAccountNumber === currentUser.linkedAccountNumber) ||
+             (currentUser.linkedAccountNumber && !currentUser.linkedAccountNumber.toUpperCase().startsWith('PENDING') && u.linkedAccountNumber === currentUser.linkedAccountNumber) ||
              (currentUser.name && u.name && u.name.toLowerCase() === currentUser.name.toLowerCase())
       );
 
-      // Match linked account number, user id, or verified email strictly to prevent cross-account contamination
+      // Match linked account number, user id, email, phone, or verified name
       const matching = consumers.filter(c => {
-        // 1. Account Number Match
-        const userAcc = currentUser.linkedAccountNumber || liveUser?.linkedAccountNumber;
-        if (userAcc && c.accountNumber && c.accountNumber === userAcc) {
+        // 1. Valid Issued Account Number Match
+        const userAcc = (currentUser.linkedAccountNumber || liveUser?.linkedAccountNumber || '').trim();
+        if (userAcc && !userAcc.toUpperCase().startsWith('PENDING') && c.accountNumber && c.accountNumber.toUpperCase() === userAcc.toUpperCase()) {
           return true;
         }
         // 2. User ID Match
@@ -485,11 +522,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         if (userEmail && consumerEmail && userEmail === consumerEmail) {
           return true;
         }
-        // 4. Name match ONLY if neither the consumer nor user has a conflicting email or user ID
+        // 4. Name match whenever emails do not belong to a different account
         const userName = (currentUser.name || liveUser?.name || '').trim().toLowerCase();
         const consumerName = (c.name || '').trim().toLowerCase();
         if (userName && consumerName && userName === consumerName) {
-          if (!consumerEmail && !c.linkedUserId) {
+          if (!userEmail || !consumerEmail || userEmail === consumerEmail) {
             return true;
           }
         }
@@ -497,11 +534,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       });
 
       // Sort matching so active issued record always takes top precedence over stale pending records
-      matching.sort((a, b) => {
-        const aActive = a.accountNumber && !a.accountNumber.toUpperCase().startsWith('PENDING') && a.status === 'active' ? 1 : 0;
-        const bActive = b.accountNumber && !b.accountNumber.toUpperCase().startsWith('PENDING') && b.status === 'active' ? 1 : 0;
-        return bActive - aActive;
-      });
+      matching.sort((a, b) => (isConsumerRecordIssued(b) ? 1 : 0) - (isConsumerRecordIssued(a) ? 1 : 0));
 
       const record = matching.length > 0 ? matching[0] : null;
 
@@ -509,22 +542,49 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         const nowIssued = isConsumerRecordIssued(record);
         const wasPendingBefore = wasAccountPendingRef.current;
 
-        if (nowIssued && wasPendingBefore === true) {
-          applyAutomaticIdConfirmation(record, undefined, false, true);
-        } else {
-          wasAccountPendingRef.current = !nowIssued;
-          if (nowIssued && !lastAnnouncedAccountRef.current) {
-            lastAnnouncedAccountRef.current = record.accountNumber.trim().toUpperCase();
-          }
-          // Ensure active session user stays linked to issued accountNumber
-          if (nowIssued) {
-            const sess = mockDb.getCurrentUser();
-            if (sess && (sess.id === currentUser.id || (sess.email && currentUser.email && sess.email.toLowerCase() === currentUser.email.toLowerCase()))) {
-              if (sess.linkedAccountNumber !== record.accountNumber || sess.status !== 'active') {
-                mockDb.setCurrentUser({ ...sess, linkedAccountNumber: record.accountNumber, status: 'active' });
-              }
+        if (nowIssued) {
+          // Check if consumer's issuance notification is already present; if session was unlinked or notification missing, apply full confirmation
+          const existingLocalNotifs = mockDb.getNotifications(record.accountNumber, {
+            userId: record.linkedUserId || currentUser.id,
+            email: record.email || currentUser.email,
+            consumerId: record.id
+          });
+          const hasIssuanceNotif = existingLocalNotifs.some(
+            n => n.type === 'account_issue' && !(n.title || '').toLowerCase().includes('registration application submitted')
+          );
+
+          if (wasPendingBefore === true || sessionWasUnlinked || !hasIssuanceNotif) {
+            applyAutomaticIdConfirmation(record, undefined, false, wasPendingBefore === true || sessionWasUnlinked);
+          } else {
+            wasAccountPendingRef.current = false;
+            if (!lastAnnouncedAccountRef.current) {
+              lastAnnouncedAccountRef.current = record.accountNumber.trim().toUpperCase();
+            }
+            if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(record)) {
+              consumerRecordRef.current = record;
+              setConsumerRecord(record);
             }
           }
+
+          // Push confirmed local record up to Cloud Firestore & server reconcile store so all other devices stay synced
+          const accountIssueNotifs = mockDb.getNotifications(record.accountNumber, {
+            userId: record.linkedUserId || currentUser.id,
+            email: record.email || currentUser.email,
+            consumerId: record.id
+          }).filter(n => n.type === 'account_issue' && !(n.title || '').toLowerCase().includes('registration application submitted'));
+
+          pushIssuedConsumerToFirestore(record, accountIssueNotifs[0], liveUser || currentUser).catch(() => {});
+
+          fetch('/api/consumers/reconcile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-portal': 'consumer' },
+            body: JSON.stringify({
+              consumers: [record],
+              notifications: accountIssueNotifs
+            })
+          }).catch(() => {});
+        } else {
+          wasAccountPendingRef.current = true;
           if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(record)) {
             consumerRecordRef.current = record;
             setConsumerRecord(record);
@@ -871,7 +931,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
       if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
     };
-  }, [currentUser?.id, currentUser?.email, currentUser?.linkedAccountNumber]);
+  }, [currentUser?.id, currentUser?.email]);
 
   // Populate profile edit fields when record is loaded or updated by admin
   useEffect(() => {
@@ -3835,11 +3895,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
               </div>
 
-            </div>
-
-            {/* Official District Mandate, Vision, Mission, Core Values & Staffing Structure */}
-            <div className="pt-6">
-              <DistrictProfileSection id="consumer-district-profile" isDarkTheme={true} />
             </div>
 
           </div>

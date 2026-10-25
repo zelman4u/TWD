@@ -241,7 +241,8 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
           barangayId: matchedBarangay.id,
           sitioZone: sitioZone.trim(),
           consumerType: consumerType,
-          linkedUserId: newUserId
+          linkedUserId: newUserId,
+          password: password
         })
       }).catch(err => {
         console.warn('[Registration] Backend sync warning:', err);

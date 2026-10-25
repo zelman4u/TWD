@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { Mail, Lock, LogIn, AlertCircle, RefreshCw, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { User } from '../types';
 import { mockDb } from '../mockDb';
-import { directFindUserInFirestore } from '../services/firebaseDb';
+import { directFindUserInFirestore, resolveConsumerAccountInFirestore } from '../services/firebaseDb';
 import { useLoading } from '../context/LoadingContext';
 import { useToast } from '../context/ToastContext';
 
@@ -111,11 +111,69 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
       }
     }
 
-    // 2. Real Registered Consumer Authentication Check
+    // 2. Real Registered Consumer Authentication Check (Local + Server Account/ID Resolution)
+    mockDb.reconcileIssuedAccounts();
     let users = mockDb.getUsers();
     let matchedUser = users.find(u => (u.email || '').toLowerCase() === inputEmail);
 
-    // If not found in local cache, query live Firestore database directly
+    // Query central server AND Cloud Firestore in parallel to resolve cross-device registrations, issued IDs & notifications
+    const [serverResolved, firestoreResolved] = await Promise.all([
+      (async () => {
+        try {
+          const resp = await fetch('/api/consumers/resolve-account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: inputEmail,
+              userId: matchedUser?.id,
+              accountNumber: matchedUser?.linkedAccountNumber,
+              name: matchedUser?.name,
+              password: inputPassword,
+              verifyPassword: !matchedUser
+            })
+          });
+          if (resp.status === 401) {
+            const errBody = await resp.json().catch(() => null);
+            return { authFailed: Boolean(errBody?.authFailed) };
+          }
+          if (resp.ok) {
+            return await resp.json().catch(() => null);
+          }
+        } catch {}
+        return null;
+      })(),
+      resolveConsumerAccountInFirestore({
+        email: inputEmail,
+        userId: matchedUser?.id,
+        accountNumber: matchedUser?.linkedAccountNumber,
+        name: matchedUser?.name
+      }).catch(() => null)
+    ]);
+
+    if (!matchedUser && serverResolved?.authFailed && !firestoreResolved?.user) {
+      hideLoading();
+      setError("Incorrect account password. Please try again.");
+      toast.error("Authentication Failed", "Incorrect account password. Please try again.");
+      setIsLoading(false);
+      return;
+    }
+
+    if (!matchedUser && firestoreResolved?.user) {
+      matchedUser = firestoreResolved.user;
+      users.push(matchedUser);
+      mockDb.saveUsers(users);
+    }
+
+    if (!matchedUser && serverResolved?.user) {
+      matchedUser = {
+        ...serverResolved.user,
+        password: serverResolved.user.password || inputPassword
+      } as User;
+      users.push(matchedUser);
+      mockDb.saveUsers(users);
+    }
+
+    // If still not found in local cache or server, query live Firestore user collection directly
     if (!matchedUser) {
       const firestoreUser = await directFindUserInFirestore(inputEmail);
       if (firestoreUser) {
@@ -133,6 +191,16 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
       return;
     }
 
+    // Upgrade matchedUser if Firestore has an active linkedAccountNumber
+    if (firestoreResolved?.user?.linkedAccountNumber && (!matchedUser.linkedAccountNumber || matchedUser.linkedAccountNumber.toUpperCase().startsWith('PENDING'))) {
+      matchedUser = {
+        ...matchedUser,
+        linkedAccountNumber: firestoreResolved.user.linkedAccountNumber,
+        status: 'active',
+        password: matchedUser.password || firestoreResolved.user.password
+      };
+    }
+
     if (matchedUser.password && matchedUser.password !== inputPassword) {
       hideLoading();
       setError("Incorrect account password. Please try again.");
@@ -141,20 +209,61 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
       return;
     }
 
-    // Access Granted: Consumer or Field Meter Reader
-    // Auto-link newly issued account number from consumers database if available
-    const allConsumers = mockDb.getConsumers();
-    const matchedConsumer = allConsumers.find(
-      c => (c.linkedUserId && c.linkedUserId === matchedUser!.id) ||
-           (c.email && c.email.toLowerCase() === matchedUser!.email?.toLowerCase()) ||
-           (c.name && c.name.toLowerCase() === matchedUser!.name.toLowerCase())
-    );
+    // Merge server-resolved & Firestore-resolved notifications and consumer record before entering portal
+    if (serverResolved?.notifications && Array.isArray(serverResolved.notifications)) {
+      mockDb.mergeExternalNotifications(serverResolved.notifications);
+    }
+    if (firestoreResolved?.notifications && Array.isArray(firestoreResolved.notifications)) {
+      mockDb.mergeExternalNotifications(firestoreResolved.notifications);
+    }
 
-    if (matchedConsumer && matchedConsumer.accountNumber && !matchedConsumer.accountNumber.toUpperCase().startsWith('PENDING')) {
-      const userStatus: 'active' | 'inactive' | 'pending_approval' = 
-        (matchedConsumer.status === 'active' || matchedConsumer.status === 'inactive' || matchedConsumer.status === 'pending_approval')
-          ? matchedConsumer.status
-          : 'active';
+    const incomingCandidates = [
+      firestoreResolved?.isIssued ? firestoreResolved.consumer : null,
+      serverResolved?.isIssued ? serverResolved.consumer : null,
+      firestoreResolved?.consumer,
+      serverResolved?.consumer
+    ].filter(Boolean);
+
+    if (incomingCandidates.length > 0) {
+      const rc = incomingCandidates[0];
+      const rcIssued = Boolean(rc.accountNumber && !rc.accountNumber.toUpperCase().startsWith('PENDING') && rc.status !== 'pending_approval');
+      const localCons = mockDb.getConsumers();
+      const cIdx = localCons.findIndex(lc =>
+        (rc.accountNumber && !rc.accountNumber.toUpperCase().startsWith('PENDING') && lc.accountNumber === rc.accountNumber) ||
+        (rc.email && lc.email && lc.email.toLowerCase() === rc.email.toLowerCase()) ||
+        (rc.linkedUserId && lc.linkedUserId && lc.linkedUserId === rc.linkedUserId)
+      );
+      if (cIdx >= 0) {
+        if (rcIssued || !localCons[cIdx].accountNumber || localCons[cIdx].accountNumber.toUpperCase().startsWith('PENDING')) {
+          localCons[cIdx] = { ...localCons[cIdx], ...rc };
+        }
+      } else {
+        localCons.unshift(rc);
+      }
+      mockDb.saveConsumers(localCons);
+    }
+
+    mockDb.reconcileIssuedAccounts();
+
+    // Access Granted: Consumer or Field Meter Reader
+    // Auto-link issued account number from consumers database if available
+    const allConsumers = mockDb.getConsumers();
+    const matchedConsumers = allConsumers
+      .filter(
+        c => (c.linkedUserId && c.linkedUserId === matchedUser!.id) ||
+             (c.email && c.email.toLowerCase() === matchedUser!.email?.toLowerCase()) ||
+             (c.name && c.name.toLowerCase() === matchedUser!.name.toLowerCase() && (!c.email || !matchedUser!.email || c.email.toLowerCase() === matchedUser!.email.toLowerCase()))
+      )
+      .sort((a, b) => {
+        const aIssued = a.accountNumber && !a.accountNumber.toUpperCase().startsWith('PENDING') && a.status !== 'pending_approval' ? 1 : 0;
+        const bIssued = b.accountNumber && !b.accountNumber.toUpperCase().startsWith('PENDING') && b.status !== 'pending_approval' ? 1 : 0;
+        return bIssued - aIssued;
+      });
+    const matchedConsumer = matchedConsumers[0];
+
+    if (matchedConsumer && matchedConsumer.accountNumber && !matchedConsumer.accountNumber.toUpperCase().startsWith('PENDING') && matchedConsumer.status !== 'pending_approval') {
+      const userStatus: 'active' | 'inactive' | 'pending_approval' =
+        matchedConsumer.status === 'inactive' ? 'inactive' : 'active';
 
       matchedUser = {
         ...matchedUser,
@@ -163,7 +272,9 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
       };
       // Update in stored users
       const currentUsers = mockDb.getUsers();
-      const uIdx = currentUsers.findIndex(u => u.id === matchedUser!.id);
+      const uIdx = currentUsers.findIndex(
+        u => u.id === matchedUser!.id || (u.email && matchedUser!.email && u.email.toLowerCase() === matchedUser!.email.toLowerCase())
+      );
       if (uIdx >= 0) {
         currentUsers[uIdx] = matchedUser;
         mockDb.saveUsers(currentUsers);
