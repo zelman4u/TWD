@@ -25,7 +25,7 @@ interface OverdueBillBannerProps {
   onPayNow: (reading: MeterReading, mode?: 'full' | 'partial') => void;
   onViewBillDetails: (reading: MeterReading) => void;
   onUploadReceipt?: (reading: MeterReading) => void;
-  calculateCostOf: (usage: number, classification?: 'Residential' | 'Commercial') => number;
+  calculateCostOf: (usageOrReading: number | MeterReading, classification?: 'Residential' | 'Commercial') => number;
 }
 
 export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
@@ -44,7 +44,7 @@ export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
   }
 
   const primaryBill = overdueBills[0];
-  const grossCost = calculateCostOf(primaryBill.consumption, consumerRecord.consumerType);
+  const grossCost = calculateCostOf(primaryBill, consumerRecord.consumerType);
   const paidAmt = primaryBill.paidAmount || 0;
   const netDue = Math.max(0, grossCost - paidAmt);
 

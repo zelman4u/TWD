@@ -47,7 +47,6 @@ import {
   Home,
   Briefcase,
   Layers,
-  Sparkles,
   Info,
   AlertTriangle,
   ArrowRight,
@@ -72,22 +71,25 @@ import DataLoadingIndicator from './common/DataLoadingIndicator';
 import { OverdueBillBanner } from './consumer/OverdueBillBanner';
 import { DynamicDueAlert } from './consumer/DynamicDueAlert';
 import { UploadReceiptModal } from './consumer/UploadReceiptModal';
-import { MonthlyUsageReportModal } from './consumer/MonthlyUsageReportModal';
+import { MonthlyUsageReportModal, downloadConsumerUsageReportPdf } from './consumer/MonthlyUsageReportModal';
 import { BillDetails } from './consumer/BillDetails';
 import { ConsumerReportsSection } from './consumer/ConsumerReportsSection';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
-import { calculateWaterTariff, getActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
+import { calculateWaterTariff, getActiveTariffConfig, getReadingEffectiveBillAmount, saveActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
 import { apiClient, safeBackendFetch } from '../services/apiClient';
 import { initRealtimeSocket } from '../services/realtimeSocket';
 import {
   resolveConsumerAccountInFirestore,
-  pushIssuedConsumerToFirestore,
   ensureRealtimeFirestoreListeners,
   subscribeToConsumerIdentityInFirestore,
-  isRealIssuedAccountNumber
+  isRealIssuedAccountNumber,
+  syncDocToFirestore,
+  COLLECTIONS
 } from '../services/firebaseDb';
 import { TablePagination } from './common/TablePagination';
+import { SmartSearchBar } from './common/SmartSearchBar';
+import { smartMatch } from '../utils/smartSearch';
 
 interface ConsumerPortalProps {
   currentUser: UserType;
@@ -177,15 +179,27 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const [passwordNew, setPasswordNew] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'err'; msg: string } | null>(null);
+  const [phoneValidationError, setPhoneValidationError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  const [isDownloadingUsagePdf, setIsDownloadingUsagePdf] = useState(false);
 
-  // My Bills Filter State
+  // My Bills, My Usage & Notifications Smart Search + Filter State
   const [billFilter, setBillFilter] = useState<'all' | 'unpaid' | 'paid' | 'partial'>('all');
+  const [consumerBillSearch, setConsumerBillSearch] = useState('');
+  const [consumerUsageSearch, setConsumerUsageSearch] = useState('');
+  const [consumerNotifSearch, setConsumerNotifSearch] = useState('');
   const [consumerBillsPage, setConsumerBillsPage] = useState(1);
   const [consumerUsagePage, setConsumerUsagePage] = useState(1);
 
   useEffect(() => {
     setConsumerBillsPage(1);
-  }, [billFilter]);
+  }, [billFilter, consumerBillSearch]);
+
+  useEffect(() => {
+    setConsumerUsagePage(1);
+  }, [consumerUsageSearch]);
 
   // Notifications Filter State
   const [notifFilter, setNotifFilter] = useState<'all' | 'billing' | 'payment' | 'account_issue' | 'announcement'>('all');
@@ -220,6 +234,30 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const alertedOverdueRef = useRef<Set<string>>(new Set());
   const wasAccountPendingRef = useRef<boolean | null>(null);
   const lastAnnouncedAccountRef = useRef<string>('');
+  const reconciledIssuedAccRef = useRef<string>('');
+  const notifDropdownRef = useRef<HTMLDivElement | null>(null);
+  const mainScrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Close Notification Bell dropdown on outside click or Escape key
+  useEffect(() => {
+    if (!showNotifDropdown) return;
+    const handleOutsideClick = (event: MouseEvent | TouchEvent) => {
+      if (notifDropdownRef.current && !notifDropdownRef.current.contains(event.target as Node)) {
+        setShowNotifDropdown(false);
+      }
+    };
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowNotifDropdown(false);
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('touchstart', handleOutsideClick);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('touchstart', handleOutsideClick);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [showNotifDropdown]);
 
   // Helper: Check whether a consumer record has officially issued IDs
   const isConsumerRecordIssued = (rec?: Consumer | null): boolean => {
@@ -249,6 +287,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     const pPrevAcc = (payload.previousAccountNumber || '').trim().toUpperCase();
     const pName = (targetConsumer.name || '').trim().toLowerCase();
 
+    if (pAcc === 'ALL' || pAcc === 'BROADCAST' || pAcc === 'DISTRICT') return true;
     if (myUid && pUid && myUid === pUid) return true;
     if (myEmail && pEmail && myEmail === pEmail) return true;
     if (myAcc && !myAcc.startsWith('PENDING') && ((pAcc && myAcc === pAcc) || (pPrevAcc && myAcc === pPrevAcc))) return true;
@@ -397,9 +436,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
   };
 
-  // Tariff calculation helper
-  const calculateCostOf = (usage: number, classification: 'Residential' | 'Commercial' = 'Residential') => {
-    return calculateWaterTariff(usage, classification);
+  // Tariff calculation helper (honors locked billAmount on existing readings; uses active tariff only for new/un-stamped usage)
+  const calculateCostOf = (
+    usageOrReading: number | MeterReading,
+    classification: 'Residential' | 'Commercial' = 'Residential'
+  ) => {
+    const cls = classification === 'Commercial' ? 'Commercial' : 'Residential';
+    if (typeof usageOrReading === 'number') {
+      return calculateWaterTariff(usageOrReading, cls);
+    }
+    return getReadingEffectiveBillAmount(usageOrReading, cls);
   };
 
   // Real-Time Data Loader
@@ -610,23 +656,25 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             }
           }
 
-          // Push confirmed local record up to Cloud Firestore & server reconcile store so all other devices stay synced
-          const accountIssueNotifs = mockDb.getNotifications(record.accountNumber, {
-            userId: record.linkedUserId || currentUser.id,
-            email: record.email || currentUser.email,
-            consumerId: record.id
-          }).filter(n => n.type === 'account_issue' && !(n.title || '').toLowerCase().includes('registration application submitted'));
+          // Reconcile confirmed local record once per issued account with backend REST store (never write to Firestore in polling loop)
+          const normalizedAccUpper = record.accountNumber.trim().toUpperCase();
+          if (reconciledIssuedAccRef.current !== normalizedAccUpper) {
+            reconciledIssuedAccRef.current = normalizedAccUpper;
+            const accountIssueNotifs = mockDb.getNotifications(record.accountNumber, {
+              userId: record.linkedUserId || currentUser.id,
+              email: record.email || currentUser.email,
+              consumerId: record.id
+            }).filter(n => n.type === 'account_issue' && !(n.title || '').toLowerCase().includes('registration application submitted'));
 
-          pushIssuedConsumerToFirestore(record, accountIssueNotifs[0], liveUser || currentUser).catch(() => {});
-
-          safeBackendFetch('/api/consumers/reconcile', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-portal': 'consumer' },
-            body: JSON.stringify({
-              consumers: [record],
-              notifications: accountIssueNotifs
-            })
-          }).catch(() => {});
+            safeBackendFetch('/api/consumers/reconcile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-portal': 'consumer' },
+              body: JSON.stringify({
+                consumers: [record],
+                notifications: accountIssueNotifs
+              })
+            }).catch(() => {});
+          }
         } else {
           wasAccountPendingRef.current = true;
           if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(record)) {
@@ -659,7 +707,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 // Bill just settled in full!
                 setPaymentConfirmationToast({
                   period: newR.billingPeriod,
-                  amount: newR.paidAmount || calculateCostOf(newR.consumption, record.consumerType),
+                  amount: newR.paidAmount || calculateCostOf(newR, record.consumerType),
                   remaining: 0,
                   isPartial: false,
                   reference: newR.orNumber || newR.paymentReference || `OR-${Math.floor(100000 + Math.random() * 900000)}`,
@@ -667,7 +715,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 });
               } else if (oldR.paymentStatus === 'unpaid' && newR.paymentStatus === 'partial') {
                 // Partial payment logged by admin / cashier!
-                const gross = calculateCostOf(newR.consumption, record.consumerType);
+                const gross = calculateCostOf(newR, record.consumerType);
                 const rem = newR.remainingBalance ?? Math.max(0, gross - (newR.paidAmount || 0));
                 setPaymentConfirmationToast({
                   period: newR.billingPeriod,
@@ -700,7 +748,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             const isPastDue = new Date() > dueDateObj;
             if (isPastDue && !alertedOverdueRef.current.has(r.id)) {
-              const gross = calculateCostOf(r.consumption, record.consumerType);
+              const gross = calculateCostOf(r, record.consumerType);
               const paid = r.paidAmount || 0;
               const net = Math.max(0, gross - paid);
 
@@ -753,7 +801,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           );
           if (!hasDisconnectionAlert) {
             const primaryOverdue = unpaidList[0];
-            const gross = calculateCostOf(primaryOverdue.consumption, record.consumerType);
+            const gross = calculateCostOf(primaryOverdue, record.consumerType);
             const net = Math.max(0, gross - (primaryOverdue.paidAmount || 0));
             mockDb.addNotification({
               accountNumber: record.accountNumber,
@@ -816,13 +864,29 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           })
           .catch(() => {});
 
-        // Load consumer reports & concerns
-        const localReports = mockDb.getReports(record.accountNumber);
-        setReports(localReports);
+        // Load consumer reports & concerns (merge external reports without wiping local/Firestore tickets)
+        const getFilteredConsumerReports = () => {
+          const byAcc =
+            record!.accountNumber && !record!.accountNumber.toUpperCase().startsWith('PENDING')
+              ? mockDb.getReports(record!.accountNumber)
+              : [];
+          const myEmail = (record!.email || currentUser.email || '').trim().toLowerCase();
+          const byEmail = myEmail
+            ? mockDb.getReports().filter(rep => (rep.consumerEmail || '').trim().toLowerCase() === myEmail)
+            : [];
+          const seenIds = new Set<string>();
+          return [...byAcc, ...byEmail].filter(rep => {
+            if (!rep?.id || seenIds.has(rep.id)) return false;
+            seenIds.add(rep.id);
+            return true;
+          });
+        };
+        setReports(getFilteredConsumerReports());
         apiClient.getReports({ accountNumber: record.accountNumber })
           .then(res => {
-            if (res?.success && Array.isArray(res.reports)) {
-              setReports(res.reports);
+            if (res?.success && Array.isArray(res.reports) && res.reports.length > 0) {
+              mockDb.mergeExternalReports(res.reports);
+              setReports(getFilteredConsumerReports());
             }
           })
           .catch(() => {});
@@ -866,6 +930,28 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         announcementsRef.current = allAnnouncements;
         setAnnouncements(allAnnouncements);
       }
+
+      // Live REST pull for District Advisories & Active Tariff Schedule across devices
+      apiClient.getAnnouncements()
+        .then(res => {
+          if (res?.announcements && Array.isArray(res.announcements)) {
+            const mergedAnns = mockDb.mergeExternalAnnouncements(res.announcements);
+            if (JSON.stringify(announcementsRef.current) !== JSON.stringify(mergedAnns)) {
+              announcementsRef.current = mergedAnns;
+              setAnnouncements(mergedAnns);
+            }
+          }
+        })
+        .catch(() => {});
+
+      apiClient.getTariffConfig()
+        .then(res => {
+          if (res?.config && (res.config.version || 0) > (getActiveTariffConfig().version || 0)) {
+            saveActiveTariffConfig(res.config);
+            setActiveTariff(res.config);
+          }
+        })
+        .catch(() => {});
 
       setLastSyncTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       setIsInitialLoading(false);
@@ -982,6 +1068,28 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           );
         }
         loadConsumerInfo(true);
+      } else if (data.type === 'ANNOUNCEMENT_PUBLISHED') {
+        const ann = data.payload?.announcement;
+        if (ann) {
+          const merged = mockDb.mergeExternalAnnouncements([ann]);
+          announcementsRef.current = merged;
+          setAnnouncements(merged);
+          toast.info('Official District Advisory', ann.title || 'A new water district advisory has been posted.');
+        }
+        loadConsumerInfo(true);
+      } else if (data.type === 'ANNOUNCEMENT_UPDATED' || data.type === 'ANNOUNCEMENT_DELETED') {
+        if (data.type === 'ANNOUNCEMENT_DELETED' && data.payload?.id) {
+          mockDb.deleteAnnouncement(data.payload.id);
+        } else if (data.payload?.announcement) {
+          mockDb.mergeExternalAnnouncements([data.payload.announcement]);
+        }
+        loadConsumerInfo(true);
+      } else if (data.type === 'tariff:updated') {
+        if (data.payload?.config) {
+          saveActiveTariffConfig(data.payload.config);
+        }
+        setActiveTariff(getActiveTariffConfig());
+        loadConsumerInfo(true);
       } else if (
         data.type === 'CONSUMER_REPORT_UPDATED' ||
         data.type === 'REPORT_STATUS_CHANGED' ||
@@ -1032,7 +1140,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const currentConsumptionVal = latestRead ? latestRead.consumption : 0;
   // If there are no issued readings for this account yet or account is pending issuance, current bill is 0.00
   const currentBillAmount = (consumerRecord && latestRead && !isAccountPending)
-    ? (latestRead.paymentStatus === 'paid' ? 0 : Math.max(0, calculateCostOf(currentConsumptionVal, consumerRecord.consumerType) - (latestRead.paidAmount || 0)))
+    ? (latestRead.paymentStatus === 'paid' ? 0 : Math.max(0, calculateCostOf(latestRead, consumerRecord.consumerType) - (latestRead.paidAmount || 0)))
     : 0;
   
   // Unpaid and Partial bills
@@ -1060,13 +1168,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   
   // Dynamic accurate outstanding sum
   const outstandingSum = unpaidBills.reduce((acc, b) => {
-    const total = calculateCostOf(b.consumption, consumerRecord?.consumerType);
+    const total = calculateCostOf(b, consumerRecord?.consumerType);
     const paid = b.paidAmount || 0;
     return acc + Math.max(0, total - paid);
   }, 0);
 
   const partialBalanceSum = partialBills.reduce((acc, b) => {
-    const total = calculateCostOf(b.consumption, consumerRecord?.consumerType);
+    const total = calculateCostOf(b, consumerRecord?.consumerType);
     const paid = b.paidAmount || 0;
     return acc + Math.max(0, total - paid);
   }, 0);
@@ -1086,29 +1194,60 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Unread admin reply count on filed reports
   const unreadReportsCount = reports.filter(r => r.hasUnreadAdminReply).length;
 
-  // Action: Handle clicking a notification to route to Dashboard, Bills, Profile, or Reports and highlight the reading
-  const handleNotificationClick = (notif: ConsumerNotification, targetPreference?: 'dashboard' | 'bills' | 'announcements' | 'profile' | 'reports') => {
+  // Action: Handle clicking a notification to route accurately to the requested view (Profile, Dashboard, Bills, Reports, or Announcements)
+  const handleNotificationClick = (
+    notif: ConsumerNotification,
+    targetPreference?: 'dashboard' | 'bills' | 'announcements' | 'profile' | 'reports'
+  ) => {
     // 1. Mark as read in storage and state
-    mockDb.markNotificationRead(notif.id);
-    setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
+    if (!notif.read) {
+      mockDb.markNotificationRead(notif.id);
+      setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
+    }
+    setShowNotifDropdown(false);
 
-    if (targetPreference === 'profile' || notif.type === 'account_issue') {
+    const scrollMainToTop = () => {
+      setTimeout(() => {
+        mainScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 60);
+    };
+
+    // Determine effective target: explicit button preference ALWAYS takes priority over default notification type!
+    const effectiveTarget: 'dashboard' | 'bills' | 'announcements' | 'profile' | 'reports' =
+      targetPreference ||
+      (notif.type === 'account_issue'
+        ? 'profile'
+        : notif.type === 'announcement'
+        ? 'announcements'
+        : notif.type === 'report' || notif.reportId
+        ? 'reports'
+        : notif.type === 'billing' || notif.type === 'balance'
+        ? 'bills'
+        : 'dashboard');
+
+    if (effectiveTarget === 'profile') {
       setActiveTab('profile');
-      setShowNotifDropdown(false);
+      scrollMainToTop();
       return;
     }
 
-    // Special handler: If notification is for a consumer report reply from admin
-    if (notif.type === 'report' || notif.reportId) {
+    if (effectiveTarget === 'announcements') {
+      setActiveTab('notifications');
+      setNotifFilter('announcement');
+      scrollMainToTop();
+      return;
+    }
+
+    if (effectiveTarget === 'reports') {
       if (notif.reportId) {
         setSelectedReportId(notif.reportId);
       }
       setActiveTab('reports');
-      setShowNotifDropdown(false);
+      scrollMainToTop();
       return;
     }
 
-    // 2. Resolve matching reading
+    // Resolve matching reading for Dashboard or Bills navigation
     let matchedReading: MeterReading | undefined;
     if (notif.readingId) {
       matchedReading = readings.find(r => r.id === notif.readingId);
@@ -1124,7 +1263,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         return bp ? (nTitle.includes(bp) || nMsg.includes(bp)) : false;
       });
     }
-    if (!matchedReading && readings.length > 0) {
+    if (!matchedReading && readings.length > 0 && notif.type !== 'account_issue') {
       matchedReading = readings[0];
     }
 
@@ -1133,16 +1272,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       setHighlightedReadingId(matchedReading.id);
     }
 
-    setShowNotifDropdown(false);
-
-    // 3. If it's a payment receipt notification and already paid, open digital receipt directly
-    if (notif.type === 'payment' && matchedReading && matchedReading.paymentStatus === 'paid') {
+    // If clicked directly without explicit tab override and it's a paid receipt notification, open receipt modal
+    if (!targetPreference && notif.type === 'payment' && matchedReading && matchedReading.paymentStatus === 'paid') {
       setReceiptDetailModal(matchedReading);
       return;
     }
 
-    // 4. Navigate to the requested view
-    if (targetPreference === 'bills') {
+    if (effectiveTarget === 'bills') {
       setActiveTab('bills');
       if (matchedReading) {
         if (matchedReading.paymentStatus === 'paid') {
@@ -1153,12 +1289,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           setBillFilter('unpaid');
         }
       }
-    } else if (targetPreference === 'announcements' || notif.type === 'announcement') {
-      setActiveTab('notifications');
-      setNotifFilter('announcement');
+      scrollMainToTop();
     } else {
-      // Default: show on Dashboard with the spotlight reading card and metrics
       setActiveTab('dashboard');
+      scrollMainToTop();
     }
   };
 
@@ -1167,6 +1301,32 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       if (!n.read) mockDb.markNotificationRead(n.id);
     });
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    toast.success('Notifications Updated', 'All notifications have been marked as read.');
+  };
+
+  // Direct One-Click PDF Download Handler for My Usage
+  const handleDirectDownloadUsagePdf = async () => {
+    if (!consumerRecord || isDownloadingUsagePdf) return;
+    setIsDownloadingUsagePdf(true);
+    try {
+      await downloadConsumerUsageReportPdf({
+        consumer: consumerRecord,
+        allHistoryReadings,
+      });
+      toast.success(
+        'Usage Report Downloaded',
+        `Downloaded Monthly Water Usage & Efficiency Report PDF for Account #${consumerRecord.accountNumber || 'Consumer'}.`
+      );
+    } catch (err) {
+      console.error('Direct Usage PDF download error:', err);
+      toast.error(
+        'PDF Generation Failed',
+        'Unable to generate the PDF report directly. Opening interactive report preview instead.'
+      );
+      setIsUsageReportModalOpen(true);
+    } finally {
+      setIsDownloadingUsagePdf(false);
+    }
   };
 
   // Cashier Receipt Verification & Payment Trigger
@@ -1184,100 +1344,431 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     setIsUploadReceiptOpen(true);
   };
 
-  // Profile Update Handler
-  const handleUpdateProfile = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!consumerRecord) return;
-
-    const newName = editName.trim() || consumerRecord.name;
-    const newEmail = editEmail.trim() || consumerRecord.email;
-
-    const allConsumers = mockDb.getConsumers();
-    const updated = allConsumers.map(c => {
-      if (c.accountNumber === consumerRecord.accountNumber) {
-        return {
-          ...c,
-          name: newName,
-          contactNumber: editContact.trim() || c.contactNumber,
-          email: newEmail,
-          address: editAddress.trim() || c.address,
-          sitioZone: editSitioZone.trim() || c.sitioZone,
-          householdInfo: editHouseholdInfo.trim() || c.householdInfo,
-          businessName: editBusinessName.trim() || c.businessName,
-          businessType: editBusinessType.trim() || c.businessType
-        };
-      }
-      return c;
-    });
-    mockDb.saveConsumers(updated);
-
-    // Synchronize matching user record
-    const allUsers = mockDb.getUsers().map(u => 
-      u.id === currentUser.id || u.linkedAccountNumber === consumerRecord.accountNumber
-        ? { ...u, name: newName, email: newEmail }
-        : u
-    );
-    mockDb.saveUsers(allUsers);
-
-    // Synchronize all meter readings under this account
-    const allReadings = mockDb.getReadings().map(r => 
-      r.accountNumber === consumerRecord.accountNumber
-        ? { ...r, consumerName: newName }
-        : r
-    );
-    mockDb.saveReadings(allReadings);
-
-    // Synchronize session user
-    const updatedCurrentUser = { ...currentUser, name: newName, email: newEmail };
-    mockDb.setCurrentUser(updatedCurrentUser);
-
-    mockDb.addAuditLog(
-      currentUser.id,
-      newName,
-      'consumer',
-      'Update Profile Information',
-      `Updated personal and contact details for consumer account #${consumerRecord.accountNumber}.`
-    );
-
-    setStatusMsg({ type: 'success', msg: 'Profile information updated successfully!' });
-    toast.success('Profile Updated', 'Your personal and contact information has been updated.');
-    loadConsumerInfo(true);
-    setTimeout(() => setStatusMsg(null), 4000);
+  // Normalize Philippine mobile number to standard 11-digit 09XXXXXXXXX format
+  const normalizePhone11 = (raw?: string | null): string => {
+    if (!raw) return '';
+    let digits = String(raw).replace(/\D/g, '');
+    if (digits.startsWith('63') && digits.length === 12) {
+      digits = '0' + digits.slice(2);
+    } else if (digits.length === 10 && digits.startsWith('9')) {
+      digits = '0' + digits;
+    }
+    return digits;
   };
 
-  // Password Change Handler
-  const handleUpdatePassword = (e: React.FormEvent) => {
+  // Validate 11-digit PH mobile number & check duplicates across all consumers, portal users, and field readers
+  const validatePhoneInput = (rawPhone: string): { valid: boolean; normalized: string; error: string | null } => {
+    const trimmed = (rawPhone || '').trim();
+    if (!trimmed) {
+      return { valid: false, normalized: '', error: 'Mobile phone number is required.' };
+    }
+    const normalized = normalizePhone11(trimmed);
+    if (!/^09\d{9}$/.test(normalized)) {
+      return {
+        valid: false,
+        normalized,
+        error: 'Enter a valid 11-digit Philippine mobile number starting with 09 (e.g. 09171234567).',
+      };
+    }
+
+    const myAccount = (consumerRecord?.accountNumber || currentUser.linkedAccountNumber || '').trim().toUpperCase();
+    const myUserId = (currentUser.id || consumerRecord?.linkedUserId || '').trim();
+    const myEmail = (currentUser.email || consumerRecord?.email || '').trim().toLowerCase();
+
+    // 1. Check Consumer records
+    const duplicateConsumer = mockDb.getConsumers().find((c) => {
+      const cPhone = normalizePhone11(c.contactNumber);
+      if (!cPhone || cPhone !== normalized) return false;
+      const cAcc = (c.accountNumber || '').trim().toUpperCase();
+      const cUid = (c.linkedUserId || '').trim();
+      const cEmail = (c.email || '').trim().toLowerCase();
+      const isSelf =
+        (myAccount && cAcc && myAccount === cAcc) ||
+        (myUserId && cUid && myUserId === cUid) ||
+        (myEmail && cEmail && myEmail === cEmail);
+      return !isSelf;
+    });
+    if (duplicateConsumer) {
+      return {
+        valid: false,
+        normalized,
+        error: `Mobile number ${normalized} is already registered to another account. Duplicate phone numbers are not allowed.`,
+      };
+    }
+
+    // 2. Check Portal User records
+    const duplicateUser = mockDb.getUsers().find((u) => {
+      const uPhone = normalizePhone11(u.contactNumber);
+      if (!uPhone || uPhone !== normalized) return false;
+      const uId = (u.id || '').trim();
+      const uAcc = (u.linkedAccountNumber || '').trim().toUpperCase();
+      const uEmail = (u.email || '').trim().toLowerCase();
+      const isSelf =
+        (myUserId && uId && myUserId === uId) ||
+        (myAccount && uAcc && myAccount === uAcc) ||
+        (myEmail && uEmail && myEmail === uEmail);
+      return !isSelf;
+    });
+    if (duplicateUser) {
+      return {
+        valid: false,
+        normalized,
+        error: `Mobile number ${normalized} is already linked to another user account. Duplicate phone numbers are not allowed.`,
+      };
+    }
+
+    // 3. Check Field Reader / Staff records
+    const duplicateReader = mockDb.getReaders().find((r) => {
+      const rPhone = normalizePhone11(r.contactNumber);
+      if (!rPhone || rPhone !== normalized) return false;
+      const rId = (r.id || '').trim();
+      const rEmail = (r.email || '').trim().toLowerCase();
+      const isSelf = (myUserId && rId && myUserId === rId) || (myEmail && rEmail && myEmail === rEmail);
+      return !isSelf;
+    });
+    if (duplicateReader) {
+      return {
+        valid: false,
+        normalized,
+        error: `Mobile number ${normalized} is already registered to a district staff account. Duplicate phone numbers are not allowed.`,
+      };
+    }
+
+    return { valid: true, normalized, error: null };
+  };
+
+  // Profile Update Handler (with strict duplicate phone validation + Firestore & Backend persistence)
+  const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!passwordOld || !passwordNew) {
-      toast.warning('Incomplete Form', 'Please enter both current and new passwords.');
+    if (!consumerRecord || isSavingProfile) return;
+
+    const newName = editName.trim() || consumerRecord.name;
+    const newEmail = (editEmail.trim() || consumerRecord.email || '').toLowerCase();
+
+    // 1. Validate Phone Number & Reject Duplicates
+    const phoneCheck = validatePhoneInput(editContact);
+    if (!phoneCheck.valid) {
+      setPhoneValidationError(phoneCheck.error);
+      setStatusMsg({ type: 'err', msg: phoneCheck.error || 'Invalid or duplicate phone number.' });
+      toast.error('Phone Validation Failed', phoneCheck.error || 'Duplicate or invalid phone number.');
+      return;
+    }
+    setPhoneValidationError(null);
+    const normalizedPhone = phoneCheck.normalized;
+
+    // 2. Check Duplicate Email across other users/consumers
+    const myAccount = (consumerRecord.accountNumber || currentUser.linkedAccountNumber || '').trim().toUpperCase();
+    const myUserId = (currentUser.id || consumerRecord.linkedUserId || '').trim();
+    const prevEmail = (consumerRecord.email || currentUser.email || '').trim().toLowerCase();
+
+    if (newEmail) {
+      const emailTakenByUser = mockDb.getUsers().find((u) => {
+        const uEmail = (u.email || '').trim().toLowerCase();
+        if (!uEmail || uEmail !== newEmail) return false;
+        const isSelf =
+          (myUserId && u.id === myUserId) ||
+          (myAccount && (u.linkedAccountNumber || '').trim().toUpperCase() === myAccount) ||
+          (prevEmail && uEmail === prevEmail);
+        return !isSelf;
+      });
+      if (emailTakenByUser) {
+        const errText = `Email address ${newEmail} is already registered to another account.`;
+        setStatusMsg({ type: 'err', msg: errText });
+        toast.error('Duplicate Email Detected', errText);
+        return;
+      }
+    }
+
+    setIsSavingProfile(true);
+    try {
+      const updatedFields: Partial<Consumer> = {
+        name: newName,
+        contactNumber: normalizedPhone,
+        email: newEmail,
+        address: editAddress.trim() || consumerRecord.address,
+        sitioZone: editSitioZone.trim() || consumerRecord.sitioZone,
+        householdInfo: editHouseholdInfo.trim() || consumerRecord.householdInfo,
+        businessName: editBusinessName.trim() || consumerRecord.businessName,
+        businessType: editBusinessType.trim() || consumerRecord.businessType,
+      };
+
+      // 3. Validate & Persist on Backend Server first (checks global cross-device phone duplicates)
+      const identifier =
+        consumerRecord.accountNumber ||
+        consumerRecord.linkedUserId ||
+        currentUser.id ||
+        consumerRecord.email ||
+        newEmail;
+      if (identifier) {
+        const res = await safeBackendFetch(`/api/consumers/${encodeURIComponent(identifier)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...updatedFields,
+            linkedUserId: currentUser.id || consumerRecord.linkedUserId,
+          }),
+        });
+        if (res && !res.ok && (res.status === 409 || res.status === 400)) {
+          let serverErr = 'Phone number is already taken by another registered account.';
+          try {
+            const payload = await res.json();
+            if (payload?.error) serverErr = payload.error;
+          } catch {}
+          setPhoneValidationError(serverErr);
+          setStatusMsg({ type: 'err', msg: serverErr });
+          toast.error('Update Rejected', serverErr);
+          setIsSavingProfile(false);
+          return;
+        }
+      }
+
+      // 4. Update Consumer Record in local store & Firestore
+      let updatedConsumerObj: Consumer = { ...consumerRecord, ...updatedFields };
+      const allConsumers = mockDb.getConsumers();
+      let consumerMatched = false;
+      const updatedConsumers = allConsumers.map((c) => {
+        const isTarget =
+          (myAccount && (c.accountNumber || '').trim().toUpperCase() === myAccount) ||
+          (myUserId && c.linkedUserId && c.linkedUserId === myUserId) ||
+          (prevEmail && c.email && c.email.trim().toLowerCase() === prevEmail);
+        if (isTarget) {
+          consumerMatched = true;
+          updatedConsumerObj = { ...c, ...updatedFields };
+          return updatedConsumerObj;
+        }
+        return c;
+      });
+      if (!consumerMatched) {
+        updatedConsumers.unshift(updatedConsumerObj);
+      }
+      mockDb.saveConsumers(updatedConsumers);
+      setEditContact(normalizedPhone);
+      setConsumerRecord(updatedConsumerObj);
+      consumerRecordRef.current = updatedConsumerObj;
+
+      const consumerDocId =
+        updatedConsumerObj.accountNumber ||
+        updatedConsumerObj.linkedUserId ||
+        currentUser.id ||
+        updatedConsumerObj.email;
+      if (consumerDocId) {
+        syncDocToFirestore(COLLECTIONS.CONSUMERS, consumerDocId, updatedConsumerObj, true);
+      }
+
+      // 5. Synchronize matching Portal User record & Firestore
+      let syncedUserObj: UserType | null = null;
+      const allUsers = mockDb.getUsers().map((u) => {
+        const isMe =
+          (myUserId && u.id === myUserId) ||
+          (myAccount && (u.linkedAccountNumber || '').trim().toUpperCase() === myAccount) ||
+          (prevEmail && u.email && u.email.trim().toLowerCase() === prevEmail);
+        if (isMe) {
+          const nextU: UserType = { ...u, name: newName, email: newEmail, contactNumber: normalizedPhone };
+          syncedUserObj = nextU;
+          return nextU;
+        }
+        return u;
+      });
+      mockDb.saveUsers(allUsers);
+
+      if (syncedUserObj) {
+        const uObj = syncedUserObj as UserType;
+        syncDocToFirestore(COLLECTIONS.USERS, uObj.id || uObj.email || currentUser.id, uObj, true);
+      }
+
+      // 6. Synchronize meter readings under this account if issued
+      if (myAccount && !myAccount.startsWith('PENDING')) {
+        const allReadings = mockDb.getReadings().map((r) =>
+          (r.accountNumber || '').trim().toUpperCase() === myAccount
+            ? { ...r, consumerName: newName }
+            : r
+        );
+        mockDb.saveReadings(allReadings);
+      }
+
+      // 7. Synchronize active session user
+      const latestSession = mockDb.getCurrentUser() || currentUser;
+      const updatedCurrentUser: UserType = {
+        ...latestSession,
+        name: newName,
+        email: newEmail,
+        contactNumber: normalizedPhone,
+      };
+      mockDb.setCurrentUser(updatedCurrentUser);
+
+      mockDb.addAuditLog(
+        currentUser.id,
+        newName,
+        'consumer',
+        'Update Profile Information',
+        `Updated personal and contact details (${normalizedPhone}) for consumer account #${consumerRecord.accountNumber || 'PENDING'}.`
+      );
+
+      setStatusMsg({ type: 'success', msg: 'Profile and contact information saved successfully!' });
+      toast.success('Profile Saved', 'Your personal details and verified mobile number have been updated.');
+      loadConsumerInfo(true);
+      setTimeout(() => setStatusMsg(null), 4500);
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  // Password Change Handler (validates current password, blocks reusing old/same password, and persists new password everywhere)
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isUpdatingPassword) return;
+    setPasswordError(null);
+
+    if (!passwordOld || !passwordNew || !passwordConfirm) {
+      const msg = 'Please fill in your current password, new password, and confirmation.';
+      setPasswordError(msg);
+      toast.warning('Incomplete Form', msg);
       return;
     }
 
-    if (passwordNew !== passwordConfirm) {
-      setStatusMsg({ type: 'err', msg: 'New password and confirmation do not match!' });
-      toast.error('Password Mismatch', 'New password and confirmation do not match.');
-      return;
-    }
+    // Locate stored user record to verify current password & prevent reusing previous password
+    const myUserId = (currentUser.id || consumerRecord?.linkedUserId || '').trim();
+    const myEmail = (currentUser.email || consumerRecord?.email || '').trim().toLowerCase();
+    const myAccount = (consumerRecord?.accountNumber || currentUser.linkedAccountNumber || '').trim().toUpperCase();
 
-    mockDb.addAuditLog(
-      currentUser.id,
-      currentUser.name,
-      'consumer',
-      'Password Rotation',
-      `Changed access password for consumer user "${currentUser.email}".`
+    const storedUsers = mockDb.getUsers();
+    const matchedUser = storedUsers.find(
+      (u) =>
+        (myUserId && u.id === myUserId) ||
+        (myEmail && u.email && u.email.trim().toLowerCase() === myEmail) ||
+        (myAccount && !myAccount.startsWith('PENDING') && (u.linkedAccountNumber || '').trim().toUpperCase() === myAccount)
     );
 
-    setStatusMsg({ type: 'success', msg: 'Security password changed successfully!' });
-    toast.success('Password Updated', 'Your portal security credentials have been updated.');
-    setPasswordOld('');
-    setPasswordNew('');
-    setPasswordConfirm('');
-    setTimeout(() => setStatusMsg(null), 4000);
+    const activeStoredPassword = matchedUser?.password ?? currentUser.password;
+
+    // 1. Verify current password matches stored password
+    if (activeStoredPassword && passwordOld !== activeStoredPassword) {
+      const msg = 'Your current password is incorrect. Please enter your valid existing password.';
+      setPasswordError(msg);
+      setStatusMsg({ type: 'err', msg });
+      toast.error('Incorrect Current Password', msg);
+      return;
+    }
+
+    // 2. Strictly disallow reusing the same / old password
+    if (passwordNew === passwordOld || (activeStoredPassword && passwordNew === activeStoredPassword)) {
+      const msg = 'New password cannot be the same as your current or previous password. Please create a new, unique password.';
+      setPasswordError(msg);
+      setStatusMsg({ type: 'err', msg });
+      toast.error('Same Password Not Allowed', msg);
+      return;
+    }
+
+    // 3. Enforce minimum security length
+    if (passwordNew.length < 6) {
+      const msg = 'New password must be at least 6 characters long.';
+      setPasswordError(msg);
+      setStatusMsg({ type: 'err', msg });
+      toast.error('Weak Password', msg);
+      return;
+    }
+
+    // 4. Confirm new password match
+    if (passwordNew !== passwordConfirm) {
+      const msg = 'New password and confirmation password do not match.';
+      setPasswordError(msg);
+      setStatusMsg({ type: 'err', msg });
+      toast.error('Password Mismatch', msg);
+      return;
+    }
+
+    setIsUpdatingPassword(true);
+    try {
+      // 5. Sync password change to Backend API
+      const res = await safeBackendFetch('/api/consumers/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: myUserId || undefined,
+          email: myEmail || undefined,
+          accountNumber: myAccount || undefined,
+          currentPassword: passwordOld,
+          newPassword: passwordNew,
+        }),
+      });
+
+      if (res && !res.ok && (res.status === 400 || res.status === 401)) {
+        let serverErr = 'Unable to update password.';
+        try {
+          const payload = await res.json();
+          if (payload?.error) serverErr = payload.error;
+        } catch {}
+        setPasswordError(serverErr);
+        setStatusMsg({ type: 'err', msg: serverErr });
+        toast.error('Password Change Rejected', serverErr);
+        setIsUpdatingPassword(false);
+        return;
+      }
+
+      // 6. Persist updated password in local Users store, Current Session, and Cloud Firestore
+      let updatedUserRecord: UserType | null = null;
+      let foundInList = false;
+      const updatedUsersList = storedUsers.map((u) => {
+        const isMe =
+          (myUserId && u.id === myUserId) ||
+          (myEmail && u.email && u.email.trim().toLowerCase() === myEmail) ||
+          (myAccount && !myAccount.startsWith('PENDING') && (u.linkedAccountNumber || '').trim().toUpperCase() === myAccount);
+        if (isMe) {
+          foundInList = true;
+          updatedUserRecord = { ...u, password: passwordNew };
+          return updatedUserRecord;
+        }
+        return u;
+      });
+
+      if (!foundInList) {
+        updatedUserRecord = {
+          ...(mockDb.getCurrentUser() || currentUser),
+          password: passwordNew,
+        };
+        updatedUsersList.push(updatedUserRecord);
+      }
+
+      mockDb.saveUsers(updatedUsersList);
+
+      const sessionNow = mockDb.getCurrentUser() || currentUser;
+      const nextSessionUser: UserType = { ...sessionNow, password: passwordNew };
+      mockDb.setCurrentUser(nextSessionUser);
+
+      if (updatedUserRecord) {
+        const docKey = updatedUserRecord.id || updatedUserRecord.email || currentUser.id;
+        if (docKey) {
+          await syncDocToFirestore(COLLECTIONS.USERS, docKey, updatedUserRecord, true);
+        }
+      }
+
+      mockDb.addAuditLog(
+        currentUser.id,
+        currentUser.name,
+        'consumer',
+        'Password Rotation',
+        `Changed access password for consumer user "${currentUser.email}".`
+      );
+
+      setPasswordOld('');
+      setPasswordNew('');
+      setPasswordConfirm('');
+      setPasswordError(null);
+      setStatusMsg({ type: 'success', msg: 'Account password updated and saved! Use your new password on your next sign-in.' });
+      toast.success('Password Saved', 'Your new password has been saved across your account.');
+      setTimeout(() => setStatusMsg(null), 4500);
+    } finally {
+      setIsUpdatingPassword(false);
+    }
   };
 
   // Initial skeleton view while loading data
   if (isInitialLoading) {
-    return <ConsumerPortalSkeleton />;
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100">
+        <ConsumerPortalSkeleton />
+      </div>
+    );
   }
 
   // Fallback if no consumer record found after loading
@@ -1301,12 +1792,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   }
 
   return (
-    <div className="flex h-screen bg-slate-100 overflow-hidden font-sans" id="consumer-portal-container">
+    <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans" id="consumer-portal-container">
       
       {/* Mobile Backdrop */}
       {mobileSidebarOpen && (
         <div 
-          className="fixed inset-0 bg-slate-900/60 z-40 lg:hidden backdrop-blur-xs transition-opacity"
+          className="fixed inset-0 bg-black/70 z-40 lg:hidden backdrop-blur-xs transition-opacity"
           onClick={() => setMobileSidebarOpen(false)}
         />
       )}
@@ -1583,25 +2074,25 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       </aside>
 
       {/* MAIN VIEWPORT AREA */}
-      <div className="flex-1 flex flex-col min-w-0 h-screen overflow-y-auto bg-slate-50">
+      <div ref={mainScrollRef} className="flex-1 flex flex-col min-w-0 h-screen overflow-y-auto bg-slate-950 text-slate-100">
         
         {/* Top Header Bar */}
-        <header className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-slate-200 z-30 shadow-2xs px-4 sm:px-8 py-3.5 flex items-center justify-between shrink-0">
-          <div className="flex items-center space-x-3.5">
+        <header className="sticky top-0 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 z-30 shadow-md px-4 sm:px-8 py-3.5 flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center space-x-3 sm:space-x-3.5 min-w-0">
             <button
               onClick={() => setMobileSidebarOpen(true)}
-              className="lg:hidden p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 cursor-pointer"
+              className="lg:hidden p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700 cursor-pointer shrink-0"
               aria-label="Open Sidebar Menu"
             >
               <Menu className="h-5 w-5" />
             </button>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                <span className="hidden sm:inline text-[10px] font-black uppercase tracking-wider text-slate-400">
                   Consumer Portal
                 </span>
-                <span className="text-slate-300">/</span>
-                <span className="text-xs font-black uppercase tracking-wider text-blue-600">
+                <span className="hidden sm:inline text-slate-600">/</span>
+                <span className="text-[11px] sm:text-xs font-black uppercase tracking-wider text-blue-400 truncate">
                   {activeTab === 'dashboard' && 'Dashboard Overview'}
                   {activeTab === 'bills' && 'My Water Bills'}
                   {activeTab === 'usage' && 'Consumption & Usage'}
@@ -1610,7 +2101,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   {activeTab === 'profile' && 'Consumer Profile'}
                 </span>
               </div>
-              <h2 className="text-base font-black text-slate-900 capitalize tracking-tight mt-0.5">
+              <h2 className="text-sm sm:text-base font-black text-white capitalize tracking-tight mt-0.5 truncate">
                 {activeTab === 'dashboard' && 'Account & Telemetry Dashboard'}
                 {activeTab === 'bills' && 'Billing Ledger & Online Settle'}
                 {activeTab === 'usage' && 'Meter Telemetry & Historical Readings'}
@@ -1622,65 +2113,83 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           </div>
 
           {/* Quick Header Actions */}
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-2 sm:space-x-3 shrink-0">
             {outstandingSum > 0 && activeTab !== 'bills' && (
               <button
                 onClick={() => {
                   setActiveTab('bills');
                   if (unpaidBills.length > 0) handleStartPayment(unpaidBills[0]);
                 }}
-                className="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                className="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
               >
                 <CreditCard className="h-3.5 w-3.5" />
-                <span>Pay ₱{outstandingSum.toFixed(2)}</span>
+                <span className="tabular-nums">Pay ₱{outstandingSum.toFixed(2)}</span>
               </button>
             )}
 
-            {/* Notification Bell with Dropdown Popover */}
-            <div className="relative">
+            {/* Responsive Notification Bell with Dropdown Popover */}
+            <div className="relative" ref={notifDropdownRef}>
               <button
-                onClick={() => setShowNotifDropdown(!showNotifDropdown)}
-                className="relative p-2 rounded-xl text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-slate-200 transition cursor-pointer"
+                type="button"
+                onClick={() => setShowNotifDropdown(prev => !prev)}
+                aria-expanded={showNotifDropdown}
+                aria-label="Open Notifications Menu"
+                className={`relative p-2.5 min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl border transition cursor-pointer ${
+                  showNotifDropdown
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-600/30'
+                    : 'bg-slate-800/90 text-slate-200 hover:text-white hover:bg-slate-800 border-slate-700'
+                }`}
                 title="Notifications & Advisories"
                 id="header-notif-bell-btn"
               >
-                <Bell className="h-4 w-4" />
+                <Bell className="h-4 w-4 sm:h-[18px] sm:w-[18px]" />
                 {unreadNotifCount > 0 && (
-                  <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] font-black text-white ring-2 ring-white animate-pulse">
-                    {unreadNotifCount}
+                  <span className="absolute -top-1 -right-1 flex h-4.5 min-w-[18px] px-1 items-center justify-center rounded-full bg-rose-500 text-[9px] font-black text-white ring-2 ring-slate-900 tabular-nums">
+                    {unreadNotifCount > 99 ? '99+' : unreadNotifCount}
                   </span>
                 )}
               </button>
 
-              {/* Quick Notification Dropdown Popover */}
+              {/* Quick Notification Dropdown Popover - Responsive Fixed on Mobile, Anchored Popover on Desktop */}
               {showNotifDropdown && (
                 <div 
-                  className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 overflow-hidden animate-slide-down"
+                  className="fixed inset-x-3 top-16 sm:inset-x-auto sm:top-auto sm:absolute sm:right-0 sm:mt-2 sm:w-96 bg-slate-900 text-slate-100 rounded-2xl shadow-2xl border border-slate-700/90 z-50 overflow-hidden animate-slide-down"
                   id="header-notif-dropdown"
                 >
-                  <div className="p-3.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                  <div className="p-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
                     <div className="flex items-center space-x-2">
-                      <Bell className="h-4 w-4 text-blue-600" />
-                      <span className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                      <Bell className="h-4 w-4 text-blue-400" />
+                      <span className="text-xs font-black text-white uppercase tracking-wider">
                         Notifications
                       </span>
                       {unreadNotifCount > 0 && (
-                        <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 font-black text-[10px] rounded-full">
-                          {unreadNotifCount} new
+                        <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 border border-blue-500/30 font-black text-[10px] rounded-md tabular-nums">
+                          {unreadNotifCount} unread
                         </span>
                       )}
                     </div>
-                    {unreadNotifCount > 0 && (
+                    <div className="flex items-center space-x-2">
+                      {unreadNotifCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleMarkAllNotifsRead}
+                          className="text-[10px] font-bold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer"
+                        >
+                          Mark all read
+                        </button>
+                      )}
                       <button
-                        onClick={handleMarkAllNotifsRead}
-                        className="text-[10px] font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                        type="button"
+                        onClick={() => setShowNotifDropdown(false)}
+                        className="sm:hidden p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
+                        aria-label="Close notifications"
                       >
-                        Mark all read
+                        <X className="h-4 w-4" />
                       </button>
-                    )}
+                    </div>
                   </div>
 
-                  <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                  <div className="max-h-[65vh] sm:max-h-80 overflow-y-auto divide-y divide-slate-800/80">
                     {notifications.length === 0 ? (
                       <div className="p-6 text-center text-xs text-slate-400">
                         No notifications yet.
@@ -1693,31 +2202,28 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         const isDisconnection = n.type === 'disconnection';
                         const isReport = n.type === 'report';
                         const isPartialAlert = (n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining');
-                        const targetTab = isAccountIssue ? 'profile' : isBilling ? 'bills' : isReport ? 'reports' : 'dashboard';
+                        const defaultTarget = isAccountIssue ? 'profile' : isBilling ? 'bills' : isReport ? 'reports' : 'dashboard';
 
                         return (
                           <div
                             key={`dropdown-notif-${n.id || idx}`}
-                            onClick={() => {
-                              handleNotificationClick(n, targetTab);
-                              setShowNotifDropdown(false);
-                            }}
-                            className={`p-3.5 hover:bg-slate-50 transition cursor-pointer flex items-start space-x-3 ${
-                              !n.read ? 'bg-blue-50/40' : ''
+                            onClick={() => handleNotificationClick(n, defaultTarget)}
+                            className={`p-3.5 hover:bg-slate-800/80 transition cursor-pointer flex items-start space-x-3 ${
+                              !n.read ? 'bg-blue-950/35' : ''
                             }`}
                           >
-                            <div className={`p-2 rounded-xl shrink-0 mt-0.5 ${
+                            <div className={`p-2 rounded-xl shrink-0 mt-0.5 border ${
                               isDisconnection
-                                ? 'bg-rose-100 text-rose-800'
+                                ? 'bg-rose-950/80 text-rose-300 border-rose-800/60'
                                 : isAccountIssue
-                                ? 'bg-purple-100 text-purple-800'
+                                ? 'bg-purple-950/80 text-purple-300 border-purple-800/60'
                                 : isPartialAlert
-                                ? 'bg-amber-100 text-amber-800'
+                                ? 'bg-amber-950/80 text-amber-300 border-amber-800/60'
                                 : isReport
-                                ? 'bg-indigo-100 text-indigo-800'
+                                ? 'bg-indigo-950/80 text-indigo-300 border-indigo-800/60'
                                 : isBilling
-                                ? 'bg-blue-100 text-blue-800'
-                                : 'bg-emerald-100 text-emerald-800'
+                                ? 'bg-blue-950/80 text-blue-300 border-blue-800/60'
+                                : 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
                             }`}>
                               {isDisconnection ? (
                                 <AlertOctagon className="h-4 w-4" />
@@ -1735,24 +2241,69 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between gap-1 mb-0.5">
-                                <h4 className="text-xs font-black text-slate-900 truncate">
+                                <h4 className="text-xs font-black text-white truncate">
                                   {n.title}
                                 </h4>
                                 {!n.read && (
-                                  <span className="h-1.5 w-1.5 rounded-full bg-blue-600 shrink-0"></span>
+                                  <span className="h-2 w-2 rounded-full bg-blue-400 shrink-0"></span>
                                 )}
                               </div>
-                              <p className="text-[11px] text-slate-600 line-clamp-2 leading-relaxed">
+                              <p className="text-[11px] text-slate-300 line-clamp-2 leading-relaxed">
                                 {n.message}
                               </p>
-                              <div className="flex items-center justify-between mt-2 pt-1 border-t border-slate-100/60">
+                              <div className="flex flex-wrap items-center justify-between gap-2 mt-2 pt-1.5 border-t border-slate-800/80">
                                 <span className="text-[9px] font-mono text-slate-400">
                                   {new Date(n.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                                 </span>
-                                <span className="text-[10px] font-black text-blue-600 hover:text-blue-800 flex items-center space-x-0.5">
-                                  <span>{isAccountIssue ? 'View Account' : isBilling ? 'View Bill' : isReport ? 'View Report' : 'View Dashboard'}</span>
-                                  <ChevronRight className="h-3 w-3" />
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  {isAccountIssue && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleNotificationClick(n, 'profile');
+                                      }}
+                                      className="text-[10px] font-black text-purple-300 hover:text-purple-200 bg-purple-950/70 hover:bg-purple-900/70 border border-purple-700/60 px-2 py-0.5 rounded-lg transition cursor-pointer"
+                                    >
+                                      Account Profile
+                                    </button>
+                                  )}
+                                  {(isBilling || isPayment) && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleNotificationClick(n, 'bills');
+                                      }}
+                                      className="text-[10px] font-black text-emerald-300 hover:text-emerald-200 bg-emerald-950/70 hover:bg-emerald-900/70 border border-emerald-700/60 px-2 py-0.5 rounded-lg transition cursor-pointer"
+                                    >
+                                      My Bills
+                                    </button>
+                                  )}
+                                  {isReport && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleNotificationClick(n, 'reports');
+                                      }}
+                                      className="text-[10px] font-black text-indigo-300 hover:text-indigo-200 bg-indigo-950/70 hover:bg-indigo-900/70 border border-indigo-700/60 px-2 py-0.5 rounded-lg transition cursor-pointer"
+                                    >
+                                      Ticket
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleNotificationClick(n, 'dashboard');
+                                    }}
+                                    className="text-[10px] font-black text-blue-300 hover:text-blue-200 bg-blue-950/70 hover:bg-blue-900/70 border border-blue-700/60 px-2 py-0.5 rounded-lg transition flex items-center space-x-0.5 cursor-pointer"
+                                  >
+                                    <span>Dashboard</span>
+                                    <ChevronRight className="h-3 w-3" />
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -1761,13 +2312,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     )}
                   </div>
 
-                  <div className="p-2.5 bg-slate-50 border-t border-slate-100 text-center">
+                  <div className="p-2.5 bg-slate-950 border-t border-slate-800 text-center">
                     <button
+                      type="button"
                       onClick={() => {
                         setActiveTab('notifications');
                         setShowNotifDropdown(false);
                       }}
-                      className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                      className="text-xs font-bold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer"
                     >
                       View All Notifications ({notifications.length})
                     </button>
@@ -1776,16 +2328,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               )}
             </div>
 
-            <div className="hidden md:flex items-center space-x-2 px-3 py-1 bg-slate-100 rounded-xl border border-slate-200/80">
-              <span className={`h-2 w-2 rounded-full ${isAccountPending ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></span>
-              <span className="text-[11px] font-mono font-bold text-slate-700">
+            <div className="hidden md:flex items-center space-x-2 px-3 py-1.5 bg-slate-800/90 rounded-xl border border-slate-700">
+              <span className={`h-2 w-2 rounded-full ${isAccountPending ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`}></span>
+              <span className="text-[11px] font-mono font-bold text-slate-200">
                 {isAccountPending ? 'Pending Issuance' : `#${consumerRecord.accountNumber}`}
               </span>
             </div>
 
             <button
               onClick={onLogout}
-              className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 transition cursor-pointer"
+              className="p-2.5 min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-300 hover:text-rose-300 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-700 transition cursor-pointer"
               title="Sign Out"
             >
               <LogOut className="h-4 w-4" />
@@ -1873,11 +2425,22 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
         {/* STATUS / ERROR TOAST */}
         {statusMsg && (
-          <div className={`p-4 rounded-2xl text-xs flex items-center space-x-3 shadow-xs ${
-            statusMsg.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
+          <div className={`p-4 rounded-2xl text-xs flex items-center justify-between gap-3 shadow-md ${
+            statusMsg.type === 'success'
+              ? 'bg-emerald-950/80 text-emerald-200 border border-emerald-500/40'
+              : 'bg-rose-950/80 text-rose-200 border border-rose-500/40'
           }`}>
-            <AlertCircle className="h-5 w-5 shrink-0" />
-            <span className="font-semibold">{statusMsg.msg}</span>
+            <div className="flex items-center space-x-3">
+              <AlertCircle className={`h-5 w-5 shrink-0 ${statusMsg.type === 'success' ? 'text-emerald-400' : 'text-rose-400'}`} />
+              <span className="font-semibold">{statusMsg.msg}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setStatusMsg(null)}
+              className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
         )}
 
@@ -1903,41 +2466,40 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
         {/* ACCOUNT STATUS: SHOWS ACCOUNT SETUP PENDING MESSAGE UNTIL ADMIN ISSUES OFFICIAL IDENTIFIERS */}
         {isAccountPending ? (
-          <div className="bg-amber-500/10 border-2 border-dashed border-amber-500/40 rounded-3xl p-6 sm:p-8 text-slate-800 space-y-4">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl p-6 sm:p-8 text-slate-100 space-y-5 shadow-lg">
             <div className="flex items-start space-x-4">
-              <div className="p-3 bg-amber-500 text-white rounded-2xl shadow-md shrink-0">
-                <Clock className="h-7 w-7 animate-pulse" />
+              <div className="p-3 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-2xl shrink-0">
+                <Clock className="h-7 w-7" />
               </div>
               <div className="space-y-1.5">
-                <div className="flex items-center space-x-2">
-                  <span className="px-2.5 py-0.5 bg-amber-500 text-white font-black text-[10px] uppercase tracking-wider rounded-md">
-                    Account Setup Pending
-                  </span>
-                  <span className="text-xs font-mono text-amber-900 font-bold">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-amber-300 font-semibold">
+                  <span>Account Setup Pending</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono tabular-nums text-amber-200">
                     Status: {consumerRecord.accountNumber ? `#${consumerRecord.accountNumber}` : 'Pending Admin Issuance'}
                   </span>
                 </div>
-                <h3 className="text-lg font-black text-slate-900">
+                <h3 className="text-lg font-black text-white">
                   Official Account & Meter Identifiers Pending Administrative Issuance
                 </h3>
-                <p className="text-xs text-slate-600 leading-relaxed max-w-3xl">
-                  Your registration application for water connection service has been received and verified. The Tagoloan Water District administration office is currently provisioning your official permanent <strong>Account Number</strong> and physical <strong>Meter Tag Number</strong>. Once issued, your telemetry readings, rate bracket schedules, and automated billing ledgers will activate automatically.
+                <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">
+                  Your registration application for water connection service has been received and verified. The Tagoloan Water District administration office is currently provisioning your official permanent <strong className="text-white">Account Number</strong> and physical <strong className="text-white">Meter Tag Number</strong>. Once issued, your telemetry readings, rate bracket schedules, and automated billing ledgers will activate automatically.
                 </p>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-amber-200/60 text-xs">
-              <div className="bg-white/80 p-3 rounded-xl border border-amber-100">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Applicant Name</span>
-                <span className="font-black text-slate-800">{consumerRecord.name}</span>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3 border-t border-slate-800 text-xs">
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                <span className="text-[11px] text-slate-400 font-medium block">Applicant Name</span>
+                <span className="font-bold text-white mt-0.5 block">{consumerRecord.name}</span>
               </div>
-              <div className="bg-white/80 p-3 rounded-xl border border-amber-100">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Designated Barangay</span>
-                <span className="font-black text-slate-800">{consumerRecord.barangay || 'Poblacion East'}</span>
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                <span className="text-[11px] text-slate-400 font-medium block">Designated Barangay</span>
+                <span className="font-bold text-white mt-0.5 block">{consumerRecord.barangay || 'Poblacion East'}</span>
               </div>
-              <div className="bg-white/80 p-3 rounded-xl border border-amber-100">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Classification</span>
-                <span className="font-black text-slate-800">{consumerRecord.consumerType || 'Residential'}</span>
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                <span className="text-[11px] text-slate-400 font-medium block">Classification</span>
+                <span className="font-bold text-white mt-0.5 block">{consumerRecord.consumerType || 'Residential'}</span>
               </div>
             </div>
           </div>
@@ -2036,7 +2598,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             <div className="bg-gradient-to-r from-blue-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-5 sm:p-6 border border-blue-800/80 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-fade-in" id="consumer-tariff-advisory-banner">
               <div className="flex items-start sm:items-center space-x-3.5">
                 <div className="p-3 bg-blue-500/20 rounded-2xl border border-blue-400/40 text-blue-300 shrink-0">
-                  <Sparkles className="h-5 w-5" />
+                  <Waves className="h-5 w-5" />
                 </div>
                 <div className="space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -2055,7 +2617,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     {consumerRecord?.consumerType === 'Commercial' ? ' Commercial' : ' Domestic / Residential'} baseline minimum (1 – 10 m³) is set at{' '}
                     <strong className="text-emerald-400 font-mono">
                       ₱{(consumerRecord?.consumerType === 'Commercial' ? activeTariff.commercial.baseMinCharge : activeTariff.residential.baseMinCharge).toFixed(2)}
-                    </strong>. All meter readings and billed consumption reflect this approved schedule.
+                    </strong>. Applies automatically to new meter readings going forward; previously issued statements retain their original billed rates.
                   </p>
                 </div>
               </div>
@@ -2072,42 +2634,39 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             {/* SPOTLIGHT: METER READING & BILL ISSUED NOTIFICATION FOCUS CARD */}
             {spotlightReading && (
               <div 
-                className="bg-white border-2 border-blue-500 rounded-3xl p-6 shadow-xl relative overflow-hidden animate-slide-down ring-4 ring-blue-500/10"
+                className="bg-slate-900 border border-blue-500/60 rounded-3xl p-6 shadow-xl relative overflow-hidden animate-slide-down ring-2 ring-blue-500/20 text-slate-100"
                 id="dashboard-reading-spotlight"
               >
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-5 border-b border-slate-100">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-5 border-b border-slate-800">
                   <div className="space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="px-2.5 py-0.5 bg-blue-600 text-white font-black text-[10px] uppercase tracking-wider rounded-lg flex items-center space-x-1 shadow-xs">
-                        <Sparkles className="h-3 w-3 mr-1" />
-                        <span>Issued Meter Reading & Bill</span>
-                      </span>
-                      <span className="px-2.5 py-0.5 bg-blue-50 text-blue-800 border border-blue-200 font-bold text-[10px] uppercase tracking-wider rounded-lg">
-                        Period: {spotlightReading.billingPeriod}
-                      </span>
-                      <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider ${
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
+                      <span className="text-blue-400">Issued Meter Reading & Bill</span>
+                      <span aria-hidden="true" className="text-slate-600">·</span>
+                      <span className="text-slate-300">Period: {spotlightReading.billingPeriod}</span>
+                      <span aria-hidden="true" className="text-slate-600">·</span>
+                      <span className={
                         spotlightReading.paymentStatus === 'paid'
-                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          ? 'text-emerald-400 font-bold'
                           : spotlightReading.paymentStatus === 'partial'
-                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                          : 'bg-rose-100 text-rose-800 border border-rose-300'
-                      }`}>
+                          ? 'text-amber-400 font-bold'
+                          : 'text-rose-400 font-bold'
+                      }>
                         {spotlightReading.paymentStatus === 'paid' ? 'Paid in Full' : spotlightReading.paymentStatus === 'partial' ? 'Partial Balance' : 'Unpaid Statement'}
                       </span>
                     </div>
 
-                    <h3 className="text-xl font-black text-slate-900 tracking-tight">
+                    <h3 className="text-xl font-black text-white tracking-tight">
                       Official Meter Reading for {spotlightReading.billingPeriod}
                     </h3>
-                    <p className="text-xs text-slate-600 max-w-2xl leading-relaxed">
-                      Your meter index was verified by our district field reader. Net consumption computed at <strong className="text-slate-900 font-mono">{spotlightReading.consumption} m³</strong> with a total calculated bill of <strong className="text-blue-700 font-mono">₱{calculateCostOf(spotlightReading.consumption, consumerRecord?.consumerType).toFixed(2)}</strong>.
+                    <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+                      Your meter index was verified by our district field reader. Net consumption computed at <strong className="text-white font-mono tabular-nums">{spotlightReading.consumption} m³</strong> with a total calculated bill of <strong className="text-sky-400 font-mono tabular-nums">₱{calculateCostOf(spotlightReading, consumerRecord?.consumerType).toFixed(2)}</strong>.
                     </p>
                   </div>
 
                   <div className="flex items-center space-x-2 shrink-0 self-end lg:self-center">
                     <button
                       onClick={() => setSpotlightReading(null)}
-                      className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                      className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
                       title="Dismiss Spotlight"
                     >
                       <X className="h-5 w-5" />
@@ -2117,57 +2676,57 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                 {/* 4 Index & Bill Telemetry Metric Tiles */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 my-5">
-                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  <div className="bg-slate-950 border border-slate-800 rounded-2xl p-3.5 space-y-1">
+                    <span className="text-[11px] font-semibold text-slate-400 block">
                       Previous Index
                     </span>
-                    <span className="text-lg font-black font-mono text-slate-700 block">
+                    <span className="text-lg font-black font-mono tabular-nums text-slate-200 block">
                       {spotlightReading.previousReading} m³
                     </span>
-                    <span className="text-[10px] text-slate-400">Prior baseline dial</span>
+                    <span className="text-[10px] text-slate-500">Prior baseline dial</span>
                   </div>
 
-                  <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-3.5 space-y-1">
-                    <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">
+                  <div className="bg-slate-950 border border-blue-500/30 rounded-2xl p-3.5 space-y-1">
+                    <span className="text-[11px] font-semibold text-blue-400 block">
                       Current Index
                     </span>
-                    <span className="text-lg font-black font-mono text-blue-900 block">
+                    <span className="text-lg font-black font-mono tabular-nums text-white block">
                       {spotlightReading.currentReading} m³
                     </span>
-                    <span className="text-[10px] text-blue-600 font-semibold">Latest dial recorded</span>
+                    <span className="text-[10px] text-blue-400 font-medium">Latest dial recorded</span>
                   </div>
 
-                  <div className="bg-sky-50 border border-sky-100 rounded-2xl p-3.5 space-y-1">
-                    <span className="text-[10px] font-bold text-sky-700 uppercase tracking-wider block">
+                  <div className="bg-slate-950 border border-sky-500/30 rounded-2xl p-3.5 space-y-1">
+                    <span className="text-[11px] font-semibold text-sky-400 block">
                       Net Consumption
                     </span>
-                    <span className="text-lg font-black font-mono text-sky-900 block">
+                    <span className="text-lg font-black font-mono tabular-nums text-sky-300 block">
                       {spotlightReading.consumption} m³
                     </span>
-                    <span className="text-[10px] text-sky-600 font-semibold">Actual volume used</span>
+                    <span className="text-[10px] text-sky-400/80 font-medium">Actual volume used</span>
                   </div>
 
-                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3.5 space-y-1">
-                    <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">
+                  <div className="bg-slate-950 border border-emerald-500/30 rounded-2xl p-3.5 space-y-1">
+                    <span className="text-[11px] font-semibold text-emerald-400 block">
                       Calculated Bill
                     </span>
-                    <span className="text-lg font-black font-mono text-emerald-900 block">
-                      ₱{calculateCostOf(spotlightReading.consumption, consumerRecord?.consumerType).toFixed(2)}
+                    <span className="text-lg font-black font-mono tabular-nums text-emerald-300 block">
+                      ₱{calculateCostOf(spotlightReading, consumerRecord?.consumerType).toFixed(2)}
                     </span>
-                    <span className="text-[10px] text-emerald-700 font-semibold">
+                    <span className="text-[10px] text-emerald-400/80 font-medium">
                       {spotlightReading.paymentStatus === 'paid' ? 'Settled in full' : `Due ${spotlightReading.dueDate || '20th of Month'}`}
                     </span>
                   </div>
                 </div>
 
                 {/* Footer Strip with Reading Meta & Direct Action Buttons */}
-                <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 font-medium">
-                    <span>Reading Date: <strong className="text-slate-800">{spotlightReading.readingDate}</strong></span>
-                    <span>•</span>
-                    <span>Field Officer: <strong className="text-slate-800">{spotlightReading.meterReaderName || 'Field Tech'}</strong></span>
-                    <span>•</span>
-                    <span>Due Date: <strong className="text-rose-600">{spotlightReading.dueDate || '20th of Month'}</strong></span>
+                <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400 font-medium">
+                    <span>Reading Date: <strong className="text-slate-200">{spotlightReading.readingDate}</strong></span>
+                    <span aria-hidden="true">·</span>
+                    <span>Field Officer: <strong className="text-slate-200">{spotlightReading.meterReaderName || 'Field Tech'}</strong></span>
+                    <span aria-hidden="true">·</span>
+                    <span>Due Date: <strong className="text-rose-400">{spotlightReading.dueDate || '20th of Month'}</strong></span>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
@@ -2176,11 +2735,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         setBillDetailsReading(spotlightReading);
                         setIsBillDetailsOpen(true);
                       }}
-                      className="px-4 py-2.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-800 font-black text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center space-x-1.5 cursor-pointer shadow-xs"
+                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-blue-300 font-bold text-xs rounded-xl transition flex items-center justify-center space-x-1.5 cursor-pointer"
                       id="spotlight-bill-breakdown-btn"
                       title="View itemized fixed, volumetric, and tax breakdown"
                     >
-                      <Calculator className="h-4 w-4 text-blue-600" />
+                      <Calculator className="h-4 w-4 text-blue-400" />
                       <span>Bill Details</span>
                     </button>
                     {spotlightReading.paymentStatus !== 'paid' ? (
@@ -2190,17 +2749,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             setActiveTab('bills');
                             handleStartPayment(spotlightReading, 'full');
                           }}
-                          className="flex-1 sm:flex-initial px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                          className="flex-1 sm:flex-initial px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center justify-center space-x-1.5 cursor-pointer"
                         >
                           <CreditCard className="h-4 w-4" />
-                          <span>Pay Online (₱{calculateCostOf(spotlightReading.consumption, consumerRecord?.consumerType).toFixed(2)})</span>
+                          <span>Pay Online (₱{calculateCostOf(spotlightReading, consumerRecord?.consumerType).toFixed(2)})</span>
                         </button>
                         <button
                           onClick={() => {
                             setUploadReceiptReading(spotlightReading);
                             setIsUploadReceiptOpen(true);
                           }}
-                          className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-xs transition flex items-center space-x-1 cursor-pointer"
+                          className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
                           title="Upload physical cashier receipt"
                         >
                           <Upload className="h-3.5 w-3.5" />
@@ -2211,7 +2770,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             setActiveTab('bills');
                             setHighlightedReadingId(spotlightReading.id);
                           }}
-                          className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-1 cursor-pointer"
+                          className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
                         >
                           <ReceiptText className="h-3.5 w-3.5" />
                           <span>View in My Bills</span>
@@ -2221,7 +2780,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <>
                         <button
                           onClick={() => setReceiptDetailModal(spotlightReading)}
-                          className="flex-1 sm:flex-initial px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                          className="flex-1 sm:flex-initial px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center justify-center space-x-1.5 cursor-pointer"
                         >
                           <ReceiptText className="h-4 w-4" />
                           <span>View Official Receipt</span>
@@ -2229,7 +2788,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         {spotlightReading.paymentReceiptUrl && (
                           <button
                             onClick={() => setViewingReceiptReading(spotlightReading)}
-                            className="px-4 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-1 cursor-pointer"
+                            className="px-4 py-2.5 bg-blue-950/60 hover:bg-blue-900/80 text-blue-300 border border-blue-700/60 font-bold text-xs rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
                             title="View uploaded cashier slip photo"
                           >
                             <ImageIcon className="h-3.5 w-3.5" />
@@ -2242,7 +2801,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             setBillFilter('paid');
                             setHighlightedReadingId(spotlightReading.id);
                           }}
-                          className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-1 cursor-pointer"
+                          className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
                         >
                           <ReceiptText className="h-3.5 w-3.5" />
                           <span>View in My Bills</span>
@@ -2258,61 +2817,61 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
               
               {/* Card 1: Current Month Consumption */}
-              <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-xs space-y-3">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-md space-y-3">
                 <div className="flex justify-between items-start">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                  <span className="text-xs font-semibold text-slate-400">
                     Current Consumption
                   </span>
-                  <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+                  <div className="p-2 bg-blue-500/15 text-blue-400 border border-blue-500/20 rounded-xl">
                     <Droplet className="h-5 w-5" />
                   </div>
                 </div>
                 <div>
                   <div className="flex items-baseline space-x-2">
-                    <span className="text-3xl font-black text-slate-900 font-mono">
+                    <span className="text-3xl font-black text-white font-mono tabular-nums">
                       {currentConsumptionVal}
                     </span>
-                    <span className="text-xs font-bold text-slate-500 uppercase">m³ (cubic meters)</span>
+                    <span className="text-xs font-semibold text-slate-400">m³ (cubic meters)</span>
                   </div>
                   <div className="flex items-center space-x-1 text-[11px] mt-1">
                     {previousMonthRead && consumptionDiff > 0 ? (
-                      <span className="text-rose-600 font-bold flex items-center">
+                      <span className="text-rose-400 font-bold flex items-center tabular-nums">
                         <TrendingUp className="h-3.5 w-3.5 mr-0.5" />
                         +{consumptionDiff} m³ ({consumptionPercentChange}%)
                       </span>
                     ) : previousMonthRead && consumptionDiff < 0 ? (
-                      <span className="text-emerald-600 font-bold flex items-center">
+                      <span className="text-emerald-400 font-bold flex items-center tabular-nums">
                         <TrendingDown className="h-3.5 w-3.5 mr-0.5" />
                         {consumptionDiff} m³ ({consumptionPercentChange}%)
                       </span>
                     ) : previousMonthRead ? (
-                      <span className="text-slate-500 font-medium">Constant vs last month</span>
+                      <span className="text-slate-400 font-medium">Constant vs last month</span>
                     ) : (
-                      <span className="text-slate-500 font-medium">{latestRead ? 'Initial baseline reading' : 'No recorded cycles yet'}</span>
+                      <span className="text-slate-400 font-medium">{latestRead ? 'Initial baseline reading' : 'No recorded cycles yet'}</span>
                     )}
-                    {previousMonthRead && <span className="text-slate-400">vs prev</span>}
+                    {previousMonthRead && <span className="text-slate-500">vs prev</span>}
                   </div>
                 </div>
               </div>
 
               {/* Card 2: Latest Meter Reading */}
-              <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-xs space-y-3">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-md space-y-3">
                 <div className="flex justify-between items-start">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                  <span className="text-xs font-semibold text-slate-400">
                     Latest Meter Reading
                   </span>
-                  <div className="p-2 bg-sky-50 text-sky-600 rounded-xl">
+                  <div className="p-2 bg-sky-500/15 text-sky-400 border border-sky-500/20 rounded-xl">
                     <Activity className="h-5 w-5" />
                   </div>
                 </div>
                 <div>
                   <div className="flex items-baseline space-x-2">
-                    <span className="text-3xl font-black text-slate-900 font-mono">
+                    <span className="text-3xl font-black text-white font-mono tabular-nums">
                       {latestRead ? latestRead.currentReading : 0}
                     </span>
-                    <span className="text-xs font-bold text-slate-500">m³ Index</span>
+                    <span className="text-xs font-semibold text-slate-400">m³ Index</span>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-1 font-medium">
+                  <p className="text-[11px] text-slate-400 mt-1 font-medium">
                     {latestRead ? `Recorded: ${latestRead.readingDate}` : 'Awaiting reading cycle'}
                   </p>
                 </div>
@@ -2324,35 +2883,35 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   setBillDetailsReading(latestRead || (readings.length > 0 ? readings[0] : null));
                   setIsBillDetailsOpen(true);
                 }}
-                className="bg-white border border-slate-200/80 hover:border-indigo-300 hover:shadow-md transition-all rounded-3xl p-5 shadow-xs space-y-3 cursor-pointer group relative overflow-hidden"
+                className="bg-slate-900 border border-slate-800 hover:border-indigo-500/60 hover:bg-slate-900/90 transition-all rounded-3xl p-5 shadow-md space-y-3 cursor-pointer group relative overflow-hidden"
                 id="card-current-bill-amount"
                 title="Click to view full itemized bill breakdown"
               >
                 <div className="flex justify-between items-start">
                   <div>
-                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                    <span className="text-xs font-semibold text-slate-400 block">
                       Current Bill Amount
                     </span>
-                    <span className="text-[10px] font-bold text-indigo-600 group-hover:text-indigo-800 flex items-center mt-0.5">
+                    <span className="text-[11px] font-semibold text-indigo-400 group-hover:text-indigo-300 flex items-center mt-0.5">
                       <span>View 3-Pillar Breakdown</span>
                       <ArrowRight className="h-3 w-3 ml-1 group-hover:translate-x-0.5 transition-transform" />
                     </span>
                   </div>
-                  <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                  <div className="p-2 bg-indigo-500/15 text-indigo-400 border border-indigo-500/20 rounded-xl group-hover:bg-indigo-600 group-hover:text-white transition-colors">
                     <Calculator className="h-5 w-5" />
                   </div>
                 </div>
                 <div>
                   <div className="flex items-baseline space-x-1">
-                    <span className="text-3xl font-black text-indigo-700 font-mono">
+                    <span className="text-3xl font-black text-indigo-300 font-mono tabular-nums">
                       ₱{currentBillAmount.toFixed(2)}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1 font-medium">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1 font-medium">
                     <span>
                       Cycle: {latestRead ? latestRead.billingPeriod : 'No Billing Cycle Yet'}
                     </span>
-                    <span className="text-[10px] font-bold text-indigo-600 uppercase bg-indigo-50 px-1.5 py-0.5 rounded">
+                    <span className="text-[10px] font-semibold text-indigo-300">
                       Fixed + Vol + Tax
                     </span>
                   </div>
@@ -2360,31 +2919,33 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
 
               {/* Card 4: Outstanding Balance */}
-              <div className={`border rounded-3xl p-5 shadow-xs space-y-3 ${
+              <div className={`bg-slate-900 border rounded-3xl p-5 shadow-md space-y-3 ${
                 outstandingSum > 0 
-                  ? 'bg-rose-50/50 border-rose-200/80 text-slate-900' 
-                  : 'bg-emerald-50/50 border-emerald-200/80 text-slate-900'
+                  ? 'border-rose-500/40' 
+                  : 'border-emerald-500/40'
               }`}>
                 <div className="flex justify-between items-start">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                  <span className="text-xs font-semibold text-slate-400">
                     Outstanding Balance
                   </span>
-                  <div className={`p-2 rounded-xl ${
-                    outstandingSum > 0 ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
+                  <div className={`p-2 rounded-xl border ${
+                    outstandingSum > 0
+                      ? 'bg-rose-500/15 text-rose-400 border-rose-500/25'
+                      : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25'
                   }`}>
                     <ReceiptText className="h-5 w-5" />
                   </div>
                 </div>
                 <div>
                   <div className="flex items-baseline space-x-1">
-                    <span className={`text-3xl font-black font-mono ${
-                      outstandingSum > 0 ? 'text-rose-700' : 'text-emerald-700'
+                    <span className={`text-3xl font-black font-mono tabular-nums ${
+                      outstandingSum > 0 ? 'text-rose-400' : 'text-emerald-400'
                     }`}>
                       ₱{outstandingSum.toFixed(2)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between mt-1">
-                    <span className="text-[11px] text-slate-600 font-semibold">
+                    <span className="text-[11px] text-slate-300 font-medium">
                       {outstandingSum > 0 
                         ? `${unpaidBills.length} bill(s)${partialBills.length > 0 ? ` (${partialBills.length} partial)` : ''}`
                         : 'Account cleared'}
@@ -2395,7 +2956,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           setActiveTab('bills');
                           if (unpaidBills.length > 0) handleStartPayment(unpaidBills[0], 'full');
                         }}
-                        className="text-[10px] font-black text-rose-700 hover:underline uppercase cursor-pointer"
+                        className="text-xs font-bold text-rose-400 hover:text-rose-300 hover:underline cursor-pointer"
                       >
                         Settle Now →
                       </button>
@@ -2405,6 +2966,83 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
 
             </div>
+
+            {/* OFFICIAL DISTRICT ADVISORIES & ANNOUNCEMENTS BULLETIN */}
+            {announcements.length > 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-md space-y-4" id="dashboard-advisories-section">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2.5 bg-blue-500/15 text-blue-400 rounded-2xl border border-blue-500/25">
+                      <Bell className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-sm font-bold text-white">
+                          Official District Advisories & Announcements
+                        </h3>
+                        <span aria-hidden="true" className="text-slate-600">·</span>
+                        <span className="text-xs text-blue-400 font-semibold">
+                          {announcements.length} Active Bulletin{announcements.length === 1 ? '' : 's'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        Live public service bulletins, scheduled maintenance advisories, and board announcements from Tagoloan Water District
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setActiveTab('notifications');
+                      setNotifFilter('announcement');
+                    }}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold rounded-xl transition flex items-center space-x-1.5 cursor-pointer self-start sm:self-auto shrink-0"
+                  >
+                    <span>View All Advisories</span>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {announcements.slice(0, 3).map((ann, idx) => {
+                    const cat = (ann.category || (ann as any).type || 'info').toLowerCase();
+                    const isAlert = cat === 'alert' || cat === 'emergency' || cat === 'urgent';
+                    const isMaint = cat === 'maintenance' || cat === 'warning';
+                    return (
+                      <div
+                        key={`dash-ann-${ann.id || idx}`}
+                        className={`rounded-2xl p-4 border flex flex-col justify-between gap-3 transition bg-slate-950 ${
+                          isAlert
+                            ? 'border-rose-500/40'
+                            : isMaint
+                            ? 'border-amber-500/40'
+                            : 'border-slate-800'
+                        }`}
+                      >
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between gap-2 text-[11px]">
+                            <span className={`font-semibold capitalize ${
+                              isAlert
+                                ? 'text-rose-400'
+                                : isMaint
+                                ? 'text-amber-400'
+                                : 'text-blue-400'
+                            }`}>
+                              {cat}
+                            </span>
+                            <span className="font-mono tabular-nums text-slate-500">{ann.date}</span>
+                          </div>
+                          <h4 className="text-xs font-bold text-white leading-snug">{ann.title}</h4>
+                          <p className="text-xs text-slate-400 leading-relaxed line-clamp-3">{ann.content}</p>
+                        </div>
+                        <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500 font-medium">
+                          <span>By: {ann.postedBy || (ann as any).author || 'TWD Administration'}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* CONSUMER SERVICE ASSISTANCE & REPORT CONCERN DASHBOARD BANNER */}
             <div className="bg-gradient-to-r from-blue-900 via-indigo-950 to-slate-900 text-white border border-blue-800/80 rounded-3xl p-6 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-6" id="dashboard-reports-banner">
@@ -2470,23 +3108,24 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             {/* EMBEDDED DASHBOARD BILL DETAILS BREAKDOWN COMPONENT */}
             {consumerRecord && (
-              <div className="bg-white border border-slate-200/90 rounded-3xl p-6 shadow-xs space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-md space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
                   <div className="flex items-center space-x-3">
-                    <div className="p-2.5 bg-indigo-50 text-indigo-700 rounded-2xl">
+                    <div className="p-2.5 bg-indigo-500/15 text-indigo-400 border border-indigo-500/25 rounded-2xl">
                       <Calculator className="h-6 w-6" />
                     </div>
                     <div>
-                      <div className="flex items-center space-x-2">
-                        <h3 className="text-base font-black text-slate-900">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-base font-bold text-white">
                           Current Water Bill Details & Tariff Itemization
                         </h3>
-                        <span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 font-black text-[9px] uppercase tracking-wider rounded-md">
+                        <span aria-hidden="true" className="text-slate-600">·</span>
+                        <span className="text-xs font-semibold text-indigo-400">
                           Fixed + Volumetric + Taxes
                         </span>
                       </div>
-                      <p className="text-xs text-slate-500">
-                        Itemized accounting breakdown of your assessed water charges for <strong className="text-slate-800 font-bold">{latestRead ? latestRead.billingPeriod : 'Current Period'}</strong> ({consumerRecord.consumerType} classification)
+                      <p className="text-xs text-slate-400">
+                        Itemized accounting breakdown of your assessed water charges for <strong className="text-white font-bold">{latestRead ? latestRead.billingPeriod : 'Current Period'}</strong> ({consumerRecord.consumerType} classification)
                       </p>
                     </div>
                   </div>
@@ -2497,7 +3136,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         setBillDetailsReading(latestRead || (readings.length > 0 ? readings[0] : null));
                         setIsBillDetailsOpen(true);
                       }}
-                      className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-black uppercase tracking-wider rounded-xl transition flex items-center space-x-1.5 cursor-pointer shadow-2xs"
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 text-xs font-bold rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
                       title="Open full interactive breakdown modal"
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
@@ -2523,24 +3162,24 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
               {/* Monthly Consumption Chart */}
-              <div className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-xs space-y-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-md space-y-4">
                 <div className="flex justify-between items-center">
                   <div>
-                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                    <h3 className="text-sm font-bold text-white">
                       Monthly Consumption Trend
                     </h3>
                     <p className="text-[11px] text-slate-400 font-medium">
                       Historical volume consumed in cubic meters (m³)
                     </p>
                   </div>
-                  <span className="text-[10px] font-mono font-bold bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200">
+                  <span className="text-xs font-mono tabular-nums font-semibold text-blue-400">
                     6-Cycle View
                   </span>
                 </div>
 
                 {chartReadings.length > 0 ? (
-                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-5 pt-8 h-64 flex items-end justify-around relative">
-                    <div className="absolute left-4 top-3 text-[9px] font-mono text-slate-400">
+                  <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5 pt-8 h-64 flex items-end justify-around relative">
+                    <div className="absolute left-4 top-3 text-[10px] font-mono text-slate-500">
                       Y-Axis: m³ Consumption
                     </div>
                     {chartReadings.map((r, idx) => {
@@ -2550,19 +3189,19 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                       return (
                         <div key={`chart-cons-${r.id || r.billingPeriod || idx}`} className="flex flex-col items-center space-y-2 w-14 group">
-                          <span className="text-[10px] font-mono font-black text-slate-700 opacity-80 group-hover:opacity-100 transition">
+                          <span className="text-[10px] font-mono tabular-nums font-bold text-slate-300 opacity-85 group-hover:opacity-100 transition">
                             {r.consumption} m³
                           </span>
                           <div 
                             className={`w-8 rounded-t-lg transition-all duration-500 ${
                               isAbnormal 
-                                ? 'bg-rose-500 hover:bg-rose-600 shadow-sm' 
-                                : 'bg-blue-600 hover:bg-blue-700 shadow-sm'
+                                ? 'bg-rose-500 hover:bg-rose-400 shadow-sm' 
+                                : 'bg-blue-500 hover:bg-blue-400 shadow-sm'
                             }`}
                             style={{ height: `${barHeight}px` }}
                             title={`${r.billingPeriod}: ${r.consumption} m³`}
                           ></div>
-                          <span className="text-[9px] font-medium text-slate-500 truncate w-full text-center">
+                          <span className="text-[10px] font-medium text-slate-400 truncate w-full text-center">
                             {r.billingPeriod.split(' ')[0]}
                           </span>
                         </div>
@@ -2570,54 +3209,54 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     })}
                   </div>
                 ) : (
-                  <div className="h-64 bg-slate-50 rounded-2xl flex items-center justify-center text-xs text-slate-400">
+                  <div className="h-64 bg-slate-950 border border-slate-800 rounded-2xl flex items-center justify-center text-xs text-slate-500">
                     No consumption data recorded yet.
                   </div>
                 )}
               </div>
 
               {/* Monthly Billing Chart */}
-              <div className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-xs space-y-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-md space-y-4">
                 <div className="flex justify-between items-center">
                   <div>
-                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                    <h3 className="text-sm font-bold text-white">
                       Monthly Billing History
                     </h3>
                     <p className="text-[11px] text-slate-400 font-medium">
                       Calculated tariff costs in Philippine Pesos (₱)
                     </p>
                   </div>
-                  <span className="text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-200">
+                  <span className="text-xs font-mono tabular-nums font-semibold text-indigo-400">
                     Tariff Tier
                   </span>
                 </div>
 
                 {chartReadings.length > 0 ? (
-                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-5 pt-8 h-64 flex items-end justify-around relative">
-                    <div className="absolute left-4 top-3 text-[9px] font-mono text-slate-400">
+                  <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5 pt-8 h-64 flex items-end justify-around relative">
+                    <div className="absolute left-4 top-3 text-[10px] font-mono text-slate-500">
                       Y-Axis: Billed Amount (₱)
                     </div>
                     {chartReadings.map((r, idx) => {
-                      const cost = calculateCostOf(r.consumption, consumerRecord.consumerType);
-                      const maxCost = Math.max(...chartReadings.map(c => calculateCostOf(c.consumption, consumerRecord.consumerType)), 500);
+                      const cost = calculateCostOf(r, consumerRecord.consumerType);
+                      const maxCost = Math.max(...chartReadings.map(c => calculateCostOf(c, consumerRecord.consumerType)), 500);
                       const barHeight = Math.max(20, Math.min(180, (cost / maxCost) * 170));
                       const isPaid = r.paymentStatus === 'paid';
 
                       return (
                         <div key={`chart-cost-${r.id || r.billingPeriod || idx}`} className="flex flex-col items-center space-y-2 w-14 group">
-                          <span className="text-[10px] font-mono font-black text-slate-700 opacity-80 group-hover:opacity-100 transition">
+                          <span className="text-[10px] font-mono tabular-nums font-bold text-slate-300 opacity-85 group-hover:opacity-100 transition">
                             ₱{cost > 999 ? `${(cost/1000).toFixed(1)}k` : cost.toFixed(0)}
                           </span>
                           <div 
                             className={`w-8 rounded-t-lg transition-all duration-500 ${
                               isPaid 
-                                ? 'bg-emerald-500 hover:bg-emerald-600 shadow-sm' 
-                                : 'bg-amber-500 hover:bg-amber-600 shadow-sm'
+                                ? 'bg-emerald-500 hover:bg-emerald-400 shadow-sm' 
+                                : 'bg-amber-500 hover:bg-amber-400 shadow-sm'
                             }`}
                             style={{ height: `${barHeight}px` }}
                             title={`${r.billingPeriod}: ₱${cost.toFixed(2)} (${isPaid ? 'PAID' : 'UNPAID'})`}
                           ></div>
-                          <span className="text-[9px] font-medium text-slate-500 truncate w-full text-center">
+                          <span className="text-[10px] font-medium text-slate-400 truncate w-full text-center">
                             {r.billingPeriod.split(' ')[0]}
                           </span>
                         </div>
@@ -2625,7 +3264,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     })}
                   </div>
                 ) : (
-                  <div className="h-64 bg-slate-50 rounded-2xl flex items-center justify-center text-xs text-slate-400">
+                  <div className="h-64 bg-slate-950 border border-slate-800 rounded-2xl flex items-center justify-center text-xs text-slate-500">
                     No billing history recorded yet.
                   </div>
                 )}
@@ -2637,31 +3276,31 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               
               {/* Recent Bills List (7 Cols) */}
-              <div className="lg:col-span-7 bg-white border border-slate-200/80 rounded-3xl p-6 shadow-xs space-y-4">
+              <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-md space-y-4">
                 <div className="flex justify-between items-center">
-                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                    <ReceiptText className="h-4 w-4 text-blue-600" />
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <ReceiptText className="h-4 w-4 text-blue-400" />
                     <span>Recent Bills</span>
                   </h3>
                   <button 
                     onClick={() => setActiveTab('bills')}
-                    className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center cursor-pointer"
+                    className="text-xs font-bold text-blue-400 hover:text-blue-300 flex items-center cursor-pointer"
                   >
                     <span>View All Bills</span>
                     <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
                   </button>
                 </div>
 
-                <div className="divide-y divide-slate-100">
+                <div className="divide-y divide-slate-800">
                   {readings.length === 0 ? (
                     <div className="py-8 text-center text-xs text-slate-400 space-y-2">
-                      <ReceiptText className="h-8 w-8 mx-auto text-slate-300" />
-                      <p className="font-semibold text-slate-600">No billing statements recorded yet.</p>
-                      <p className="text-[11px] text-slate-400">Readings verified by the water district will appear here automatically.</p>
+                      <ReceiptText className="h-8 w-8 mx-auto text-slate-600" />
+                      <p className="font-semibold text-slate-300">No billing statements recorded yet.</p>
+                      <p className="text-[11px] text-slate-500">Readings verified by the water district will appear here automatically.</p>
                     </div>
                   ) : (
                     readings.slice(0, 3).map((r, idx) => {
-                      const cost = calculateCostOf(r.consumption, consumerRecord.consumerType);
+                      const cost = calculateCostOf(r, consumerRecord.consumerType);
                       const isPaid = r.paymentStatus === 'paid';
                       const isPartial = r.paymentStatus === 'partial';
                       const paidAmt = r.paidAmount || 0;
@@ -2673,46 +3312,41 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         <div 
                           key={`dash-bill-${r.id || idx}`} 
                           className={`py-3.5 px-3 rounded-2xl transition flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 ${
-                            isHighlight ? 'bg-sky-100/90 border-l-4 border-l-blue-700 ring-1 ring-blue-300 shadow-xs' : 'hover:bg-slate-50'
+                            isHighlight ? 'bg-blue-950/50 border border-blue-500/50 shadow-xs' : 'hover:bg-slate-800/50'
                           }`}
                         >
                           <div className="space-y-1">
-                            <div className="flex items-center space-x-2">
-                              <span className={`text-xs font-black ${isHighlight ? 'text-blue-950 font-extrabold' : 'text-slate-950'}`}>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`text-xs font-bold ${isHighlight ? 'text-blue-300' : 'text-white'}`}>
                                 {r.billingPeriod} Statement
                               </span>
-                              {isHighlight && (
-                                <span className="px-2 py-0.5 bg-blue-700 text-white font-black text-[9px] uppercase tracking-wider rounded-md shadow-xs">
-                                  Selected
-                                </span>
-                              )}
-                              {/* COLOR CODED BILL STATUS BADGE */}
-                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                              <span aria-hidden="true" className="text-slate-600">·</span>
+                              <span className={`text-[11px] font-semibold ${
                                 isPaid 
-                                  ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' 
+                                  ? 'text-emerald-400' 
                                   : isPartial
-                                  ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                                  : 'bg-rose-100 text-rose-900 border border-rose-300'
+                                  ? 'text-amber-400'
+                                  : 'text-rose-400'
                               }`}>
                                 {isPaid ? 'Paid in Full' : isPartial ? `Partial (₱${remainingDue.toFixed(2)} Due)` : 'Unpaid'}
                               </span>
                             </div>
-                            <p className="text-[11px] text-slate-700 font-medium">
-                              Consumption: <strong className="text-slate-950 font-mono font-bold">{r.consumption} m³</strong> • Due: <span className="text-slate-900 font-semibold">{r.dueDate || '20th of Month'}</span>
+                            <p className="text-[11px] text-slate-400 font-medium">
+                              Consumption: <strong className="text-slate-200 font-mono tabular-nums font-bold">{r.consumption} m³</strong> · Due: <span className="text-slate-300 font-semibold">{r.dueDate || '20th of Month'}</span>
                             </p>
                             {isPartial && (
-                              <p className="text-[11px] text-amber-900 font-bold">
-                                Credited: ₱{paidAmt.toFixed(2)} • Remaining: ₱{remainingDue.toFixed(2)}
+                              <p className="text-[11px] text-amber-400 font-semibold font-mono tabular-nums">
+                                Credited: ₱{paidAmt.toFixed(2)} · Remaining: ₱{remainingDue.toFixed(2)}
                               </p>
                             )}
                           </div>
 
                           <div className="flex items-center space-x-3 text-right shrink-0 w-full sm:w-auto justify-between sm:justify-end">
                             <div>
-                              <span className="font-mono font-black text-slate-950 text-sm block">
+                              <span className="font-mono tabular-nums font-black text-white text-sm block">
                                 {isPartial ? `₱${remainingDue.toFixed(2)}` : `₱${cost.toFixed(2)}`}
                               </span>
-                              <span className="text-[10px] text-slate-600 font-mono font-medium block">
+                              <span className="text-[10px] text-slate-400 font-mono tabular-nums font-medium block">
                                 {isPaid 
                                   ? (r.paymentDate ? `Paid ${r.paymentDate}` : 'Settled')
                                   : isPartial 
@@ -2723,7 +3357,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             {isPaid ? (
                               <button
                                 onClick={() => setReceiptDetailModal(r)}
-                                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer border border-emerald-500"
+                                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
                                 id={`dashboard-receipt-btn-${r.id}`}
                                 title="Click to view Official Electronic Payment Receipt"
                               >
@@ -2734,7 +3368,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               <div className="flex items-center space-x-2">
                                 <button
                                   onClick={() => setReceiptDetailModal(r)}
-                                  className="px-2.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer"
+                                  className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer"
                                   title="View Partial Payment Receipt"
                                 >
                                   <ReceiptText className="h-4 w-4" />
@@ -2744,7 +3378,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                     setActiveTab('bills');
                                     handleStartPayment(r, 'full');
                                   }}
-                                  className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                  className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
                                   id={`dashboard-pay-partial-${r.id}`}
                                 >
                                   <CreditCard className="h-4 w-4" />
@@ -2757,7 +3391,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   setActiveTab('bills');
                                   handleStartPayment(r, 'full');
                                 }}
-                                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs hover:shadow-md transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
                                 id={`dashboard-pay-btn-${r.id}`}
                               >
                                 <CreditCard className="h-4 w-4" />
@@ -2773,46 +3407,46 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
 
               {/* Recent Readings List (5 Cols) */}
-              <div className="lg:col-span-5 bg-white border border-slate-200/80 rounded-3xl p-6 shadow-xs space-y-4">
+              <div className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-md space-y-4">
                 <div className="flex justify-between items-center">
-                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                    <Activity className="h-4 w-4 text-sky-600" />
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Activity className="h-4 w-4 text-sky-400" />
                     <span>Recent Readings</span>
                   </h3>
                   <button 
                     onClick={() => setActiveTab('usage')}
-                    className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center cursor-pointer"
+                    className="text-xs font-bold text-blue-400 hover:text-blue-300 flex items-center cursor-pointer"
                   >
                     <span>Full Ledger</span>
                     <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
                   </button>
                 </div>
 
-                <div className="divide-y divide-slate-100">
+                <div className="divide-y divide-slate-800">
                   {readings.length === 0 ? (
                     <div className="py-8 text-center text-xs text-slate-400 space-y-2">
-                      <Activity className="h-8 w-8 mx-auto text-slate-300" />
-                      <p className="font-semibold text-slate-600">No physical readings logged yet.</p>
-                      <p className="text-[11px] text-slate-400">Field meter recordings will appear here in chronological order.</p>
+                      <Activity className="h-8 w-8 mx-auto text-slate-600" />
+                      <p className="font-semibold text-slate-300">No physical readings logged yet.</p>
+                      <p className="text-[11px] text-slate-500">Field meter recordings will appear here in chronological order.</p>
                     </div>
                   ) : (
                     readings.slice(0, 3).map((r, idx) => (
                       <div key={`dash-read-${r.id || idx}`} className="py-3.5 space-y-1">
                         <div className="flex justify-between items-center">
-                          <span className="text-xs font-bold text-slate-800">{r.readingDate}</span>
-                          <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${
+                          <span className="text-xs font-bold text-slate-200">{r.readingDate}</span>
+                          <span className={`text-[11px] font-semibold ${
                             r.status === 'flagged_abnormal'
-                              ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                              : 'bg-sky-100 text-sky-800 border border-sky-300'
+                              ? 'text-rose-400'
+                              : 'text-emerald-400'
                           }`}>
                             {r.status === 'flagged_abnormal' ? 'High / Flagged' : 'Verified'}
                           </span>
                         </div>
                         <div className="flex justify-between items-baseline text-xs">
-                          <span className="text-slate-500 font-mono text-[11px]">
+                          <span className="text-slate-400 font-mono tabular-nums text-[11px]">
                             {r.previousReading} m³ → {r.currentReading} m³
                           </span>
-                          <span className="font-mono font-black text-blue-700 text-sm">
+                          <span className="font-mono tabular-nums font-black text-sky-400 text-sm">
                             {r.consumption} m³
                           </span>
                         </div>
@@ -2833,114 +3467,143 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         {activeTab === 'bills' && (
           <div className="space-y-6 animate-fade-in" id="consumer-tab-bills">
             
-            {/* Header & Filter Controls - Eye-friendly Dark Slate Theme */}
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-5 text-white">
-              <div>
-                <div className="flex items-center space-x-2.5">
-                  <span className="p-2 bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl">
-                    <ReceiptText className="h-4 w-4" />
-                  </span>
-                  <h3 className="text-base font-black text-white uppercase tracking-wider">
-                    Complete Water Bill History
-                  </h3>
-                </div>
-                <p className="text-xs text-slate-400 mt-1.5 font-medium">
-                  Audit all historical bills, due dates, outstanding dues, and official receipts.
-                </p>
-              </div>
-
-              {/* Status Filter Tabs - Eye-friendly dark container with clear, comfortable pill states */}
-              <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-950/90 rounded-2xl border border-slate-800 shadow-inner">
-                <div className="hidden sm:flex items-center space-x-1.5 pl-2.5 pr-1 text-slate-400 text-[11px] font-black uppercase tracking-wider">
-                  <ListFilter className="h-3.5 w-3.5 text-blue-400" />
-                  <span>Filter:</span>
-                </div>
-
-                <button
-                  onClick={() => setBillFilter('all')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
-                    billFilter === 'all' 
-                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30 border border-blue-500' 
-                      : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/80'
-                  }`}
-                  id="filter-bills-all"
-                >
-                  <span>All</span>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
-                    billFilter === 'all' ? 'bg-black/30 text-white' : 'bg-slate-800 text-slate-300'
-                  }`}>
-                    {readings.length}
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => setBillFilter('unpaid')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
-                    billFilter === 'unpaid' 
-                      ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 border border-rose-500' 
-                      : 'bg-slate-900 text-rose-300 hover:text-rose-200 hover:bg-rose-950/40 border border-rose-900/60'
-                  }`}
-                  id="filter-bills-unpaid"
-                >
-                  <Clock className="h-3.5 w-3.5 shrink-0" />
-                  <span>Unpaid</span>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
-                    billFilter === 'unpaid' ? 'bg-black/30 text-white' : 'bg-rose-950/80 text-rose-300'
-                  }`}>
-                    {unpaidBills.length}
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => setBillFilter('partial')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
-                    billFilter === 'partial' 
-                      ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30 border border-amber-500' 
-                      : 'bg-slate-900 text-amber-300 hover:text-amber-200 hover:bg-amber-950/40 border border-amber-900/60'
-                  }`}
-                  id="filter-bills-partial"
-                >
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                  <span>Partial</span>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
-                    billFilter === 'partial' ? 'bg-black/30 text-white' : 'bg-amber-950/80 text-amber-300'
-                  }`}>
-                    {partialBills.length}
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => setBillFilter('paid')}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
-                    billFilter === 'paid' 
-                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 border border-emerald-500' 
-                      : 'bg-slate-900 text-emerald-300 hover:text-emerald-200 hover:bg-emerald-950/40 border border-emerald-900/60'
-                  }`}
-                  id="filter-bills-paid"
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                  <span>Paid</span>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
-                    billFilter === 'paid' ? 'bg-black/30 text-white' : 'bg-emerald-950/80 text-emerald-300'
-                  }`}>
-                    {paidBills.length}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {/* Complete Bills Table & Responsive Grid - Eye-Friendly Dark Navy Slate Theme */}
+            {/* Complete Bills Search, Filter & Responsive Ledger */}
             {(() => {
-              const filteredBills = readings.filter(r => {
-                if (billFilter === 'unpaid') return r.paymentStatus !== 'paid';
-                if (billFilter === 'paid') return r.paymentStatus === 'paid';
-                if (billFilter === 'partial') return r.paymentStatus === 'partial';
-                return true;
-              });
+              const filteredBills = readings
+                .filter(r => {
+                  if (billFilter === 'unpaid') return r.paymentStatus !== 'paid';
+                  if (billFilter === 'paid') return r.paymentStatus === 'paid';
+                  if (billFilter === 'partial') return r.paymentStatus === 'partial';
+                  return true;
+                })
+                .filter(r =>
+                  smartMatch(consumerBillSearch, [
+                    r.billingPeriod,
+                    r.id,
+                    r.orNumber,
+                    r.paymentReference,
+                    r.transactionId,
+                    r.dueDate,
+                    r.readingDate,
+                    r.meterNumber,
+                    r.paymentStatus || 'unpaid',
+                    `${r.consumption} m3`,
+                    calculateCostOf(r, consumerRecord?.consumerType).toFixed(2)
+                  ])
+                );
               const paginatedBills = filteredBills.slice((consumerBillsPage - 1) * 10, consumerBillsPage * 10);
 
               return (
-                <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl text-slate-100">
+                <>
+                  {/* Header, Smart Search & Filter Controls */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 shadow-lg space-y-5 text-white">
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+                      <div>
+                        <div className="flex items-center space-x-2.5">
+                          <span className="p-2 bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl">
+                            <ReceiptText className="h-4 w-4" />
+                          </span>
+                          <h3 className="text-base font-black text-white uppercase tracking-wider">
+                            Complete Water Bill History
+                          </h3>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1.5 font-medium">
+                          Audit all historical bills, due dates, outstanding dues, and official receipts.
+                        </p>
+                      </div>
+
+                      {/* Status Filter Tabs */}
+                      <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-950/90 rounded-2xl border border-slate-800 shadow-inner">
+                        <div className="hidden sm:flex items-center space-x-1.5 pl-2.5 pr-1 text-slate-400 text-[11px] font-black uppercase tracking-wider">
+                          <ListFilter className="h-3.5 w-3.5 text-blue-400" />
+                          <span>Filter:</span>
+                        </div>
+
+                        <button
+                          onClick={() => setBillFilter('all')}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
+                            billFilter === 'all' 
+                              ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30 border border-blue-500' 
+                              : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/80'
+                          }`}
+                          id="filter-bills-all"
+                        >
+                          <span>All</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                            billFilter === 'all' ? 'bg-black/30 text-white' : 'bg-slate-800 text-slate-300'
+                          }`}>
+                            {readings.length}
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => setBillFilter('unpaid')}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
+                            billFilter === 'unpaid' 
+                              ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 border border-rose-500' 
+                              : 'bg-slate-900 text-rose-300 hover:text-rose-200 hover:bg-rose-950/40 border border-rose-900/60'
+                          }`}
+                          id="filter-bills-unpaid"
+                        >
+                          <Clock className="h-3.5 w-3.5 shrink-0" />
+                          <span>Unpaid</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                            billFilter === 'unpaid' ? 'bg-black/30 text-white' : 'bg-rose-950/80 text-rose-300'
+                          }`}>
+                            {unpaidBills.length}
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => setBillFilter('partial')}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
+                            billFilter === 'partial' 
+                              ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30 border border-amber-500' 
+                              : 'bg-slate-900 text-amber-300 hover:text-amber-200 hover:bg-amber-950/40 border border-amber-900/60'
+                          }`}
+                          id="filter-bills-partial"
+                        >
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                          <span>Partial</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                            billFilter === 'partial' ? 'bg-black/30 text-white' : 'bg-amber-950/80 text-amber-300'
+                          }`}>
+                            {partialBills.length}
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => setBillFilter('paid')}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
+                            billFilter === 'paid' 
+                              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 border border-emerald-500' 
+                              : 'bg-slate-900 text-emerald-300 hover:text-emerald-200 hover:bg-emerald-950/40 border border-emerald-900/60'
+                          }`}
+                          id="filter-bills-paid"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                          <span>Paid</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                            billFilter === 'paid' ? 'bg-black/30 text-white' : 'bg-emerald-950/80 text-emerald-300'
+                          }`}>
+                            {paidBills.length}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <SmartSearchBar
+                      variant="dark"
+                      value={consumerBillSearch}
+                      onChange={setConsumerBillSearch}
+                      resultCount={filteredBills.length}
+                      totalCount={readings.length}
+                      placeholder="Smart search bills by billing period, OR #, reference ID, amount, m³, due date, or status..."
+                      id="consumer-bills-smart-search"
+                    />
+                  </div>
+
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl text-slate-100">
                   {/* Desktop & Tablet Table View */}
                   <div className="hidden md:block overflow-x-auto">
                     <table className="w-full text-xs text-left border-collapse">
@@ -2959,7 +3622,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       </thead>
                       <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium">
                         {paginatedBills.map((r, idx) => {
-                        const totalAmount = calculateCostOf(r.consumption, consumerRecord.consumerType);
+                        const totalAmount = calculateCostOf(r, consumerRecord.consumerType);
                         const isPaid = r.paymentStatus === 'paid';
                         const isPartial = r.paymentStatus === 'partial';
                         const paidAmt = r.paidAmount || 0;
@@ -3140,7 +3803,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               {/* Mobile Card List View for Perfect Fitting on Small Screens */}
               <div className="block md:hidden divide-y divide-slate-800/80">
                 {paginatedBills.map((r, idx) => {
-                    const totalAmount = calculateCostOf(r.consumption, consumerRecord.consumerType);
+                    const totalAmount = calculateCostOf(r, consumerRecord.consumerType);
                     const isPaid = r.paymentStatus === 'paid';
                     const isPartial = r.paymentStatus === 'partial';
                     const paidAmt = r.paidAmount || 0;
@@ -3278,6 +3941,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 itemName="water bills"
               />
             </div>
+            </>
           );
         })()}
 
@@ -3291,80 +3955,97 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           <div className="space-y-6 animate-fade-in" id="consumer-tab-usage">
             
             {/* Header & Usage Summary Statistics */}
-            <div className="bg-white border border-slate-200/80 rounded-3xl p-6 sm:p-8 shadow-xs space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-lg space-y-6 text-slate-100">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
-                  <h3 className="text-base font-black text-slate-900 uppercase tracking-wider">
+                  <h3 className="text-base font-bold text-white">
                     Meter Reading History & Usage Analytics
                   </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
+                  <p className="text-xs text-slate-400 mt-0.5">
                     Complete timeline of physical meter inspections conducted by authorized Tagoloan Water District field readers.
                   </p>
                 </div>
 
                 <button
-                  onClick={() => setIsUsageReportModalOpen(true)}
-                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center space-x-2 transition shadow-md shadow-blue-600/20 cursor-pointer self-start sm:self-auto shrink-0"
+                  type="button"
+                  onClick={handleDirectDownloadUsagePdf}
+                  disabled={isDownloadingUsagePdf}
+                  className={`px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl flex items-center space-x-2 transition shadow-md shadow-blue-600/20 cursor-pointer self-start sm:self-auto shrink-0 ${
+                    isDownloadingUsagePdf ? 'opacity-70 cursor-wait' : ''
+                  }`}
+                  id="usage-direct-download-pdf-btn"
                 >
-                  <FileText className="h-4 w-4" />
-                  <span>Download Usage Report (PDF)</span>
+                  {isDownloadingUsagePdf ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                      <span>Downloading PDF...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="h-4 w-4" />
+                      <span>Download Usage Report (PDF)</span>
+                    </>
+                  )}
                 </button>
               </div>
 
               {/* Household Consumption vs District Average Benchmark Feature Banner */}
-              <div className="bg-gradient-to-r from-blue-950 via-indigo-950 to-slate-900 rounded-2xl p-5 text-white shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-blue-800/40">
+              <div className="bg-gradient-to-r from-blue-950 via-indigo-950 to-slate-950 rounded-2xl p-5 text-white shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-blue-800/50">
                 <div className="flex items-start space-x-3.5">
                   <div className="p-2.5 bg-blue-500/20 text-blue-400 rounded-xl border border-blue-500/30 shrink-0">
                     <Award className="h-5 w-5" />
                   </div>
                   <div className="space-y-0.5">
-                    <div className="flex items-center space-x-2">
-                      <h4 className="text-xs font-black uppercase tracking-wider text-white">
-                        Monthly Usage vs. Average Household Benchmark Report
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="text-xs font-bold text-white">
+                        Monthly Water Usage & Efficiency Report
                       </h4>
-                      <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded">
+                      <span aria-hidden="true" className="text-blue-400/50">·</span>
+                      <span className="text-[11px] font-semibold text-emerald-400">
                         PDF Available
                       </span>
                     </div>
-                    <p className="text-[11px] text-blue-100/90 max-w-2xl leading-relaxed">
-                      Generate an official downloadable PDF report summarizing your monthly consumption against the Tagoloan municipal average household usage. Includes efficiency rating, tariff breakdown, and official document signatures.
+                    <p className="text-xs text-blue-100/85 max-w-2xl leading-relaxed">
+                      Preview and download an official PDF report summarizing your monthly consumption against the Tagoloan municipal average household usage. Includes efficiency rating, tariff breakdown, and official document signatures.
                     </p>
                   </div>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setIsUsageReportModalOpen(true)}
-                  className="px-4 py-2 bg-blue-500 hover:bg-blue-400 text-white font-black text-xs uppercase tracking-wider rounded-xl flex items-center space-x-1.5 transition shadow-sm cursor-pointer shrink-0"
+                  className="px-4 py-2.5 bg-blue-500 hover:bg-blue-400 text-white font-bold text-xs rounded-xl flex items-center space-x-1.5 transition shadow-sm cursor-pointer shrink-0"
+                  id="usage-open-report-modal-btn"
                 >
-                  <Download className="h-3.5 w-3.5" />
+                  <FileText className="h-3.5 w-3.5" />
                   <span>Generate PDF Report</span>
                 </button>
               </div>
 
               {/* Summary Stats Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150">
-                  <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Volume Consumed</span>
-                  <span className="text-2xl font-black font-mono text-blue-700 mt-1 block">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 font-semibold block">Total Volume Consumed</span>
+                  <span className="text-2xl font-black font-mono tabular-nums text-sky-400 mt-1 block">
                     {allHistoryReadings.reduce((acc, r) => acc + (r.consumption || 0), 0)} m³
                   </span>
                 </div>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150">
-                  <span className="text-[10px] text-slate-400 font-bold uppercase block">Average Monthly Usage</span>
-                  <span className="text-2xl font-black font-mono text-slate-800 mt-1 block">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 font-semibold block">Average Monthly Usage</span>
+                  <span className="text-2xl font-black font-mono tabular-nums text-white mt-1 block">
                     {allHistoryReadings.length > 0 
                       ? (allHistoryReadings.reduce((acc, r) => acc + (r.consumption || 0), 0) / allHistoryReadings.length).toFixed(1)
                       : 0} m³
                   </span>
                 </div>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150">
-                  <span className="text-[10px] text-slate-400 font-bold uppercase block">Peak Month Consumption</span>
-                  <span className="text-2xl font-black font-mono text-rose-600 mt-1 block">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 font-semibold block">Peak Month Consumption</span>
+                  <span className="text-2xl font-black font-mono tabular-nums text-rose-400 mt-1 block">
                     {allHistoryReadings.length > 0 ? Math.max(...allHistoryReadings.map(r => r.consumption || 0)) : 0} m³
                   </span>
                 </div>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-150">
-                  <span className="text-[10px] text-slate-400 font-bold uppercase block">Audited Reading Cycles</span>
-                  <span className="text-2xl font-black font-mono text-emerald-700 mt-1 block">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                  <span className="text-[11px] text-slate-400 font-semibold block">Audited Reading Cycles</span>
+                  <span className="text-2xl font-black font-mono tabular-nums text-emerald-400 mt-1 block">
                     {readings.length} Approved ({allHistoryReadings.length} Logged)
                   </span>
                 </div>
@@ -3373,12 +4054,42 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             {/* Comprehensive Reading History Table */}
             {(() => {
-              const paginatedUsageReadings = allHistoryReadings.slice((consumerUsagePage - 1) * 10, consumerUsagePage * 10);
+              const filteredUsageReadings = allHistoryReadings.filter(r =>
+                smartMatch(consumerUsageSearch, [
+                  r.readingDate,
+                  r.billingPeriod,
+                  r.meterNumber,
+                  `${r.consumption} m3`,
+                  r.previousReading,
+                  r.currentReading,
+                  r.status,
+                  r.meterReaderName,
+                  r.notes
+                ])
+              );
+              const paginatedUsageReadings = filteredUsageReadings.slice((consumerUsagePage - 1) * 10, consumerUsagePage * 10);
               return (
-                <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl text-slate-100">
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl text-slate-100">
+                  <div className="p-4 sm:p-5 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-black text-white uppercase tracking-wider">Historical Meter Reading Log</h4>
+                      <p className="text-xs text-slate-400 mt-0.5">Search reading dates, billing periods, meter serials, cubic meter usage, or verification notes.</p>
+                    </div>
+                    <div className="w-full sm:w-96">
+                      <SmartSearchBar
+                        variant="dark"
+                        value={consumerUsageSearch}
+                        onChange={setConsumerUsageSearch}
+                        resultCount={filteredUsageReadings.length}
+                        totalCount={allHistoryReadings.length}
+                        placeholder="Smart search reading date, period, meter #, m³, or status..."
+                        id="consumer-usage-smart-search"
+                      />
+                    </div>
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="min-w-full text-xs text-left">
-                      <thead className="bg-slate-950 text-slate-300 font-black uppercase text-[11px] tracking-wider border-b border-slate-800">
+                      <thead className="bg-slate-950 text-slate-300 font-bold text-xs border-b border-slate-800">
                         <tr>
                           <th className="px-6 py-4">Reading Date</th>
                           <th className="px-6 py-4">Meter Serial / Tag</th>
@@ -3390,47 +4101,57 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
-                        {paginatedUsageReadings.map((r, idx) => (
-                          <tr key={`usage-tbl-${r.id || idx}`} className="hover:bg-slate-800/60 transition">
-                            <td className="px-6 py-4 font-bold text-white">
-                              {r.readingDate}
-                              <span className="text-[10px] text-slate-400 font-mono block mt-0.5">{r.billingPeriod}</span>
-                            </td>
-                            <td className="px-6 py-4 font-mono font-bold text-sky-400">
-                              {r.meterNumber}
-                            </td>
-                            <td className="px-6 py-4 font-mono text-slate-300">
-                              {r.previousReading} m³ → <strong className="text-white">{r.currentReading} m³</strong>
-                            </td>
-                            <td className="px-6 py-4 font-mono font-black text-sky-400 text-sm">
-                              {r.consumption} m³
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${
-                                r.status === 'flagged_abnormal'
-                                  ? 'bg-rose-950/80 text-rose-300 border-rose-800/80'
-                                  : r.status === 'pending'
-                                  ? 'bg-amber-950/80 text-amber-300 border-amber-800/80'
-                                  : 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
-                              }`}>
-                                {r.status === 'flagged_abnormal' ? 'Flagged Abnormal' : r.status === 'pending' ? 'Pending Approval' : 'Verified'}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 text-slate-400 font-mono text-[11px]">
-                              TWD Field Unit
-                            </td>
-                            <td className="px-6 py-4 text-slate-400 italic max-w-xs truncate">
-                              {r.notes || (r.status === 'pending' ? 'Awaiting verification in Approvals module' : 'Normal residential baseline reading')}
+                        {paginatedUsageReadings.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="px-6 py-10 text-center text-slate-400">
+                              {consumerUsageSearch.trim()
+                                ? `No meter readings match "${consumerUsageSearch}".`
+                                : 'No meter reading inspections recorded yet for this account.'}
                             </td>
                           </tr>
-                        ))}
+                        ) : (
+                          paginatedUsageReadings.map((r, idx) => (
+                            <tr key={`usage-tbl-${r.id || idx}`} className="hover:bg-slate-800/60 transition">
+                              <td className="px-6 py-4 font-bold text-white">
+                                {r.readingDate}
+                                <span className="text-[10px] text-slate-400 font-mono block mt-0.5">{r.billingPeriod}</span>
+                              </td>
+                              <td className="px-6 py-4 font-mono tabular-nums font-bold text-sky-400">
+                                {r.meterNumber}
+                              </td>
+                              <td className="px-6 py-4 font-mono tabular-nums text-slate-300">
+                                {r.previousReading} m³ → <strong className="text-white">{r.currentReading} m³</strong>
+                              </td>
+                              <td className="px-6 py-4 font-mono tabular-nums font-black text-sky-400 text-sm">
+                                {r.consumption} m³
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className={`font-semibold text-xs ${
+                                  r.status === 'flagged_abnormal'
+                                    ? 'text-rose-400'
+                                    : r.status === 'pending'
+                                    ? 'text-amber-400'
+                                    : 'text-emerald-400'
+                                }`}>
+                                  {r.status === 'flagged_abnormal' ? 'Flagged Abnormal' : r.status === 'pending' ? 'Pending Approval' : 'Verified'}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 text-slate-400 font-mono text-[11px]">
+                                TWD Field Unit
+                              </td>
+                              <td className="px-6 py-4 text-slate-400 italic max-w-xs truncate">
+                                {r.notes || (r.status === 'pending' ? 'Awaiting verification in Approvals module' : 'Normal residential baseline reading')}
+                              </td>
+                            </tr>
+                          ))
+                        )}
                       </tbody>
                     </table>
                   </div>
 
                   <TablePagination
                     currentPage={consumerUsagePage}
-                    totalItems={allHistoryReadings.length}
+                    totalItems={filteredUsageReadings.length}
                     pageSize={10}
                     onPageChange={setConsumerUsagePage}
                     itemName="reading records"
@@ -3462,272 +4183,340 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         {activeTab === 'notifications' && (
           <div className="space-y-6 animate-fade-in" id="consumer-tab-notifications">
             
-            {/* Header & Filter */}
-            <div className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div>
-                <h3 className="text-base font-black text-slate-900 uppercase tracking-wider">
-                  Notifications & District Advisories
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  All payment confirmations, billing alerts, and administrative district announcements.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-100 rounded-2xl border border-slate-200 shadow-2xs">
-                <button
-                  onClick={() => setNotifFilter('all')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
-                    notifFilter === 'all' 
-                      ? 'bg-slate-900 text-white shadow-sm' 
-                      : 'bg-white text-slate-700 hover:text-slate-900 hover:bg-slate-50 border border-slate-200/80'
-                  }`}
-                  id="filter-notif-all"
-                >
-                  All ({notifications.length + announcements.length})
-                </button>
-                <button
-                  onClick={() => setNotifFilter('account_issue')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
-                    notifFilter === 'account_issue' 
-                      ? 'bg-purple-600 text-white shadow-sm' 
-                      : 'bg-white text-purple-700 hover:text-purple-800 hover:bg-purple-50 border border-purple-200'
-                  }`}
-                  id="filter-notif-account"
-                >
-                  Account & ID ({notifications.filter(n => n.type === 'account_issue' || n.type === 'disconnection' || n.type === 'report').length})
-                </button>
-                <button
-                  onClick={() => setNotifFilter('billing')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
-                    notifFilter === 'billing' 
-                      ? 'bg-blue-600 text-white shadow-sm' 
-                      : 'bg-white text-blue-700 hover:text-blue-800 hover:bg-blue-50 border border-blue-200'
-                  }`}
-                  id="filter-notif-billing"
-                >
-                  Bills & Balances ({notifications.filter(n => n.type === 'billing' || n.type === 'balance').length})
-                </button>
-                <button
-                  onClick={() => setNotifFilter('payment')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
-                    notifFilter === 'payment' 
-                      ? 'bg-emerald-600 text-white shadow-sm' 
-                      : 'bg-white text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 border border-emerald-200'
-                  }`}
-                  id="filter-notif-payment"
-                >
-                  Payments ({notifications.filter(n => n.type === 'payment' || n.type === 'receipt_upload').length})
-                </button>
-                <button
-                  onClick={() => setNotifFilter('announcement')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
-                    notifFilter === 'announcement' 
-                      ? 'bg-indigo-600 text-white shadow-sm' 
-                      : 'bg-white text-indigo-700 hover:text-indigo-800 hover:bg-indigo-50 border border-indigo-200'
-                  }`}
-                  id="filter-notif-advisories"
-                >
-                  Advisories ({announcements.length})
-                </button>
-              </div>
-            </div>
-
-            {/* Notifications Grid */}
-            <div className="grid grid-cols-1 gap-4">
-              
-              {/* Account, Payment & Billing Notifications from mockDb */}
-              {notifications
+            {/* Notifications Search, Filter & Grid */}
+            {(() => {
+              const filteredNotifications = notifications
                 .filter(n => {
                   if (notifFilter === 'all') return true;
                   if (notifFilter === 'billing') return n.type === 'billing' || n.type === 'balance';
                   if (notifFilter === 'payment') return n.type === 'payment' || n.type === 'receipt_upload';
                   if (notifFilter === 'account_issue') return n.type === 'account_issue' || n.type === 'disconnection' || n.type === 'report';
+                  if (notifFilter === 'announcement') return false;
                   return notifFilter === n.type;
                 })
-                .map((n, idx) => {
-                  const isBilling = n.type === 'billing' || n.type === 'balance';
-                  const isPayment = n.type === 'payment' || n.type === 'receipt_upload';
-                  const isAccountIssue = n.type === 'account_issue';
-                  const isDisconnection = n.type === 'disconnection';
-                  const isReport = n.type === 'report';
-                  const isReceiptUpload = n.type === 'receipt_upload';
-                  const isPartialAlert = (n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining');
+                .filter(n =>
+                  smartMatch(consumerNotifSearch, [
+                    n.title,
+                    n.message,
+                    n.type,
+                    n.billingPeriod,
+                    new Date(n.timestamp).toLocaleString()
+                  ])
+                );
+              const showAnnouncements = notifFilter === 'all' || notifFilter === 'announcement';
+              const filteredAnnouncements = showAnnouncements
+                ? announcements.filter(ann =>
+                    smartMatch(consumerNotifSearch, [
+                      ann.title,
+                      ann.content,
+                      ann.category,
+                      ann.date,
+                      ann.postedBy
+                    ])
+                  )
+                : [];
+              const totalVisible = filteredNotifications.length + filteredAnnouncements.length;
 
-                  return (
-                    <div 
-                      key={`notif-tab-${n.id || idx}`} 
-                      className={`bg-white border rounded-2xl p-5 shadow-xs flex flex-col sm:flex-row items-start justify-between gap-4 transition ${
-                        !n.read ? 'border-blue-300 bg-blue-50/20' : 'border-slate-200/80'
-                      }`}
-                    >
-                      <div className="flex items-start space-x-3.5">
-                        <div className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${
-                          isDisconnection
-                            ? 'bg-rose-100 text-rose-800'
-                            : isAccountIssue
-                            ? 'bg-purple-100 text-purple-800'
-                            : isPartialAlert
-                            ? 'bg-amber-100 text-amber-800'
-                            : isReport
-                            ? 'bg-indigo-100 text-indigo-800'
-                            : isBilling
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-emerald-100 text-emerald-800'
-                        }`}>
-                          {isDisconnection ? (
-                            <AlertOctagon className="h-5 w-5" />
-                          ) : isAccountIssue ? (
-                            <UserCheck className="h-5 w-5" />
-                          ) : isPartialAlert ? (
-                            <AlertTriangle className="h-5 w-5" />
-                          ) : isReport ? (
-                            <MessageSquare className="h-5 w-5" />
-                          ) : isBilling ? (
-                            <ReceiptText className="h-5 w-5" />
-                          ) : (
-                            <CheckCircle2 className="h-5 w-5" />
+              return (
+                <>
+                  {/* Header, Smart Search & Filter - Dark Slate Theme */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-lg space-y-4 text-slate-100">
+                    <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <h3 className="text-base font-bold text-white">
+                            Notifications & District Advisories
+                          </h3>
+                          {unreadNotifCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleMarkAllNotifsRead}
+                              className="text-xs font-bold text-blue-400 hover:text-blue-300 underline cursor-pointer"
+                            >
+                              Mark all {unreadNotifCount} as read
+                            </button>
                           )}
                         </div>
-                        <div className="space-y-1">
-                          <div className="flex items-center space-x-2">
-                            <span className={`px-2 py-0.5 font-black text-[9px] uppercase rounded border ${
-                              isDisconnection
-                                ? 'bg-rose-100 text-rose-800 border-rose-300'
-                                : isAccountIssue
-                                ? 'bg-purple-100 text-purple-800 border-purple-300'
-                                : isReport
-                                ? 'bg-indigo-100 text-indigo-800 border-indigo-300'
-                                : isPartialAlert
-                                ? 'bg-amber-100 text-amber-800 border-amber-300'
-                                : isBilling
-                                ? 'bg-blue-100 text-blue-800 border-blue-300'
-                                : isReceiptUpload
-                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                                : 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                            }`}>
-                              {isDisconnection ? 'Disconnection Notice' : isAccountIssue ? 'Account & ID Notice' : isReport ? 'Concern Reply' : isPartialAlert ? 'Remaining Balance' : isBilling ? 'Bill Issued' : isReceiptUpload ? 'Receipt Verified' : 'Payment Success'}
-                            </span>
-                            <span className="text-[10px] font-mono text-slate-400">
-                              {new Date(n.timestamp).toLocaleString()}
-                            </span>
-                          </div>
-                          <h4 className="text-sm font-black text-slate-900">{n.title}</h4>
-                          <p className="text-xs text-slate-600 leading-relaxed max-w-3xl">{n.message}</p>
-                        </div>
+                        <p className="text-xs text-slate-400">
+                          All payment confirmations, account updates, billing alerts, and administrative district announcements.
+                        </p>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2 self-end sm:self-center shrink-0">
-                        {/* View Profile Button for Account/ID issues */}
-                        {isAccountIssue && (
+                      <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-slate-950 rounded-2xl border border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setNotifFilter('all')}
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            notifFilter === 'all' 
+                              ? 'bg-blue-600 text-white shadow-sm' 
+                              : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                          }`}
+                          id="filter-notif-all"
+                        >
+                          All ({notifications.length + announcements.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNotifFilter('account_issue')}
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            notifFilter === 'account_issue' 
+                              ? 'bg-purple-600 text-white shadow-sm' 
+                              : 'text-purple-300 hover:text-white hover:bg-slate-800'
+                          }`}
+                          id="filter-notif-account"
+                        >
+                          Account & ID ({notifications.filter(n => n.type === 'account_issue' || n.type === 'disconnection' || n.type === 'report').length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNotifFilter('billing')}
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            notifFilter === 'billing' 
+                              ? 'bg-sky-600 text-white shadow-sm' 
+                              : 'text-sky-300 hover:text-white hover:bg-slate-800'
+                          }`}
+                          id="filter-notif-billing"
+                        >
+                          Bills & Balances ({notifications.filter(n => n.type === 'billing' || n.type === 'balance').length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNotifFilter('payment')}
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            notifFilter === 'payment' 
+                              ? 'bg-emerald-600 text-white shadow-sm' 
+                              : 'text-emerald-300 hover:text-white hover:bg-slate-800'
+                          }`}
+                          id="filter-notif-payment"
+                        >
+                          Payments ({notifications.filter(n => n.type === 'payment' || n.type === 'receipt_upload').length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNotifFilter('announcement')}
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            notifFilter === 'announcement' 
+                              ? 'bg-indigo-600 text-white shadow-sm' 
+                              : 'text-indigo-300 hover:text-white hover:bg-slate-800'
+                          }`}
+                          id="filter-notif-advisories"
+                        >
+                          Advisories ({announcements.length})
+                        </button>
+                      </div>
+                    </div>
+
+                    <SmartSearchBar
+                      variant="dark"
+                      value={consumerNotifSearch}
+                      onChange={setConsumerNotifSearch}
+                      resultCount={totalVisible}
+                      totalCount={notifications.length + announcements.length}
+                      placeholder="Smart search notifications, advisories, account ID notices, or billing alerts..."
+                      id="consumer-notifications-smart-search"
+                    />
+                  </div>
+
+                  {totalVisible === 0 ? (
+                    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-10 text-center space-y-2 text-slate-400">
+                      <Bell className="h-8 w-8 mx-auto text-slate-600" />
+                      <p className="text-sm font-bold text-slate-200">
+                        {consumerNotifSearch.trim() ? `No notifications match "${consumerNotifSearch}"` : 'No notifications in this category'}
+                      </p>
+                      <p className="text-xs text-slate-500">New account notices, billing statements, and district advisories will appear here.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-4">
+                  {/* Account, Payment & Billing Notifications */}
+                  {filteredNotifications.map((n, idx) => {
+                    const isBilling = n.type === 'billing' || n.type === 'balance';
+                    const isPayment = n.type === 'payment' || n.type === 'receipt_upload';
+                    const isAccountIssue = n.type === 'account_issue';
+                    const isDisconnection = n.type === 'disconnection';
+                    const isReport = n.type === 'report';
+                    const isReceiptUpload = n.type === 'receipt_upload';
+                    const isPartialAlert = (n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining');
+
+                    return (
+                      <div 
+                        key={`notif-tab-${n.id || idx}`} 
+                        className={`border rounded-2xl p-5 shadow-md flex flex-col lg:flex-row items-start justify-between gap-4 transition ${
+                          !n.read
+                            ? 'bg-blue-950/30 border-blue-500/50 text-white'
+                            : 'bg-slate-900 border-slate-800 text-slate-100 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-start space-x-3.5">
+                          <div className={`p-2.5 rounded-xl border shrink-0 mt-0.5 ${
+                            isDisconnection
+                              ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                              : isAccountIssue
+                              ? 'bg-purple-500/15 text-purple-400 border-purple-500/30'
+                              : isPartialAlert
+                              ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                              : isReport
+                              ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
+                              : isBilling
+                              ? 'bg-sky-500/15 text-sky-400 border-sky-500/30'
+                              : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                          }`}>
+                            {isDisconnection ? (
+                              <AlertOctagon className="h-5 w-5" />
+                            ) : isAccountIssue ? (
+                              <UserCheck className="h-5 w-5" />
+                            ) : isPartialAlert ? (
+                              <AlertTriangle className="h-5 w-5" />
+                            ) : isReport ? (
+                              <MessageSquare className="h-5 w-5" />
+                            ) : isBilling ? (
+                              <ReceiptText className="h-5 w-5" />
+                            ) : (
+                              <CheckCircle2 className="h-5 w-5" />
+                            )}
+                          </div>
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              <span className={`font-bold ${
+                                isDisconnection
+                                  ? 'text-rose-400'
+                                  : isAccountIssue
+                                  ? 'text-purple-400'
+                                  : isReport
+                                  ? 'text-indigo-400'
+                                  : isPartialAlert
+                                  ? 'text-amber-400'
+                                  : isBilling
+                                  ? 'text-sky-400'
+                                  : isReceiptUpload
+                                  ? 'text-emerald-400'
+                                  : 'text-emerald-400'
+                              }`}>
+                                {isDisconnection ? 'Disconnection Notice' : isAccountIssue ? 'Account & ID Notice' : isReport ? 'Concern Reply' : isPartialAlert ? 'Remaining Balance' : isBilling ? 'Bill Issued' : isReceiptUpload ? 'Receipt Verified' : 'Payment Success'}
+                              </span>
+                              <span aria-hidden="true" className="text-slate-600">·</span>
+                              <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                                {new Date(n.timestamp).toLocaleString()}
+                              </span>
+                              {!n.read && (
+                                <>
+                                  <span aria-hidden="true" className="text-slate-600">·</span>
+                                  <span className="text-[11px] font-bold text-blue-400">Unread</span>
+                                </>
+                              )}
+                            </div>
+                            <h4 className="text-sm font-bold text-white">{n.title}</h4>
+                            <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">{n.message}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 self-end lg:self-center shrink-0">
+                          {/* View Account Profile Button */}
                           <button
-                            onClick={() => {
-                              setActiveTab('profile');
-                              if (!n.read) {
-                                mockDb.markNotificationRead(n.id);
-                                loadConsumerInfo(true);
-                              }
-                            }}
-                            className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs rounded-xl border border-purple-200 transition flex items-center space-x-1 cursor-pointer"
+                            type="button"
+                            onClick={() => handleNotificationClick(n, 'profile')}
+                            className="px-3.5 py-2 bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 font-bold text-xs rounded-xl border border-purple-700/60 transition flex items-center space-x-1.5 cursor-pointer"
+                            title="Navigate to My Account Profile"
                           >
-                            <UserCheck className="h-3.5 w-3.5" />
+                            <UserCheck className="h-3.5 w-3.5 text-purple-400" />
                             <span>View Account Profile</span>
                           </button>
-                        )}
 
-                        {/* View in Reports Button */}
-                        {isReport && (
+                          {/* View on Dashboard Button */}
                           <button
-                            onClick={() => {
-                              setActiveTab('reports');
-                              if (n.reportId) setSelectedReportId(n.reportId);
-                              if (!n.read) {
+                            type="button"
+                            onClick={() => handleNotificationClick(n, 'dashboard')}
+                            className="px-3.5 py-2 bg-blue-950/60 hover:bg-blue-900/80 text-blue-200 font-bold text-xs rounded-xl border border-blue-700/60 transition flex items-center space-x-1.5 cursor-pointer"
+                            title="Navigate to Consumer Dashboard"
+                          >
+                            <LayoutDashboard className="h-3.5 w-3.5 text-blue-400" />
+                            <span>View on Dashboard</span>
+                          </button>
+
+                          {/* View in Reports Button */}
+                          {isReport && (
+                            <button
+                              type="button"
+                              onClick={() => handleNotificationClick(n, 'reports')}
+                              className="px-3.5 py-2 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-200 font-bold text-xs rounded-xl border border-indigo-700/60 transition flex items-center space-x-1.5 cursor-pointer"
+                            >
+                              <MessageSquare className="h-3.5 w-3.5 text-indigo-400" />
+                              <span>View Concern Ticket</span>
+                            </button>
+                          )}
+
+                          {/* View in Bills Button */}
+                          {(isBilling || isPayment) && (
+                            <button
+                              type="button"
+                              onClick={() => handleNotificationClick(n, 'bills')}
+                              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl border border-slate-700 transition flex items-center space-x-1.5 cursor-pointer"
+                              title="View Statement in My Bills"
+                            >
+                              <ReceiptText className="h-3.5 w-3.5 text-sky-400" />
+                              <span>View in Bills</span>
+                            </button>
+                          )}
+
+                          {/* Direct Pay Action if Unpaid */}
+                          {isBilling && unpaidBills.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const targetBill = readings.find(r => r.id === n.readingId || r.billingPeriod === n.billingPeriod) || unpaidBills[0];
+                                setActiveTab('bills');
+                                handleStartPayment(targetBill, 'full');
+                              }}
+                              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
+                            >
+                              <CreditCard className="h-3.5 w-3.5" />
+                              <span>Settle Now</span>
+                            </button>
+                          )}
+
+                          {!n.read && (
+                            <button
+                              type="button"
+                              onClick={() => {
                                 mockDb.markNotificationRead(n.id);
-                                loadConsumerInfo(true);
-                              }
-                            }}
-                            className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 transition flex items-center space-x-1 cursor-pointer"
-                          >
-                            <MessageSquare className="h-3.5 w-3.5" />
-                            <span>View Concern Ticket</span>
-                          </button>
-                        )}
+                                setNotifications(prev => prev.map(item => item.id === n.id ? { ...item, read: true } : item));
+                              }}
+                              className="text-xs font-bold text-slate-400 hover:text-white hover:underline shrink-0 cursor-pointer px-2 py-1"
+                            >
+                              Mark Read
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
 
-                        {/* View in Bills Button */}
-                        {(isBilling || isPayment) && (
-                          <button
-                            onClick={() => handleNotificationClick(n, 'bills')}
-                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition flex items-center space-x-1 cursor-pointer"
-                            title="View Statement in My Bills"
-                          >
-                            <ReceiptText className="h-3.5 w-3.5" />
-                            <span>View in Bills</span>
-                          </button>
-                        )}
-
-                        {/* View on Dashboard Button */}
-                        <button
-                          onClick={() => handleNotificationClick(n, 'dashboard')}
-                          className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 transition flex items-center space-x-1 cursor-pointer"
-                          title="Display Reading & Consumption Spotlight on Dashboard"
-                        >
-                          <LayoutDashboard className="h-3.5 w-3.5" />
-                          <span>View on Dashboard</span>
-                        </button>
-
-                        {/* Direct Pay Action if Unpaid */}
-                        {isBilling && unpaidBills.length > 0 && (
-                          <button
-                            onClick={() => {
-                              const targetBill = readings.find(r => r.id === n.readingId || r.billingPeriod === n.billingPeriod) || unpaidBills[0];
-                              setActiveTab('bills');
-                              handleStartPayment(targetBill, 'full');
-                            }}
-                            className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center space-x-1 cursor-pointer"
-                          >
-                            <CreditCard className="h-3.5 w-3.5" />
-                            <span>Settle Now</span>
-                          </button>
-                        )}
-
-                        {!n.read && (
-                          <button
-                            onClick={() => {
-                              mockDb.markNotificationRead(n.id);
-                              loadConsumerInfo(true);
-                            }}
-                            className="text-[10px] font-bold text-slate-500 hover:text-slate-800 hover:underline uppercase shrink-0 cursor-pointer px-1 py-1"
-                          >
-                            Mark Read
-                          </button>
-                        )}
+                  {/* District Announcements */}
+                  {filteredAnnouncements.map((ann, idx) => (
+                    <div key={`ann-${ann.id || idx}`} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-md flex items-start justify-between gap-4 text-slate-100">
+                      <div className="flex items-start space-x-3.5">
+                        <div className="p-2.5 bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 rounded-xl shrink-0 mt-0.5">
+                          <Bell className="h-5 w-5" />
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="font-bold text-indigo-400 capitalize">
+                              {ann.category || (ann as any).type || 'Advisory'}
+                            </span>
+                            <span aria-hidden="true" className="text-slate-600">·</span>
+                            <span className="text-[11px] font-mono tabular-nums text-slate-400">{ann.date}</span>
+                          </div>
+                          <h4 className="text-sm font-bold text-white">{ann.title}</h4>
+                          <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">{ann.content}</p>
+                          <p className="text-[11px] font-medium text-slate-500 pt-1">Issued by: {ann.postedBy || (ann as any).author || 'TWD Administration'}</p>
+                        </div>
                       </div>
                     </div>
-                  );
-                })}
-
-              {/* District Announcements */}
-              {(notifFilter === 'all' || notifFilter === 'announcement') && announcements.map((ann, idx) => (
-                <div key={`ann-${ann.id || idx}`} className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs flex items-start justify-between gap-4">
-                  <div className="flex items-start space-x-3.5">
-                    <div className="p-2.5 bg-blue-50 text-blue-700 rounded-xl shrink-0 mt-0.5">
-                      <Bell className="h-5 w-5" />
+                  ))}
                     </div>
-                    <div className="space-y-1">
-                      <div className="flex items-center space-x-2">
-                        <span className="px-2 py-0.2 bg-blue-100 text-blue-800 font-black text-[9px] uppercase rounded">
-                          {ann.category}
-                        </span>
-                        <span className="text-[10px] font-mono text-slate-400">{ann.date}</span>
-                      </div>
-                      <h4 className="text-sm font-black text-slate-900">{ann.title}</h4>
-                      <p className="text-xs text-slate-600 leading-relaxed max-w-3xl">{ann.content}</p>
-                      <p className="text-[10px] font-bold text-slate-400 pt-1">Issued by: {ann.postedBy}</p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-            </div>
+                  )}
+                </>
+              );
+            })()}
 
           </div>
         )}
@@ -3741,20 +4530,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
               
               {/* Left Column: Edit Personal Information & Contact Details (7 Cols) */}
-              <div className="lg:col-span-7 bg-white border border-slate-200/80 rounded-3xl p-6 sm:p-8 shadow-xs space-y-6">
+              <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-lg space-y-6 text-slate-100">
                 <div>
-                  <h3 className="text-base font-black text-slate-900 uppercase tracking-wider">
+                  <h3 className="text-base font-bold text-white">
                     Edit Personal Information & Contact Details
                   </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Keep your registered mobile contact, email, and service address updated.
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Keep your registered 11-digit mobile contact, email, and service address updated. Duplicate mobile numbers registered to other accounts are strictly prevented.
                   </p>
                 </div>
 
                 <form onSubmit={handleUpdateProfile} className="space-y-4">
                   
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                       Full Legal Name
                     </label>
                     <input
@@ -3762,25 +4551,50 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       required
                       value={editName}
                       onChange={(e) => setEditName(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 focus:border-blue-600 rounded-xl py-2.5 px-3.5 text-xs text-slate-900 font-bold"
+                      className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:outline-none rounded-xl py-2.5 px-3.5 text-xs text-white font-semibold"
                     />
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
-                        Contact Mobile Number
+                      <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                        Contact Mobile Number (11 Digits)
                       </label>
                       <input
                         type="tel"
                         required
+                        maxLength={13}
+                        placeholder="09171234567"
                         value={editContact}
-                        onChange={(e) => setEditContact(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-blue-600 rounded-xl py-2.5 px-3.5 text-xs text-slate-900 font-mono font-bold"
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setEditContact(val);
+                          if (val.trim()) {
+                            const check = validatePhoneInput(val);
+                            setPhoneValidationError(check.error);
+                          } else {
+                            setPhoneValidationError('Mobile phone number is required.');
+                          }
+                        }}
+                        className={`w-full bg-slate-950 border rounded-xl py-2.5 px-3.5 text-xs text-white font-mono tabular-nums font-bold focus:outline-none ${
+                          phoneValidationError
+                            ? 'border-rose-500 focus:border-rose-400 ring-1 ring-rose-500/40'
+                            : 'border-slate-700 focus:border-blue-500'
+                        }`}
                       />
+                      {phoneValidationError ? (
+                        <p className="mt-1.5 text-[11px] text-rose-400 font-semibold flex items-start gap-1.5">
+                          <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-rose-400" />
+                          <span>{phoneValidationError}</span>
+                        </p>
+                      ) : (
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Must be a unique PH mobile number (e.g. 0917XXXXXXX).
+                        </p>
+                      )}
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+                      <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                         Registered Email
                       </label>
                       <input
@@ -3788,14 +4602,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         required
                         value={editEmail}
                         onChange={(e) => setEditEmail(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-blue-600 rounded-xl py-2.5 px-3.5 text-xs text-slate-900 font-mono"
+                        className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:outline-none rounded-xl py-2.5 px-3.5 text-xs text-white font-mono"
                       />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+                      <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                         Sitio / Zone / House #
                       </label>
                       <input
@@ -3803,11 +4617,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         value={editSitioZone}
                         onChange={(e) => setEditSitioZone(e.target.value)}
                         placeholder="e.g. Zone 2, Sitio Sto. Nino"
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-blue-600 rounded-xl py-2.5 px-3.5 text-xs text-slate-900"
+                        className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:outline-none rounded-xl py-2.5 px-3.5 text-xs text-white placeholder:text-slate-600"
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+                      <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                         Full Service Address
                       </label>
                       <input
@@ -3815,39 +4629,39 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         required
                         value={editAddress}
                         onChange={(e) => setEditAddress(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-blue-600 rounded-xl py-2.5 px-3.5 text-xs text-slate-900"
+                        className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:outline-none rounded-xl py-2.5 px-3.5 text-xs text-white"
                       />
                     </div>
                   </div>
 
                   {consumerRecord.consumerType === 'Commercial' ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-100">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-800">
                       <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+                        <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                           Business Name
                         </label>
                         <input
                           type="text"
                           value={editBusinessName}
                           onChange={(e) => setEditBusinessName(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 focus:border-blue-600 rounded-xl py-2.5 px-3.5 text-xs text-slate-900"
+                          className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:outline-none rounded-xl py-2.5 px-3.5 text-xs text-white"
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+                        <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                           Business Type
                         </label>
                         <input
                           type="text"
                           value={editBusinessType}
                           onChange={(e) => setEditBusinessType(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 focus:border-blue-600 rounded-xl py-2.5 px-3.5 text-xs text-slate-900"
+                          className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:outline-none rounded-xl py-2.5 px-3.5 text-xs text-white"
                         />
                       </div>
                     </div>
                   ) : (
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+                      <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                         Household Information / Members
                       </label>
                       <input
@@ -3855,7 +4669,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         value={editHouseholdInfo}
                         onChange={(e) => setEditHouseholdInfo(e.target.value)}
                         placeholder="e.g. 4 family members"
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-blue-600 rounded-xl py-2.5 px-3.5 text-xs text-slate-900"
+                        className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:outline-none rounded-xl py-2.5 px-3.5 text-xs text-white placeholder:text-slate-600"
                       />
                     </div>
                   )}
@@ -3863,9 +4677,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   <div className="pt-2">
                     <button
                       type="submit"
-                      className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-xs transition cursor-pointer"
+                      disabled={isSavingProfile || Boolean(phoneValidationError)}
+                      className={`px-6 py-2.5 font-bold text-xs rounded-xl shadow-md transition flex items-center space-x-2 ${
+                        isSavingProfile || Boolean(phoneValidationError)
+                          ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                          : 'bg-blue-600 hover:bg-blue-500 text-white cursor-pointer'
+                      }`}
                     >
-                      Save Profile Changes
+                      {isSavingProfile ? (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                          <span>Saving Profile...</span>
+                        </>
+                      ) : (
+                        <span>Save Profile Changes</span>
+                      )}
                     </button>
                   </div>
 
@@ -3876,31 +4702,31 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               <div className="lg:col-span-5 space-y-6">
                 
                 {/* Official Parameters Read-Only Card */}
-                <div className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-xs space-y-4">
-                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-400">
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-lg space-y-4 text-slate-100">
+                  <h4 className="text-xs font-bold text-slate-300">
                     Official Connection Parameters
                   </h4>
 
-                  <div className="divide-y divide-slate-100 text-xs">
+                  <div className="divide-y divide-slate-800 text-xs">
                     <div className="py-2.5 flex justify-between">
-                      <span className="text-slate-500">Official Account Number:</span>
-                      <span className="font-mono font-bold text-slate-900">{consumerRecord.accountNumber}</span>
+                      <span className="text-slate-400">Official Account Number:</span>
+                      <span className="font-mono tabular-nums font-bold text-amber-300">{consumerRecord.accountNumber || 'Pending Issuance'}</span>
                     </div>
                     <div className="py-2.5 flex justify-between">
-                      <span className="text-slate-500">Water Meter Tag Number:</span>
-                      <span className="font-mono font-bold text-blue-700">{consumerRecord.meterNumber || 'MT-7711'}</span>
+                      <span className="text-slate-400">Water Meter Tag Number:</span>
+                      <span className="font-mono tabular-nums font-bold text-sky-400">{consumerRecord.meterNumber || 'Pending Issuance'}</span>
                     </div>
                     <div className="py-2.5 flex justify-between">
-                      <span className="text-slate-500">Assigned Barangay:</span>
-                      <span className="font-bold text-slate-800">{consumerRecord.barangay || 'Poblacion East'}</span>
+                      <span className="text-slate-400">Assigned Barangay:</span>
+                      <span className="font-bold text-white">{consumerRecord.barangay || 'Poblacion East'}</span>
                     </div>
                     <div className="py-2.5 flex justify-between">
-                      <span className="text-slate-500">Classification:</span>
-                      <span className="font-bold text-slate-800">{consumerRecord.consumerType || 'Residential'}</span>
+                      <span className="text-slate-400">Classification:</span>
+                      <span className="font-bold text-white">{consumerRecord.consumerType || 'Residential'}</span>
                     </div>
                     <div className="py-2.5 flex justify-between">
-                      <span className="text-slate-500">Connection Status:</span>
-                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-black text-[9px] uppercase rounded">
+                      <span className="text-slate-400">Connection Status:</span>
+                      <span className="font-bold text-emerald-400 capitalize">
                         {consumerRecord.status}
                       </span>
                     </div>
@@ -3908,55 +4734,116 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 </div>
 
                 {/* Change Password Form */}
-                <form onSubmit={handleUpdatePassword} className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-xs space-y-4">
-                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-900 border-b border-slate-100 pb-2">
-                    Change Account Password
-                  </h4>
+                <form onSubmit={handleUpdatePassword} className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-lg space-y-4 text-slate-100">
+                  <div className="border-b border-slate-800 pb-2.5">
+                    <h4 className="text-sm font-bold text-white">
+                      Change Account Password
+                    </h4>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      New password must be at least 6 characters and different from your current password.
+                    </p>
+                  </div>
+
+                  {passwordError && (
+                    <div className="p-3 bg-rose-950/80 border border-rose-500/40 rounded-xl text-xs text-rose-200 flex items-start gap-2">
+                      <AlertCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+                      <span className="font-medium">{passwordError}</span>
+                    </div>
+                  )}
 
                   <div className="space-y-3">
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
                         Current Password
                       </label>
                       <input
                         type="password"
                         required
                         value={passwordOld}
-                        onChange={(e) => setPasswordOld(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-blue-600 rounded-xl py-2 px-3 text-xs"
+                        onChange={(e) => {
+                          setPasswordOld(e.target.value);
+                          setPasswordError(null);
+                        }}
+                        placeholder="Enter current password"
+                        className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:outline-none rounded-xl py-2.5 px-3 text-xs text-white placeholder:text-slate-600"
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
                         New Password
                       </label>
                       <input
                         type="password"
                         required
+                        minLength={6}
                         value={passwordNew}
-                        onChange={(e) => setPasswordNew(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-blue-600 rounded-xl py-2 px-3 text-xs"
+                        onChange={(e) => {
+                          setPasswordNew(e.target.value);
+                          setPasswordError(null);
+                        }}
+                        placeholder="At least 6 characters (must be new)"
+                        className={`w-full bg-slate-950 border rounded-xl py-2.5 px-3 text-xs text-white placeholder:text-slate-600 focus:outline-none ${
+                          passwordNew && passwordOld && passwordNew === passwordOld
+                            ? 'border-rose-500 focus:border-rose-400'
+                            : 'border-slate-700 focus:border-blue-500'
+                        }`}
                       />
+                      {passwordNew && passwordOld && passwordNew === passwordOld && (
+                        <p className="mt-1 text-[11px] text-rose-400 font-semibold">
+                          New password cannot be the same as your current password.
+                        </p>
+                      )}
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
                         Confirm New Password
                       </label>
                       <input
                         type="password"
                         required
                         value={passwordConfirm}
-                        onChange={(e) => setPasswordConfirm(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-blue-600 rounded-xl py-2 px-3 text-xs"
+                        onChange={(e) => {
+                          setPasswordConfirm(e.target.value);
+                          setPasswordError(null);
+                        }}
+                        placeholder="Re-enter new password"
+                        className={`w-full bg-slate-950 border rounded-xl py-2.5 px-3 text-xs text-white placeholder:text-slate-600 focus:outline-none ${
+                          passwordConfirm && passwordNew && passwordConfirm !== passwordNew
+                            ? 'border-rose-500 focus:border-rose-400'
+                            : 'border-slate-700 focus:border-blue-500'
+                        }`}
                       />
+                      {passwordConfirm && passwordNew && passwordConfirm !== passwordNew && (
+                        <p className="mt-1 text-[11px] text-rose-400 font-semibold">
+                          Confirmation does not match new password.
+                        </p>
+                      )}
                     </div>
                   </div>
 
                   <button
                     type="submit"
-                    className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition cursor-pointer"
+                    disabled={
+                      isUpdatingPassword ||
+                      Boolean(passwordNew && passwordOld && passwordNew === passwordOld) ||
+                      Boolean(passwordConfirm && passwordNew && passwordConfirm !== passwordNew)
+                    }
+                    className={`w-full py-2.5 font-bold text-xs rounded-xl transition flex items-center justify-center space-x-2 ${
+                      isUpdatingPassword ||
+                      Boolean(passwordNew && passwordOld && passwordNew === passwordOld) ||
+                      Boolean(passwordConfirm && passwordNew && passwordConfirm !== passwordNew)
+                        ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                        : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md cursor-pointer'
+                    }`}
                   >
-                    Update Password
+                    {isUpdatingPassword ? (
+                      <>
+                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        <span>Saving New Password...</span>
+                      </>
+                    ) : (
+                      <span>Update & Save Password</span>
+                    )}
                   </button>
                 </form>
 
@@ -3974,64 +4861,64 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       {/* DIGITAL RECEIPT MODAL */}
       {receiptDetailModal && (
         <div 
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in"
+          className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in print:bg-white print:p-0"
           onClick={() => setReceiptDetailModal(null)}
         >
           <div 
-            className="bg-white border border-slate-100 rounded-3xl w-full max-w-sm p-6 sm:p-7 space-y-5 relative overflow-hidden shadow-2xl animate-scale-up"
+            className="bg-slate-900 border border-slate-800 text-slate-100 print:bg-white print:text-slate-900 print:border-slate-200 rounded-3xl w-full max-w-sm p-6 sm:p-7 space-y-5 relative overflow-hidden shadow-2xl animate-scale-up"
             onClick={(e) => e.stopPropagation()}
           >
             <button 
               onClick={() => setReceiptDetailModal(null)}
-              className="absolute top-4 right-4 p-1.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
+              className="absolute top-4 right-4 p-1.5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer print:hidden"
               title="Close"
             >
               <X className="h-4 w-4" />
             </button>
 
             <div className="text-center space-y-1.5 pt-2">
-              <div className="h-12 w-12 bg-emerald-50 text-emerald-600 rounded-2xl mx-auto flex items-center justify-center shadow-xs">
+              <div className="h-12 w-12 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-2xl mx-auto flex items-center justify-center">
                 <ShieldCheck className="h-7 w-7" />
               </div>
-              <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">
+              <p className="text-[11px] font-semibold text-slate-400 print:text-slate-500">
                 Tagoloan Water District
               </p>
-              <h3 className="text-base font-black text-slate-900 leading-tight">
+              <h3 className="text-base font-black text-white print:text-slate-900 leading-tight">
                 Official Electronic Payment Receipt
               </h3>
             </div>
 
-            <div className="border-t border-b border-slate-200 border-dashed py-4 space-y-2.5 text-xs text-slate-700 font-mono">
+            <div className="border-t border-b border-slate-800 print:border-slate-200 border-dashed py-4 space-y-2.5 text-xs text-slate-300 print:text-slate-700 font-mono tabular-nums">
               <div className="flex justify-between">
                 <span className="text-slate-400 font-sans">Consumer Name:</span>
-                <span className="font-bold text-slate-900 font-sans">{consumerRecord.name}</span>
+                <span className="font-bold text-white print:text-slate-900 font-sans">{consumerRecord.name}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400 font-sans">Billing Cycle:</span>
-                <span className="font-bold text-slate-900">{receiptDetailModal.billingPeriod}</span>
+                <span className="font-bold text-white print:text-slate-900">{receiptDetailModal.billingPeriod}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400 font-sans">Account Number:</span>
-                <span className="font-bold text-slate-900">{receiptDetailModal.accountNumber}</span>
+                <span className="font-bold text-amber-300 print:text-slate-900">{receiptDetailModal.accountNumber}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400 font-sans">Water Meter Tag:</span>
-                <span className="font-bold text-blue-700">{receiptDetailModal.meterNumber}</span>
+                <span className="font-bold text-sky-400 print:text-blue-700">{receiptDetailModal.meterNumber}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400 font-sans">Method:</span>
-                <span className="font-bold text-slate-800 uppercase">{receiptDetailModal.paymentMethod || 'Online Gateway'}</span>
+                <span className="font-bold text-slate-200 print:text-slate-800 uppercase">{receiptDetailModal.paymentMethod || 'Online Gateway'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400 font-sans">Official Receipt #:</span>
-                <span className="font-bold text-slate-900 uppercase">{receiptDetailModal.orNumber || receiptDetailModal.paymentReference || 'N/A'}</span>
+                <span className="font-bold text-white print:text-slate-900 uppercase">{receiptDetailModal.orNumber || receiptDetailModal.paymentReference || 'N/A'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400 font-sans">Date Settled:</span>
-                <span className="font-bold text-slate-800">{receiptDetailModal.paymentDate || 'N/A'}</span>
+                <span className="font-bold text-slate-200 print:text-slate-800">{receiptDetailModal.paymentDate || 'N/A'}</span>
               </div>
               {(() => {
-                const totalCost = calculateCostOf(receiptDetailModal.consumption, consumerRecord.consumerType);
+                const totalCost = calculateCostOf(receiptDetailModal, consumerRecord.consumerType);
                 const isPart = receiptDetailModal.paymentStatus === 'partial';
                 const paid = receiptDetailModal.paidAmount || totalCost;
                 const rem = Math.max(0, totalCost - paid);
@@ -4040,26 +4927,26 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   <>
                     <div className="flex justify-between">
                       <span className="text-slate-400 font-sans">Payment Status:</span>
-                      <span className={`font-bold font-sans ${isPart ? 'text-amber-700' : 'text-emerald-700'}`}>
+                      <span className={`font-bold font-sans ${isPart ? 'text-amber-400 print:text-amber-700' : 'text-emerald-400 print:text-emerald-700'}`}>
                         {isPart ? 'Partial Payment Credited' : 'Paid in Full (Settled)'}
                       </span>
                     </div>
                     {isPart && (
                       <div className="flex justify-between">
                         <span className="text-slate-400 font-sans">Gross Statement Total:</span>
-                        <span className="font-bold text-slate-800">₱{totalCost.toFixed(2)}</span>
+                        <span className="font-bold text-slate-200 print:text-slate-800">₱{totalCost.toFixed(2)}</span>
                       </div>
                     )}
-                    <div className="pt-2.5 border-t border-slate-200 border-dashed flex justify-between items-baseline">
-                      <span className="text-sm font-bold text-slate-900 font-sans">{isPart ? 'Amount Credited:' : 'Total Amount Paid:'}</span>
-                      <span className="text-xl font-black text-emerald-700 font-sans">
+                    <div className="pt-2.5 border-t border-slate-800 print:border-slate-200 border-dashed flex justify-between items-baseline">
+                      <span className="text-sm font-bold text-white print:text-slate-900 font-sans">{isPart ? 'Amount Credited:' : 'Total Amount Paid:'}</span>
+                      <span className="text-xl font-black text-emerald-400 print:text-emerald-700 font-sans tabular-nums">
                         ₱{paid.toFixed(2)}
                       </span>
                     </div>
                     {isPart && (
                       <div className="flex justify-between items-baseline pt-1">
-                        <span className="text-xs font-bold text-rose-700 font-sans">Remaining Balance Due:</span>
-                        <span className="text-sm font-black text-rose-700 font-sans">
+                        <span className="text-xs font-bold text-rose-400 print:text-rose-700 font-sans">Remaining Balance Due:</span>
+                        <span className="text-sm font-black text-rose-400 print:text-rose-700 font-sans tabular-nums">
                           ₱{rem.toFixed(2)}
                         </span>
                       </div>
@@ -4070,21 +4957,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             </div>
 
             <div className="text-center space-y-0.5">
-              <p className="text-sm font-mono tracking-[4px] text-slate-300">|||||| |||| ||||||</p>
-              <p className="text-[9px] text-slate-400 font-mono font-semibold">TWD-OR-{receiptDetailModal.id}</p>
+              <p className="text-sm font-mono tracking-[4px] text-slate-600 print:text-slate-300">|||||| |||| ||||||</p>
+              <p className="text-[10px] text-slate-400 font-mono font-semibold">TWD-OR-{receiptDetailModal.id}</p>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 print:hidden">
               <button 
                 onClick={() => window.print()}
-                className="flex-1 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5 cursor-pointer"
               >
                 <Printer className="h-4 w-4" />
                 <span>Print</span>
               </button>
               <button 
                 onClick={() => setReceiptDetailModal(null)}
-                className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition cursor-pointer"
               >
                 Close
               </button>

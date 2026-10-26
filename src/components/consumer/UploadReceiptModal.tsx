@@ -35,7 +35,7 @@ interface UploadReceiptModalProps {
   consumerRecord: Consumer;
   onSuccess?: (updatedReading: MeterReading, orNumber: string, isPartial: boolean) => void;
   onReceiptValidated?: (receipt: { billingPeriod: string; amountPaid: number; remainingBalance: number; isPartial: boolean; orNumber: string; paymentDate: string }) => void;
-  calculateCostOf: (usage: number, classification?: 'Residential' | 'Commercial') => number;
+  calculateCostOf: (usageOrReading: number | MeterReading, classification?: 'Residential' | 'Commercial') => number;
 }
 
 export interface SmartScanResult {
@@ -80,7 +80,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
 
   // Calculation
   const grossCost = activeReading 
-    ? calculateCostOf(activeReading.consumption, consumerRecord.consumerType)
+    ? calculateCostOf(activeReading, consumerRecord.consumerType)
     : 0;
   const alreadyPaid = activeReading?.paidAmount || 0;
   const currentNetDue = Math.max(0, grossCost - alreadyPaid);
@@ -112,7 +112,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
   useEffect(() => {
     if (activeReading) {
       setSelectedReadingId(activeReading.id);
-      const gross = calculateCostOf(activeReading.consumption, consumerRecord.consumerType);
+      const gross = calculateCostOf(activeReading, consumerRecord.consumerType);
       const paid = activeReading.paidAmount || 0;
       const net = Math.max(0, gross - paid);
       setSettlementType('full');
@@ -451,7 +451,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
         r => r.accountNumber === consumerRecord.accountNumber && r.paymentStatus !== 'paid'
       );
       const newTotalArrears = conUnpaid.reduce((acc, r) => {
-        const gross = calculateCostOf(r.consumption, consumerRecord.consumerType);
+        const gross = calculateCostOf(r, consumerRecord.consumerType);
         const paid = r.paidAmount || 0;
         return acc + Math.max(0, gross - paid);
       }, 0);
@@ -520,25 +520,26 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
 
   return (
     <div 
-      className="fixed inset-0 bg-slate-900/75 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in overflow-y-auto"
+      className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in overflow-y-auto"
       onClick={onClose}
       id="upload-receipt-modal-backdrop"
     >
       <div 
-        className="bg-white border border-slate-200 rounded-3xl w-full max-w-2xl shadow-2xl relative overflow-hidden my-8 animate-scale-up"
+        className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl w-full max-w-2xl shadow-2xl relative overflow-hidden my-8 animate-scale-up"
         onClick={(e) => e.stopPropagation()}
         id="upload-receipt-modal"
       >
         {/* Header */}
-        <div className="bg-gradient-to-r from-blue-950 via-slate-900 to-indigo-950 text-white p-5 sm:p-6 flex items-start justify-between relative">
+        <div className="bg-gradient-to-r from-blue-950 via-slate-900 to-indigo-950 text-white p-5 sm:p-6 flex items-start justify-between relative border-b border-slate-800">
           <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="px-2.5 py-0.5 bg-blue-600 text-white font-black text-[10px] uppercase tracking-wider rounded-lg flex items-center space-x-1 shadow-xs">
-                <ScanLine className="h-3 w-3" />
+            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
+              <span className="text-blue-400 flex items-center space-x-1">
+                <ScanLine className="h-3.5 w-3.5" />
                 <span>Smart Photo Identification</span>
               </span>
-              <span className="px-2.5 py-0.5 bg-emerald-600 text-white font-black text-[10px] uppercase tracking-wider rounded-lg flex items-center space-x-1 shadow-xs">
-                <ShieldCheck className="h-3 w-3" />
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className="text-emerald-400 flex items-center space-x-1">
+                <ShieldCheck className="h-3.5 w-3.5" />
                 <span>Instant Due Alert Clearance</span>
               </span>
             </div>
@@ -564,23 +565,23 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
           
           {/* Validation Error Banner */}
           {validationError && (
-            <div className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl flex items-start space-x-3 text-xs animate-shake">
-              <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
+            <div className="p-4 bg-rose-950/80 border border-rose-500/40 text-rose-200 rounded-2xl flex items-start space-x-3 text-xs animate-shake">
+              <AlertTriangle className="h-5 w-5 text-rose-400 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <strong className="font-black block uppercase text-[11px]">Action Required:</strong>
+                <strong className="font-bold block text-rose-300">Action Required:</strong>
                 <p className="leading-relaxed">{validationError}</p>
               </div>
             </div>
           )}
 
           {/* Statement Selection & Outstanding Status */}
-          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4.5 space-y-3">
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4.5 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <label className="text-xs font-black text-slate-700 uppercase tracking-wider">
+              <label className="text-xs font-bold text-slate-200">
                 Select Billing Statement Paid:
               </label>
-              <span className="text-[11px] font-mono text-slate-500">
-                Account: <strong>{consumerRecord.accountNumber}</strong>
+              <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                Account: <strong className="text-amber-300">{consumerRecord.accountNumber}</strong>
               </span>
             </div>
 
@@ -590,17 +591,17 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                 const target = allReadings.find(r => r.id === e.target.value);
                 if (target) {
                   setSelectedReadingId(target.id);
-                  const gross = calculateCostOf(target.consumption, consumerRecord.consumerType);
+                  const gross = calculateCostOf(target, consumerRecord.consumerType);
                   const paid = target.paidAmount || 0;
                   const net = Math.max(0, gross - paid);
                   setPaymentAmount(net.toFixed(2));
                   setSmartScanResult(null);
                 }
               }}
-              className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500"
+              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-bold text-white focus:border-blue-500 focus:outline-none"
             >
               {allReadings.map(r => {
-                const gross = calculateCostOf(r.consumption, consumerRecord.consumerType);
+                const gross = calculateCostOf(r, consumerRecord.consumerType);
                 const paid = r.paidAmount || 0;
                 const net = Math.max(0, gross - paid);
                 return (
@@ -612,21 +613,21 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
             </select>
 
             <div className="grid grid-cols-3 gap-3 pt-2 text-center text-xs">
-              <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Gross Bill</span>
-                <span className="font-mono font-black text-slate-800 text-sm mt-0.5 block">
+              <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                <span className="text-[10px] text-slate-400 font-semibold block">Gross Bill</span>
+                <span className="font-mono tabular-nums font-black text-white text-sm mt-0.5 block">
                   ₱{grossCost.toFixed(2)}
                 </span>
               </div>
-              <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Already Credited</span>
-                <span className="font-mono font-bold text-emerald-700 text-sm mt-0.5 block">
+              <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                <span className="text-[10px] text-slate-400 font-semibold block">Already Credited</span>
+                <span className="font-mono tabular-nums font-bold text-emerald-400 text-sm mt-0.5 block">
                   ₱{alreadyPaid.toFixed(2)}
                 </span>
               </div>
-              <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs">
-                <span className="text-[10px] text-rose-600 font-black uppercase block">Net Statement Due</span>
-                <span className="font-mono font-black text-rose-600 text-sm mt-0.5 block">
+              <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                <span className="text-[10px] text-rose-400 font-semibold block">Net Statement Due</span>
+                <span className="font-mono tabular-nums font-black text-rose-400 text-sm mt-0.5 block">
                   ₱{currentNetDue.toFixed(2)}
                 </span>
               </div>
@@ -636,29 +637,29 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
           {/* Receipt Photo Upload & Live AI Identification Scanner */}
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <label className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center space-x-1.5">
-                <Camera className="h-4 w-4 text-blue-600" />
+              <label className="text-xs font-bold text-slate-200 flex items-center space-x-1.5">
+                <Camera className="h-4 w-4 text-blue-400" />
                 <span>Upload Physical Receipt Photo (Required)</span>
-                <span className="text-rose-500">*</span>
+                <span className="text-rose-400">*</span>
               </label>
               
               <div className="flex items-center space-x-2">
                 <button
                   type="button"
                   onClick={() => handleGenerateSampleReceipt(false)}
-                  className="text-[10px] font-bold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2.5 py-1 rounded-lg transition flex items-center space-x-1 cursor-pointer"
+                  className="text-[11px] font-bold text-blue-300 hover:text-white bg-blue-950/60 hover:bg-blue-900/80 border border-blue-700/60 px-2.5 py-1 rounded-lg transition flex items-center space-x-1 cursor-pointer"
                   title="Generate authentic demo receipt for 100% full payment"
                 >
-                  <Sparkles className="h-3 w-3 text-blue-500" />
+                  <Sparkles className="h-3 w-3 text-blue-400" />
                   <span>Sample Full Receipt</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleGenerateSampleReceipt(true)}
-                  className="text-[10px] font-bold text-amber-800 hover:text-amber-950 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-lg transition flex items-center space-x-1 cursor-pointer"
+                  className="text-[11px] font-bold text-amber-300 hover:text-white bg-amber-950/60 hover:bg-amber-900/80 border border-amber-700/60 px-2.5 py-1 rounded-lg transition flex items-center space-x-1 cursor-pointer"
                   title="Generate authentic demo receipt for partial payment"
                 >
-                  <Percent className="h-3 w-3 text-amber-600" />
+                  <Percent className="h-3 w-3 text-amber-400" />
                   <span>Sample Partial (50%)</span>
                 </button>
               </div>
@@ -679,34 +680,34 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                 onDragLeave={() => setIsDragOver(false)}
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition ${
+                className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition bg-slate-950 ${
                   isDragOver 
-                    ? 'border-blue-600 bg-blue-50/80 scale-[1.01]' 
-                    : 'border-slate-300 hover:border-blue-500 hover:bg-slate-50'
+                    ? 'border-blue-500 bg-blue-950/40 scale-[1.01]' 
+                    : 'border-slate-700 hover:border-blue-500 hover:bg-slate-900'
                 }`}
               >
                 <div className="max-w-sm mx-auto space-y-3">
-                  <div className="h-14 w-14 bg-blue-50 text-blue-600 rounded-2xl mx-auto flex items-center justify-center shadow-xs">
+                  <div className="h-14 w-14 bg-blue-500/15 text-blue-400 border border-blue-500/30 rounded-2xl mx-auto flex items-center justify-center">
                     <Upload className="h-7 w-7" />
                   </div>
                   <div className="space-y-1">
-                    <p className="text-xs font-black text-slate-900 uppercase tracking-wide">
+                    <p className="text-xs font-bold text-white">
                       Click to Capture / Browse Cashier Receipt Photo
                     </p>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="text-[11px] text-slate-400">
                       Supports JPG, PNG, WEBP from your phone camera or computer. Smart Photo Identification will automatically scan and extract payment status.
                     </p>
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="relative border border-slate-200 bg-slate-900 rounded-2xl overflow-hidden shadow-md">
+              <div className="relative border border-slate-700 bg-slate-950 rounded-2xl overflow-hidden shadow-md">
                 {/* Image Display */}
                 <div className="relative">
                   <img
                     src={receiptPhotoUrl}
                     alt="Official Receipt"
-                    className="w-full h-64 object-contain bg-slate-950/80"
+                    className="w-full h-64 object-contain bg-slate-950"
                   />
 
                   {/* Scanning Animation Line Overlay */}
@@ -756,7 +757,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="text-[10px] text-blue-300 hover:text-white underline cursor-pointer"
+                      className="text-[11px] text-blue-300 hover:text-white underline cursor-pointer"
                     >
                       Change Photo
                     </button>
@@ -768,7 +769,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                   <div className="p-4 bg-gradient-to-r from-slate-900 to-blue-950 text-white border-t border-slate-700/80 space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center space-x-2">
-                        <span className={`px-2.5 py-1 text-[10px] font-black uppercase tracking-wider rounded-lg flex items-center space-x-1 ${
+                        <span className={`px-2.5 py-1 text-[10px] font-bold rounded-lg flex items-center space-x-1 ${
                           smartScanResult.settlementType === 'full' 
                             ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
                             : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
@@ -776,11 +777,11 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                           <Sparkles className="h-3 w-3" />
                           <span>
                             {smartScanResult.settlementType === 'full' 
-                              ? 'AI Identified: 100% Fully Settled' 
-                              : 'AI Identified: Partial Payment (≥ 50%)'}
+                              ? 'Identified: 100% Fully Settled' 
+                              : 'Identified: Partial Payment (≥ 50%)'}
                           </span>
                         </span>
-                        <span className="text-[10px] text-slate-300 font-mono">
+                        <span className="text-[10px] text-slate-300 font-mono tabular-nums">
                           Confidence: {(smartScanResult.confidence * 100).toFixed(0)}%
                         </span>
                       </div>
@@ -788,7 +789,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                       <button
                         type="button"
                         onClick={() => triggerSmartScan(receiptPhotoUrl)}
-                        className="text-[10px] text-blue-300 hover:text-white flex items-center space-x-1 transition cursor-pointer"
+                        className="text-[11px] text-blue-300 hover:text-white flex items-center space-x-1 transition cursor-pointer"
                       >
                         <RefreshCw className="h-3 w-3" />
                         <span>Re-Scan</span>
@@ -804,7 +805,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                       </div>
                       <div className="bg-white/5 p-2 rounded-xl border border-white/10">
                         <span className="text-[9px] text-slate-400 uppercase block">Amount Paid</span>
-                        <span className="font-mono font-black text-emerald-400 block mt-0.5">
+                        <span className="font-mono tabular-nums font-black text-emerald-400 block mt-0.5">
                           ₱{smartScanResult.amountPaid.toFixed(2)}
                         </span>
                       </div>
@@ -836,7 +837,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                           </span>
                         ) : (
                           <span>
-                            <strong>Next Reading Computation:</strong> The remaining balance of <strong className="font-mono text-white">₱{smartScanResult.remainingBalance.toFixed(2)}</strong> will automatically carry over as <strong>Arrears</strong> into your next billing notice.
+                            <strong>Next Reading Computation:</strong> The remaining balance of <strong className="font-mono tabular-nums text-white">₱{smartScanResult.remainingBalance.toFixed(2)}</strong> will automatically carry over as <strong>Arrears</strong> into your next billing notice.
                           </span>
                         )}
                       </div>
@@ -849,12 +850,12 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
 
           {/* Settlement Mode Selection: Full vs Partial (Strict 50% Rule) */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-black text-slate-800 uppercase tracking-wider">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-xs font-bold text-slate-200">
                 Confirmed Settlement Mode
               </label>
-              <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-                Tagoloan Water District Policy: Minimum 50% for Partials
+              <span className="text-[11px] font-semibold text-amber-300">
+                Policy: Minimum 50% for Partials
               </span>
             </div>
 
@@ -868,18 +869,18 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                 }}
                 className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
                   settlementType === 'full'
-                    ? 'border-blue-600 bg-blue-50/80 ring-2 ring-blue-500/20'
-                    : 'border-slate-200 hover:bg-slate-50'
+                    ? 'border-blue-500 bg-blue-950/40 ring-2 ring-blue-500/20'
+                    : 'border-slate-800 bg-slate-950 hover:border-slate-700'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-black text-blue-700 uppercase">Full Payment (100%)</span>
-                  {settlementType === 'full' && <CheckCircle2 className="h-4 w-4 text-blue-600" />}
+                  <span className="text-xs font-bold text-blue-400">Full Payment (100%)</span>
+                  {settlementType === 'full' && <CheckCircle2 className="h-4 w-4 text-blue-400" />}
                 </div>
-                <span className="text-base font-black font-mono text-slate-900 block mt-1">
+                <span className="text-base font-black font-mono tabular-nums text-white block mt-1">
                   ₱{currentNetDue.toFixed(2)}
                 </span>
-                <span className="text-[10px] text-slate-500">Completely clears statement</span>
+                <span className="text-[11px] text-slate-400">Completely clears statement</span>
               </button>
 
               <button
@@ -891,29 +892,29 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                 }}
                 className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
                   settlementType === 'partial'
-                    ? 'border-amber-600 bg-amber-50/80 ring-2 ring-amber-500/20'
-                    : 'border-slate-200 hover:bg-slate-50'
+                    ? 'border-amber-500 bg-amber-950/40 ring-2 ring-amber-500/20'
+                    : 'border-slate-800 bg-slate-950 hover:border-slate-700'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-black text-amber-800 uppercase">Partial Payment (≥ 50%)</span>
-                  {settlementType === 'partial' && <CheckCircle2 className="h-4 w-4 text-amber-600" />}
+                  <span className="text-xs font-bold text-amber-400">Partial Payment (≥ 50%)</span>
+                  {settlementType === 'partial' && <CheckCircle2 className="h-4 w-4 text-amber-400" />}
                 </div>
-                <span className="text-base font-black font-mono text-amber-900 block mt-1">
+                <span className="text-base font-black font-mono tabular-nums text-amber-300 block mt-1">
                   Min: ₱{minPartialAmount.toFixed(2)}
                 </span>
-                <span className="text-[10px] text-slate-500">Must be at least 50% of balance</span>
+                <span className="text-[11px] text-slate-400">Must be at least 50% of balance</span>
               </button>
             </div>
 
             {/* Partial Payment Amount Input & Quick Chips */}
             {settlementType === 'partial' && (
-              <div className="p-4 bg-amber-50/80 border border-amber-200 rounded-2xl space-y-3 animate-fade-in">
+              <div className="p-4 bg-slate-950 border border-amber-500/40 rounded-2xl space-y-3 animate-fade-in">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-amber-950 uppercase">
+                  <label className="text-xs font-bold text-amber-300">
                     Enter Partial Amount Paid at Cashier:
                   </label>
-                  <span className="text-[10px] font-bold text-amber-800">
+                  <span className="text-[11px] font-semibold text-amber-200 font-mono tabular-nums">
                     Min 50%: <strong>₱{minPartialAmount.toFixed(2)}</strong>
                   </span>
                 </div>
@@ -930,50 +931,50 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                       setPaymentAmount(e.target.value);
                       setValidationError(null);
                     }}
-                    className={`w-full bg-white border ${
-                      isLessThan50Percent ? 'border-rose-500 ring-2 ring-rose-200' : 'border-amber-300'
-                    } pl-8 pr-4 py-2.5 text-xs rounded-xl font-mono font-black text-slate-900`}
+                    className={`w-full bg-slate-900 border ${
+                      isLessThan50Percent ? 'border-rose-500 ring-1 ring-rose-500/40' : 'border-amber-500/50 focus:border-amber-400'
+                    } pl-8 pr-4 py-2.5 text-xs rounded-xl font-mono tabular-nums font-black text-white focus:outline-none`}
                     placeholder={`Min ₱${minPartialAmount.toFixed(2)}`}
                   />
                 </div>
 
                 {/* Strict 50% validation warning */}
                 {isLessThan50Percent && (
-                  <p className="text-[11px] text-rose-600 font-bold flex items-center space-x-1 animate-pulse">
-                    <AlertTriangle className="h-3.5 w-3.5 text-rose-600 shrink-0" />
+                  <p className="text-[11px] text-rose-400 font-bold flex items-center space-x-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
                     <span>Strict Rule: Partial payments below ₱{minPartialAmount.toFixed(2)} (50%) are strictly prohibited.</span>
                   </p>
                 )}
 
                 {/* Quick percentage helper chips */}
                 <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase">Quick Amounts:</span>
+                  <span className="text-[11px] font-semibold text-slate-400">Quick Amounts:</span>
                   <button
                     type="button"
                     onClick={() => setPaymentAmount(minPartialAmount.toFixed(2))}
-                    className="px-2.5 py-1 bg-white hover:bg-amber-100 border border-amber-300 rounded-lg text-[10px] font-bold text-amber-900 transition cursor-pointer"
+                    className="px-2.5 py-1 bg-slate-900 hover:bg-amber-950/60 border border-amber-700/60 rounded-lg text-[11px] font-bold text-amber-300 transition cursor-pointer font-mono tabular-nums"
                   >
                     50% (₱{minPartialAmount.toFixed(2)})
                   </button>
                   <button
                     type="button"
                     onClick={() => setPaymentAmount((Math.round((currentNetDue * 0.75) * 100) / 100).toFixed(2))}
-                    className="px-2.5 py-1 bg-white hover:bg-amber-100 border border-amber-300 rounded-lg text-[10px] font-bold text-amber-900 transition cursor-pointer"
+                    className="px-2.5 py-1 bg-slate-900 hover:bg-amber-950/60 border border-amber-700/60 rounded-lg text-[11px] font-bold text-amber-300 transition cursor-pointer font-mono tabular-nums"
                   >
                     75% (₱{(Math.round((currentNetDue * 0.75) * 100) / 100).toFixed(2)})
                   </button>
                   <button
                     type="button"
                     onClick={() => setPaymentAmount(currentNetDue.toFixed(2))}
-                    className="px-2.5 py-1 bg-white hover:bg-amber-100 border border-amber-300 rounded-lg text-[10px] font-bold text-amber-900 transition cursor-pointer"
+                    className="px-2.5 py-1 bg-slate-900 hover:bg-amber-950/60 border border-amber-700/60 rounded-lg text-[11px] font-bold text-amber-300 transition cursor-pointer font-mono tabular-nums"
                   >
                     100% Full (₱{currentNetDue.toFixed(2)})
                   </button>
                 </div>
 
-                <div className="flex justify-between text-xs pt-2 border-t border-amber-200/60 text-amber-900">
+                <div className="flex justify-between text-xs pt-2 border-t border-slate-800 text-slate-300">
                   <span>Balance rolling forward to next reading (Arrears):</span>
-                  <strong className="font-mono text-rose-700">
+                  <strong className="font-mono tabular-nums text-rose-400">
                     ₱{calculatedRemaining.toFixed(2)}
                   </strong>
                 </div>
@@ -984,8 +985,8 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
           {/* Cashier Receipt Details (OR Number, Date, Counter) */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
             <div className="space-y-1 sm:col-span-1">
-              <label className="block text-[11px] font-black text-slate-700 uppercase tracking-wider">
-                Official Receipt (OR) # <span className="text-rose-500">*</span>
+              <label className="block text-xs font-semibold text-slate-300">
+                Official Receipt (OR) # <span className="text-rose-400">*</span>
               </label>
               <input
                 type="text"
@@ -993,31 +994,31 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                 value={orNumber}
                 onChange={(e) => setOrNumber(e.target.value)}
                 placeholder="e.g. OR-2024-884912"
-                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500"
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono font-bold text-white focus:border-blue-500 focus:outline-none placeholder:text-slate-600"
               />
             </div>
 
             <div className="space-y-1 sm:col-span-1">
-              <label className="block text-[11px] font-black text-slate-700 uppercase tracking-wider">
-                Date of Payment <span className="text-rose-500">*</span>
+              <label className="block text-xs font-semibold text-slate-300">
+                Date of Payment <span className="text-rose-400">*</span>
               </label>
               <input
                 type="date"
                 required
                 value={paymentDate}
                 onChange={(e) => setPaymentDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500"
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-white focus:border-blue-500 focus:outline-none"
               />
             </div>
 
             <div className="space-y-1 sm:col-span-1">
-              <label className="block text-[11px] font-black text-slate-700 uppercase tracking-wider">
+              <label className="block text-xs font-semibold text-slate-300">
                 Payment Location / Counter
               </label>
               <select
                 value={cashierCounter}
                 onChange={(e) => setCashierCounter(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-900 focus:bg-white"
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-xs font-bold text-white focus:border-blue-500 focus:outline-none"
               >
                 <option value="TWD Main Office - Counter 1">TWD Main Office (Counter 1)</option>
                 <option value="TWD Main Office - Counter 2">TWD Main Office (Counter 2)</option>
@@ -1029,7 +1030,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
 
           {/* Optional notes */}
           <div className="space-y-1 text-xs">
-            <label className="block text-[11px] font-bold text-slate-600 uppercase">
+            <label className="block text-xs font-semibold text-slate-300">
               Additional Notes / Remarks (Optional)
             </label>
             <input
@@ -1037,20 +1038,20 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
               value={receiptNotes}
               onChange={(e) => setReceiptNotes(e.target.value)}
               placeholder="e.g. Paid in cash at municipal treasury window"
-              className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:bg-white"
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-blue-500 focus:outline-none placeholder:text-slate-600"
             />
           </div>
 
           {/* Summary & Submit Action */}
-          <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase block">
+              <span className="text-[11px] text-slate-400 font-semibold block">
                 Total Payment Credited
               </span>
-              <span className="text-xl font-black font-mono text-emerald-700">
+              <span className="text-xl font-black font-mono tabular-nums text-emerald-400">
                 ₱{numericPayment.toFixed(2)}
               </span>
-              <span className="text-[10px] text-slate-500 block">
+              <span className="text-[11px] text-slate-400 block">
                 {settlementType === 'full' 
                   ? 'Clears statement balance in full (₱0.00 arrears)' 
                   : `Carries over ₱${calculatedRemaining.toFixed(2)} into next cycle arrears`}
@@ -1062,7 +1063,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                 type="button"
                 onClick={onClose}
                 disabled={isSubmitting}
-                className="flex-1 sm:flex-none px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer"
+                className="flex-1 sm:flex-none px-4 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer"
               >
                 Cancel
               </button>
@@ -1070,10 +1071,10 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
               <button
                 type="submit"
                 disabled={isSubmitting || isLessThan50Percent || !receiptPhotoUrl || !orNumber.trim()}
-                className={`flex-1 sm:flex-none px-6 py-3 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition flex items-center justify-center space-x-2 cursor-pointer ${
+                className={`flex-1 sm:flex-none px-6 py-3 font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center space-x-2 ${
                   isSubmitting || isLessThan50Percent || !receiptPhotoUrl || !orNumber.trim()
-                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                    : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white'
+                    ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                    : 'bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer'
                 }`}
                 id="submit-receipt-confirm-btn"
               >

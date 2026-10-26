@@ -29,7 +29,6 @@ import {
   Briefcase,
   Moon,
   Sun,
-  Sparkles,
   FileDown,
   CheckSquare
 } from 'lucide-react';
@@ -37,6 +36,8 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Consumer, MeterReading, WaterMeter, Barangay, MeterReader, User } from '../../types';
 import { calculateWaterTariff } from '../../utils/tariffCalculator';
+import { SmartSearchBar } from '../common/SmartSearchBar';
+import { smartMatch } from '../../utils/smartSearch';
 
 interface OfficialReportsGeneratorProps {
   consumers: Consumer[];
@@ -1474,10 +1475,10 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
   return (
     <div className="space-y-6" id="official-reports-generator">
       {/* Module Banner */}
-      <div className="bg-slate-900 text-white rounded-none border-2 border-slate-800 p-6 shadow-xl no-print">
+      <div className="bg-slate-900 text-white rounded-3xl border border-slate-800 p-6 shadow-xl no-print">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 border-b border-slate-800 pb-5">
           <div className="flex items-center space-x-4">
-            <div className="h-16 w-16 bg-slate-950 border-2 border-blue-500/50 p-1 flex items-center justify-center shrink-0 shadow-lg">
+            <div className="h-16 w-16 bg-slate-950 rounded-2xl border border-slate-700 p-1.5 flex items-center justify-center shrink-0 shadow-lg">
               <img 
                 src={OFFICIAL_LOGO_URL} 
                 alt="Tagoloan Water District Logo"
@@ -1490,7 +1491,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <span className="bg-blue-600 text-white text-[10px] font-black uppercase px-2 py-0.5 tracking-widest">
+                <span className="bg-blue-600 text-white text-[10px] font-black uppercase px-2.5 py-0.5 rounded-md tracking-widest">
                   OFFICIAL WATER DISTRICT REPORTS
                 </span>
                 <span className="text-slate-400 text-xs font-mono">REPUBLIC OF THE PHILIPPINES</span>
@@ -1509,7 +1510,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               type="button"
               onClick={handleDownloadPDF}
               disabled={isGeneratingPdf}
-              className="flex-1 lg:flex-none px-5 py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center space-x-2 shadow-lg cursor-pointer disabled:opacity-50"
+              className="flex-1 lg:flex-none px-5 py-3 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg cursor-pointer disabled:opacity-50"
             >
               <Download className="h-4 w-4" />
               <span>{isGeneratingPdf ? 'Generating PDF...' : 'Download Official PDF'}</span>
@@ -1517,7 +1518,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             <button
               type="button"
               onClick={() => setShowPrintModal(true)}
-              className="px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs uppercase tracking-wider transition flex items-center space-x-2 border border-slate-700 cursor-pointer"
+              className="px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-2 border border-slate-700 cursor-pointer"
             >
               <Printer className="h-4 w-4" />
               <span>Print Preview / Print</span>
@@ -1527,19 +1528,19 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
 
         {/* 1. FILTER MATRIX (Hierarchy: Year -> Month -> Barangay -> Type -> Reader) */}
         <div className="pt-5 space-y-4">
-          <div className="flex items-center space-x-2 text-xs font-black uppercase text-amber-400 tracking-wider">
-            <Filter className="h-4 w-4 text-amber-400" />
+          <div className="flex items-center space-x-2 text-xs font-black uppercase text-slate-300 tracking-wider">
+            <Filter className="h-4 w-4 text-blue-400" />
             <span>CONSOLIDATION & FILTER CRITERIA MATRIX</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
             {/* Billing Year */}
-            <div className="bg-slate-800/80 border border-slate-700 p-3 space-y-1">
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-1">
               <label className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Billing Year</label>
               <select
                 value={selectedYear}
                 onChange={(e) => setSelectedYear(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 text-white font-bold text-xs p-2 focus:outline-none focus:border-blue-500 cursor-pointer"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg text-white font-bold text-xs p-2 focus:outline-none focus:border-blue-500 cursor-pointer"
               >
                 {years.map(y => (
                   <option key={y} value={y}>{y}</option>
@@ -1548,12 +1549,12 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             </div>
 
             {/* Billing Month */}
-            <div className="bg-slate-800/80 border border-slate-700 p-3 space-y-1">
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-1">
               <label className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Billing Month & Schedule</label>
               <select
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 text-white font-bold text-xs p-2 focus:outline-none focus:border-blue-500 cursor-pointer"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg text-white font-bold text-xs p-2 focus:outline-none focus:border-blue-500 cursor-pointer"
               >
                 {months.map(m => (
                   <option key={m} value={m}>{m}</option>
@@ -1562,12 +1563,12 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             </div>
 
             {/* Barangay / Area */}
-            <div className="bg-slate-800/80 border border-slate-700 p-3 space-y-1">
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-1">
               <label className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Barangay Zone</label>
               <select
                 value={selectedBarangay}
                 onChange={(e) => setSelectedBarangay(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 text-white font-bold text-xs p-2 focus:outline-none focus:border-blue-500 cursor-pointer"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg text-white font-bold text-xs p-2 focus:outline-none focus:border-blue-500 cursor-pointer"
               >
                 <option value="All">All Barangays (All Zones)</option>
                 {barangayNames.map(b => (
@@ -1577,12 +1578,12 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             </div>
 
             {/* Consumer Type / Classification */}
-            <div className="bg-slate-800/80 border border-slate-700 p-3 space-y-1">
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-1">
               <label className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Consumer Classification</label>
               <select
                 value={selectedConsumerType}
                 onChange={(e) => setSelectedConsumerType(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 text-white font-bold text-xs p-2 focus:outline-none focus:border-blue-500 cursor-pointer"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg text-white font-bold text-xs p-2 focus:outline-none focus:border-blue-500 cursor-pointer"
               >
                 <option value="All">All Classifications</option>
                 <option value="Residential">Residential (RES)</option>
@@ -1592,12 +1593,12 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             </div>
 
             {/* Meter Reader (Multi-Area Assigned) */}
-            <div className="bg-slate-800/80 border border-slate-700 p-3 space-y-1">
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-1">
               <label className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Meter Reader Officer</label>
               <select
                 value={selectedReader}
                 onChange={(e) => setSelectedReader(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 text-white font-bold text-xs p-2 focus:outline-none focus:border-blue-500 cursor-pointer"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg text-white font-bold text-xs p-2 focus:outline-none focus:border-blue-500 cursor-pointer"
               >
                 <option value="All">All Meter Readers (Multi-Area)</option>
                 {readerNames.map(r => (
@@ -1613,9 +1614,9 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
           {/* PRIMARY REQUIRED REPORTS SECTION */}
           <div>
             <div className="flex items-center space-x-2 mb-2">
-              <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-              <label className="text-[10px] font-black uppercase tracking-wider text-amber-300">
-                Official Regulatory Reports (Required for Operations & Audits)
+              <FileSpreadsheet className="h-3.5 w-3.5 text-blue-400" />
+              <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                Official Regulatory Reports (Operations & Audits)
               </label>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
@@ -1623,18 +1624,22 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               <button
                 type="button"
                 onClick={() => setReportCategory('daily_accomplishment')}
-                className={`p-3.5 text-left font-black transition border cursor-pointer ${
+                className={`p-3.5 rounded-xl text-left font-black transition border cursor-pointer ${
                   reportCategory === 'daily_accomplishment'
-                    ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-lg ring-2 ring-amber-400/40'
-                    : 'bg-slate-800/95 text-slate-200 border-slate-700 hover:bg-slate-800 hover:border-slate-600'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/30'
+                    : 'bg-slate-950/80 text-slate-200 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                 }`}
               >
                 <div className="flex items-center justify-between text-[10px] uppercase font-bold opacity-90 mb-1">
                   <span>Report 1</span>
-                  <span className="px-1.5 py-0.2 bg-amber-950/40 text-amber-200 border border-amber-500/30 rounded text-[9px]">Field Telemetry</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono ${
+                    reportCategory === 'daily_accomplishment'
+                      ? 'bg-black/25 text-white'
+                      : 'bg-slate-900 text-slate-300 border border-slate-800'
+                  }`}>Field Telemetry</span>
                 </div>
-                <div className="font-black text-sm truncate flex items-center space-x-1.5">
-                  <span>★ Daily Accomplishment</span>
+                <div className="font-black text-sm truncate">
+                  Daily Accomplishment
                 </div>
                 <div className="text-[11px] opacity-80 mt-0.5 truncate">Day-by-day readings & quota completion</div>
               </button>
@@ -1643,18 +1648,22 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               <button
                 type="button"
                 onClick={() => setReportCategory('unread_meter')}
-                className={`p-3.5 text-left font-black transition border cursor-pointer ${
+                className={`p-3.5 rounded-xl text-left font-black transition border cursor-pointer ${
                   reportCategory === 'unread_meter'
-                    ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-lg ring-2 ring-amber-400/40'
-                    : 'bg-slate-800/95 text-slate-200 border-slate-700 hover:bg-slate-800 hover:border-slate-600'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/30'
+                    : 'bg-slate-950/80 text-slate-200 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                 }`}
               >
                 <div className="flex items-center justify-between text-[10px] uppercase font-bold opacity-90 mb-1">
                   <span>Report 2</span>
-                  <span className="px-1.5 py-0.2 bg-rose-950/40 text-rose-200 border border-rose-500/30 rounded text-[9px]">{unreadMetersData.totalUnread} Pending</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono tabular-nums ${
+                    reportCategory === 'unread_meter'
+                      ? 'bg-black/25 text-white'
+                      : 'bg-rose-950/60 text-rose-300 border border-rose-800/60'
+                  }`}>{unreadMetersData.totalUnread} Pending</span>
                 </div>
-                <div className="font-black text-sm truncate flex items-center space-x-1.5">
-                  <span>★ Unread Meter Report</span>
+                <div className="font-black text-sm truncate">
+                  Unread Meter Report
                 </div>
                 <div className="text-[11px] opacity-80 mt-0.5 truncate">Pending meters, obstacles & est. recovery</div>
               </button>
@@ -1663,18 +1672,22 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               <button
                 type="button"
                 onClick={() => setReportCategory('consumption_trend')}
-                className={`p-3.5 text-left font-black transition border cursor-pointer ${
+                className={`p-3.5 rounded-xl text-left font-black transition border cursor-pointer ${
                   reportCategory === 'consumption_trend'
-                    ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-lg ring-2 ring-amber-400/40'
-                    : 'bg-slate-800/95 text-slate-200 border-slate-700 hover:bg-slate-800 hover:border-slate-600'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/30'
+                    : 'bg-slate-950/80 text-slate-200 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                 }`}
               >
                 <div className="flex items-center justify-between text-[10px] uppercase font-bold opacity-90 mb-1">
                   <span>Report 3</span>
-                  <span className="px-1.5 py-0.2 bg-blue-950/40 text-blue-200 border border-blue-500/30 rounded text-[9px]">{consumptionTrendData.currentM3} m³</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono tabular-nums ${
+                    reportCategory === 'consumption_trend'
+                      ? 'bg-black/25 text-white'
+                      : 'bg-blue-950/60 text-blue-300 border border-blue-800/60'
+                  }`}>{consumptionTrendData.currentM3} m³</span>
                 </div>
-                <div className="font-black text-sm truncate flex items-center space-x-1.5">
-                  <span>★ Consumption & Trend</span>
+                <div className="font-black text-sm truncate">
+                  Consumption & Trend
                 </div>
                 <div className="text-[11px] opacity-80 mt-0.5 truncate">Volume dynamics, MoM delta & brackets</div>
               </button>
@@ -1683,18 +1696,22 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               <button
                 type="button"
                 onClick={() => setReportCategory('billing_prep')}
-                className={`p-3.5 text-left font-black transition border cursor-pointer ${
+                className={`p-3.5 rounded-xl text-left font-black transition border cursor-pointer ${
                   reportCategory === 'billing_prep'
-                    ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-lg ring-2 ring-amber-400/40'
-                    : 'bg-slate-800/95 text-slate-200 border-slate-700 hover:bg-slate-800 hover:border-slate-600'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/30'
+                    : 'bg-slate-950/80 text-slate-200 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                 }`}
               >
                 <div className="flex items-center justify-between text-[10px] uppercase font-bold opacity-90 mb-1">
                   <span>Report 4</span>
-                  <span className="px-1.5 py-0.2 bg-emerald-950/40 text-emerald-200 border border-emerald-500/30 rounded text-[9px]">CSV / PDF</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono ${
+                    reportCategory === 'billing_prep'
+                      ? 'bg-black/25 text-white'
+                      : 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/60'
+                  }`}>CSV / PDF</span>
                 </div>
-                <div className="font-black text-sm truncate flex items-center space-x-1.5">
-                  <span>★ Billing Export / Prep</span>
+                <div className="font-black text-sm truncate">
+                  Billing Export / Prep
                 </div>
                 <div className="text-[11px] opacity-80 mt-0.5 truncate">Pre-billing ledger, tariffs & export</div>
               </button>
@@ -1708,10 +1725,10 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               <button
                 type="button"
                 onClick={() => setReportCategory('consolidated_master')}
-                className={`p-2.5 text-left font-black transition border cursor-pointer ${
+                className={`p-2.5 rounded-xl text-left font-black transition border cursor-pointer ${
                   reportCategory === 'consolidated_master'
-                    ? 'bg-blue-600 text-white border-blue-400 shadow-md ring-2 ring-blue-400/40'
-                    : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-800'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/30'
+                    : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                 }`}
               >
                 <div className="text-[9px] uppercase opacity-75">Master</div>
@@ -1721,10 +1738,10 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               <button
                 type="button"
                 onClick={() => setReportCategory('consumption')}
-                className={`p-2.5 text-left font-black transition border cursor-pointer ${
+                className={`p-2.5 rounded-xl text-left font-black transition border cursor-pointer ${
                   reportCategory === 'consumption'
-                    ? 'bg-blue-600 text-white border-blue-400 shadow-md'
-                    : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-800'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/30'
+                    : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                 }`}
               >
                 <div className="text-[9px] opacity-75">Summary</div>
@@ -1734,10 +1751,10 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               <button
                 type="button"
                 onClick={() => setReportCategory('collection')}
-                className={`p-2.5 text-left font-black transition border cursor-pointer ${
+                className={`p-2.5 rounded-xl text-left font-black transition border cursor-pointer ${
                   reportCategory === 'collection'
-                    ? 'bg-blue-600 text-white border-blue-400 shadow-md'
-                    : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-800'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/30'
+                    : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                 }`}
               >
                 <div className="text-[9px] opacity-75">Ledger</div>
@@ -1747,10 +1764,10 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               <button
                 type="button"
                 onClick={() => setReportCategory('pending_ar')}
-                className={`p-2.5 text-left font-black transition border cursor-pointer ${
+                className={`p-2.5 rounded-xl text-left font-black transition border cursor-pointer ${
                   reportCategory === 'pending_ar'
-                    ? 'bg-blue-600 text-white border-blue-400 shadow-md'
-                    : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-800'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/30'
+                    : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                 }`}
               >
                 <div className="text-[9px] opacity-75">AR</div>
@@ -1760,10 +1777,10 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               <button
                 type="button"
                 onClick={() => setReportCategory('summary_matrix')}
-                className={`p-2.5 text-left font-black transition border cursor-pointer ${
+                className={`p-2.5 rounded-xl text-left font-black transition border cursor-pointer ${
                   reportCategory === 'summary_matrix'
-                    ? 'bg-blue-600 text-white border-blue-400 shadow-md'
-                    : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-800'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/30'
+                    : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                 }`}
               >
                 <div className="text-[9px] opacity-75">Matrix</div>
@@ -1773,10 +1790,10 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               <button
                 type="button"
                 onClick={() => setReportCategory('barangay_performance')}
-                className={`p-2.5 text-left font-black transition border cursor-pointer ${
+                className={`p-2.5 rounded-xl text-left font-black transition border cursor-pointer ${
                   reportCategory === 'barangay_performance'
-                    ? 'bg-blue-600 text-white border-blue-400 shadow-md'
-                    : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-800'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/30'
+                    : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                 }`}
               >
                 <div className="text-[9px] opacity-75">Zones</div>
@@ -1786,10 +1803,10 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               <button
                 type="button"
                 onClick={() => setReportCategory('arrears_ledger')}
-                className={`p-2.5 text-left font-black transition border cursor-pointer ${
+                className={`p-2.5 rounded-xl text-left font-black transition border cursor-pointer ${
                   reportCategory === 'arrears_ledger'
-                    ? 'bg-blue-600 text-white border-blue-400 shadow-md'
-                    : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-800'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/30'
+                    : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                 }`}
               >
                 <div className="text-[9px] opacity-75">Delinquency</div>
@@ -1803,71 +1820,70 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
       {/* 3. EXECUTIVE KPI DASHBOARD SUMMARY (WITH OVERALL AMOUNT & EXPECTED COLLECTED) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 no-print">
         {/* OVERALL AMOUNT (TOTAL BILLED) */}
-        <div className="bg-slate-900 border-2 border-slate-800 p-4 rounded-none shadow-md">
-          <span className="text-[10px] font-black uppercase tracking-wider text-slate-300 block">Overall Amount Billed</span>
-          <div className="text-2xl font-black text-white mt-1">
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
+          <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Overall Amount Billed</span>
+          <div className="text-2xl font-black font-mono tabular-nums text-white mt-1">
             ₱{aggregatedData.grandTotals.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </div>
           <span className="text-[11px] text-slate-400 font-medium">Total Assessed Tariff</span>
         </div>
 
         {/* EXPECTED COLLECTED AMOUNT (TARGET: 95%) */}
-        <div className="bg-slate-900 border-2 border-amber-500/40 p-4 rounded-none shadow-md relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-2 h-full bg-amber-500"></div>
-          <span className="text-[10px] font-black uppercase tracking-wider text-amber-300 block flex items-center space-x-1">
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
+          <span className="text-[10px] font-black uppercase tracking-wider text-amber-400 flex items-center justify-between">
             <span>Expected Collected</span>
-            <span className="text-[9px] px-1 py-0.2 bg-amber-400/20 text-amber-300 rounded font-mono">95% Target</span>
+            <span className="text-[9px] font-mono text-slate-400">95% Target</span>
           </span>
-          <div className="text-2xl font-black text-amber-300 mt-1">
+          <div className="text-2xl font-black font-mono tabular-nums text-amber-300 mt-1">
             ₱{Math.round(aggregatedData.grandTotals.totalBilled * 0.95).toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </div>
-          <span className="text-[11px] text-amber-400/80 font-bold">Target Cash Inflow</span>
+          <span className="text-[11px] text-slate-400 font-medium">Target Cash Inflow</span>
         </div>
 
         {/* REALIZED CASH COLLECTIONS */}
-        <div className="bg-slate-900 border-2 border-slate-800 p-4 rounded-none shadow-md">
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
           <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 block">Realized Collected</span>
-          <div className="text-2xl font-black text-emerald-400 mt-1">
+          <div className="text-2xl font-black font-mono tabular-nums text-emerald-400 mt-1">
             ₱{aggregatedData.grandTotals.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </div>
-          <span className="text-[11px] text-emerald-300 font-bold">Verified Cashier Settlements</span>
+          <span className="text-[11px] text-slate-400 font-medium">Verified Cashier Settlements</span>
         </div>
 
         {/* COLLECTION REALIZATION RATE */}
-        <div className="bg-slate-900 border-2 border-slate-800 p-4 rounded-none shadow-md">
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
           <span className="text-[10px] font-black uppercase tracking-wider text-cyan-400 block">Collection Realization</span>
-          <div className="text-2xl font-black text-cyan-400 mt-1">
+          <div className="text-2xl font-black font-mono tabular-nums text-cyan-400 mt-1">
             {aggregatedData.grandTotals.totalBilled > 0
               ? `${((aggregatedData.grandTotals.totalCollected / aggregatedData.grandTotals.totalBilled) * 100).toFixed(1)}%`
               : '100%'}
           </div>
-          <span className="text-[11px] text-cyan-300 font-bold">Collection Efficiency</span>
+          <span className="text-[11px] text-slate-400 font-medium">Collection Efficiency</span>
         </div>
 
         {/* TOTAL WATER CONSUMPTION */}
-        <div className="bg-slate-900 border-2 border-slate-800 p-4 rounded-none shadow-md">
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
           <span className="text-[10px] font-black uppercase tracking-wider text-blue-400 block">Total Volume Consumed</span>
-          <div className="text-2xl font-black text-blue-400 mt-1">
+          <div className="text-2xl font-black font-mono tabular-nums text-blue-400 mt-1">
             {aggregatedData.grandTotals.totalM3.toLocaleString()} m³
           </div>
           <span className="text-[11px] text-slate-400 font-medium">Across {aggregatedData.grandTotals.totalConsumers} accounts</span>
         </div>
 
         {/* UNREAD METERS PENDING */}
-        <div className="bg-slate-900 border-2 border-slate-800 p-4 rounded-none shadow-md">
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
           <span className="text-[10px] font-black uppercase tracking-wider text-rose-400 block">Unread Meters Pending</span>
-          <div className="text-2xl font-black text-rose-400 mt-1">
+          <div className="text-2xl font-black font-mono tabular-nums text-rose-400 mt-1">
             {unreadMetersData.totalUnread}
           </div>
-          <span className="text-[11px] text-rose-300 font-bold">Est: ₱{unreadMetersData.totalEstimatedBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+          <span className="text-[11px] text-slate-400 font-mono tabular-nums">Est: ₱{unreadMetersData.totalEstimatedBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
         </div>
       </div>
 
       {/* 4. ACTIVE REPORT PREVIEW HEADER */}
-      <div className="bg-slate-900 border-2 border-slate-800 p-4 rounded-none flex flex-col md:flex-row justify-between items-start md:items-center gap-3 no-print">
+      <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 shadow-md no-print">
         <div>
           <div className="flex items-center space-x-2">
-            <span className="bg-blue-600 text-white text-[10px] font-black px-2 py-0.5 uppercase tracking-wider">
+            <span className="bg-blue-600 text-white text-[10px] font-black px-2.5 py-0.5 rounded-md uppercase tracking-wider">
               {reportCategory.replace('_', ' ').toUpperCase()}
             </span>
             <span className="text-slate-300 font-mono text-xs font-bold">
@@ -1875,16 +1891,16 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             </span>
           </div>
           <h3 className="text-lg font-black text-white mt-1">{reportTitles[reportCategory].title}</h3>
-          <p className="text-xs text-slate-300">{reportTitles[reportCategory].description}</p>
+          <p className="text-xs text-slate-400">{reportTitles[reportCategory].description}</p>
         </div>
 
-        <div className="flex items-center space-x-2 w-full md:w-auto flex-wrap gap-2">
+        <div className="flex items-center w-full xl:w-auto flex-wrap gap-2.5">
           {/* Billing Prep CSV Export Shortcut */}
           {reportCategory === 'billing_prep' && (
             <button
               type="button"
               onClick={handleExportBillingCSV}
-              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase flex items-center space-x-1.5 transition shadow-sm cursor-pointer"
+              className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase rounded-xl flex items-center space-x-1.5 transition shadow-sm cursor-pointer"
               title="Download CSV file for billing software and Excel"
             >
               <FileDown className="h-4 w-4" />
@@ -1895,7 +1911,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
           <button
             type="button"
             onClick={() => setShowPrintModal(true)}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase flex items-center space-x-1.5 transition shadow-sm cursor-pointer"
+            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase rounded-xl flex items-center space-x-1.5 transition shadow-sm cursor-pointer"
           >
             <Printer className="h-4 w-4" />
             <span>Print Document</span>
@@ -1905,32 +1921,31 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             type="button"
             onClick={handleDownloadPDF}
             disabled={isGeneratingPdf}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase flex items-center space-x-1.5 transition border border-slate-700 cursor-pointer disabled:opacity-50"
+            className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 transition border border-slate-700 cursor-pointer disabled:opacity-50"
           >
             <Download className="h-4 w-4" />
             <span>{isGeneratingPdf ? 'Generating PDF...' : 'Download PDF'}</span>
           </button>
 
-          <div className="relative flex-1 md:w-56">
-            <Search className="h-4 w-4 absolute left-3 top-2.5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Filter table rows..."
+          <div className="w-full sm:w-72">
+            <SmartSearchBar
+              variant="dark"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 pl-9 pr-3 py-2 text-xs font-medium text-white focus:outline-none focus:border-blue-500"
+              onChange={setSearchQuery}
+              placeholder="Smart search report rows..."
+              id="official-reports-smart-search"
             />
           </div>
         </div>
       </div>
 
-      {/* 5. RECTANGULAR HIGH-CONTRAST DATA TABLE */}
-      <div className="bg-slate-950 border-2 border-slate-800 rounded-none overflow-hidden shadow-sm no-print">
+      {/* 5. HIGH-CONTRAST DATA TABLE */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl no-print">
         <div className="overflow-x-auto">
           {/* 1. DAILY READING ACCOMPLISHMENT TABLE */}
           {reportCategory === 'daily_accomplishment' && (
             <table className="w-full text-xs text-left border-collapse min-w-[1050px]">
-              <thead className="bg-slate-900 text-white font-extrabold uppercase text-[11px] tracking-wider border-b-2 border-slate-800">
+              <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-800">
                 <tr>
                   <th className="px-4 py-3.5 border-r border-slate-800">Reading Date</th>
                   <th className="px-4 py-3.5 border-r border-slate-800">Meter Reader</th>
@@ -1947,10 +1962,15 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               </thead>
               <tbody className="divide-y divide-slate-800 text-slate-300">
                 {dailyAccomplishmentData.dayList
-                  .filter(d => 
-                    d.date.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                    d.reader.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                    d.routes.some(r => r.toLowerCase().includes(searchQuery.toLowerCase()))
+                  .filter(d =>
+                    smartMatch(searchQuery, [
+                      d.date,
+                      new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+                      d.reader,
+                      d.routes,
+                      d.status,
+                      `${d.accomplishmentRate}%`
+                    ])
                   )
                   .map((d, idx) => (
                     <tr key={idx} className="hover:bg-slate-900/60 transition">
@@ -2071,11 +2091,18 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                 </thead>
                 <tbody className="divide-y divide-slate-800 text-slate-300">
                   {unreadMetersData.unreadList
-                    .filter(u => 
-                      u.accountNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                      u.consumerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                      u.barangay.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                      u.reasonObstacle.toLowerCase().includes(searchQuery.toLowerCase())
+                    .filter(u =>
+                      smartMatch(searchQuery, [
+                        u.accountNumber,
+                        u.consumerName,
+                        u.meterNumber,
+                        u.barangay,
+                        u.address,
+                        u.consumerType,
+                        u.assignedReader,
+                        u.reasonObstacle,
+                        u.actionRequired
+                      ])
                     )
                     .map((u, idx) => (
                       <tr key={idx} className="hover:bg-slate-900/60 transition">
@@ -2138,7 +2165,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             <div>
               {/* MoM Trend Banner & Consumption Brackets */}
               <div className="bg-slate-900 p-4 border-b border-slate-800 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                <div className="bg-slate-950 p-3 border border-slate-800">
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">MoM Volume Trajectory</span>
                   <div className="text-xl font-black text-emerald-400 mt-0.5 flex items-center space-x-1">
                     <TrendingUp className="h-4 w-4" />
@@ -2147,7 +2174,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                   <span className="text-[10px] text-slate-500">+{consumptionTrendData.momChangeM3.toLocaleString()} m³ monthly net expansion</span>
                 </div>
 
-                <div className="bg-slate-950 p-3 border border-slate-800">
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">Average Household Usage</span>
                   <div className="text-xl font-black text-blue-400 mt-0.5 font-mono">
                     {consumptionTrendData.avgPerAccount} m³ / Account
@@ -2155,7 +2182,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                   <span className="text-[10px] text-slate-500">Tagoloan residential baseline: 21.5 m³</span>
                 </div>
 
-                <div className="bg-slate-950 p-3 border border-slate-800">
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">Lifeline Brackets (0 - 10 m³)</span>
                   <div className="text-xl font-black text-amber-300 mt-0.5 font-mono">
                     {consumptionTrendData.lifelinePct}% ({consumptionTrendData.lifelineCount} accts)
@@ -2163,7 +2190,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                   <span className="text-[10px] text-slate-500">Qualified for lifeline water subsidies</span>
                 </div>
 
-                <div className="bg-slate-950 p-3 border border-slate-800">
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">Expected Revenue from Volume</span>
                   <div className="text-xl font-black text-white mt-0.5 font-mono">
                     ₱{consumptionTrendData.expectedCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}
@@ -2173,7 +2200,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               </div>
 
               <table className="w-full text-xs text-left border-collapse min-w-[950px]">
-                <thead className="bg-slate-900 text-white font-extrabold uppercase text-[11px] tracking-wider border-b-2 border-slate-800">
+                <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-800">
                   <tr>
                     <th className="px-5 py-3.5 border-r border-slate-800 min-w-[180px]">Barangay / Area</th>
                     <th className="px-5 py-3.5 text-right border-r border-slate-800">Residential (m³)</th>
@@ -2189,7 +2216,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                 </thead>
                 <tbody className="divide-y divide-slate-800 text-slate-300">
                   {aggregatedData.barangayList
-                    .filter(b => (b.barangay || '').toLowerCase().includes(searchQuery.toLowerCase()))
+                    .filter(b => smartMatch(searchQuery, [b.barangay, b.assignedReader, b.readingSchedule]))
                     .map((b, idx) => {
                       const avg = b.totalConsumers > 0 ? (b.totalM3 / b.totalConsumers).toFixed(1) : '0.0';
                       const exp = Math.round(b.totalBilled * 0.95);
@@ -2321,10 +2348,16 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                 </thead>
                 <tbody className="divide-y divide-slate-800 text-slate-300">
                   {billingPrepData.list
-                    .filter(b => 
-                      b.accountNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                      b.consumerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                      b.barangay.toLowerCase().includes(searchQuery.toLowerCase())
+                    .filter(b =>
+                      smartMatch(searchQuery, [
+                        b.accountNumber,
+                        b.consumerName,
+                        b.meterNumber,
+                        b.barangay,
+                        b.sitio,
+                        b.rateClass,
+                        b.status
+                      ])
                     )
                     .map((b) => (
                       <tr key={b.itemNo} className="hover:bg-slate-900/60 transition">
@@ -2409,7 +2442,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               </thead>
               <tbody className="divide-y divide-slate-800 text-slate-300">
                 {aggregatedData.barangayList
-                  .filter(b => (b.barangay || '').toLowerCase().includes((searchQuery || '').toLowerCase()))
+                  .filter(b => smartMatch(searchQuery, [b.barangay, b.assignedReader, b.readingSchedule]))
                   .map((b, idx) => {
                     const rate = b.totalBilled > 0 ? ((b.totalCollected / b.totalBilled) * 100).toFixed(1) : '100.0';
                     return (
@@ -2479,7 +2512,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               </thead>
               <tbody className="divide-y divide-slate-800 text-slate-300">
                 {aggregatedData.barangayList
-                  .filter(b => (b.barangay || '').toLowerCase().includes((searchQuery || '').toLowerCase()))
+                  .filter(b => smartMatch(searchQuery, [b.barangay, b.assignedReader, b.readingSchedule]))
                   .map((b, idx) => {
                     const avg = b.totalConsumers > 0 ? (b.totalM3 / b.totalConsumers).toFixed(1) : '0.0';
                     return (
@@ -2542,7 +2575,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
               </thead>
               <tbody className="divide-y divide-slate-800 text-slate-300">
                 {aggregatedData.barangayList
-                  .filter(b => (b.barangay || '').toLowerCase().includes((searchQuery || '').toLowerCase()))
+                  .filter(b => smartMatch(searchQuery, [b.barangay, b.assignedReader, b.readingSchedule]))
                   .map((b, idx) => {
                     const rate = b.totalBilled > 0 ? ((b.totalCollected / b.totalBilled) * 100).toFixed(1) : '100.0';
                     return (
@@ -2601,7 +2634,9 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800 text-slate-300">
-                {readerPerformance.map((r, idx) => (
+                {readerPerformance
+                  .filter(r => smartMatch(searchQuery, [r.name, r.assignedAreas, r.readingSchedule, r.status]))
+                  .map((r, idx) => (
                   <tr key={idx} className="hover:bg-slate-900/60 transition">
                     <td className="px-5 py-3.5 font-black text-white border-r border-slate-800 flex items-center space-x-2">
                       <UserCheck className="h-4 w-4 text-blue-400 shrink-0" />
@@ -2665,12 +2700,19 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                     flatList = flatList.filter(a => a.paymentStatus === 'paid' || a.paidAmount > 0);
                   }
 
-                  if (searchQuery) {
-                    const q = searchQuery.toLowerCase().trim();
-                    flatList = flatList.filter(a => 
-                      (a.accountNumber || '').toLowerCase().includes(q) ||
-                      (a.consumerName || '').toLowerCase().includes(q) ||
-                      (a.barangay || '').toLowerCase().includes(q)
+                  if (searchQuery.trim()) {
+                    flatList = flatList.filter(a =>
+                      smartMatch(searchQuery, [
+                        a.accountNumber,
+                        a.consumerName,
+                        a.meterNumber,
+                        a.barangay,
+                        a.type,
+                        a.paymentStatus,
+                        a.reader,
+                        `${a.consumption} m3`,
+                        a.billedAmount?.toFixed?.(2)
+                      ])
                     );
                   }
 
@@ -2727,11 +2769,11 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             if (e.target === e.currentTarget) setShowPrintModal(false);
           }}
         >
-          <div className="bg-slate-900 border-2 border-slate-700 max-w-7xl w-full h-[94vh] max-h-[96vh] flex flex-col shadow-2xl rounded-none overflow-hidden">
+          <div className="bg-slate-900 border border-slate-700 max-w-7xl w-full h-[94vh] max-h-[96vh] flex flex-col shadow-2xl rounded-3xl overflow-hidden">
             {/* Modal Toolbar (hidden when printing) */}
             <div className="flex-shrink-0 flex justify-between items-center p-4 bg-slate-950 border-b border-slate-800 no-print flex-wrap gap-3">
               <div className="flex items-center space-x-3">
-                <div className="h-10 w-10 bg-slate-900 border border-blue-500/40 p-1 flex items-center justify-center">
+                <div className="h-10 w-10 bg-slate-900 rounded-xl border border-slate-700 p-1 flex items-center justify-center">
                   <img 
                     src={OFFICIAL_LOGO_URL} 
                     alt="Logo"
@@ -2750,11 +2792,11 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
 
               <div className="flex items-center space-x-2">
                 {/* Visual Preview Mode Switcher */}
-                <div className="flex items-center bg-slate-900 border border-slate-700 p-0.5 rounded-none mr-1">
+                <div className="flex items-center bg-slate-900 border border-slate-700 p-0.5 rounded-xl mr-1">
                   <button
                     type="button"
                     onClick={() => setPreviewTheme('dark')}
-                    className={`px-3 py-1.5 text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer ${
                       previewTheme === 'dark'
                         ? 'bg-blue-600 text-white shadow-sm'
                         : 'text-slate-400 hover:text-white'
@@ -2767,7 +2809,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                   <button
                     type="button"
                     onClick={() => setPreviewTheme('paper')}
-                    className={`px-3 py-1.5 text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer ${
                       previewTheme === 'paper'
                         ? 'bg-slate-200 text-slate-950 shadow-sm'
                         : 'text-slate-400 hover:text-white'
@@ -2782,7 +2824,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                 <button
                   type="button"
                   onClick={() => window.print()}
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase flex items-center space-x-2 shadow-md cursor-pointer"
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase rounded-xl flex items-center space-x-2 shadow-md cursor-pointer"
                 >
                   <Printer className="h-4 w-4" />
                   <span>Print Document</span>
@@ -2790,7 +2832,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                 <button
                   type="button"
                   onClick={handleDownloadPDF}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs uppercase flex items-center space-x-1.5 border border-slate-700 cursor-pointer"
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 border border-slate-700 cursor-pointer"
                 >
                   <Download className="h-4 w-4" />
                   <span>Download PDF</span>
@@ -2798,7 +2840,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                 <button
                   type="button"
                   onClick={() => setShowPrintModal(false)}
-                  className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+                  className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl transition cursor-pointer"
                   title="Close Preview (Esc)"
                 >
                   <X className="h-5 w-5" />

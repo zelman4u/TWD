@@ -28,7 +28,7 @@ interface DynamicDueAlertProps {
   onPayNow: (reading: MeterReading, mode?: 'full' | 'partial') => void;
   onViewBillDetails: (reading: MeterReading) => void;
   onUploadReceipt: (reading: MeterReading | null) => void;
-  calculateCostOf: (usage: number, classification?: 'Residential' | 'Commercial') => number;
+  calculateCostOf: (usageOrReading: number | MeterReading, classification?: 'Residential' | 'Commercial') => number;
 }
 
 export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
@@ -50,7 +50,7 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
 
   // Identify current / latest verified reading
   const latestReading = readings[0];
-  const grossLatestCost = calculateCostOf(latestReading.consumption, consumerRecord.consumerType);
+  const grossLatestCost = calculateCostOf(latestReading, consumerRecord.consumerType);
   const paidLatestAmt = latestReading.paidAmount || 0;
   const netLatestDue = latestReading.remainingBalance !== undefined 
     ? latestReading.remainingBalance 
@@ -76,14 +76,14 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
   // Overdue calculations across all overdue bills
   const hasOverdue = overdueBills && overdueBills.length > 0;
   const overdueTotalNet = overdueBills.reduce((sum, r) => {
-    const gross = calculateCostOf(r.consumption, consumerRecord.consumerType);
+    const gross = calculateCostOf(r, consumerRecord.consumerType);
     const paid = r.paidAmount || 0;
     const net = r.remainingBalance !== undefined ? r.remainingBalance : Math.max(0, gross - paid);
     return sum + net;
   }, 0);
 
   const totalPenalties = overdueBills.reduce((sum, r) => {
-    const gross = calculateCostOf(r.consumption, consumerRecord.consumerType);
+    const gross = calculateCostOf(r, consumerRecord.consumerType);
     const paid = r.paidAmount || 0;
     const net = r.remainingBalance !== undefined ? r.remainingBalance : Math.max(0, gross - paid);
     const pen = r.penaltyAmount !== undefined ? r.penaltyAmount : Math.round(net * 0.10 * 100) / 100;
@@ -217,7 +217,7 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
             {/* Overdue Statements Summary Pill List */}
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {overdueBills.slice(0, 3).map((b, idx) => {
-                const bGross = calculateCostOf(b.consumption, consumerRecord.consumerType);
+                const bGross = calculateCostOf(b, consumerRecord.consumerType);
                 const bPaid = b.paidAmount || 0;
                 const bNet = b.remainingBalance !== undefined ? b.remainingBalance : Math.max(0, bGross - bPaid);
                 return (

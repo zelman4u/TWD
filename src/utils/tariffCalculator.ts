@@ -237,6 +237,54 @@ export function calculateWaterTariff(
 }
 
 /**
+ * Returns the authoritative basic water charge for a specific MeterReading:
+ * - Honors locked-in `reading.billAmount` whenever present so past/existing bills NEVER change after a rate hike.
+ * - For legacy readings without `billAmount` recorded strictly before the active tariff's `updatedAt` timestamp
+ *   (or tagged with `appliedTariffVersion <= 1`), computes against `DEFAULT_TARIFF_CONFIG`.
+ * - For all newly recorded readings, computes using `getActiveTariffConfig()`.
+ */
+export function getReadingEffectiveBillAmount(
+  reading:
+    | {
+        consumption: number;
+        classification?: string;
+        billAmount?: number;
+        readingDate?: string;
+        appliedTariffVersion?: number;
+      }
+    | null
+    | undefined,
+  fallbackClassification: 'Residential' | 'Commercial' | 'RES' | 'COMM' = 'Residential'
+): number {
+  if (!reading) return 0;
+  if (typeof reading.billAmount === 'number' && !Number.isNaN(reading.billAmount) && reading.billAmount >= 0) {
+    return Math.round(reading.billAmount * 100) / 100;
+  }
+
+  const rawClass = reading.classification || fallbackClassification;
+  const cls: 'Residential' | 'Commercial' =
+    rawClass === 'Commercial' || rawClass === 'COMM' ? 'Commercial' : 'Residential';
+
+  const activeTariff = getActiveTariffConfig();
+  if (reading.appliedTariffVersion !== undefined && reading.appliedTariffVersion <= 1) {
+    return calculateWaterTariff(reading.consumption, cls, DEFAULT_TARIFF_CONFIG);
+  }
+
+  if ((activeTariff.version || 1) > 1 && activeTariff.updatedAt && reading.readingDate) {
+    const readTs = new Date(reading.readingDate).getTime();
+    const tariffTs = new Date(activeTariff.updatedAt).getTime();
+    // Compare calendar days / timestamps so readings recorded prior to the tariff adjustment stay on original schedule
+    const tariffDayStart = new Date(activeTariff.updatedAt);
+    tariffDayStart.setHours(0, 0, 0, 0);
+    if (!Number.isNaN(readTs) && !Number.isNaN(tariffTs) && readTs < tariffDayStart.getTime()) {
+      return calculateWaterTariff(reading.consumption, cls, DEFAULT_TARIFF_CONFIG);
+    }
+  }
+
+  return calculateWaterTariff(reading.consumption, cls, activeTariff);
+}
+
+/**
  * Calculates 2% Franchise Tax: round((Bill Amt × rate) / (1 - rate), 2)
  */
 export function calculateFranchiseTax(billAmount: number, customTariff?: WaterTariffConfig): number {

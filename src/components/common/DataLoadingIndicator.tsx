@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { Waves, Droplet, RefreshCw, Sparkles, Database, CheckCircle2 } from 'lucide-react';
+import { Waves, Droplet, RefreshCw, Database, CheckCircle2 } from 'lucide-react';
 
 interface DataLoadingIndicatorProps {
   message?: string;
@@ -59,7 +59,7 @@ export default function DataLoadingIndicator({
 
       {badgeText && (
         <div className="mb-4 inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 text-[10px] font-black uppercase tracking-wider text-blue-400">
-          <Sparkles className="h-3 w-3 text-cyan-400" />
+          <Database className="h-3 w-3 text-cyan-400" />
           <span>{badgeText}</span>
         </div>
       )}

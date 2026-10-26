@@ -323,10 +323,15 @@ function triggerLocalUpdateEvent(key: string) {
 }
 
 // ============================================================================
-// FIRESTORE QUOTA CIRCUIT BREAKER (DEFAULT ENABLED FOR LIVE CROSS-DEVICE SYNC)
+// FIRESTORE QUOTA CIRCUIT BREAKER (SEPARATE WRITE VS READ QUOTA PROTECTION)
 // ============================================================================
-let memoryQuotaExceeded = false;
-let quotaCooldownUntil = 0;
+const WRITE_QUOTA_SESSION_KEY = 'twd_fs_write_quota_until_v3';
+const READ_QUOTA_SESSION_KEY = 'twd_fs_read_quota_until_v3';
+const SEEDED_STORAGE_KEY = 'twd_fs_seeded_v4';
+const DELETED_ANNOUNCEMENTS_KEY = 'twd_live_v4_deleted_announcements';
+
+let memoryWriteQuotaUntil = 0;
+let memoryReadQuotaUntil = 0;
 
 try {
   if (typeof window !== 'undefined') {
@@ -339,6 +344,14 @@ try {
       localStorage.removeItem(k);
       sessionStorage.removeItem(k);
     });
+    const savedWriteUntil = Number(sessionStorage.getItem(WRITE_QUOTA_SESSION_KEY) || '0');
+    if (savedWriteUntil > Date.now()) {
+      memoryWriteQuotaUntil = savedWriteUntil;
+    }
+    const savedReadUntil = Number(sessionStorage.getItem(READ_QUOTA_SESSION_KEY) || '0');
+    if (savedReadUntil > Date.now()) {
+      memoryReadQuotaUntil = savedReadUntil;
+    }
     enableNetwork(db).catch(() => {});
   }
 } catch {}
@@ -357,25 +370,56 @@ export function isQuotaError(err: any): boolean {
   );
 }
 
-export function isFirestoreQuotaExceeded(): boolean {
-  if (!memoryQuotaExceeded) return false;
-  if (Date.now() >= quotaCooldownUntil) {
-    memoryQuotaExceeded = false;
-    quotaCooldownUntil = 0;
+export function isFirestoreWriteQuotaExceeded(): boolean {
+  if (Date.now() < memoryWriteQuotaUntil) return true;
+  if (memoryWriteQuotaUntil !== 0) {
+    memoryWriteQuotaUntil = 0;
     try {
-      enableNetwork(db).catch(() => {});
+      sessionStorage.removeItem(WRITE_QUOTA_SESSION_KEY);
     } catch {}
-    return false;
   }
-  return true;
+  return false;
 }
 
-export function markFirestoreQuotaExceeded(_err?: any) {
-  if (!memoryQuotaExceeded) {
-    console.warn('[Firestore] Temporary rate limit reached; pausing background batch sync for 45s.');
+export function isFirestoreReadQuotaExceeded(): boolean {
+  if (Date.now() < memoryReadQuotaUntil) return true;
+  if (memoryReadQuotaUntil !== 0) {
+    memoryReadQuotaUntil = 0;
+    try {
+      sessionStorage.removeItem(READ_QUOTA_SESSION_KEY);
+    } catch {}
   }
-  memoryQuotaExceeded = true;
-  quotaCooldownUntil = Date.now() + 45 * 1000;
+  return false;
+}
+
+export function isFirestoreQuotaExceeded(): boolean {
+  return isFirestoreWriteQuotaExceeded();
+}
+
+export function markFirestoreQuotaExceeded(err?: any, mode: 'write' | 'read' = 'write') {
+  const msg = err?.message || String(err || '');
+  const isDailyLimit = msg.includes('Free daily write units') || msg.includes('Free daily read units');
+  // Pause 10 minutes on hard daily quota exhaustion (persisted in sessionStorage so reloads don't retry-storm), 60s on transient burst
+  const cooldownMs = isDailyLimit ? 10 * 60 * 1000 : 60 * 1000;
+  const until = Date.now() + cooldownMs;
+
+  if (mode === 'read' || msg.includes('Free daily read units')) {
+    if (Date.now() >= memoryReadQuotaUntil) {
+      console.warn('[Firestore] Read quota limit reached; falling back to REST/WebSocket sync.');
+    }
+    memoryReadQuotaUntil = until;
+    try {
+      sessionStorage.setItem(READ_QUOTA_SESSION_KEY, String(until));
+    } catch {}
+  } else {
+    if (Date.now() >= memoryWriteQuotaUntil) {
+      console.warn('[Firestore] Write quota limit reached; routing live writes through /api & WebSocket sync.');
+    }
+    memoryWriteQuotaUntil = until;
+    try {
+      sessionStorage.setItem(WRITE_QUOTA_SESSION_KEY, String(until));
+    } catch {}
+  }
 }
 
 /**
@@ -956,19 +1000,52 @@ export function startRealtimeFirestoreListeners() {
     );
     realtimeUnsubscribes.push(unsubReadings);
 
-    // 6. Live ANNOUNCEMENTS Listener
+    // 6. Live ANNOUNCEMENTS Listener (merges cloud + local without wiping newly published local advisories)
     const unsubAnnouncements = onSnapshot(
       collection(db, COLLECTIONS.ANNOUNCEMENTS),
       (snapshot) => {
         if (!snapshot.empty) {
+          let deletedIds = new Set<string>();
+          try {
+            const rawDel = localStorage.getItem(DELETED_ANNOUNCEMENTS_KEY);
+            if (rawDel) deletedIds = new Set(JSON.parse(rawDel));
+          } catch {}
+
           const cloudAnns: Announcement[] = [];
-          snapshot.forEach((d) => cloudAnns.push(d.data() as Announcement));
-          localStorage.setItem(KEYS.ANNOUNCEMENTS, JSON.stringify(cloudAnns));
-          triggerLocalUpdateEvent(KEYS.ANNOUNCEMENTS);
+          snapshot.forEach((d) => {
+            const a = d.data() as Announcement;
+            const id = a.id || d.id;
+            if (id && !deletedIds.has(id)) {
+              cloudAnns.push({ ...a, id });
+            }
+          });
+
+          const localRaw = localStorage.getItem(KEYS.ANNOUNCEMENTS);
+          const localAnns: Announcement[] = localRaw ? JSON.parse(localRaw) : [];
+          const mergedMap = new Map<string, Announcement>();
+
+          localAnns.forEach((la) => {
+            if (la?.id && !deletedIds.has(la.id)) mergedMap.set(la.id, la);
+          });
+          cloudAnns.forEach((ca) => {
+            if (ca?.id && !deletedIds.has(ca.id)) {
+              const prev = mergedMap.get(ca.id);
+              mergedMap.set(ca.id, prev ? { ...prev, ...ca } : ca);
+            }
+          });
+
+          const finalAnns = Array.from(mergedMap.values()).sort(
+            (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+          );
+          const nextJson = JSON.stringify(finalAnns);
+          if (localRaw !== nextJson) {
+            localStorage.setItem(KEYS.ANNOUNCEMENTS, nextJson);
+            triggerLocalUpdateEvent(KEYS.ANNOUNCEMENTS);
+          }
         }
       },
       (err) => {
-        if (isQuotaError(err)) markFirestoreQuotaExceeded(err);
+        if (isQuotaError(err)) markFirestoreQuotaExceeded(err, 'read');
       }
     );
     realtimeUnsubscribes.push(unsubAnnouncements);
@@ -1087,10 +1164,44 @@ export function startRealtimeFirestoreListeners() {
         }
       },
       (err) => {
-        if (isQuotaError(err)) markFirestoreQuotaExceeded(err);
+        if (isQuotaError(err)) markFirestoreQuotaExceeded(err, 'read');
       }
     );
     realtimeUnsubscribes.push(unsubReports);
+
+    // 10. Live TARIFF CONFIG Listener (propagates Admin rate adjustments automatically to all Consumer devices)
+    const unsubTariff = onSnapshot(
+      doc(db, COLLECTIONS.SETTINGS, 'tariff_config'),
+      (snap) => {
+        if (snap.exists()) {
+          const cloudCfg = snap.data() as Record<string, any>;
+          if (cloudCfg && cloudCfg.residential && cloudCfg.commercial) {
+            try {
+              const localRaw = localStorage.getItem(KEYS.TARIFF_CONFIG);
+              const localCfg = localRaw ? JSON.parse(localRaw) : null;
+              const cloudVer = Number(cloudCfg.version || 1);
+              const localVer = Number(localCfg?.version || 0);
+              const cloudTime = new Date(cloudCfg.updatedAt || 0).getTime();
+              const localTime = new Date(localCfg?.updatedAt || 0).getTime();
+              if (!localCfg || cloudVer > localVer || (cloudVer === localVer && cloudTime > localTime)) {
+                const nextJson = JSON.stringify(cloudCfg);
+                if (localRaw !== nextJson) {
+                  localStorage.setItem(KEYS.TARIFF_CONFIG, nextJson);
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('twd_tariff_updated', { detail: cloudCfg }));
+                  }
+                  triggerLocalUpdateEvent(KEYS.TARIFF_CONFIG);
+                }
+              }
+            } catch {}
+          }
+        }
+      },
+      (err) => {
+        if (isQuotaError(err)) markFirestoreQuotaExceeded(err, 'read');
+      }
+    );
+    realtimeUnsubscribes.push(unsubTariff);
   } catch (err) {
     console.warn('[Firestore Live Sync] Listener init notice:', err);
   }
@@ -1182,7 +1293,7 @@ export async function pushIssuedConsumerToFirestore(
   force: boolean = false,
   previousAccountNumber?: string
 ): Promise<void> {
-  if (!force && isFirestoreQuotaExceeded()) return;
+  if (isFirestoreWriteQuotaExceeded()) return;
   if (!isRealIssuedAccountNumber(consumer.accountNumber)) return;
 
   const accNum = consumer.accountNumber.replace(/^#/, '').trim().toUpperCase();
@@ -1355,8 +1466,11 @@ export async function pushIssuedConsumerToFirestore(
       }
     }
 
-    // 3. Ensure official Account Issuance Notification exists in Firestore
+    // 3. Ensure official Account Issuance Notification exists in Firestore (deterministic timestamp for payload dedupe)
     const deterministicNotifId = `notif-issued-${accNum.replace(/[^a-zA-Z0-9]/g, '')}`;
+    const stableIssuedTimestamp = consumer.registrationDate
+      ? `${consumer.registrationDate.split('T')[0]}T00:00:00.000Z`
+      : '2026-01-01T00:00:00.000Z';
     const notifToSync: ConsumerNotification = sanitizeForFirestore(
       notification
         ? {
@@ -1373,7 +1487,7 @@ export async function pushIssuedConsumerToFirestore(
             consumerEmail: cleanEmail || undefined,
             title: 'Official Account Number & Meter Issued!',
             message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${accNum} and Meter Serial is #${meterNum}. Smart RFID Tag: ${rfidTag}. Your full dashboard and telemetry are now active.`,
-            timestamp: new Date().toISOString(),
+            timestamp: stableIssuedTimestamp,
             type: 'account_issue',
             read: false,
           }
@@ -1578,10 +1692,14 @@ export async function resolveConsumerAccountInFirestore(params: {
         await getDocs(query(collection(db, COLLECTIONS.NOTIFICATIONS), where('userId', '==', targetNotifUid), limit(30)))
       );
     }
+    // Also include district-wide broadcast notifications (announcements & tariff advisories)
+    addNotifSnap(
+      await getDocs(query(collection(db, COLLECTIONS.NOTIFICATIONS), where('accountNumber', '==', 'ALL'), limit(20)))
+    );
 
     const notifications = Array.from(notifMap.values());
 
-    // 4. Self-heal Firestore if consumer is issued so stale pending twins & missing notifications are fixed permanently
+    // 4. Synthesize issuance notification in-memory if missing (NEVER perform Firestore writes inside a read resolver!)
     if (isIssued && resolvedConsumer) {
       const hasIssuanceNotif = notifications.some(
         (n) =>
@@ -1597,14 +1715,13 @@ export async function resolveConsumerAccountInFirestore(params: {
           consumerEmail: (effectiveEmail || resolvedConsumer.email || '').trim().toLowerCase() || undefined,
           title: 'Official Account Number & Meter Issued!',
           message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${finalAcc} and Meter Serial is #${resolvedConsumer.meterNumber}. Smart RFID Tag: ${resolvedConsumer.rfidTag}. Your full dashboard and telemetry are now active.`,
-          timestamp: new Date().toISOString(),
+          timestamp: resolvedConsumer.registrationDate
+            ? `${resolvedConsumer.registrationDate.split('T')[0]}T00:00:00.000Z`
+            : '2026-01-01T00:00:00.000Z',
           type: 'account_issue',
           read: false,
         };
         notifications.unshift(backfilled);
-        pushIssuedConsumerToFirestore(resolvedConsumer, backfilled, resolvedUser || undefined).catch(() => {});
-      } else {
-        pushIssuedConsumerToFirestore(resolvedConsumer, undefined, resolvedUser || undefined).catch(() => {});
       }
 
       if (resolvedUser) {
@@ -1624,7 +1741,7 @@ export async function resolveConsumerAccountInFirestore(params: {
     };
   } catch (error) {
     if (isQuotaError(error)) {
-      markFirestoreQuotaExceeded(error);
+      markFirestoreQuotaExceeded(error, 'read');
     } else if (isPermissionDeniedError(error)) {
       try {
         handleFirestoreError(error, OperationType.GET, COLLECTIONS.CONSUMERS);
@@ -1654,7 +1771,7 @@ export function subscribeToConsumerIdentityInFirestore(
     notifications: ConsumerNotification[];
   }) => void
 ): () => void {
-  if (isFirestoreQuotaExceeded()) return () => {};
+  if (isFirestoreReadQuotaExceeded()) return () => {};
 
   const cleanEmail = (params.email || '').trim().toLowerCase();
   const cleanUid = (params.userId || '').trim();
@@ -1780,13 +1897,21 @@ export async function initializeFirestoreSeed(initialData: {
   announcements: Announcement[];
   barangays: Barangay[];
 }) {
-  if (isFirestoreQuotaExceeded()) {
+  if (!isFirestoreReadQuotaExceeded()) {
+    startRealtimeFirestoreListeners();
+  }
+  if (isFirestoreWriteQuotaExceeded()) {
     return;
   }
+  try {
+    if (typeof window !== 'undefined' && localStorage.getItem(SEEDED_STORAGE_KEY) === '1') {
+      return;
+    }
+  } catch {}
 
   try {
     setTimeout(async () => {
-      if (isFirestoreQuotaExceeded()) {
+      if (isFirestoreWriteQuotaExceeded()) {
         return;
       }
       try {
@@ -1822,18 +1947,18 @@ export async function initializeFirestoreSeed(initialData: {
 
           await batch.commit();
         }
-
-        startRealtimeFirestoreListeners();
+        try {
+          localStorage.setItem(SEEDED_STORAGE_KEY, '1');
+        } catch {}
       } catch (innerError: any) {
         if (isQuotaError(innerError)) {
-          markFirestoreQuotaExceeded(innerError);
+          markFirestoreQuotaExceeded(innerError, 'write');
         }
-        startRealtimeFirestoreListeners();
       }
     }, 300);
   } catch (error: any) {
     if (isQuotaError(error)) {
-      markFirestoreQuotaExceeded(error);
+      markFirestoreQuotaExceeded(error, 'write');
     }
   }
 }
@@ -1848,7 +1973,7 @@ export async function syncDocToFirestore<T extends object>(
   force: boolean = false
 ): Promise<void> {
   if (!docId || docId.trim() === '') return;
-  if (!force && isFirestoreQuotaExceeded()) return;
+  if (isFirestoreWriteQuotaExceeded()) return;
   const cleanId = sanitizeDocId(docId);
   const cleanData = sanitizeForFirestore(data);
   if (!force && isPayloadAlreadySynced(collectionName, cleanId, cleanData)) return;

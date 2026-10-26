@@ -74,6 +74,8 @@ const CORE_BACKEND_ROUTES = new Set([
   '/api/reports',
   '/api/readers',
   '/api/notifications',
+  '/api/announcements',
+  '/api/tariff-config',
   '/api/consumers',
   '/api/consumers/reconcile',
   '/api/consumers/resolve-account',
@@ -95,10 +97,15 @@ function isRouteTemporarilyUnavailable(url: string): boolean {
 }
 
 function markRoute404(url: string, contentType: string) {
+  // If the server returned a JSON 404 response, the backend API is alive and routing properly
+  // (e.g. resource ID not found). Never trip static-host circuit breaking on JSON 404s.
+  if (contentType && contentType.toLowerCase().includes('application/json')) {
+    return;
+  }
   const routeKey = normalizeApiRouteKey(url);
   const cooldownMs = 15 * 60 * 1000; // 15 minutes
   unavailableApiRoutes.set(routeKey, Date.now() + cooldownMs);
-  if (CORE_BACKEND_ROUTES.has(routeKey) || !contentType.includes('application/json')) {
+  if (CORE_BACKEND_ROUTES.has(routeKey)) {
     backendStaticOnlyUntil = Date.now() + cooldownMs;
   }
 }
@@ -407,11 +414,57 @@ export const apiClient = {
     return apiClient.post<{ success: boolean; message: string; report: any }>('/api/reports', reportData);
   },
 
-  replyToReport: async (id: string, replyData: { senderId: string; senderName: string; senderRole: 'admin' | 'consumer' | 'staff'; message: string; statusUpdate?: string; assignedStaff?: string }) => {
-    return apiClient.post<{ success: boolean; message: string; report: any; reply: any }>(`/api/reports/${encodeURIComponent(id)}/reply`, replyData);
+  replyToReport: async (
+    id: string,
+    replyData: {
+      senderId: string;
+      senderName: string;
+      senderRole: 'admin' | 'consumer' | 'staff';
+      message: string;
+      statusUpdate?: string;
+      assignedStaff?: string;
+      report?: any;
+    }
+  ) => {
+    return apiClient.post<{ success: boolean; message: string; report: any; reply: any }>(
+      `/api/reports/${encodeURIComponent(id)}/reply`,
+      replyData
+    );
   },
 
-  updateReportStatus: async (id: string, status: string, assignedStaff?: string) => {
-    return apiClient.patch<{ success: boolean; message: string; report: any }>(`/api/reports/${encodeURIComponent(id)}/status`, { status, assignedStaff });
-  }
+  updateReportStatus: async (id: string, status: string, assignedStaff?: string, report?: any) => {
+    return apiClient.patch<{ success: boolean; message: string; report: any }>(
+      `/api/reports/${encodeURIComponent(id)}/status`,
+      { status, assignedStaff, report }
+    );
+  },
+
+  // District Public Announcements
+  getAnnouncements: async () => {
+    return apiClient.get<{ success: boolean; announcements: any[]; data?: any[] }>('/api/announcements');
+  },
+
+  createAnnouncement: async (announcement: any) => {
+    return apiClient.post<{ success: boolean; announcement: any }>('/api/announcements', announcement);
+  },
+
+  updateAnnouncement: async (id: string, announcement: any) => {
+    return apiClient.put<{ success: boolean; announcement: any }>(
+      `/api/announcements/${encodeURIComponent(id)}`,
+      announcement
+    );
+  },
+
+  deleteAnnouncement: async (id: string) => {
+    return apiClient.delete<{ success: boolean }>(`/api/announcements/${encodeURIComponent(id)}`);
+  },
+
+  // Water Tariff Schedule Sync
+  getTariffConfig: async () => {
+    return apiClient.get<{ success: boolean; config: any }>('/api/tariff-config');
+  },
+
+  saveTariffConfig: async (config: any) => {
+    return apiClient.post<{ success: boolean; config: any }>('/api/tariff-config', config);
+  },
 };

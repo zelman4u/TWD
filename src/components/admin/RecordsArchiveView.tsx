@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { Consumer, WaterMeter, MeterReading, AuditLog } from '../../types';
 import { TablePagination } from '../common/TablePagination';
+import { SmartSearchBar } from '../common/SmartSearchBar';
+import { smartMatch } from '../../utils/smartSearch';
 
 interface RecordsArchiveViewProps {
   recordsTab: 'consumers' | 'meters' | 'readings' | 'bills' | 'payments' | 'audit';
@@ -35,7 +37,7 @@ interface RecordsArchiveViewProps {
   setSearchQuery: (q: string) => void;
   classificationFilter: 'all' | 'Residential' | 'Commercial';
   setClassificationFilter: (c: 'all' | 'Residential' | 'Commercial') => void;
-  calculateCostOf: (usage: number, classification?: string) => number;
+  calculateCostOf: (usageOrReading: number | MeterReading, classification?: string) => number;
   handleVerifyReading: (id: string, status: 'verified' | 'flagged_abnormal') => void;
   handleDeleteReading: (id: string) => void;
   exportToCsv: (filename: string, headers: string[], rows: (string | number | undefined)[][]) => void;
@@ -62,82 +64,140 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
     setCurrentPage(1);
   }, [recordsTab, searchQuery, classificationFilter]);
 
-  const q = searchQuery.toLowerCase().trim();
-
   // Metrics for Cards
   const totalConsumers = consumers.length;
   const activeConsumers = consumers.filter(c => c.status === 'active').length;
-  const commercialConsumers = consumers.filter(c => c.consumerType === 'Commercial').length;
 
   const totalMeters = meters.length;
   const activeMeters = meters.filter(m => m.status === 'active').length;
 
   const totalReadings = readings.length;
   const verifiedReadings = readings.filter(r => r.status === 'verified').length;
-  const pendingReadings = readings.filter(r => r.status === 'pending').length;
 
   const bills = readings.filter(r => r.status === 'verified');
   const paidBills = readings.filter(r => r.paymentStatus === 'paid');
   const totalCollectedAmount = paidBills.reduce((acc, r) => {
-    const cost = r.paidAmount && r.paidAmount > 0 ? r.paidAmount : calculateCostOf(r.consumption, r.classification);
+    const cost = r.paidAmount && r.paidAmount > 0 ? r.paidAmount : calculateCostOf(r, r.classification);
     return acc + cost;
   }, 0);
 
   // Filtered Consumers
   const filteredConsumers = consumers.filter(c => {
-    const matchesSearch = !q || 
-      (c.name || '').toLowerCase().includes(q) ||
-      (c.accountNumber || '').toLowerCase().includes(q) ||
-      (c.meterNumber || '').toLowerCase().includes(q) ||
-      (c.address || '').toLowerCase().includes(q) ||
-      (c.businessName || '').toLowerCase().includes(q);
+    const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.status === 'pending_approval';
+    const matchesSearch = smartMatch(searchQuery, [
+      c.name,
+      c.accountNumber,
+      c.meterNumber,
+      c.rfidTag,
+      c.address,
+      c.barangay,
+      c.sitioZone,
+      c.contactNumber,
+      c.email,
+      c.businessName,
+      c.consumerType || 'Residential',
+      c.status,
+      isPending ? 'pending id issuance' : 'active issued',
+    ]);
     const matchesType = classificationFilter === 'all' || (c.consumerType || 'Residential') === classificationFilter;
     return matchesSearch && matchesType;
   });
 
   // Filtered Meters
   const filteredMeters = meters.filter(m => {
-    return !q ||
-      (m.meterNumber || '').toLowerCase().includes(q) ||
-      (m.brand || '').toLowerCase().includes(q) ||
-      (m.linkedAccountNumber || '').toLowerCase().includes(q) ||
-      (m.status || '').toLowerCase().includes(q);
+    const linked = consumers.find(c => c.accountNumber === m.linkedAccountNumber);
+    return smartMatch(searchQuery, [
+      m.meterNumber,
+      m.brand,
+      m.linkedAccountNumber || 'unassigned',
+      linked?.name,
+      linked?.barangay,
+      linked?.address,
+      m.installationDate,
+      m.status,
+    ]);
   });
 
   // Filtered Readings
   const filteredReadings = readings.filter(r => {
-    return !q ||
-      (r.accountNumber || '').toLowerCase().includes(q) ||
-      (r.consumerName || '').toLowerCase().includes(q) ||
-      (r.meterReaderName || '').toLowerCase().includes(q) ||
-      (r.id || '').toLowerCase().includes(q);
+    return smartMatch(searchQuery, [
+      r.id,
+      r.accountNumber,
+      r.consumerName,
+      r.meterNumber,
+      r.billingPeriod,
+      r.readingDate,
+      r.meterReaderName,
+      r.route,
+      r.status,
+      r.notes,
+      `${r.consumption} m3`,
+    ]);
   });
 
   // Filtered Bills
   const filteredBills = bills.filter(r => {
-    return !q ||
-      (r.accountNumber || '').toLowerCase().includes(q) ||
-      (r.consumerName || '').toLowerCase().includes(q) ||
-      (r.billingPeriod || '').toLowerCase().includes(q);
+    const billAmt = calculateCostOf(r, r.classification).toFixed(2);
+    return smartMatch(searchQuery, [
+      r.id,
+      r.accountNumber,
+      r.consumerName,
+      r.meterNumber,
+      r.billingPeriod,
+      r.dueDate,
+      r.paymentStatus || 'unpaid',
+      r.classification || 'Residential',
+      billAmt,
+      `${r.consumption} m3`,
+    ]);
   });
 
   // Filtered Payments
   const filteredPayments = paidBills.filter(r => {
-    return !q ||
-      (r.transactionId || '').toLowerCase().includes(q) ||
-      (r.accountNumber || '').toLowerCase().includes(q) ||
-      (r.consumerName || '').toLowerCase().includes(q) ||
-      (r.paymentMethod || '').toLowerCase().includes(q);
+    const paidAmt = (r.paidAmount && r.paidAmount > 0 ? r.paidAmount : calculateCostOf(r, r.classification)).toFixed(2);
+    return smartMatch(searchQuery, [
+      r.transactionId,
+      r.orNumber,
+      r.paymentReference,
+      r.accountNumber,
+      r.consumerName,
+      r.billingPeriod,
+      r.paymentDate,
+      r.readingDate,
+      r.paymentMethod || 'Cash',
+      paidAmt,
+    ]);
   });
 
   // Filtered Audit Logs
   const filteredAuditLogs = auditLogs.filter(log => {
-    return !q ||
-      (log.userName || '').toLowerCase().includes(q) ||
-      (log.action || '').toLowerCase().includes(q) ||
-      (log.details || '').toLowerCase().includes(q) ||
-      (log.ipAddress || '').toLowerCase().includes(q);
+    const formattedTs = log.timestamp ? new Date(log.timestamp).toLocaleString() : '';
+    return smartMatch(searchQuery, [
+      log.userName,
+      log.userRole,
+      log.action,
+      log.details,
+      log.ipAddress,
+      formattedTs,
+      log.timestamp,
+    ]);
   });
+
+  const activeTotalCount =
+    recordsTab === 'consumers' ? consumers.length :
+    recordsTab === 'meters' ? meters.length :
+    recordsTab === 'readings' ? readings.length :
+    recordsTab === 'bills' ? bills.length :
+    recordsTab === 'payments' ? paidBills.length :
+    auditLogs.length;
+
+  const activeFilteredCount =
+    recordsTab === 'consumers' ? filteredConsumers.length :
+    recordsTab === 'meters' ? filteredMeters.length :
+    recordsTab === 'readings' ? filteredReadings.length :
+    recordsTab === 'bills' ? filteredBills.length :
+    recordsTab === 'payments' ? filteredPayments.length :
+    filteredAuditLogs.length;
 
   // CSV Export Triggers
   const handleExportCurrentView = () => {
@@ -185,7 +245,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
         b.accountNumber,
         b.consumerName,
         b.consumption,
-        calculateCostOf(b.consumption, b.classification).toFixed(2),
+        calculateCostOf(b, b.classification).toFixed(2),
         b.paymentStatus || 'unpaid'
       ]);
       exportToCsv(`TWD_Bills_Ledger_${timestamp}.csv`, headers, rows);
@@ -197,7 +257,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
         p.accountNumber,
         p.consumerName,
         p.paymentMethod || 'Cash',
-        (p.paidAmount && p.paidAmount > 0 ? p.paidAmount : calculateCostOf(p.consumption, p.classification)).toFixed(2)
+        (p.paidAmount && p.paidAmount > 0 ? p.paidAmount : calculateCostOf(p, p.classification)).toFixed(2)
       ]);
       exportToCsv(`TWD_Payment_Receipts_${timestamp}.csv`, headers, rows);
     } else if (recordsTab === 'audit') {
@@ -217,103 +277,95 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
     <div className="space-y-6" id="records-archive-view">
       {/* 1. ARCHIVE CONTEXT STATS BAR */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="bg-slate-900 border border-slate-800 p-3.5 flex flex-col justify-between">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
           <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-black uppercase tracking-wider">Master Accounts</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider">Master Accounts</span>
             <Building2 className="h-4 w-4 text-blue-400" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-white">{totalConsumers.toLocaleString()}</div>
-            <div className="text-[10px] text-slate-400 font-mono mt-0.5">{activeConsumers} Active Connected</div>
+            <div className="text-xl font-black text-white tabular-nums">{totalConsumers.toLocaleString()}</div>
+            <div className="text-[10px] text-slate-400 font-mono tabular-nums mt-0.5">{activeConsumers} Active Connected</div>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 p-3.5 flex flex-col justify-between">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
           <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-black uppercase tracking-wider">Meters Tracked</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider">Meters Tracked</span>
             <Gauge className="h-4 w-4 text-cyan-400" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-white">{totalMeters.toLocaleString()}</div>
-            <div className="text-[10px] text-slate-400 font-mono mt-0.5">{activeMeters} Operational</div>
+            <div className="text-xl font-black text-white tabular-nums">{totalMeters.toLocaleString()}</div>
+            <div className="text-[10px] text-slate-400 font-mono tabular-nums mt-0.5">{activeMeters} Operational</div>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 p-3.5 flex flex-col justify-between">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
           <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-black uppercase tracking-wider">Field Readings</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider">Field Readings</span>
             <Activity className="h-4 w-4 text-emerald-400" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-emerald-400">{totalReadings.toLocaleString()}</div>
-            <div className="text-[10px] text-slate-400 font-mono mt-0.5">{verifiedReadings} Verified Records</div>
+            <div className="text-xl font-black text-emerald-400 tabular-nums">{totalReadings.toLocaleString()}</div>
+            <div className="text-[10px] text-slate-400 font-mono tabular-nums mt-0.5">{verifiedReadings} Verified Records</div>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 p-3.5 flex flex-col justify-between">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
           <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-black uppercase tracking-wider">Billed Assessments</span>
-            <Receipt className="h-4 w-4 text-amber-400" />
+            <span className="text-[10px] font-bold uppercase tracking-wider">Billed Assessments</span>
+            <Receipt className="h-4 w-4 text-sky-400" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-white">{bills.length.toLocaleString()}</div>
-            <div className="text-[10px] text-amber-400 font-mono mt-0.5">{bills.length - paidBills.length} Pending Collections</div>
+            <div className="text-xl font-black text-white tabular-nums">{bills.length.toLocaleString()}</div>
+            <div className="text-[10px] text-slate-400 font-mono tabular-nums mt-0.5">{bills.length - paidBills.length} Pending Collections</div>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 p-3.5 flex flex-col justify-between">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
           <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-black uppercase tracking-wider">Cash Collections</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider">Cash Collections</span>
             <CreditCard className="h-4 w-4 text-emerald-400" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-emerald-400">₱{totalCollectedAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-            <div className="text-[10px] text-emerald-300 font-mono mt-0.5">{paidBills.length} Valid Official Receipts</div>
+            <div className="text-xl font-black text-emerald-400 tabular-nums">₱{totalCollectedAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+            <div className="text-[10px] text-emerald-300 font-mono tabular-nums mt-0.5">{paidBills.length} Valid Official Receipts</div>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 p-3.5 flex flex-col justify-between">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
           <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-black uppercase tracking-wider">Audit Security</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider">Audit Security</span>
             <ShieldCheck className="h-4 w-4 text-indigo-400" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-white">{auditLogs.length.toLocaleString()}</div>
+            <div className="text-xl font-black text-white tabular-nums">{auditLogs.length.toLocaleString()}</div>
             <div className="text-[10px] text-slate-400 font-mono mt-0.5">Immutable System Events</div>
           </div>
         </div>
       </div>
 
       {/* 2. REGULATORY ARCHIVE TOOLBAR */}
-      <div className="bg-white border border-slate-200 p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-2xs">
-        <div className="flex flex-1 items-center gap-3">
-          <div className="relative flex-1 max-w-md">
-            <Search className="h-4 w-4 absolute left-3 top-2.5 text-slate-400" />
-            <input
-              type="text"
-              placeholder={`Search ${recordsTab}... (by name, account #, serial, date)`}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-xl">
+        <div className="flex flex-col sm:flex-row flex-1 items-stretch sm:items-center gap-3">
+          <div className="flex-1 max-w-xl w-full">
+            <SmartSearchBar
+              variant="dark"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 pl-9 pr-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:bg-white transition"
+              onChange={setSearchQuery}
+              resultCount={activeFilteredCount}
+              totalCount={activeTotalCount}
+              placeholder={`Smart search ${recordsTab} by name, account #, serial, barangay, phone, or date...`}
+              id="records-archive-smart-search"
             />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-2 text-[10px] font-bold text-slate-400 hover:text-slate-600 uppercase"
-              >
-                Clear
-              </button>
-            )}
           </div>
 
           {recordsTab === 'consumers' && (
-            <div className="flex items-center space-x-1.5 shrink-0">
-              <Filter className="h-3.5 w-3.5 text-slate-400" />
+            <div className="flex items-center space-x-2 shrink-0">
+              <Filter className="h-3.5 w-3.5 text-slate-400 hidden sm:block" />
               <select
                 value={classificationFilter}
                 onChange={(e) => setClassificationFilter(e.target.value as any)}
-                className="bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold py-1.5 px-2.5 focus:outline-none focus:border-blue-600"
+                className="w-full sm:w-auto bg-slate-950 border border-slate-800 rounded-xl text-slate-200 text-xs font-bold py-2.5 px-3 focus:outline-none focus:border-blue-500 cursor-pointer"
               >
                 <option value="all">All Classifications</option>
                 <option value="Residential">Residential Only</option>
@@ -323,33 +375,24 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 shrink-0">
-          <span className="text-[11px] font-mono text-slate-500 hidden sm:inline">
-            Showing{' '}
-            <strong className="text-slate-900 font-bold">
-              {recordsTab === 'consumers' && filteredConsumers.length}
-              {recordsTab === 'meters' && filteredMeters.length}
-              {recordsTab === 'readings' && filteredReadings.length}
-              {recordsTab === 'bills' && filteredBills.length}
-              {recordsTab === 'payments' && filteredPayments.length}
-              {recordsTab === 'audit' && filteredAuditLogs.length}
-            </strong>{' '}
-            entries
+        <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+          <span className="text-[11px] font-mono tabular-nums text-slate-400">
+            Showing <strong className="text-white font-bold">{activeFilteredCount}</strong> of {activeTotalCount} entries
           </span>
 
           <button
             type="button"
             onClick={handleExportCurrentView}
-            className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs uppercase tracking-wider transition flex items-center space-x-1.5 cursor-pointer shadow-xs shrink-0"
+            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-1.5 cursor-pointer shadow-md shrink-0"
           >
-            <Download className="h-3.5 w-3.5 text-amber-400" />
+            <Download className="h-3.5 w-3.5 text-white" />
             <span>Export CSV</span>
           </button>
         </div>
       </div>
 
       {/* 3. ARCHIVE DATA PRESENTATION */}
-      <div className="bg-slate-900 border border-slate-800 overflow-hidden shadow-xl">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
         {/* SUBTAB A: CONSUMERS ARCHIVE */}
         {recordsTab === 'consumers' && (() => {
           const paginatedConsumers = filteredConsumers.slice((currentPage - 1) * 10, currentPage * 10);
@@ -371,7 +414,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                     {paginatedConsumers.map((c, cIdx) => {
                       const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || c.status === 'pending_approval';
                       return (
-                      <tr key={`rec-cons-${c.accountNumber || c.meterNumber || cIdx}-${cIdx}`} className={`transition ${isPending ? 'bg-amber-950/20 hover:bg-amber-950/40 border-l-2 border-l-amber-500' : 'hover:bg-slate-800/60'}`}>
+                      <tr key={`rec-cons-${c.accountNumber || c.meterNumber || cIdx}-${cIdx}`} className={`transition ${isPending ? 'bg-amber-950/20 hover:bg-amber-950/40' : 'hover:bg-slate-800/60'}`}>
                         <td className="px-5 py-3 font-mono font-bold border-r border-slate-800/80">
                           {isPending ? (
                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40 text-[11px] font-bold">
@@ -649,7 +692,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
                     {paginatedBills.map((r, bIdx) => {
-                      const totalBill = calculateCostOf(r.consumption, r.classification);
+                      const totalBill = calculateCostOf(r, r.classification);
                       return (
                         <tr key={`rec-bill-${r.id || r.accountNumber || bIdx}-${bIdx}`} className="hover:bg-slate-800/60 transition">
                           <td className="px-5 py-3 font-mono font-bold text-white border-r border-slate-800/80">
@@ -720,7 +763,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
                     {paginatedPayments.map((r, pIdx) => {
-                      const totalBill = r.paidAmount && r.paidAmount > 0 ? r.paidAmount : calculateCostOf(r.consumption, r.classification);
+                      const totalBill = r.paidAmount && r.paidAmount > 0 ? r.paidAmount : calculateCostOf(r, r.classification);
                       return (
                         <tr key={`rec-paid-${r.id || r.transactionId || pIdx}-${pIdx}`} className="hover:bg-slate-800/60 transition">
                           <td className="px-5 py-3 font-mono font-bold text-emerald-400 border-r border-slate-800/80">

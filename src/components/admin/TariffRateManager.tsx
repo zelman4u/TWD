@@ -22,7 +22,6 @@ import {
   Home, 
   HelpCircle,
   Clock,
-  Sparkles,
   ArrowRight,
   RefreshCw,
   Flame,
@@ -40,7 +39,7 @@ import {
 import { mockDb } from '../../mockDb';
 import { User, Consumer, MeterReading, Announcement } from '../../types';
 import { sendRealtimeMessage } from '../../services/realtimeSocket';
-import { syncBatchToFirestore, COLLECTIONS } from '../../services/firebaseDb';
+import { apiClient } from '../../services/apiClient';
 import { useToast } from '../../context/ToastContext';
 
 interface TariffRateManagerProps {
@@ -81,8 +80,8 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
   // Target classification state: 'Residential' (Regular community / single account) | 'Commercial' (Private high-consumption accounts) | 'both'
   const [targetScope, setTargetScope] = useState<'Residential' | 'Commercial' | 'both'>('Residential');
 
-  // Options toggles
-  const [recalculateUnbilledReadings, setRecalculateUnbilledReadings] = useState(true);
+  // Options toggles (existing/historical readings are always protected and locked at their original billed rate)
+  const [protectHistoricalReadings] = useState(true);
   const [notifyAllConsumers, setNotifyAllConsumers] = useState(true);
   const [postAnnouncement, setPostAnnouncement] = useState(true);
   const [broadcastWebSocket, setBroadcastWebSocket] = useState(true);
@@ -258,173 +257,153 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
     return (isComm && isCommTargeted) || (!isComm && isResTargeted);
   }).length;
 
-  // Commit and Implement Price Hike with Identification of Residential vs Commercial
+  // Commit and Implement Price Hike (Strictly Forward-Only: Locks existing readings, applies new rates ONLY to NEW readings)
   const handleCommitTariffHike = () => {
     setIsApplying(true);
 
     try {
+      const previousTariff = activeTariff;
       const finalConfig: WaterTariffConfig = {
         ...formConfig,
-        residential: isResTargeted ? formConfig.residential : activeTariff.residential,
-        commercial: isCommTargeted ? formConfig.commercial : activeTariff.commercial,
-        version: (activeTariff.version || 1) + 1,
+        residential: isResTargeted ? formConfig.residential : previousTariff.residential,
+        commercial: isCommTargeted ? formConfig.commercial : previousTariff.commercial,
+        version: (previousTariff.version || 1) + 1,
         updatedAt: new Date().toISOString(),
         updatedBy: currentUser.name || 'Administrator',
       };
 
-      // 1. Save active tariff config in mockDb, localStorage, and Firestore
+      // 1. Freeze any legacy un-stamped readings at their PREVIOUS tariff BEFORE saving the new rate hike
+      // so existing/old readings NEVER get retroactively altered by the new price adjustment.
+      let frozenHistoricalCount = 0;
+      const allReadings = mockDb.getReadings();
+      const lockedReadings = allReadings.map(r => {
+        if (r.billAmount === undefined && r.consumption >= 0) {
+          frozenHistoricalCount++;
+          const lockedBasic = calculateWaterTariff(
+            r.consumption || 0,
+            r.classification || 'Residential',
+            previousTariff
+          );
+          const lockedTax = r.franchiseTax !== undefined
+            ? r.franchiseTax
+            : calculateFranchiseTax(lockedBasic, previousTariff);
+          const lockedTotal = r.totalAmount !== undefined
+            ? r.totalAmount
+            : Math.round((lockedBasic + lockedTax + (r.arrears || 0)) * 100) / 100;
+          const lockedRemaining = r.remainingBalance !== undefined
+            ? r.remainingBalance
+            : Math.max(0, lockedTotal - (r.paidAmount || 0));
+          return {
+            ...r,
+            billAmount: lockedBasic,
+            franchiseTax: lockedTax,
+            totalAmount: lockedTotal,
+            remainingBalance: lockedRemaining,
+            appliedTariffVersion: r.appliedTariffVersion ?? (previousTariff.version || 1),
+          };
+        }
+        return r;
+      });
+
+      if (frozenHistoricalCount > 0) {
+        mockDb.saveReadings(lockedReadings);
+        setReadings(lockedReadings);
+      }
+
+      // 2. Save active tariff config in mockDb, localStorage, API (/api/tariff-config), and Firestore
+      // All NEW meter readings recorded from this moment forward will automatically use finalConfig!
       mockDb.saveTariffConfig(finalConfig);
       setActiveTariff(finalConfig);
 
-      let updatedReadingsCount = 0;
+      // 3. Dispatch a single district-wide notification (`accountNumber: 'ALL'`) instead of 50+ per-consumer writes
+      const notifiedConsumersCount = notifyAllConsumers ? targetedConsumersCount : 0;
+      const scopeLabel =
+        targetScope === 'Residential'
+          ? 'Residential Community'
+          : targetScope === 'Commercial'
+          ? 'Commercial Private'
+          : 'Residential & Commercial';
 
-      // 2. Automatically recalculate price hike in unbilled readings for targeted classification only
-      if (recalculateUnbilledReadings) {
-        const allReadings = mockDb.getReadings();
-        const updated = allReadings.map(r => {
-          if (r.paymentStatus !== 'paid' && r.consumption > 0) {
-            const isCommReading = r.classification === 'Commercial';
-            const shouldRecalculate = (isCommReading && isCommTargeted) || (!isCommReading && isResTargeted);
-
-            if (shouldRecalculate) {
-              updatedReadingsCount++;
-              const newBasicBill = calculateWaterTariff(r.consumption, r.classification || 'Residential', finalConfig);
-              const newTax = calculateFranchiseTax(newBasicBill, finalConfig);
-              const oldPaid = r.paidAmount || 0;
-              const newTotal = Math.round((newBasicBill + newTax + (r.arrears || 0)) * 100) / 100;
-              const newRemaining = Math.max(0, newTotal - oldPaid);
-              return {
-                ...r,
-                billAmount: newBasicBill,
-                franchiseTax: newTax,
-                totalAmount: newTotal,
-                remainingBalance: newRemaining
-              };
-            }
-          }
-          return r;
-        });
-        mockDb.saveReadings(updated);
-        setReadings(updated);
-
-        // Update each consumer's total outstandingBalance to match their updated readings
-        const allConsumers = mockDb.getConsumers();
-        const consumerBalanceMap: Record<string, number> = {};
-        updated.forEach(r => {
-          if (r.paymentStatus !== 'paid' && r.remainingBalance !== undefined) {
-            consumerBalanceMap[r.accountNumber] = (consumerBalanceMap[r.accountNumber] || 0) + (r.remainingBalance || 0);
-          }
-        });
-
-        const updatedConsumers = allConsumers.map(c => {
-          if (consumerBalanceMap[c.accountNumber] !== undefined) {
-            return { ...c, outstandingBalance: Math.round(consumerBalanceMap[c.accountNumber] * 100) / 100 };
-          }
-          return c;
-        });
-        mockDb.saveConsumers(updatedConsumers);
-        if (setConsumers) {
-          setConsumers(updatedConsumers);
-        }
-
-        // Batch sync updated readings and consumers to Firestore
-        syncBatchToFirestore(COLLECTIONS.READINGS, updated, 'id');
-        syncBatchToFirestore(COLLECTIONS.CONSUMERS, updatedConsumers, 'id');
-      }
-
-      // 3. Automatically notify consumers of the targeted classification
-      let notifiedConsumersCount = 0;
       if (notifyAllConsumers) {
-        const allConsumers = mockDb.getConsumers();
         const resBase = finalConfig.residential.baseMinCharge;
         const commBase = finalConfig.commercial.baseMinCharge;
-        const oldResBase = activeTariff.residential.baseMinCharge;
-        const oldCommBase = activeTariff.commercial.baseMinCharge;
+        const oldResBase = previousTariff.residential.baseMinCharge;
+        const oldCommBase = previousTariff.commercial.baseMinCharge;
 
-        allConsumers.forEach(consumer => {
-          if (!consumer.accountNumber || consumer.accountNumber.toUpperCase().startsWith('PENDING')) {
-            return;
-          }
-          const isComm = consumer.consumerType === 'Commercial';
+        const summaryMsg =
+          targetScope === 'Residential'
+            ? `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Residential water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Lifeline 1-10 m³: ₱${oldResBase.toFixed(2)} → ₱${resBase.toFixed(2)}, Tier 1: ₱${finalConfig.residential.tier1_rate.toFixed(2)}/m³). Previous billed statements remain unchanged.`
+            : targetScope === 'Commercial'
+            ? `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Commercial water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Lifeline 1-10 m³: ₱${oldCommBase.toFixed(2)} → ₱${commBase.toFixed(2)}, Tier 1: ₱${finalConfig.commercial.tier1_rate.toFixed(2)}/m³). Previous billed statements remain unchanged.`
+            : `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, updated water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Residential Base: ₱${resBase.toFixed(2)}, Commercial Base: ₱${commBase.toFixed(2)}). Previous billed statements remain unchanged.`;
 
-          // Strictly filter notification by target classification
-          if (isComm && !isCommTargeted) return;
-          if (!isComm && !isResTargeted) return;
-
-          notifiedConsumersCount++;
-
-          if (isComm) {
-            // Tailored Commercial Private Account Notification
-            mockDb.addNotification({
-              accountNumber: consumer.accountNumber,
-              consumerId: consumer.id,
-              userId: consumer.linkedUserId,
-              consumerEmail: consumer.email,
-              title: `Official Advisory: Commercial Water Tariff Adjustment (${finalConfig.resolutionNumber})`,
-              message: `Notice to Commercial Private Account #${consumer.accountNumber} (${consumer.name}): Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Tagoloan Water District has adjusted commercial private account rates effective ${finalConfig.effectiveDate} to reflect heavy volume water consumption. Your commercial lifeline base charge (1-10 m³) is adjusted from ₱${oldCommBase.toFixed(2)} to ₱${commBase.toFixed(2)}, with Tier 1 consumption at ₱${finalConfig.commercial.tier1_rate.toFixed(2)}/m³. Unbilled commercial readings have been recalculated. Justification: ${finalConfig.memoNotes}`,
-              type: 'billing'
-            });
-          } else {
-            // Tailored Residential Community Household Notification (Individual / Single Account)
-            mockDb.addNotification({
-              accountNumber: consumer.accountNumber,
-              consumerId: consumer.id,
-              userId: consumer.linkedUserId,
-              consumerEmail: consumer.email,
-              title: `Official Advisory: Residential Water Tariff Adjustment (${finalConfig.resolutionNumber})`,
-              message: `Notice to Account #${consumer.accountNumber} (${consumer.name}): Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Tagoloan Water District has adjusted regular Residential community water rates effective ${finalConfig.effectiveDate}. Your Residential lifeline base charge (1-10 m³) is adjusted from ₱${oldResBase.toFixed(2)} to ₱${resBase.toFixed(2)}, with Tier 1 domestic consumption at ₱${finalConfig.residential.tier1_rate.toFixed(2)}/m³. Handled on your individual account holder record. (Commercial private rates remain separate). Justification: ${finalConfig.memoNotes}`,
-              type: 'billing'
-            });
-          }
+        const createdNotif = mockDb.addNotification({
+          accountNumber: 'ALL',
+          title: `Official Advisory: ${scopeLabel} Water Tariff Adjustment (${finalConfig.resolutionNumber})`,
+          message: summaryMsg,
+          type: 'billing',
         });
 
-        // Broadcast real-time notification alert to connected consumers
-        const scopeLabel = targetScope === 'Residential' ? 'Residential Community' : targetScope === 'Commercial' ? 'Commercial Private' : 'Residential and Commercial';
+        sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
+          notification: createdNotif,
+          accountNumber: 'ALL',
+        });
         sendRealtimeMessage('notification:new', {
-          title: `Official Advisory: ${scopeLabel} Water Tariff Adjustment (${finalConfig.resolutionNumber})`,
-          message: `Water service rates for ${scopeLabel} accounts have been officially updated under ${finalConfig.resolutionNumber} effective ${finalConfig.effectiveDate}.`,
-          type: 'billing'
+          notification: createdNotif,
+          accountNumber: 'ALL',
+          title: createdNotif.title,
+          message: createdNotif.message,
+          type: 'billing',
         });
       }
 
-      // 4. Publish official public advisory announcement
+      // 4. Publish official public advisory announcement to mockDb, REST API, and WebSocket
       if (postAnnouncement) {
         let annTitle = `District Advisory: Water Tariff Rate Adjustment (${finalConfig.resolutionNumber})`;
         let annContent = '';
 
         if (targetScope === 'Residential') {
           annTitle = `District Advisory: Residential Water Tariff Adjustment (${finalConfig.resolutionNumber})`;
-          annContent = `Notice to Tagoloan Residential Community Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for regular Residential community accounts under Board Resolution ${finalConfig.resolutionNumber}. Residential Lifeline (1-10 m³): ₱${finalConfig.residential.baseMinCharge.toFixed(2)} (adjusted from ₱${activeTariff.residential.baseMinCharge.toFixed(2)}). Handled per individual single-account holder. Commercial private rates remain unchanged. Justification: ${finalConfig.memoNotes}`;
+          annContent = `Notice to Tagoloan Residential Community Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for NEW Residential meter readings under Board Resolution ${finalConfig.resolutionNumber}. Residential Lifeline (1-10 m³): ₱${finalConfig.residential.baseMinCharge.toFixed(2)} (adjusted from ₱${previousTariff.residential.baseMinCharge.toFixed(2)}). Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
         } else if (targetScope === 'Commercial') {
           annTitle = `District Advisory: Commercial Private Account Tariff Adjustment (${finalConfig.resolutionNumber})`;
-          annContent = `Notice to Tagoloan Commercial & Private Enterprise Accounts: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for Commercial accounts under Board Resolution ${finalConfig.resolutionNumber} to cover high-volume water consumption. Commercial Lifeline (1-10 m³): ₱${finalConfig.commercial.baseMinCharge.toFixed(2)} (adjusted from ₱${activeTariff.commercial.baseMinCharge.toFixed(2)}). Regular Residential community rates remain unchanged. Justification: ${finalConfig.memoNotes}`;
+          annContent = `Notice to Tagoloan Commercial & Private Enterprise Accounts: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for NEW Commercial meter readings under Board Resolution ${finalConfig.resolutionNumber}. Commercial Lifeline (1-10 m³): ₱${finalConfig.commercial.baseMinCharge.toFixed(2)} (adjusted from ₱${previousTariff.commercial.baseMinCharge.toFixed(2)}). Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
         } else {
-          annContent = `Notice to all Tagoloan Water District Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff rate adjustment has been implemented under ${finalConfig.resolutionNumber}. Residential Lifeline (1-10 m³): ₱${finalConfig.residential.baseMinCharge.toFixed(2)} | Commercial Lifeline (1-10 m³): ₱${finalConfig.commercial.baseMinCharge.toFixed(2)}. ${finalConfig.memoNotes}`;
+          annContent = `Notice to all Tagoloan Water District Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff rate adjustment has been implemented for NEW meter readings under ${finalConfig.resolutionNumber}. Residential Lifeline (1-10 m³): ₱${finalConfig.residential.baseMinCharge.toFixed(2)} | Commercial Lifeline (1-10 m³): ₱${finalConfig.commercial.baseMinCharge.toFixed(2)}. Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
         }
 
         const newAnn: Announcement = {
           id: `ann-tariff-${Date.now()}`,
           title: annTitle,
           content: annContent,
-          date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
           category: 'info',
-          postedBy: currentUser.name || 'Board of Directors / General Manager'
+          date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          postedBy: currentUser.name || 'Board of Directors / General Manager',
         };
         const currentAnns = mockDb.getAnnouncements();
         mockDb.saveAnnouncements([newAnn, ...currentAnns]);
-        setAnnouncements(prev => [newAnn, ...prev]);
+        setAnnouncements(prev => [newAnn, ...prev.filter(a => a.id !== newAnn.id)]);
+
+        apiClient.createAnnouncement(newAnn).catch(() => {});
+
+        sendRealtimeMessage('ANNOUNCEMENT_PUBLISHED', {
+          announcement: newAnn,
+          message: `Official Advisory Published: ${newAnn.title}`,
+        });
       }
 
       // 5. Real-time WebSocket broadcast to all connected consumers and reader tabs
       if (broadcastWebSocket) {
         sendRealtimeMessage('tariff:updated', {
+          config: finalConfig,
+          version: finalConfig.version,
           targetScope,
           resolutionNumber: finalConfig.resolutionNumber,
           effectiveDate: finalConfig.effectiveDate,
           residentialBase: finalConfig.residential.baseMinCharge,
           commercialBase: finalConfig.commercial.baseMinCharge,
           updatedBy: currentUser.name,
-          message: `Official price adjustment implemented for ${targetScope.toUpperCase()} under ${finalConfig.resolutionNumber}.`
+          message: `Official price adjustment implemented for ${targetScope.toUpperCase()} under ${finalConfig.resolutionNumber} (applies to new readings going forward).`,
         });
       }
 
@@ -434,7 +413,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
         currentUser.name,
         'admin',
         `Water Tariff Price Adjustment (${targetScope.toUpperCase()})`,
-        `Adjusted ${targetScope} water tariff under ${finalConfig.resolutionNumber}. Res Base: ₱${finalConfig.residential.baseMinCharge}, Comm Base: ₱${finalConfig.commercial.baseMinCharge}. Effective ${finalConfig.effectiveDate}. Recalculated ${updatedReadingsCount} readings. Dispatched notifications to ${notifiedConsumersCount} ${targetScope} consumers.`
+        `Adjusted ${targetScope} water tariff under ${finalConfig.resolutionNumber} (Version v${finalConfig.version}). Res Base: ₱${finalConfig.residential.baseMinCharge}, Comm Base: ₱${finalConfig.commercial.baseMinCharge}. Effective ${finalConfig.effectiveDate} for NEW readings only (${allReadings.length} historical readings preserved).`
       );
 
       // 7. Dispatch local cross-tab event
@@ -446,9 +425,14 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
       }
 
       setShowConfirmModal(false);
-      const scopeSummary = targetScope === 'Residential' ? 'Residential (Regular Community)' : targetScope === 'Commercial' ? 'Commercial (Private Accounts)' : 'All (Residential & Commercial)';
+      const scopeSummary =
+        targetScope === 'Residential'
+          ? 'Residential (Regular Community)'
+          : targetScope === 'Commercial'
+          ? 'Commercial (Private Accounts)'
+          : 'All (Residential & Commercial)';
       toast.success(
-        `Price adjustment successfully applied for ${scopeSummary}! ${notifiedConsumersCount} accounts notified and ${updatedReadingsCount} active statements updated.`
+        `Price adjustment applied for ${scopeSummary}! New rates will automatically apply to all NEW meter readings going forward while ${allReadings.length} existing readings remain locked at their original billed rates.`
       );
     } catch (err: any) {
       toast.error(`Failed to implement price hike: ${err?.message || 'Unknown error'}`);
@@ -474,7 +458,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="px-3 py-1 bg-blue-500/20 border border-blue-400/40 text-blue-300 font-black text-[10px] uppercase tracking-wider rounded-xl flex items-center space-x-1.5 shadow-xs">
-                <Sparkles className="h-3.5 w-3.5 text-blue-400" />
+                <Sliders className="h-3.5 w-3.5 text-blue-400" />
                 <span>LWUA & PD 198 RATE ENGINE</span>
               </span>
               <span className="px-3 py-1 bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 font-black text-[10px] uppercase tracking-wider rounded-xl flex items-center space-x-1.5">
@@ -1464,22 +1448,22 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <label className="p-4 bg-slate-950/80 border border-blue-900/60 rounded-2xl flex items-start space-x-3 cursor-pointer hover:border-blue-700 transition">
+          <div className="p-4 bg-slate-950/80 border border-blue-900/60 rounded-2xl flex items-start space-x-3">
             <input
               type="checkbox"
-              checked={recalculateUnbilledReadings}
-              onChange={(e) => setRecalculateUnbilledReadings(e.target.checked)}
+              checked={protectHistoricalReadings}
+              readOnly
               className="mt-0.5 h-4 w-4 rounded-sm text-blue-600 accent-blue-600"
             />
             <div>
               <span className="text-xs font-black text-white block">
-                Automatically recalculate targeted unpaid & unbilled readings
+                Apply strictly to NEW meter readings only (Preserve Old Readings)
               </span>
               <span className="text-[11px] text-slate-300 leading-relaxed block mt-0.5">
-                Instantly recalculates <strong className="text-blue-400">{targetedUnpaidReadingsCount} unpaid {targetScope === 'both' ? 'statements' : `${targetScope} statements`}</strong> across the consumer ledger so accounts see updated bills immediately.
+                All <strong className="text-blue-400">{readings.length} existing &amp; historical statements</strong> remain permanently locked at their original billed tariff. Only newly recorded readings from this point forward automatically use the updated schedule.
               </span>
             </div>
-          </label>
+          </div>
 
           <label className="p-4 bg-slate-950/80 border border-emerald-900/60 rounded-2xl flex items-start space-x-3 cursor-pointer hover:border-emerald-700 transition">
             <input
@@ -1642,13 +1626,17 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
                 <span className="font-bold text-sky-400">{notifyAllConsumers ? `${targetedConsumersCount} accounts (${targetScope})` : 'None'}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Unpaid Statements Recalculated:</span>
-                <span className="font-bold text-emerald-400">{recalculateUnbilledReadings ? `${targetedUnpaidReadingsCount} statements (${targetScope})` : 'None'}</span>
+                <span className="text-slate-400">Historical / Existing Readings:</span>
+                <span className="font-bold text-emerald-400">Locked at Original Rate ({readings.length} preserved)</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Rate Application Rule:</span>
+                <span className="font-bold text-amber-300">Auto-applies to NEW Readings Only</span>
               </div>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              This action will update the active water tariff engine. Unbilled statements and subsequent meter readings for the targeted classification will immediately reflect these rates.
+              This action updates the active water tariff schedule for all <strong>new meter readings recorded going forward</strong>. Previously recorded and billed statements are never retroactively altered.
             </p>
 
             <div className="flex justify-end space-x-3 pt-2 border-t border-slate-800">

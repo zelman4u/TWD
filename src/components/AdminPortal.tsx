@@ -67,7 +67,6 @@ import {
   Home,
   AlertOctagon,
   Zap,
-  Sparkles,
   MessageSquare,
   Smartphone
 } from 'lucide-react';
@@ -86,6 +85,8 @@ import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
 import { OfficialReportsGenerator, RecordsArchiveView, GracePeriodScannerCard, TariffRateManager, ConsumerReportsManager } from './admin';
 import { TablePagination } from './common/TablePagination';
+import { SmartSearchBar } from './common/SmartSearchBar';
+import { smartMatch } from '../utils/smartSearch';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
 import {
@@ -97,7 +98,7 @@ import {
 } from '../services/firebaseDb';
 import { initRealtimeSocket, sendRealtimeMessage } from '../services/realtimeSocket';
 import { apiClient, safeBackendFetch } from '../services/apiClient';
-import { calculateWaterTariff, calculateFranchiseTax, getActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
+import { calculateWaterTariff, calculateFranchiseTax, getActiveTariffConfig, getReadingEffectiveBillAmount, saveActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
 import { 
   checkDuplicateAccountNumber, 
   checkDuplicateRfidTag, 
@@ -118,9 +119,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const toast = useToast();
   const { showLoading, hideLoading } = useLoading();
   
-  // Tariff calculation helper
-  const calculateCostOf = (usage: number, classification?: string) => {
-    return calculateWaterTariff(usage, classification === 'Commercial' ? 'Commercial' : 'Residential');
+  // Tariff calculation helper (honors locked billAmount on existing readings; uses active tariff only for new/un-stamped usage)
+  const calculateCostOf = (usageOrReading: number | MeterReading, classification?: string) => {
+    const cls = classification === 'Commercial' ? 'Commercial' : 'Residential';
+    if (typeof usageOrReading === 'number') {
+      return calculateWaterTariff(usageOrReading, cls);
+    }
+    return getReadingEffectiveBillAmount(usageOrReading, cls);
   };
 
   // Navigation Module Selected - All 15 Admin Portal Modules
@@ -307,6 +312,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [billSearch, setBillSearch] = useState('');
   const [billStatusFilter, setBillStatusFilter] = useState<'all' | 'unpaid' | 'paid' | 'overdue' | 'cancelled'>('all');
 
+  // Additional Smart Search States for Routes, Announcements, Staff, and Barangays Overview
+  const [routesSearch, setRoutesSearch] = useState('');
+  const [announcementSearch, setAnnouncementSearch] = useState('');
+  const [staffSearch, setStaffSearch] = useState('');
+  const [barangayOverviewSearch, setBarangayOverviewSearch] = useState('');
+
   // Table Pagination States (Displays 10 records per page with next/prev page navigation)
   const [consumerPage, setConsumerPage] = useState(1);
   const [approvalHistoryPage, setApprovalHistoryPage] = useState(1);
@@ -335,6 +346,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   useEffect(() => {
     setBillPage(1);
   }, [billSearch, billStatusFilter]);
+
+  useEffect(() => {
+    setStaffPage(1);
+  }, [staffSearch]);
 
   // 6. Process Payment Counter State
   const [paymentSearch, setPaymentSearch] = useState('');
@@ -666,28 +681,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const localUsersToSync = mockDb.getUsers().filter(u => u.role !== 'admin');
     const localNotifsToSync = mockDb.getAllNotifications().filter(n => n.type === 'account_issue');
 
-    // Also push any locally issued accounts (BRG-*, email-linked, or user-linked) to Cloud Firestore so other devices sync immediately
-    localConsumersToSync.forEach(lc => {
-      if (
-        isRealIssuedAccountNumber(lc.accountNumber) &&
-        (lc.accountNumber.toUpperCase().startsWith('BRG-') || lc.linkedUserId || lc.email)
-      ) {
-        const matchedU = localUsersToSync.find(
-          u =>
-            (lc.email && u.email && lc.email.toLowerCase() === u.email.toLowerCase()) ||
-            (lc.linkedUserId && u.id === lc.linkedUserId) ||
-            u.linkedAccountNumber === lc.accountNumber
-        );
-        const matchedN = localNotifsToSync.find(
-          n =>
-            !(n.title || '').toLowerCase().includes('registration application submitted') &&
-            ((n.accountNumber || '').toUpperCase() === lc.accountNumber.toUpperCase() ||
-              (lc.email && n.consumerEmail && n.consumerEmail.toLowerCase() === lc.email.toLowerCase()))
-        );
-        pushIssuedConsumerToFirestore(lc, matchedN, matchedU, false).catch(() => {});
-      }
-    });
-
     safeBackendFetch('/api/consumers/reconcile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-portal': 'admin', 'x-role': 'admin' },
@@ -800,18 +793,37 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         // Fallback gracefully if running purely client-side
       });
 
-    // 4. Fetch Reports from Backend API
+    // 4. Fetch Reports from Backend API (merge without wiping local/Firestore reports)
     safeBackendFetch('/api/reports')
       .then(res => (res ? res.json() : null))
       .then(data => {
-        if (data && data.reports && Array.isArray(data.reports)) {
-          setReports(data.reports);
-          mockDb.saveReports(data.reports);
+        if (data && data.reports && Array.isArray(data.reports) && data.reports.length > 0) {
+          const merged = mockDb.mergeExternalReports(data.reports);
+          setReports(merged);
         }
       })
       .catch(() => {
         // Fallback to mockDb
       });
+
+    // 4b. Sync Announcements & Tariff Config from Backend API
+    apiClient.getAnnouncements()
+      .then(res => {
+        if (res?.announcements && Array.isArray(res.announcements)) {
+          const mergedAnns = mockDb.mergeExternalAnnouncements(res.announcements);
+          setAnnouncements(mergedAnns);
+        }
+      })
+      .catch(() => {});
+
+    apiClient.getTariffConfig()
+      .then(res => {
+        if (res?.config && (res.config.version || 0) > (getActiveTariffConfig().version || 0)) {
+          saveActiveTariffConfig(res.config);
+          setActiveTariff(res.config);
+        }
+      })
+      .catch(() => {});
 
     // 5. Fetch Mobile App Submitted Readings from Backend API (/api/readings)
     safeBackendFetch('/api/readings')
@@ -840,6 +852,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             const existsIdx = currentLocal.findIndex(lr => lr.id === ar.id);
             if (existsIdx < 0) {
               const photo = ar.photoUrl || ar.imageUrl || ar.meterImageUrl || '';
+              const cls = matchedConsumer?.consumerType === 'Commercial' ? 'Commercial' : 'Residential';
+              const activeTariffCfg = getActiveTariffConfig();
+              const computedBill = typeof ar.billAmount === 'number' && ar.billAmount > 0
+                ? ar.billAmount
+                : calculateWaterTariff(consumptionVal, cls, activeTariffCfg);
               const newReadingRecord: MeterReading = {
                 id: ar.id,
                 accountNumber: ar.accountNumber || matchedConsumer?.accountNumber || 'UNKNOWN',
@@ -848,10 +865,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 addressZone: matchedConsumer?.sitioZone || '',
                 meterNumber: ar.meterNumber || matchedConsumer?.meterNumber || '',
                 meterBrand: matchedConsumer?.meterBrand || 'EVER',
-                classification: matchedConsumer?.consumerType === 'Commercial' ? 'Commercial' : 'Residential',
+                classification: cls,
                 previousReading: Number(ar.previousReading || 0),
                 currentReading: Number(ar.currentReading || 0),
                 consumption: consumptionVal,
+                billAmount: computedBill,
+                totalAmount: computedBill,
+                appliedTariffVersion: ar.appliedTariffVersion || activeTariffCfg.version,
                 readingDate: ar.readingDate || new Date().toISOString().split('T')[0],
                 billingPeriod: ar.billingPeriod || new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
                 meterReaderName: ar.readerName || ar.meterReaderName || 'Field Meter Officer',
@@ -948,7 +968,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         loadAllDataFromStore(false);
         setScannerStatus(getScannerStatus());
       } else if (data.type === 'tariff:updated') {
+        if (data.payload?.config) {
+          saveActiveTariffConfig(data.payload.config);
+        }
         setActiveTariff(getActiveTariffConfig());
+        loadAllDataFromStore(false);
+      } else if (
+        data.type === 'ANNOUNCEMENT_PUBLISHED' ||
+        data.type === 'ANNOUNCEMENT_UPDATED' ||
+        data.type === 'ANNOUNCEMENT_DELETED'
+      ) {
         loadAllDataFromStore(false);
       } else if (data.type === 'CONSUMER_REPORT_CREATED' || data.type === 'consumer:report:created') {
         toast.warning(
@@ -1904,6 +1933,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveAnnouncements(updated);
     setAnnouncements(updated);
 
+    // Sync announcement to REST backend + broadcast live via WebSocket to all Consumer accounts
+    apiClient.createAnnouncement(created).catch(() => {});
+    sendRealtimeMessage('ANNOUNCEMENT_PUBLISHED', { announcement: created });
+
+    // Create a single district-wide broadcast notification ('ALL') so every consumer receives an instant bell alert without exhausting Firestore write quota
+    const broadcastNotif = mockDb.addNotification({
+      accountNumber: 'ALL',
+      title: `Official District Advisory: ${created.title}`,
+      message: created.content,
+      type: 'announcement'
+    });
+    sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
+      notification: broadcastNotif,
+      accountNumber: 'ALL'
+    });
+
     mockDb.addAuditLog(
       currentUser.id,
       currentUser.name,
@@ -1918,6 +1963,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       category: 'info'
     });
     setShowAddAnnouncement(false);
+    toast.success('Advisory Published', `"${created.title}" is now live across all Consumer accounts.`);
     loadAllDataFromStore();
   };
 
@@ -2237,6 +2283,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const executeDeleteAnnouncement = (ann: Announcement) => {
     mockDb.deleteAnnouncement(ann.id);
     setAnnouncements(prev => prev.filter(item => item.id !== ann.id));
+    sendRealtimeMessage('ANNOUNCEMENT_DELETED', { id: ann.id });
     mockDb.addAuditLog(
       currentUser.id,
       currentUser.name,
@@ -2269,6 +2316,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const updated = allAnnouncements.map(a => a.id === editingAnnouncementModal.id ? editingAnnouncementModal : a);
     mockDb.saveAnnouncements(updated);
     setAnnouncements(updated);
+
+    apiClient.updateAnnouncement(editingAnnouncementModal.id, editingAnnouncementModal).catch(() => {});
+    sendRealtimeMessage('ANNOUNCEMENT_UPDATED', { announcement: editingAnnouncementModal });
 
     mockDb.addAuditLog(
       currentUser.id,
@@ -2491,12 +2541,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   // Action: Verify Mobile Submitted Reading
   const handleVerifyReading = (readingId: string, status: 'verified' | 'flagged_abnormal') => {
     let verifiedReading: MeterReading | undefined;
+    const activeCfg = getActiveTariffConfig();
     const updated = readings.map(r => {
       if (r.id === readingId) {
-        const billAmt = calculateCostOf(r.consumption, r.classification);
+        const billAmt = calculateCostOf(r, r.classification);
         verifiedReading = { 
           ...r, 
           status,
+          billAmount: billAmt,
+          totalAmount: billAmt,
+          appliedTariffVersion: r.appliedTariffVersion || activeCfg.version,
           ...(status === 'verified' && !r.remainingBalance ? {
             paymentStatus: (r.paymentStatus || 'unpaid') as any,
             remainingBalance: billAmt,
@@ -2513,14 +2567,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     if (status === 'verified' && verifiedReading) {
       const vRead = verifiedReading;
-      const billCost = calculateCostOf(vRead.consumption, vRead.classification);
+      const billCost = calculateCostOf(vRead, vRead.classification);
       
       // Recalculate consumer arrears
       const consumerUnpaid = updated.filter(
         r => r.accountNumber === vRead.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid'
       );
       const newArrears = consumerUnpaid.reduce((sum, r) => {
-        const gross = calculateCostOf(r.consumption, r.classification);
+        const gross = calculateCostOf(r, r.classification);
         const paid = r.paidAmount || 0;
         return sum + Math.max(0, gross - paid);
       }, 0);
@@ -2568,14 +2622,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     const targetIds = new Set(readingsToApprove.map(r => r.id));
     const readingBills = new Map<string, number>();
+    const activeCfg = getActiveTariffConfig();
 
     readingsToApprove.forEach(r => {
-      readingBills.set(r.id, calculateCostOf(r.consumption, r.classification));
+      readingBills.set(r.id, calculateCostOf(r, r.classification));
     });
 
     const updatedReadings = readings.map(r => {
       if (targetIds.has(r.id)) {
-        const totalCalculatedBill = readingBills.get(r.id) ?? calculateCostOf(r.consumption, r.classification);
+        const totalCalculatedBill = readingBills.get(r.id) ?? calculateCostOf(r, r.classification);
         return {
           ...r,
           status: 'verified' as const,
@@ -2583,27 +2638,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           remainingBalance: totalCalculatedBill,
           billAmount: totalCalculatedBill,
           totalAmount: totalCalculatedBill,
+          appliedTariffVersion: r.appliedTariffVersion || activeCfg.version,
           paidAmount: 0
         };
       }
       return r;
     });
 
+    // Save readings (diffChangedItems syncs only modified readings to Firestore once)
     mockDb.saveReadings(updatedReadings);
     setReadings(updatedReadings);
 
-    // Direct Firestore & Backend API sync
+    // Backend API approval sync
     readingsToApprove.forEach(reading => {
-      const totalCalculatedBill = readingBills.get(reading.id) ?? calculateCostOf(reading.consumption, reading.classification);
-      syncDocToFirestore(COLLECTIONS.READINGS, reading.id, {
-        ...reading,
-        status: 'verified',
-        paymentStatus: 'unpaid',
-        remainingBalance: totalCalculatedBill,
-        billAmount: totalCalculatedBill,
-        totalAmount: totalCalculatedBill,
-        paidAmount: 0
-      });
       fetch(`/api/readings/${encodeURIComponent(reading.id)}/approve`, { method: 'POST' }).catch(() => {});
     });
 
@@ -2623,7 +2670,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                r.paymentStatus !== 'paid'
         );
         const newArrears = consumerUnpaid.reduce((sum, r) => {
-          const gross = calculateCostOf(r.consumption, r.classification);
+          const gross = calculateCostOf(r, r.classification);
           const paid = r.paidAmount || 0;
           return sum + Math.max(0, gross - paid);
         }, 0);
@@ -2637,7 +2684,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     // Dispatch Smart Notifications
     readingsToApprove.forEach(reading => {
-      const totalCalculatedBill = readingBills.get(reading.id) ?? calculateCostOf(reading.consumption, reading.classification);
+      const totalCalculatedBill = readingBills.get(reading.id) ?? calculateCostOf(reading, reading.classification);
       const matchedConsumer = consumers.find(c => c.accountNumber === reading.accountNumber);
       mockDb.addNotification({
         accountNumber: reading.accountNumber,
@@ -2689,8 +2736,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   // Filtered and sorted consumers list logic
   const filteredConsumers = consumers.filter(c => {
-    const term = consumerSearch.trim().toLowerCase();
-    
     // Check if pending ID issuance
     const isPending = !c.accountNumber || 
                       c.accountNumber.trim() === '' || 
@@ -2698,22 +2743,23 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || 
                       c.status === 'pending_approval';
 
-    // 1. Search Query Matcher: searches name, account #, meter #, rfid tag, email, phone, address, barangay, sitio, status, classification
-    const matchesSearch = !term || (
-      (c.name || '').toLowerCase().includes(term) ||
-      (c.accountNumber || '').toLowerCase().includes(term) ||
-      (c.meterNumber || '').toLowerCase().includes(term) ||
-      (c.rfidTag || '').toLowerCase().includes(term) ||
-      (c.email || '').toLowerCase().includes(term) ||
-      (c.contactNumber || '').toLowerCase().includes(term) ||
-      (c.address || '').toLowerCase().includes(term) ||
-      (c.barangay || '').toLowerCase().includes(term) ||
-      (c.sitioZone || '').toLowerCase().includes(term) ||
-      (c.status || '').toLowerCase().includes(term) ||
-      (c.consumerType || '').toLowerCase().includes(term) ||
-      (isPending && (term.includes('pend') || 'pending'.includes(term))) ||
-      (c.isRegistered ? 'registered online'.includes(term) : 'offline ledger'.includes(term))
-    );
+    // 1. Smart Search Matcher: multi-token + compact ID/phone normalization across all consumer fields
+    const matchesSearch = smartMatch(consumerSearch, [
+      c.name,
+      c.accountNumber,
+      c.meterNumber,
+      c.rfidTag,
+      c.email,
+      c.contactNumber,
+      c.address,
+      c.barangay,
+      c.sitioZone,
+      c.businessName,
+      c.status,
+      c.consumerType,
+      isPending ? 'pending approval issuance' : 'issued active',
+      c.isRegistered ? 'registered online' : 'offline ledger'
+    ]);
 
     // 2. Status Matcher
     const matchesStatus = 
@@ -3270,41 +3316,54 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {/* 2. RECORDS MODULE (Read-only Central Archive) */}
           {activeTab === 'records' && (
             <div className="space-y-6 animate-fade-in" id="records-tab">
-              <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <FolderLock className="h-5 w-5 text-amber-600 shrink-0" />
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
+                <div className="flex items-start sm:items-center space-x-3.5">
+                  <div className="p-3 bg-blue-600/20 border border-blue-500/30 rounded-xl text-blue-400 shrink-0">
+                    <FolderLock className="h-5 w-5" />
+                  </div>
                   <div>
-                    <h4 className="text-xs font-black uppercase text-amber-900 tracking-wider">Read-Only Central Archive (System Audit Log of Truth)</h4>
-                    <p className="text-[11px] text-amber-700">Master database records are locked for modification here. All entries are immutable for regulatory compliance.</p>
+                    <h3 className="text-base sm:text-lg font-black text-white tracking-tight font-sans">
+                      Central Records & Official Reports Archive
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                      Read-only regulatory archive and PD 198 report generation center. Master database records are immutable here for audit compliance.
+                    </p>
                   </div>
                 </div>
-                <span className="bg-amber-600 text-white font-mono font-bold text-[10px] px-3 py-1 rounded-full uppercase tracking-wider shrink-0">
-                  Audit Locked
-                </span>
+                <div className="flex items-center space-x-2 shrink-0">
+                  <div className="bg-slate-950 border border-slate-800 px-3.5 py-2 rounded-xl text-xs font-mono font-bold text-emerald-400 flex items-center gap-2 shadow-inner">
+                    <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
+                    <span>Audit Locked</span>
+                  </div>
+                </div>
               </div>
 
-              {/* Records Sub-Navigation Tabs */}
-              <div className="flex space-x-2 border-b border-slate-200 pb-3 overflow-x-auto scrollbar-none">
+              {/* Records Sub-Navigation Tabs — Unified with Admin Portal Dark Slate Modules */}
+              <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-3">
                 <button
                   type="button"
                   onClick={() => setRecordsTab('reports')}
-                  className={`px-4 py-2.5 rounded-none text-xs font-black uppercase tracking-wider transition flex items-center space-x-2 border cursor-pointer ${
+                  className={`px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center space-x-2 cursor-pointer ${
                     recordsTab === 'reports'
-                      ? 'bg-blue-600 text-white border-blue-600 shadow-md ring-2 ring-blue-400/30'
-                      : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                      ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-500/30'
+                      : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800 hover:text-white'
                   }`}
                 >
-                  <FileSpreadsheet className="h-4 w-4 shrink-0 text-amber-300" />
+                  <FileSpreadsheet className="h-4 w-4 shrink-0" />
                   <span>Official Reports Center (PDF)</span>
-                  <span className="bg-amber-400 text-slate-950 font-black text-[9px] px-1.5 py-0.2 rounded-none uppercase">
-                    10 Reports
+                  <span className={`font-mono font-bold text-[10px] px-1.5 py-0.5 rounded-md ${
+                    recordsTab === 'reports' ? 'bg-black/25 text-white' : 'bg-slate-800 text-slate-300'
+                  }`}>
+                    11 Reports
                   </span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setRecordsTab('consumers')}
-                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
-                    recordsTab === 'consumers' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer ${
+                    recordsTab === 'consumers'
+                      ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-500/30'
+                      : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800 hover:text-white'
                   }`}
                 >
                   Consumers Archive ({consumers.length})
@@ -3312,8 +3371,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <button
                   type="button"
                   onClick={() => setRecordsTab('meters')}
-                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
-                    recordsTab === 'meters' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer ${
+                    recordsTab === 'meters'
+                      ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-500/30'
+                      : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800 hover:text-white'
                   }`}
                 >
                   Water Meters Inventory ({meters.length})
@@ -3321,8 +3382,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <button
                   type="button"
                   onClick={() => setRecordsTab('readings')}
-                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
-                    recordsTab === 'readings' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer ${
+                    recordsTab === 'readings'
+                      ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-500/30'
+                      : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800 hover:text-white'
                   }`}
                 >
                   Readings Trail ({readings.length})
@@ -3330,8 +3393,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <button
                   type="button"
                   onClick={() => setRecordsTab('bills')}
-                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
-                    recordsTab === 'bills' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer ${
+                    recordsTab === 'bills'
+                      ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-500/30'
+                      : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800 hover:text-white'
                   }`}
                 >
                   Bills Ledger ({readings.filter(r => r.status === 'verified').length})
@@ -3339,8 +3404,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <button
                   type="button"
                   onClick={() => setRecordsTab('payments')}
-                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
-                    recordsTab === 'payments' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer ${
+                    recordsTab === 'payments'
+                      ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-500/30'
+                      : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800 hover:text-white'
                   }`}
                 >
                   Receipts Log ({readings.filter(r => r.paymentStatus === 'paid').length})
@@ -3348,8 +3415,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <button
                   type="button"
                   onClick={() => setRecordsTab('audit')}
-                  className={`px-4 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition border cursor-pointer ${
-                    recordsTab === 'audit' ? 'bg-slate-900 text-white border-slate-900 shadow' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                  className={`px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer ${
+                    recordsTab === 'audit'
+                      ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-500/30'
+                      : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800 hover:text-white'
                   }`}
                 >
                   System Security Audit ({auditLogs.length})
@@ -3455,14 +3524,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     return (
                       <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3">
                         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-1">
-                          <div className="relative flex-1 sm:max-w-md">
-                            <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
-                            <input
-                              type="text"
-                              placeholder="Search by consumer name, account #, meter reader, or route..."
+                          <div className="flex-1 sm:max-w-lg">
+                            <SmartSearchBar
+                              variant="dark"
                               value={pendingApprovalSearch}
-                              onChange={(e) => setPendingApprovalSearch(e.target.value)}
-                              className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2.5 pl-10 pr-3.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-blue-500 shadow-inner font-medium"
+                              onChange={setPendingApprovalSearch}
+                              placeholder="Smart search consumer name, account #, meter #, reader, period, or route..."
+                              id="admin-approvals-pending-smart-search"
                             />
                           </div>
 
@@ -3471,7 +3539,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <select
                               value={selectedPendingReaderFilter}
                               onChange={(e) => setSelectedPendingReaderFilter(e.target.value)}
-                              className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2.5 pl-3.5 pr-8 text-xs text-slate-200 focus:outline-none focus:border-blue-500 shadow-inner font-medium cursor-pointer"
+                              className="w-full min-h-[42px] bg-slate-900 border border-slate-800 rounded-xl py-2.5 pl-3.5 pr-8 text-xs text-slate-200 focus:outline-none focus:border-blue-500 shadow-inner font-medium cursor-pointer"
                             >
                               <option value="all">All Readers ({pendingList.length} readings)</option>
                               {distinctReaders.map((reader) => {
@@ -3509,28 +3577,18 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <button
                               type="button"
                               onClick={() => {
-                                const q = (pendingApprovalSearch || '').toLowerCase().trim();
-                                const cleanQ = q.replace(/^#/, '').trim();
                                 const filtered = pendingList.filter(r => {
                                   const rName = (r.meterReaderName && r.meterReaderName.trim()) ? r.meterReaderName.trim() : 'Field Reader';
                                   if (selectedPendingReaderFilter !== 'all' && rName !== selectedPendingReaderFilter) return false;
-                                  if (!q) return true;
-                                  const acct = (r.accountNumber || '').toLowerCase();
-                                  const name = (r.consumerName || '').toLowerCase();
-                                  const reader = rName.toLowerCase();
-                                  const meter = (r.meterNumber || '').toLowerCase();
-                                  const period = (r.billingPeriod || '').toLowerCase();
-                                  const route = (r.route || '').toLowerCase();
-                                  return (
-                                    name.includes(q) ||
-                                    reader.includes(q) ||
-                                    acct.includes(q) ||
-                                    acct.includes(cleanQ) ||
-                                    `#${acct}`.includes(q) ||
-                                    meter.includes(q) ||
-                                    period.includes(q) ||
-                                    route.includes(q)
-                                  );
+                                  return smartMatch(pendingApprovalSearch, [
+                                    r.consumerName,
+                                    rName,
+                                    r.accountNumber,
+                                    r.meterNumber,
+                                    r.billingPeriod,
+                                    r.route,
+                                    r.notes
+                                  ]);
                                 });
                                 if (filtered.length > 0) {
                                   setConfirmDialog({
@@ -3556,30 +3614,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                   {(() => {
                     const pendingList = readings.filter(r => r.status === 'pending');
-                    const q = (pendingApprovalSearch || '').toLowerCase().trim();
-                    const cleanQ = q.replace(/^#/, '').trim();
                     const filteredPending = pendingList.filter(r => {
                       const rName = (r.meterReaderName && r.meterReaderName.trim()) ? r.meterReaderName.trim() : 'Field Reader';
                       if (selectedPendingReaderFilter !== 'all' && rName !== selectedPendingReaderFilter) {
                         return false;
                       }
-                      if (!q) return true;
-                      const acct = (r.accountNumber || '').toLowerCase();
-                      const name = (r.consumerName || '').toLowerCase();
-                      const reader = rName.toLowerCase();
-                      const meter = (r.meterNumber || '').toLowerCase();
-                      const period = (r.billingPeriod || '').toLowerCase();
-                      const route = (r.route || '').toLowerCase();
-                      return (
-                        name.includes(q) ||
-                        reader.includes(q) ||
-                        acct.includes(q) ||
-                        acct.includes(cleanQ) ||
-                        `#${acct}`.includes(q) ||
-                        meter.includes(q) ||
-                        period.includes(q) ||
-                        route.includes(q)
-                      );
+                      return smartMatch(pendingApprovalSearch, [
+                        r.consumerName,
+                        rName,
+                        r.accountNumber,
+                        r.meterNumber,
+                        r.billingPeriod,
+                        r.route,
+                        r.notes
+                      ]);
                     });
 
                     if (filteredPending.length === 0) {
@@ -3610,7 +3658,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                     const readerGroups = Array.from(readerGroupsMap.entries()).map(([readerName, groupReadings]) => {
                       const totalConsumption = groupReadings.reduce((sum, r) => sum + (Number(r.consumption) || 0), 0);
-                      const totalBill = groupReadings.reduce((sum, r) => sum + calculateCostOf(r.consumption, r.classification), 0);
+                      const totalBill = groupReadings.reduce((sum, r) => sum + calculateCostOf(r, r.classification), 0);
                       const routes = Array.from(new Set(groupReadings.map(r => r.route).filter(Boolean)));
                       const latestDate = groupReadings.map(r => r.readingDate || r.meterReaderDate || '').filter(Boolean).sort().reverse()[0] || 'Today';
                       return {
@@ -3711,7 +3759,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               {!isCollapsed && (
                                 <div className="p-4 sm:p-5 space-y-3.5 bg-slate-950/40">
                                   {group.readings.map((reading, pIdx) => {
-                                    const totalCalculatedBill = calculateCostOf(reading.consumption, reading.classification);
+                                    const totalCalculatedBill = calculateCostOf(reading, reading.classification);
 
                                     return (
                                       <div 
@@ -3854,60 +3902,54 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {/* PERMANENT APPROVAL HISTORY SUB-TAB */}
               {approvalsSubTab === 'history' && (
                 <div className="space-y-4">
-                  <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
-                    <div className="relative flex-1 sm:max-w-md">
-                      <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
-                      <input
-                        type="text"
-                        placeholder="Search history by account #, consumer name, meter ID, or notes..."
-                        value={approvalHistorySearch}
-                        onChange={(e) => setApprovalHistorySearch(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2.5 pl-10 pr-3.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-blue-500 shadow-inner font-medium"
-                      />
-                    </div>
-
-                    <button
-                      onClick={() => {
-                        const historyList = readings.filter(r => r.status !== 'pending');
-                        const headers = ['Tx ID', 'Billing Period', 'Account Number', 'Consumer Name', 'Meter Number', 'Prev Index', 'Curr Index', 'Consumption', 'Status', 'Reader Staff', 'Notes'];
-                        const rows = historyList.map(r => [
-                          r.id, r.billingPeriod, r.accountNumber, r.consumerName, r.meterNumber, r.previousReading, r.currentReading, r.consumption, r.status.toUpperCase(), r.meterReaderName, r.notes || ''
-                        ]);
-                        exportToCsv('twd_approval_history_audit_export.csv', headers, rows);
-                      }}
-                      className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 transition shadow-sm border border-blue-700 shrink-0 cursor-pointer"
-                    >
-                      <Download className="h-4 w-4 text-white" />
-                      <span className="text-white font-bold tracking-wide">Export Approval History CSV</span>
-                    </button>
-                  </div>
-
                   {(() => {
-                    const q = (approvalHistorySearch || '').toLowerCase().trim();
-                    const cleanQ = q.replace(/^#/, '').trim();
-                    const filteredHistory = readings
-                      .filter(r => r.status !== 'pending')
-                      .filter(r => {
-                        if (!q) return true;
-                        const acct = (r.accountNumber || '').toLowerCase();
-                        const name = (r.consumerName || '').toLowerCase();
-                        const meter = (r.meterNumber || '').toLowerCase();
-                        const date = (r.readingDate || '').toLowerCase();
-                        const notes = (r.notes || '').toLowerCase();
-                        return (
-                          acct.includes(q) ||
-                          acct.includes(cleanQ) ||
-                          `#${acct}`.includes(q) ||
-                          name.includes(q) ||
-                          meter.includes(q) ||
-                          date.includes(q) ||
-                          notes.includes(q)
-                        );
-                      });
+                    const allHistoryItems = readings.filter(r => r.status !== 'pending');
+                    const filteredHistory = allHistoryItems.filter(r =>
+                      smartMatch(approvalHistorySearch, [
+                        r.id,
+                        r.accountNumber,
+                        r.consumerName,
+                        r.meterNumber,
+                        r.billingPeriod,
+                        r.readingDate,
+                        r.meterReaderName,
+                        r.status,
+                        r.notes
+                      ])
+                    );
                     const paginatedHistory = filteredHistory.slice((approvalHistoryPage - 1) * 10, approvalHistoryPage * 10);
 
                     return (
-                      <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl">
+                      <>
+                        <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+                          <div className="flex-1 sm:max-w-lg">
+                            <SmartSearchBar
+                              variant="dark"
+                              value={approvalHistorySearch}
+                              onChange={setApprovalHistorySearch}
+                              resultCount={filteredHistory.length}
+                              totalCount={allHistoryItems.length}
+                              placeholder="Smart search history by Tx ID, account #, consumer name, meter #, reader, or notes..."
+                              id="admin-approvals-history-smart-search"
+                            />
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              const headers = ['Tx ID', 'Billing Period', 'Account Number', 'Consumer Name', 'Meter Number', 'Prev Index', 'Curr Index', 'Consumption', 'Status', 'Reader Staff', 'Notes'];
+                              const rows = filteredHistory.map(r => [
+                                r.id, r.billingPeriod, r.accountNumber, r.consumerName, r.meterNumber, r.previousReading, r.currentReading, r.consumption, r.status.toUpperCase(), r.meterReaderName, r.notes || ''
+                              ]);
+                              exportToCsv('twd_approval_history_audit_export.csv', headers, rows);
+                            }}
+                            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 transition shadow-sm border border-blue-700 shrink-0 cursor-pointer"
+                          >
+                            <Download className="h-4 w-4 text-white" />
+                            <span className="text-white font-bold tracking-wide">Export Approval History CSV</span>
+                          </button>
+                        </div>
+
+                        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
                         <div className="overflow-x-auto">
                           <table className="w-full text-xs text-left border-collapse">
                             <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[10px] tracking-wider border-b border-slate-800">
@@ -3935,7 +3977,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 </tr>
                               ) : (
                                 paginatedHistory.map((r, hIdx) => {
-                                  const totalBill = calculateCostOf(r.consumption, r.classification);
+                                  const totalBill = calculateCostOf(r, r.classification);
                               const isCorrected = r.notes && r.notes.includes('CORRECTED');
                               const isRejected = r.status === ('rejected' as any) || (r.notes && r.notes.includes('REJECTED'));
 
@@ -4030,6 +4072,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       itemName="approval records"
                     />
                   </div>
+                </>
                 );
               })()}
                 </div>
@@ -4310,27 +4353,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     <div className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-5 shadow-xs space-y-4">
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
                         
-                        {/* 1. Primary Search Input */}
-                        <div className="lg:col-span-4 relative">
-                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                            <Search className="h-4 w-4" />
-                          </div>
-                          <input 
-                            type="text" 
-                            placeholder="Search by name, account #, meter #, email, phone, or address..."
+                        {/* 1. Primary Smart Search Input */}
+                        <div className="lg:col-span-4">
+                          <SmartSearchBar
+                            variant="light"
                             value={consumerSearch}
-                            onChange={(e) => setConsumerSearch(e.target.value)}
-                            className="w-full bg-slate-50 hover:bg-slate-100/60 focus:bg-white border border-slate-200 focus:border-blue-500 rounded-2xl py-2.5 pl-10 pr-9 text-xs text-slate-900 font-medium placeholder-slate-400 focus:outline-none transition shadow-2xs"
+                            onChange={setConsumerSearch}
+                            resultCount={filteredConsumers.length}
+                            totalCount={consumers.length}
+                            placeholder="Smart search name, account #, meter #, phone, email, barangay..."
+                            id="admin-consumers-smart-search"
                           />
-                          {consumerSearch && (
-                            <button
-                              onClick={() => setConsumerSearch('')}
-                              className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
-                              title="Clear search"
-                            >
-                              <X className="h-4 w-4" />
-                            </button>
-                          )}
                         </div>
 
                         {/* 2. Status Filter Dropdown */}
@@ -4814,16 +4847,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   if (readerFilter !== 'all' && currentStatus !== readerFilter) {
                     return false;
                   }
-                  if (readerSearch.trim()) {
-                    const q = readerSearch.toLowerCase();
-                    const matchesName = r.name?.toLowerCase().includes(q);
-                    const matchesId = (r.employeeId || r.id)?.toLowerCase().includes(q);
-                    const matchesEmail = r.email?.toLowerCase().includes(q);
-                    const matchesPhone = r.contactNumber?.toLowerCase().includes(q);
-                    const matchesRoute = r.assignedRoutes?.some(route => route.toLowerCase().includes(q));
-                    return matchesName || matchesId || matchesEmail || matchesPhone || matchesRoute;
-                  }
-                  return true;
+                  return smartMatch(readerSearch, [
+                    r.name,
+                    r.username,
+                    r.employeeId,
+                    r.id,
+                    r.email,
+                    r.contactNumber,
+                    r.assignedRoutes,
+                    r.targetRoute,
+                    r.zone
+                  ]);
                 })
                 .filter(r => {
                   const kId = (r.id || '').trim().toLowerCase();
@@ -4937,27 +4971,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                 {/* Filter and Search Controls */}
                 <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-xl space-y-3">
-                  <div className="flex flex-col sm:flex-row items-center gap-3">
-                    <div className="relative flex-1 w-full">
-                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                      <input 
-                        type="text"
-                        placeholder="Search officer name, employee ID, route, email, or phone..."
-                        value={readerSearch}
-                        onChange={(e) => setReaderSearch(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
-                      />
-                    </div>
-
-                    {readerSearch && (
-                      <button
-                        onClick={() => setReaderSearch('')}
-                        className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer shrink-0"
-                      >
-                        Clear Search
-                      </button>
-                    )}
-                  </div>
+                  <SmartSearchBar
+                    variant="dark"
+                    value={readerSearch}
+                    onChange={setReaderSearch}
+                    resultCount={filteredStaff.length}
+                    totalCount={readers.length}
+                    placeholder="Smart search officer name, @username, badge ID, route zone, email, or phone..."
+                    id="admin-readers-smart-search"
+                  />
 
                   {/* Filter Pills */}
                   <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800">
@@ -5176,13 +5198,28 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             {readersSubTab === 'routes' && (
               <div className="space-y-6 animate-fade-in" id="readers-routes-tab">
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-4 shadow-xl">
-                  <div>
-                    <h3 className="text-sm font-extrabold text-white uppercase tracking-widest leading-none">Geographic Service Route assignments</h3>
-                    <p className="text-xs text-slate-400 mt-1.5">Assign designated zones directly to registered reader handheld mobile applications.</p>
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    <div>
+                      <h3 className="text-sm font-extrabold text-white uppercase tracking-widest leading-none">Geographic Service Route Assignments</h3>
+                      <p className="text-xs text-slate-400 mt-1.5">Assign designated zones directly to registered reader handheld mobile applications.</p>
+                    </div>
+                    <div className="w-full lg:w-96">
+                      <SmartSearchBar
+                        variant="dark"
+                        value={routesSearch}
+                        onChange={setRoutesSearch}
+                        resultCount={routes.filter(rt => smartMatch(routesSearch, [rt.routeName, rt.description, rt.assignedReaderName, rt.status])).length}
+                        totalCount={routes.length}
+                        placeholder="Smart search zone route, barangay, or assigned reader..."
+                        id="admin-routes-smart-search"
+                      />
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
-                    {routes.map((rt, rtIdx) => (
+                    {routes
+                      .filter(rt => smartMatch(routesSearch, [rt.routeName, rt.description, rt.assignedReaderName, rt.status]))
+                      .map((rt, rtIdx) => (
                       <div key={`route-card-${rt.id || ''}-${rtIdx}`} className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-lg">
                         <div className="flex justify-between items-start">
                           <div>
@@ -5404,67 +5441,71 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 </button>
               </div>
 
-              {/* Search and Filters Bar */}
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center gap-3">
-                <div className="relative flex-1 w-full">
-                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search by meter serial, brand manufacturer, or linked account #..."
-                    value={meterSearch}
-                    onChange={(e) => setMeterSearch(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <select
-                    value={meterStatusFilter}
-                    onChange={(e) => setMeterStatusFilter(e.target.value as any)}
-                    className="bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer w-full sm:w-auto"
-                  >
-                    <option value="all">All Meter Statuses</option>
-                    <option value="active">Active Only</option>
-                    <option value="damaged">Damaged Only</option>
-                    <option value="maintenance">Maintenance Only</option>
-                    <option value="inactive">Inactive Only</option>
-                  </select>
-
-                  {(meterSearch || meterStatusFilter !== 'all') && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMeterSearch('');
-                        setMeterStatusFilter('all');
-                      }}
-                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer whitespace-nowrap shrink-0 border border-slate-700"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Meter list table */}
+              {/* Search and Filters Bar & Meter List Table */}
               {(() => {
                 const filteredMetersList = meters.filter((m) => {
                   if (meterStatusFilter !== 'all') {
                     if (meterStatusFilter === 'maintenance' && m.status !== 'maintenance' && m.status !== 'inactive') return false;
                     if (meterStatusFilter !== 'maintenance' && m.status !== meterStatusFilter) return false;
                   }
-                  if (meterSearch.trim()) {
-                    const q = meterSearch.toLowerCase().trim();
-                    const matchNum = (m.meterNumber || '').toLowerCase().includes(q);
-                    const matchBrand = (m.brand || '').toLowerCase().includes(q);
-                    const matchAcc = (m.linkedAccountNumber || '').toLowerCase().includes(q);
-                    return matchNum || matchBrand || matchAcc;
-                  }
-                  return true;
+                  const linkedConsumer = consumers.find(c => c.accountNumber === m.linkedAccountNumber);
+                  return smartMatch(meterSearch, [
+                    m.meterNumber,
+                    m.brand,
+                    m.linkedAccountNumber,
+                    m.installationDate,
+                    m.status,
+                    linkedConsumer?.name,
+                    linkedConsumer?.barangay,
+                    linkedConsumer?.consumerType
+                  ]);
                 });
                 const paginatedMeters = filteredMetersList.slice((meterPage - 1) * 10, meterPage * 10);
 
                 return (
-                  <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl">
+                  <>
+                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center gap-3">
+                      <div className="flex-1 w-full">
+                        <SmartSearchBar
+                          variant="dark"
+                          value={meterSearch}
+                          onChange={setMeterSearch}
+                          resultCount={filteredMetersList.length}
+                          totalCount={meters.length}
+                          placeholder="Smart search meter serial, brand, linked account #, consumer name, or barangay..."
+                          id="admin-meters-smart-search"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-2 w-full sm:w-auto">
+                        <select
+                          value={meterStatusFilter}
+                          onChange={(e) => setMeterStatusFilter(e.target.value as any)}
+                          className="min-h-[42px] bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer w-full sm:w-auto"
+                        >
+                          <option value="all">All Meter Statuses</option>
+                          <option value="active">Active Only</option>
+                          <option value="damaged">Damaged Only</option>
+                          <option value="maintenance">Maintenance Only</option>
+                          <option value="inactive">Inactive Only</option>
+                        </select>
+
+                        {(meterSearch || meterStatusFilter !== 'all') && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setMeterSearch('');
+                              setMeterStatusFilter('all');
+                            }}
+                            className="min-h-[42px] px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer whitespace-nowrap shrink-0 border border-slate-700"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs text-left border-collapse">
                         <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[11px] tracking-wider border-b border-slate-800">
@@ -5582,6 +5623,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       itemName="water meters"
                     />
                   </div>
+                  </>
                 );
               })()}
             </div>
@@ -5674,68 +5716,72 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 </button>
               </div>
 
-              {/* Search and Filters Bar */}
-              <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-xs flex flex-col sm:flex-row items-center gap-3">
-                <div className="relative flex-1 w-full">
-                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search by transaction ID, consumer name, account #, or meter #..."
-                    value={readingsSearch}
-                    onChange={(e) => setReadingsSearch(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <select
-                    value={readingsStatusFilter}
-                    onChange={(e) => setReadingsStatusFilter(e.target.value as any)}
-                    className="bg-slate-50 border border-slate-200 text-slate-700 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer w-full sm:w-auto"
-                  >
-                    <option value="all">All Statuses</option>
-                    <option value="verified">Approved Only</option>
-                    <option value="pending">Pending Only</option>
-                    <option value="flagged_abnormal">Flagged Anomalies</option>
-                  </select>
-
-                  {(readingsSearch || readingsStatusFilter !== 'all') && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setReadingsSearch('');
-                        setReadingsStatusFilter('all');
-                      }}
-                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer whitespace-nowrap shrink-0"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Readings board layout */}
+              {/* Search and Filters Bar & Readings Table */}
               {(() => {
                 const filteredReadingsList = readings.filter((r) => {
                   if (readingsStatusFilter === 'verified' && r.status !== 'verified') return false;
                   if (readingsStatusFilter === 'pending' && r.status !== 'pending') return false;
                   if (readingsStatusFilter === 'flagged_abnormal' && r.status !== 'flagged_abnormal' && r.consumption < 50) return false;
 
-                  if (readingsSearch.trim()) {
-                    const q = readingsSearch.toLowerCase().trim();
-                    const matchId = (r.id || '').toLowerCase().includes(q);
-                    const matchName = (r.consumerName || '').toLowerCase().includes(q);
-                    const matchAcc = (r.accountNumber || '').toLowerCase().includes(q);
-                    const matchMeter = (r.meterNumber || '').toLowerCase().includes(q);
-                    const matchPeriod = (r.billingPeriod || '').toLowerCase().includes(q);
-                    return matchId || matchName || matchAcc || matchMeter || matchPeriod;
-                  }
-                  return true;
+                  return smartMatch(readingsSearch, [
+                    r.id,
+                    r.consumerName,
+                    r.accountNumber,
+                    r.meterNumber,
+                    r.billingPeriod,
+                    r.readingDate,
+                    r.meterReaderName,
+                    r.route,
+                    r.status,
+                    r.notes,
+                    `${r.consumption} m3`
+                  ]);
                 });
                 const paginatedReadings = filteredReadingsList.slice((readingsPage - 1) * 10, readingsPage * 10);
 
                 return (
-                  <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl">
+                  <>
+                    <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-xs flex flex-col sm:flex-row items-center gap-3">
+                      <div className="flex-1 w-full">
+                        <SmartSearchBar
+                          variant="light"
+                          value={readingsSearch}
+                          onChange={setReadingsSearch}
+                          resultCount={filteredReadingsList.length}
+                          totalCount={readings.length}
+                          placeholder="Smart search Tx ID, consumer name, account #, meter #, period, reader, or route..."
+                          id="admin-readings-smart-search"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-2 w-full sm:w-auto">
+                        <select
+                          value={readingsStatusFilter}
+                          onChange={(e) => setReadingsStatusFilter(e.target.value as any)}
+                          className="min-h-[42px] bg-slate-50 border border-slate-200 text-slate-700 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer w-full sm:w-auto"
+                        >
+                          <option value="all">All Statuses</option>
+                          <option value="verified">Approved Only</option>
+                          <option value="pending">Pending Only</option>
+                          <option value="flagged_abnormal">Flagged Anomalies</option>
+                        </select>
+
+                        {(readingsSearch || readingsStatusFilter !== 'all') && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReadingsSearch('');
+                              setReadingsStatusFilter('all');
+                            }}
+                            className="min-h-[42px] px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs text-left border-collapse">
                         <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[11px] tracking-wider border-b border-slate-800">
@@ -5915,6 +5961,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       itemName="meter readings"
                     />
                   </div>
+                </>
                 );
               })()}
             </div>
@@ -5980,12 +6027,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {/* Sub-tab A: Public Advisories Bulletin */}
               {announcementsSubTab === 'bulletin' && (
                 <div className="space-y-6 animate-fade-in">
-                  <div className="flex justify-between items-center">
-                    <h4 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">Public advisories bulletin</h4>
+                  <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+                    <div className="flex-1 sm:max-w-lg">
+                      <SmartSearchBar
+                        variant="light"
+                        value={announcementSearch}
+                        onChange={setAnnouncementSearch}
+                        resultCount={announcements.filter(ann => smartMatch(announcementSearch, [ann.title, ann.content, ann.category, ann.date, ann.postedBy])).length}
+                        totalCount={announcements.length}
+                        placeholder="Smart search public advisories by title, category, content, date, or author..."
+                        id="admin-announcements-smart-search"
+                      />
+                    </div>
                     
                     <button
                       onClick={() => setShowAddAnnouncement(!showAddAnnouncement)}
-                      className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs uppercase tracking-wider transition flex items-center space-x-2 cursor-pointer shadow-xs"
+                      className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition flex items-center justify-center space-x-2 cursor-pointer shadow-xs shrink-0"
                     >
                       <Plus className="h-4.5 w-4.5" />
                       <span>Publish Advisory Notice</span>
@@ -6053,7 +6110,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                   {/* Announcements list */}
                   <div className="space-y-4">
-                    {announcements.map((ann, aIdx) => (
+                    {announcements
+                      .filter(ann => smartMatch(announcementSearch, [ann.title, ann.content, ann.category, ann.date, ann.postedBy]))
+                      .map((ann, aIdx) => (
                       <div key={`ann-card-${ann.id || ''}-${aIdx}`} className="bg-white border border-slate-150 rounded-2xl p-6 shadow-sm flex flex-col justify-between">
                         <div>
                           <div className="flex justify-between items-center text-xs font-bold mb-2">
@@ -6129,7 +6188,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 const totalConsumptionVol = verifiedReadings.reduce((sum, r) => sum + (r.consumption || 0), 0);
                 const unpaidBills = verifiedReadings.filter(r => r.paymentStatus !== 'paid' && r.status !== 'cancelled');
                 const unpaidTotal = unpaidBills.reduce((sum, r) => {
-                  const gross = calculateCostOf(r.consumption, r.classification);
+                  const gross = calculateCostOf(r, r.classification);
                   const paid = r.paidAmount || 0;
                   return sum + Math.max(0, gross - paid);
                 }, 0);
@@ -6169,48 +6228,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 );
               })()}
 
-              <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:max-w-xl">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                    <input
-                      type="text"
-                      placeholder="Search account #, consumer name or billing period..."
-                      value={billSearch}
-                      onChange={(e) => setBillSearch(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 pl-9 pr-3 text-xs text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-2xs placeholder:text-slate-400 placeholder:font-normal"
-                    />
-                  </div>
-                  <select
-                    value={billStatusFilter}
-                    onChange={(e: any) => setBillStatusFilter(e.target.value)}
-                    className="bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-black text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-2xs shrink-0 cursor-pointer"
-                  >
-                    <option value="all">All Statuses</option>
-                    <option value="unpaid">Unpaid Only</option>
-                    <option value="paid">Paid Only</option>
-                    <option value="overdue">Overdue Only</option>
-                    <option value="cancelled">Cancelled Only</option>
-                  </select>
-                </div>
-
-                <div className="flex items-center space-x-2 shrink-0">
-                  <button
-                    onClick={() => {
-                      toast.success('Export Completed', 'TWD Water Bills Ledger exported as PDF/CSV.');
-                    }}
-                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-xl text-xs uppercase tracking-wider transition shadow-2xs flex items-center space-x-2 cursor-pointer"
-                  >
-                    <Download className="h-3.5 w-3.5 text-slate-300" />
-                    <span>Export Ledger</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Bills List Table */}
+              {/* Bills Smart Search, Filter & List Table */}
               {(() => {
-                const filteredBills = readings
-                  .filter(r => r.status === 'verified')
+                const verifiedBillsAll = readings.filter(r => r.status === 'verified');
+                const filteredBills = verifiedBillsAll
                   .filter(r => {
                     if (billStatusFilter === 'unpaid') return r.paymentStatus !== 'paid' && r.status !== 'cancelled';
                     if (billStatusFilter === 'paid') return r.paymentStatus === 'paid';
@@ -6218,18 +6239,66 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     if (billStatusFilter === 'cancelled') return r.status === 'cancelled';
                     return true;
                   })
-                  .filter(r => {
-                    if (!billSearch) return true;
-                    const q = (billSearch || '').toLowerCase();
-                    return (r.accountNumber || '').toLowerCase().includes(q) || 
-                           (r.consumerName || '').toLowerCase().includes(q) || 
-                           (r.billingPeriod && r.billingPeriod.toLowerCase().includes(q));
-                  });
+                  .filter(r =>
+                    smartMatch(billSearch, [
+                      r.accountNumber,
+                      r.consumerName,
+                      r.meterNumber,
+                      r.billingPeriod,
+                      r.id,
+                      r.orNumber,
+                      r.paymentReference,
+                      r.paymentStatus || 'unpaid',
+                      r.classification,
+                      `${r.consumption} m3`,
+                      calculateCostOf(r, r.classification).toFixed(2)
+                    ])
+                  );
 
                 const paginatedBills = filteredBills.slice((billPage - 1) * 10, billPage * 10);
 
                 return (
-                  <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl">
+                  <>
+                    <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-4">
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1">
+                        <div className="flex-1 sm:max-w-lg">
+                          <SmartSearchBar
+                            variant="light"
+                            value={billSearch}
+                            onChange={setBillSearch}
+                            resultCount={filteredBills.length}
+                            totalCount={verifiedBillsAll.length}
+                            placeholder="Smart search account #, consumer name, meter #, billing period, OR #, or amount..."
+                            id="admin-bills-smart-search"
+                          />
+                        </div>
+                        <select
+                          value={billStatusFilter}
+                          onChange={(e: any) => setBillStatusFilter(e.target.value)}
+                          className="min-h-[42px] bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-black text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-2xs shrink-0 cursor-pointer"
+                        >
+                          <option value="all">All Statuses</option>
+                          <option value="unpaid">Unpaid Only</option>
+                          <option value="paid">Paid Only</option>
+                          <option value="overdue">Overdue Only</option>
+                          <option value="cancelled">Cancelled Only</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-center space-x-2 shrink-0">
+                        <button
+                          onClick={() => {
+                            toast.success('Export Completed', 'TWD Water Bills Ledger exported as PDF/CSV.');
+                          }}
+                          className="min-h-[42px] px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-xl text-xs uppercase tracking-wider transition shadow-2xs flex items-center space-x-2 cursor-pointer"
+                        >
+                          <Download className="h-3.5 w-3.5 text-slate-300" />
+                          <span>Export Ledger</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
                     <div className="w-full overflow-x-auto">
                       <table className="min-w-full text-xs text-left">
                         <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase border-b border-slate-800 text-[10px] select-none tracking-wider">
@@ -6257,7 +6326,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             </tr>
                           ) : (
                             paginatedBills.map((bill, bIdx) => {
-                              const totalBill = calculateCostOf(bill.consumption, bill.classification);
+                              const totalBill = calculateCostOf(bill, bill.classification);
                               const isPaid = bill.paymentStatus === 'paid';
                               const isCancelled = bill.status === 'cancelled';
 
@@ -6379,6 +6448,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       itemName="water bills"
                     />
                   </div>
+                  </>
                 );
               })()}
             </div>
@@ -6417,31 +6487,30 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   </div>
                   
                   <div className="space-y-2">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">Search Name, Account #, Phone, or Scan RFID</label>
-                    <div className="relative">
-                      <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
-                      <input
-                        type="text"
-                        placeholder="e.g. 1001-A, John Doe, 0917..."
-                        value={paymentSearch}
-                        onChange={(e) => setPaymentSearch(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-3.5 text-xs text-slate-800 font-medium focus:outline-none focus:border-emerald-500 focus:bg-white transition"
-                      />
-                    </div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">Smart Search Name, Account #, Meter #, Phone, or RFID</label>
+                    <SmartSearchBar
+                      variant="light"
+                      value={paymentSearch}
+                      onChange={setPaymentSearch}
+                      placeholder="e.g. 1001-A, Juan Dela Cruz, 09171234567, RFID..."
+                      id="admin-cashier-payment-smart-search"
+                    />
                   </div>
 
                   <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
                     {consumers
-                      .filter(c => {
-                        if (!paymentSearch) return true;
-                        const q = (paymentSearch || '').toLowerCase();
-                        return (
-                          (c.accountNumber || '').toLowerCase().includes(q) ||
-                          (c.name || '').toLowerCase().includes(q) ||
-                          (c.contactNumber && c.contactNumber.includes(q)) ||
-                          (c.rfidTag && c.rfidTag.toLowerCase().includes(q))
-                        );
-                      })
+                      .filter(c =>
+                        smartMatch(paymentSearch, [
+                          c.accountNumber,
+                          c.name,
+                          c.contactNumber,
+                          c.rfidTag,
+                          c.meterNumber,
+                          c.barangay,
+                          c.address,
+                          c.email
+                        ])
+                      )
                       .sort((a, b) => {
                         const aUnpaid = readings.filter(r => r.accountNumber === a.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid').length;
                         const bUnpaid = readings.filter(r => r.accountNumber === b.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid').length;
@@ -6455,7 +6524,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                         // Total due calculation including overdue penalties
                         const totalArrears = unpaidReadings.reduce((acc, r) => {
-                          const w = calculateCostOf(r.consumption, r.classification);
+                          const w = calculateCostOf(r, r.classification);
                           const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
                           const pen = isOverdue ? Math.round(w * 0.10) : 0;
                           const gross = w + pen;
@@ -6474,7 +6543,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               
                               // Auto calculate exact total due
                               const exactDue = unpaidList.reduce((acc, r) => {
-                                const w = calculateCostOf(r.consumption, r.classification);
+                                const w = calculateCostOf(r, r.classification);
                                 const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
                                 const pen = isOverdue ? Math.round(w * 0.10) : 0;
                                 const gross = w + pen;
@@ -6562,7 +6631,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             {readings
                               .filter(r => r.accountNumber === selectedPaymentAccount.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid')
                               .map((r, bIdx) => {
-                                const waterAmount = calculateCostOf(r.consumption, r.classification);
+                                const waterAmount = calculateCostOf(r, r.classification);
                                 const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
                                 const penaltyAmount = isOverdue ? Math.round(waterAmount * 0.10) : 0;
                                 const grossTotal = waterAmount + penaltyAmount;
@@ -6635,7 +6704,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                   // Recalculate full total due
                                   const selectedReadings = readings.filter(r => selectedBillIds.includes(r.id));
                                   const exactDue = selectedReadings.reduce((acc, r) => {
-                                    const w = calculateCostOf(r.consumption, r.classification);
+                                    const w = calculateCostOf(r, r.classification);
                                     const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
                                     const pen = isOverdue ? Math.round(w * 0.10) : 0;
                                     const gross = w + pen;
@@ -6733,7 +6802,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               ₱{(() => {
                                 const selectedReadings = readings.filter(r => selectedBillIds.includes(r.id));
                                 const totalNetDue = selectedReadings.reduce((acc, r) => {
-                                  const w = calculateCostOf(r.consumption, r.classification);
+                                  const w = calculateCostOf(r, r.classification);
                                   const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
                                   const pen = isOverdue ? Math.round(w * 0.10) : 0;
                                   const gross = w + pen;
@@ -6769,7 +6838,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           const allocations: { [billId: string]: { allocated: number; newPaid: number; newRem: number; newStatus: 'paid' | 'partial'; grossTotal: number; penaltyAmount: number } } = {};
 
                           selectedReadings.forEach(r => {
-                            const waterAmount = calculateCostOf(r.consumption, r.classification);
+                            const waterAmount = calculateCostOf(r, r.classification);
                             const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
                             const penaltyAmount = isOverdue ? Math.round(waterAmount * 0.10) : 0;
                             const grossTotal = waterAmount + penaltyAmount;
@@ -6831,7 +6900,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             r => r.accountNumber === selectedPaymentAccount.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid'
                           );
                           const newConsumerArrears = updatedUnpaid.reduce((acc, r) => {
-                            const w = calculateCostOf(r.consumption, r.classification);
+                            const w = calculateCostOf(r, r.classification);
                             const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
                             const pen = isOverdue ? Math.round(w * 0.10) : 0;
                             const gross = w + pen;
@@ -7075,7 +7144,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   <div className="bg-gradient-to-r from-blue-900 via-indigo-950 to-slate-900 text-white p-5 rounded-3xl border border-blue-800/80 shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                     <div className="flex items-center space-x-3.5">
                       <div className="p-3 bg-blue-500/20 rounded-2xl border border-blue-400/40 text-blue-300 shrink-0">
-                        <Sparkles className="h-5 w-5" />
+                        <SlidersHorizontal className="h-5 w-5" />
                       </div>
                       <div>
                         <div className="flex items-center space-x-2">
@@ -7101,82 +7170,109 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     </button>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-wider">Admin Staff & System Permissions</h3>
-                      <p className="text-xs text-slate-500 mt-0.5">Manage administrative portal users and role access levels.</p>
-                    </div>
-                    <div className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-slate-300 shrink-0">
-                      <ShieldCheck className="h-4 w-4 text-emerald-400" />
-                      <span>Direct Staff Enrollment Disabled • Access Managed via Mobile/System RBAC</span>
-                    </div>
-                  </div>
-
-                  {/* Staff List Table */}
+                  {/* Staff List Search & Table */}
                   {(() => {
-                    const paginatedStaff = staffList.slice((staffPage - 1) * 10, staffPage * 10);
+                    const filteredStaffUsers = staffList.filter(st =>
+                      smartMatch(staffSearch, [
+                        st.id,
+                        st.name,
+                        st.email,
+                        st.role,
+                        st.department,
+                        st.status
+                      ])
+                    );
+                    const paginatedStaff = filteredStaffUsers.slice((staffPage - 1) * 10, staffPage * 10);
                     return (
-                      <div className="bg-slate-900 border border-slate-800 rounded-none overflow-hidden shadow-xl">
-                        <table className="min-w-full text-xs text-left">
-                          <thead className="bg-slate-950 text-slate-300 font-bold uppercase border-b border-slate-800 text-[10px] tracking-wider">
-                            <tr>
-                              <th className="px-6 py-4">Staff ID</th>
-                              <th className="px-6 py-4">Name & Email</th>
-                              <th className="px-6 py-4">Role Title</th>
-                              <th className="px-6 py-4">Department</th>
-                              <th className="px-6 py-4">Status</th>
-                              <th className="px-6 py-4 text-right">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-800/80 font-medium text-slate-200 bg-slate-900">
-                            {paginatedStaff.map((st, sIdx) => (
-                              <tr key={`staff-user-${st.id || ''}-${st.email || ''}-${sIdx}`} className="hover:bg-slate-800/60 transition">
-                                <td className="px-6 py-4 font-mono font-bold text-white">{st.id}</td>
-                                <td className="px-6 py-4">
-                                  <span className="font-extrabold text-white block">{st.name}</span>
-                                  <span className="text-slate-400 text-[10px] font-mono">{st.email}</span>
-                                </td>
-                                <td className="px-6 py-4 font-bold text-sky-400">{st.role}</td>
-                                <td className="px-6 py-4 text-slate-300">{st.department}</td>
-                                <td className="px-6 py-4">
-                                  <span className="bg-emerald-950/80 text-emerald-300 border border-emerald-800/80 font-bold px-2.5 py-1 rounded-full text-[10px] uppercase">
-                                    {st.status}
-                                  </span>
-                                </td>
-                                <td className="px-6 py-4 text-right space-x-2">
-                                  <button
-                                    onClick={() => setEditingStaffModal({ ...st })}
-                                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 font-bold text-[10px] uppercase rounded-lg transition cursor-pointer"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      toast.info('Password Reset Initiated', `Password reset notification initiated for ${st.email}`);
-                                    }}
-                                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] uppercase rounded-lg transition"
-                                  >
-                                    Reset Pwd
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteStaff(st)}
-                                    className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[10px] uppercase rounded-lg transition"
-                                  >
-                                    Terminate
-                                  </button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                        <TablePagination
-                          currentPage={staffPage}
-                          totalItems={staffList.length}
-                          pageSize={10}
-                          onPageChange={setStaffPage}
-                          itemName="staff users"
-                        />
-                      </div>
+                      <>
+                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                          <div>
+                            <h3 className="text-sm font-extrabold text-slate-950 uppercase tracking-wider">Admin Staff & System Permissions</h3>
+                            <p className="text-xs text-slate-500 mt-0.5">Manage administrative portal users and role access levels.</p>
+                          </div>
+                          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
+                            <div className="w-full sm:w-80">
+                              <SmartSearchBar
+                                variant="light"
+                                value={staffSearch}
+                                onChange={setStaffSearch}
+                                resultCount={filteredStaffUsers.length}
+                                totalCount={staffList.length}
+                                placeholder="Smart search staff ID, name, email, role, or dept..."
+                                id="admin-staff-smart-search"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-slate-300 shrink-0">
+                              <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                              <span>RBAC Managed</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full text-xs text-left">
+                              <thead className="bg-slate-950 text-slate-300 font-bold uppercase border-b border-slate-800 text-[10px] tracking-wider">
+                                <tr>
+                                  <th className="px-6 py-4">Staff ID</th>
+                                  <th className="px-6 py-4">Name & Email</th>
+                                  <th className="px-6 py-4">Role Title</th>
+                                  <th className="px-6 py-4">Department</th>
+                                  <th className="px-6 py-4">Status</th>
+                                  <th className="px-6 py-4 text-right">Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-800/80 font-medium text-slate-200 bg-slate-900">
+                                {paginatedStaff.map((st, sIdx) => (
+                                  <tr key={`staff-user-${st.id || ''}-${st.email || ''}-${sIdx}`} className="hover:bg-slate-800/60 transition">
+                                    <td className="px-6 py-4 font-mono font-bold text-white">{st.id}</td>
+                                    <td className="px-6 py-4">
+                                      <span className="font-extrabold text-white block">{st.name}</span>
+                                      <span className="text-slate-400 text-[10px] font-mono">{st.email}</span>
+                                    </td>
+                                    <td className="px-6 py-4 font-bold text-sky-400">{st.role}</td>
+                                    <td className="px-6 py-4 text-slate-300">{st.department}</td>
+                                    <td className="px-6 py-4">
+                                      <span className="bg-emerald-950/80 text-emerald-300 border border-emerald-800/80 font-bold px-2.5 py-1 rounded-full text-[10px] uppercase">
+                                        {st.status}
+                                      </span>
+                                    </td>
+                                    <td className="px-6 py-4 text-right space-x-2">
+                                      <button
+                                        onClick={() => setEditingStaffModal({ ...st })}
+                                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 font-bold text-[10px] uppercase rounded-lg transition cursor-pointer"
+                                      >
+                                        Edit
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          toast.info('Password Reset Initiated', `Password reset notification initiated for ${st.email}`);
+                                        }}
+                                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] uppercase rounded-lg transition"
+                                      >
+                                        Reset Pwd
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteStaff(st)}
+                                        className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[10px] uppercase rounded-lg transition"
+                                      >
+                                        Terminate
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <TablePagination
+                            currentPage={staffPage}
+                            totalItems={filteredStaffUsers.length}
+                            pageSize={10}
+                            onPageChange={setStaffPage}
+                            itemName="staff users"
+                          />
+                        </div>
+                      </>
                     );
                   })()}
                 </div>
@@ -7275,9 +7371,43 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   </div>
                 </div>
 
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+                  <SmartSearchBar
+                    variant="dark"
+                    value={barangayOverviewSearch}
+                    onChange={setBarangayOverviewSearch}
+                    resultCount={
+                      barangayList.filter(bg => {
+                        const bgConsumers = getConsumersForBarangay(bg);
+                        return smartMatch(barangayOverviewSearch, [
+                          bg.name,
+                          bg.code,
+                          bg.supervisor,
+                          bg.schedule,
+                          ...bgConsumers.flatMap(c => [c.name, c.accountNumber, c.meterNumber, c.sitioZone, c.contactNumber])
+                        ]);
+                      }).length
+                    }
+                    totalCount={barangayList.length}
+                    placeholder="Smart search barangay zone, code, supervisor, sitio, or any consumer name / account # inside..."
+                    id="admin-barangays-overview-smart-search"
+                  />
+                </div>
+
                 {/* Barangay Cards Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {barangayList.map((bg, bgIdx) => {
+                  {barangayList
+                    .filter(bg => {
+                      const bgConsumers = getConsumersForBarangay(bg);
+                      return smartMatch(barangayOverviewSearch, [
+                        bg.name,
+                        bg.code,
+                        bg.supervisor,
+                        bg.schedule,
+                        ...bgConsumers.flatMap(c => [c.name, c.accountNumber, c.meterNumber, c.sitioZone, c.contactNumber])
+                      ]);
+                    })
+                    .map((bg, bgIdx) => {
                     const bgConsumers = getConsumersForBarangay(bg);
                     const activeCount = bgConsumers.filter(c => c.status === 'active').length;
                     const pendingCount = bgConsumers.filter(c => c.status === 'pending_approval' || c.status === 'pending').length;
@@ -7526,17 +7656,18 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           if (barangayCategoryFilter !== 'all') {
             if ((c.consumerType || 'Residential') !== barangayCategoryFilter) return false;
           }
-          if (barangaySearchQuery.trim()) {
-            const q = barangaySearchQuery.trim().toLowerCase();
-            const nameMatch = (c.name || '').toLowerCase().includes(q);
-            const accMatch = String(c.accountNumber || '').toLowerCase().includes(q);
-            const meterMatch = String(c.meterNumber || '').toLowerCase().includes(q);
-            const sitioMatch = (c.sitioZone || '').toLowerCase().includes(q);
-            const phoneMatch = (c.contactNumber || '').toLowerCase().includes(q);
-            const addrMatch = (c.address || '').toLowerCase().includes(q);
-            return nameMatch || accMatch || meterMatch || sitioMatch || phoneMatch || addrMatch;
-          }
-          return true;
+          return smartMatch(barangaySearchQuery, [
+            c.name,
+            c.accountNumber,
+            c.meterNumber,
+            c.rfidTag,
+            c.sitioZone,
+            c.contactNumber,
+            c.email,
+            c.address,
+            c.consumerType,
+            c.status
+          ]);
         });
 
         const paginatedBarangayConsumers = filteredModalConsumers.slice(
@@ -7683,14 +7814,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                 {/* Search and Filters Bar */}
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-950 p-3.5 rounded-2xl border border-slate-800">
-                  <div className="relative flex-1 w-full">
-                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                    <input
-                      type="text"
+                  <div className="flex-1 w-full">
+                    <SmartSearchBar
+                      variant="dark"
                       value={barangaySearchQuery}
-                      onChange={(e) => setBarangaySearchQuery(e.target.value)}
-                      placeholder={`Search in ${bg.name} by name, account #, meter #, address, phone...`}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                      onChange={setBarangaySearchQuery}
+                      resultCount={filteredModalConsumers.length}
+                      totalCount={allInBarangay.length}
+                      placeholder={`Smart search in ${bg.name} by name, account #, meter #, sitio, phone, or address...`}
+                      id="admin-barangay-modal-smart-search"
                     />
                   </div>
 

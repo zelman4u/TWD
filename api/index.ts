@@ -69,6 +69,7 @@ const FS_COLLECTIONS = {
   READINGS: "readings",
   NOTIFICATIONS: "notifications",
   REPORTS: "consumer_reports",
+  ANNOUNCEMENTS: "announcements",
   SETTINGS: "settings",
 };
 
@@ -364,6 +365,9 @@ let syncedUsers: PortalSyncUser[] = [];
 let syncedNotifications: PortalNotification[] = [];
 let syncedReadings: MobileReadingSubmission[] = [];
 let syncedReports: ServerConsumerReport[] = [];
+let syncedAnnouncements: any[] = [];
+const deletedAnnouncementIds = new Set<string>();
+let syncedTariffConfig: any = null;
 
 function mergeConsumersList(items: MobileConsumerRecord[]): MobileConsumerRecord[] {
   const merged: MobileConsumerRecord[] = [];
@@ -1405,6 +1409,22 @@ app.get("/api/notifications", async (req, res) => {
     const email = rawEmail.toLowerCase();
 
     const notifMap = new Map<string, PortalNotification>();
+
+    // Include warm-instance notifications first so notifications remain instant even when Firestore daily write quota is exhausted
+    for (const n of syncedNotifications) {
+      if (!n || !n.title) continue;
+      const nAcc = String(n.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+      const nEmail = String(n.consumerEmail || "").trim().toLowerCase();
+      const nUid = String(n.userId || "").trim();
+      const isBroadcast = nAcc === "ALL" || nAcc === "BROADCAST" || nAcc === "DISTRICT";
+      const matchAcc = accountNumber && !accountNumber.startsWith("PENDING") && nAcc === accountNumber;
+      const matchEmail = email && nEmail === email;
+      const matchUid = userId && nUid === userId;
+      if (isBroadcast || matchAcc || matchEmail || matchUid) {
+        notifMap.set(n.id, n);
+      }
+    }
+
     const collect = async (field: string, val: string) => {
       if (!val || val.toUpperCase().startsWith("PENDING")) return;
       const snap = await getDocs(
@@ -1420,6 +1440,7 @@ app.get("/api/notifications", async (req, res) => {
 
     await Promise.all([
       collect("accountNumber", accountNumber),
+      collect("accountNumber", "ALL"),
       collect("consumerEmail", email),
       ...(rawEmail && rawEmail !== email ? [collect("consumerEmail", rawEmail)] : []),
       collect("userId", userId),
@@ -1451,7 +1472,12 @@ app.post("/api/notifications", async (req, res) => {
       timestamp: body.timestamp || new Date().toISOString(),
       read: Boolean(body.read),
     };
-    syncedNotifications.unshift(notif);
+    const existingIdx = syncedNotifications.findIndex((n) => n.id === notif.id);
+    if (existingIdx >= 0) {
+      syncedNotifications[existingIdx] = { ...syncedNotifications[existingIdx], ...notif };
+    } else {
+      syncedNotifications.unshift(notif);
+    }
     await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(notif.id)), sanitizePayload(notif), {
       merge: true,
     }).catch(() => {});
@@ -1464,9 +1490,16 @@ app.post("/api/notifications", async (req, res) => {
 app.patch("/api/notifications/:id/read", async (req, res) => {
   try {
     const { id } = req.params;
-    await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(id)), { read: true }, { merge: true }).catch(
-      () => {}
-    );
+    const found = syncedNotifications.find((n) => n.id === id);
+    const isBroadcast = found && String(found.accountNumber || "").trim().toUpperCase() === "ALL";
+    if (found && !isBroadcast) {
+      found.read = true;
+    }
+    if (!isBroadcast) {
+      await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(id)), { read: true }, { merge: true }).catch(
+        () => {}
+      );
+    }
     res.json({ success: true });
   } catch {
     res.json({ success: true });
@@ -1595,7 +1628,12 @@ app.post("/api/reports", async (req, res) => {
       hasUnreadConsumerUpdate: true,
     };
 
-    syncedReports.unshift(report);
+    const existingIdx = syncedReports.findIndex((r) => r.id === id || r.ticketNumber === ticketNumber);
+    if (existingIdx >= 0) {
+      syncedReports[existingIdx] = { ...syncedReports[existingIdx], ...report };
+    } else {
+      syncedReports.unshift(report);
+    }
     await setDoc(doc(fsDb, FS_COLLECTIONS.REPORTS, sanitizeDocId(id)), sanitizePayload(report), { merge: true }).catch(
       () => {}
     );
@@ -1611,18 +1649,39 @@ app.post("/api/reports", async (req, res) => {
   }
 });
 
-app.post("/api/reports/:id/reply", async (req, res) => {
+app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], async (req, res) => {
   try {
     const { id } = req.params;
-    const { senderId, senderName, senderRole, message, statusUpdate, assignedStaff } = req.body || {};
+    const { senderId, senderName, senderRole, message, statusUpdate, assignedStaff, report: clientReport } = req.body || {};
     const list = await loadReportsFromFirestore();
-    const idx = list.findIndex((r) => r.id === id || r.ticketNumber === id);
+    let idx = list.findIndex((r) => r.id === id || r.ticketNumber === id);
+
+    const now = new Date().toISOString();
+    if (idx < 0 && clientReport && typeof clientReport === "object") {
+      const hydrated: ServerConsumerReport = {
+        ...clientReport,
+        id: clientReport.id || id,
+        ticketNumber: clientReport.ticketNumber || id,
+        accountNumber: clientReport.accountNumber || "",
+        consumerName: clientReport.consumerName || "Consumer",
+        category: clientReport.category || "other",
+        title: clientReport.title || "Consumer Inquiry",
+        description: clientReport.description || "",
+        urgency: clientReport.urgency || "normal",
+        status: clientReport.status || "pending",
+        createdAt: clientReport.createdAt || now,
+        updatedAt: now,
+        replies: Array.isArray(clientReport.replies) ? clientReport.replies : [],
+      };
+      syncedReports.unshift(hydrated);
+      idx = 0;
+    }
+
     if (idx < 0) {
       return res.status(404).json({ success: false, message: "Report not found." });
     }
 
-    const now = new Date().toISOString();
-    const existing = list[idx];
+    const existing = syncedReports[idx];
     const reply: ServerReportReply = {
       id: `REP-MSG-${Date.now()}`,
       reportId: existing.id,
@@ -1634,6 +1693,14 @@ app.post("/api/reports/:id/reply", async (req, res) => {
       statusUpdate,
     };
 
+    const existingReplies = Array.isArray(existing.replies) ? existing.replies : [];
+    const alreadyHasSameLastReply =
+      existingReplies.length > 0 &&
+      existingReplies[existingReplies.length - 1].message === reply.message &&
+      existingReplies[existingReplies.length - 1].senderRole === reply.senderRole &&
+      Math.abs(new Date(existingReplies[existingReplies.length - 1].timestamp || 0).getTime() - Date.now()) < 5000;
+
+    const mergedReplies = alreadyHasSameLastReply ? existingReplies : [...existingReplies, reply];
     const nextStatus = statusUpdate || existing.status;
     const updated: ServerConsumerReport = {
       ...existing,
@@ -1641,7 +1708,7 @@ app.post("/api/reports/:id/reply", async (req, res) => {
       updatedAt: now,
       resolvedAt: nextStatus === "resolved" ? existing.resolvedAt || now : existing.resolvedAt,
       assignedStaff: assignedStaff !== undefined ? assignedStaff : existing.assignedStaff,
-      replies: [...(existing.replies || []), reply],
+      replies: mergedReplies,
       hasUnreadAdminReply: reply.senderRole === "admin",
       hasUnreadConsumerUpdate: reply.senderRole === "consumer",
     };
@@ -1664,6 +1731,7 @@ app.post("/api/reports/:id/reply", async (req, res) => {
         reportId: updated.id,
         ticketNumber: updated.ticketNumber,
       };
+      syncedNotifications.unshift(notif);
       await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(notif.id)), sanitizePayload(notif), {
         merge: true,
       }).catch(() => {});
@@ -1675,17 +1743,38 @@ app.post("/api/reports/:id/reply", async (req, res) => {
   }
 });
 
-app.patch("/api/reports/:id/status", async (req, res) => {
+app.all("/api/reports/:id/status", async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, assignedStaff } = req.body || {};
+    const { status, assignedStaff, report: clientReport } = req.body || {};
     const list = await loadReportsFromFirestore();
-    const idx = list.findIndex((r) => r.id === id || r.ticketNumber === id);
+    let idx = list.findIndex((r) => r.id === id || r.ticketNumber === id);
+    const now = new Date().toISOString();
+
+    if (idx < 0 && clientReport && typeof clientReport === "object") {
+      const hydrated: ServerConsumerReport = {
+        ...clientReport,
+        id: clientReport.id || id,
+        ticketNumber: clientReport.ticketNumber || id,
+        accountNumber: clientReport.accountNumber || "",
+        consumerName: clientReport.consumerName || "Consumer",
+        category: clientReport.category || "other",
+        title: clientReport.title || "Consumer Inquiry",
+        description: clientReport.description || "",
+        urgency: clientReport.urgency || "normal",
+        status: clientReport.status || "pending",
+        createdAt: clientReport.createdAt || now,
+        updatedAt: now,
+        replies: Array.isArray(clientReport.replies) ? clientReport.replies : [],
+      };
+      syncedReports.unshift(hydrated);
+      idx = 0;
+    }
+
     if (idx < 0) {
       return res.status(404).json({ success: false, message: "Report not found." });
     }
-    const now = new Date().toISOString();
-    const existing = list[idx];
+    const existing = syncedReports[idx];
     const updated: ServerConsumerReport = {
       ...existing,
       status: status || existing.status,
@@ -2101,29 +2190,132 @@ app.post("/api/readings/:id/approve", async (req, res) => {
 });
 
 // ==========================================
-// 6. TARIFF CONFIG, BARANGAYS & HEALTH
+// 6. ANNOUNCEMENTS, TARIFF CONFIG, BARANGAYS & HEALTH
 // ==========================================
+async function loadAnnouncementsFromFirestore(): Promise<any[]> {
+  try {
+    const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS), limit(100)));
+    const map = new Map<string, any>();
+    syncedAnnouncements.forEach((a) => {
+      if (a && a.id && !deletedAnnouncementIds.has(a.id)) map.set(a.id, a);
+    });
+    snap.forEach((d) => {
+      const a = d.data();
+      const id = (a && a.id) || d.id;
+      if (a && id && !deletedAnnouncementIds.has(id)) {
+        const existing = map.get(id);
+        map.set(id, existing ? { ...a, ...existing, id } : { ...a, id });
+      }
+    });
+    syncedAnnouncements = Array.from(map.values()).sort(
+      (a, b) => new Date(b.createdAt || b.date || 0).getTime() - new Date(a.createdAt || a.date || 0).getTime()
+    );
+  } catch {
+    // Graceful fallback to syncedAnnouncements
+  }
+  return syncedAnnouncements.filter((a) => a && a.id && !deletedAnnouncementIds.has(a.id));
+}
+
+app.get("/api/announcements", async (_req, res) => {
+  try {
+    const list = await loadAnnouncementsFromFirestore();
+    res.json({ success: true, count: list.length, announcements: list, data: list });
+  } catch {
+    res.json({ success: true, count: syncedAnnouncements.length, announcements: syncedAnnouncements, data: syncedAnnouncements });
+  }
+});
+
+app.post("/api/announcements", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const id = body.id || `ann-${Date.now()}`;
+    const ann = {
+      id,
+      title: String(body.title || "Official Advisory").trim(),
+      content: String(body.content || "").trim(),
+      type: body.type || "info",
+      date: body.date || new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+      author: body.author || "TWD Operations",
+      createdAt: body.createdAt || new Date().toISOString(),
+    };
+    deletedAnnouncementIds.delete(id);
+    const idx = syncedAnnouncements.findIndex((a) => a.id === id);
+    if (idx >= 0) {
+      syncedAnnouncements[idx] = { ...syncedAnnouncements[idx], ...ann };
+    } else {
+      syncedAnnouncements.unshift(ann);
+    }
+    await setDoc(doc(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS, sanitizeDocId(id)), sanitizePayload(ann), {
+      merge: true,
+    }).catch(() => {});
+    res.status(201).json({ success: true, announcement: ann, data: ann });
+  } catch {
+    res.status(200).json({ success: false, message: "Failed to publish announcement." });
+  }
+});
+
+app.put("/api/announcements/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+    const idx = syncedAnnouncements.findIndex((a) => a.id === id);
+    const updated = {
+      ...(idx >= 0 ? syncedAnnouncements[idx] : {}),
+      ...body,
+      id,
+      updatedAt: new Date().toISOString(),
+    };
+    if (idx >= 0) {
+      syncedAnnouncements[idx] = updated;
+    } else {
+      syncedAnnouncements.unshift(updated);
+    }
+    await setDoc(doc(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS, sanitizeDocId(id)), sanitizePayload(updated), {
+      merge: true,
+    }).catch(() => {});
+    res.json({ success: true, announcement: updated, data: updated });
+  } catch {
+    res.status(200).json({ success: false, message: "Failed to update announcement." });
+  }
+});
+
+app.delete("/api/announcements/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    deletedAnnouncementIds.add(id);
+    syncedAnnouncements = syncedAnnouncements.filter((a) => a.id !== id);
+    await deleteDoc(doc(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS, sanitizeDocId(id))).catch(() => {});
+    res.json({ success: true });
+  } catch {
+    res.json({ success: true });
+  }
+});
+
 app.get("/api/tariff-config", async (_req, res) => {
   try {
     const tDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.SETTINGS, "tariff_config")).catch(() => null);
     if (tDoc && tDoc.exists()) {
-      return res.json({ success: true, config: tDoc.data() });
+      const remoteCfg = tDoc.data();
+      if (!syncedTariffConfig || (Number(remoteCfg?.version || 0) >= Number(syncedTariffConfig?.version || 0))) {
+        syncedTariffConfig = remoteCfg;
+      }
     }
   } catch {
     // Graceful fallback
   }
-  res.json({ success: true, config: null });
+  res.json({ success: true, config: syncedTariffConfig });
 });
 
 app.post("/api/tariff-config", async (req, res) => {
   try {
     const cfg = req.body || {};
+    syncedTariffConfig = cfg;
     await setDoc(doc(fsDb, FS_COLLECTIONS.SETTINGS, "tariff_config"), sanitizePayload(cfg), { merge: true }).catch(
       () => {}
     );
     res.json({ success: true, config: cfg });
   } catch {
-    res.json({ success: true, config: req.body || {} });
+    res.json({ success: true, config: syncedTariffConfig || req.body || {} });
   }
 });
 

@@ -1349,6 +1349,71 @@ function setStored<T>(key: string, value: T): void {
   }
 }
 
+const DELETED_ANNOUNCEMENTS_KEY = 'twd_live_v4_deleted_announcements';
+const READ_BROADCAST_NOTIFS_KEY = 'twd_live_v4_read_broadcast_notifs';
+
+function getDeletedAnnouncementIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_ANNOUNCEMENTS_KEY);
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw));
+  } catch {
+    return new Set();
+  }
+}
+
+function addDeletedAnnouncementId(id: string): void {
+  try {
+    const set = getDeletedAnnouncementIds();
+    set.add(id);
+    localStorage.setItem(DELETED_ANNOUNCEMENTS_KEY, JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+function getReadBroadcastNotifSet(): Set<string> {
+  try {
+    const raw = localStorage.getItem(READ_BROADCAST_NOTIFS_KEY);
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw));
+  } catch {
+    return new Set();
+  }
+}
+
+function markBroadcastNotifReadForIdentity(notifId: string, identityKey: string): void {
+  try {
+    const set = getReadBroadcastNotifSet();
+    set.add(`${identityKey}::${notifId}`);
+    localStorage.setItem(READ_BROADCAST_NOTIFS_KEY, JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+/**
+ * Computes strictly the subset of items in `nextItems` whose serialized JSON changed
+ * compared to what is currently stored in `localStorage[key]`, preventing full-collection
+ * Firestore batch writes on minor updates.
+ */
+function diffChangedItems<T extends Record<string, any>>(key: string, nextItems: T[], idField: string): T[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return nextItems;
+    const prevItems = JSON.parse(raw) as T[];
+    if (!Array.isArray(prevItems)) return nextItems;
+    const prevMap = new Map<string, string>();
+    prevItems.forEach((item) => {
+      const k = String(item?.[idField] || item?.id || item?.accountNumber || item?.email || '');
+      if (k) prevMap.set(k, JSON.stringify(item));
+    });
+    return nextItems.filter((item) => {
+      const k = String(item?.[idField] || item?.id || item?.accountNumber || item?.email || '');
+      if (!k) return true;
+      return prevMap.get(k) !== JSON.stringify(item);
+    });
+  } catch {
+    return nextItems;
+  }
+}
+
 export const mockDb = {
   // Get all datasets
   getUsers: (): User[] => getStored<User[]>(KEYS.USERS, INITIAL_USERS),
@@ -1357,7 +1422,12 @@ export const mockDb = {
   getMeters: (): WaterMeter[] => getStored<WaterMeter[]>(KEYS.METERS, INITIAL_METERS),
   getReadings: (): MeterReading[] => getStored<MeterReading[]>(KEYS.READINGS, INITIAL_READINGS),
   getRoutes: (): RouteAssignment[] => getStored<RouteAssignment[]>(KEYS.ROUTES, INITIAL_ROUTES),
-  getAnnouncements: (): Announcement[] => getStored<Announcement[]>(KEYS.ANNOUNCEMENTS, INITIAL_ANNOUNCEMENTS),
+  getAnnouncements: (): Announcement[] => {
+    const deleted = getDeletedAnnouncementIds();
+    return getStored<Announcement[]>(KEYS.ANNOUNCEMENTS, INITIAL_ANNOUNCEMENTS).filter(
+      (a) => a && (!a.id || !deleted.has(a.id))
+    );
+  },
   getAuditLogs: (): AuditLog[] => getStored<AuditLog[]>(KEYS.AUDIT_LOGS, INITIAL_AUDIT_LOGS).sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   ),
@@ -1401,8 +1471,9 @@ export const mockDb = {
   },
 
   saveUsers: (users: User[]): void => {
+    const changed = diffChangedItems(KEYS.USERS, users, 'id');
     setStored(KEYS.USERS, users);
-    syncBatchToFirestore(COLLECTIONS.USERS, users, 'id');
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.USERS, changed, 'id');
   },
   saveConsumers: (consumers: Consumer[]): void => {
     const normalizedList = consumers.map(c => normalizeConsumerRecord(c));
@@ -1420,8 +1491,9 @@ export const mockDb = {
       return true;
     });
 
+    const changed = diffChangedItems(KEYS.CONSUMERS, deduplicated, 'accountNumber');
     setStored(KEYS.CONSUMERS, deduplicated);
-    syncBatchToFirestore(COLLECTIONS.CONSUMERS, deduplicated, 'accountNumber');
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.CONSUMERS, changed, 'accountNumber');
   },
   saveReaders: (readers: MeterReader[]): void => {
     const seen = new Set<string>();
@@ -1451,8 +1523,9 @@ export const mockDb = {
       if (kEmail) seen.add(kEmail);
       deduplicated.push(r);
     });
+    const changed = diffChangedItems(KEYS.READERS, deduplicated, 'id');
     setStored(KEYS.READERS, deduplicated);
-    syncBatchToFirestore(COLLECTIONS.READERS, deduplicated, 'id');
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.READERS, changed, 'id');
   },
   deleteReader: (readerId: string, employeeId?: string, email?: string, username?: string, name?: string): void => {
     // 1. Mark identifiers in blacklist
@@ -1596,10 +1669,12 @@ export const mockDb = {
   },
 
   deleteAnnouncement: (id: string): void => {
+    addDeletedAnnouncementId(id);
     const allAnnouncements = getStored<Announcement[]>(KEYS.ANNOUNCEMENTS, INITIAL_ANNOUNCEMENTS);
     const updatedAnnouncements = allAnnouncements.filter(a => a.id !== id);
     setStored(KEYS.ANNOUNCEMENTS, updatedAnnouncements);
     deleteDocFromFirestore(COLLECTIONS.ANNOUNCEMENTS, id);
+    safeBackendFetch(`/api/announcements/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
   },
 
   deleteBarangay: (id: string): void => {
@@ -1610,28 +1685,57 @@ export const mockDb = {
   },
 
   saveMeters: (meters: WaterMeter[]): void => {
+    const changed = diffChangedItems(KEYS.METERS, meters, 'meterNumber');
     setStored(KEYS.METERS, meters);
-    syncBatchToFirestore(COLLECTIONS.METERS, meters, 'meterNumber');
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.METERS, changed, 'meterNumber');
   },
   saveReadings: (readings: MeterReading[]): void => {
+    const changed = diffChangedItems(KEYS.READINGS, readings, 'id');
     setStored(KEYS.READINGS, readings);
-    syncBatchToFirestore(COLLECTIONS.READINGS, readings, 'id');
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.READINGS, changed, 'id');
   },
   saveRoutes: (routes: RouteAssignment[]): void => {
+    const changed = diffChangedItems(KEYS.ROUTES, routes, 'id');
     setStored(KEYS.ROUTES, routes);
-    syncBatchToFirestore(COLLECTIONS.ROUTES, routes, 'id');
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.ROUTES, changed, 'id');
   },
   saveAnnouncements: (anns: Announcement[]): void => {
-    setStored(KEYS.ANNOUNCEMENTS, anns);
-    syncBatchToFirestore(COLLECTIONS.ANNOUNCEMENTS, anns, 'id');
+    const deleted = getDeletedAnnouncementIds();
+    const filtered = anns.filter(a => a && (!a.id || !deleted.has(a.id)));
+    const changed = diffChangedItems(KEYS.ANNOUNCEMENTS, filtered, 'id');
+    setStored(KEYS.ANNOUNCEMENTS, filtered);
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.ANNOUNCEMENTS, changed, 'id');
+  },
+  mergeExternalAnnouncements: (incoming: Announcement[]): Announcement[] => {
+    const deleted = getDeletedAnnouncementIds();
+    const localList = mockDb.getAnnouncements();
+    if (!Array.isArray(incoming) || incoming.length === 0) return localList;
+    const map = new Map<string, Announcement>();
+    localList.forEach(la => {
+      if (la?.id && !deleted.has(la.id)) map.set(la.id, la);
+    });
+    incoming.forEach(ia => {
+      if (ia?.id && !deleted.has(ia.id)) {
+        const prev = map.get(ia.id);
+        map.set(ia.id, prev ? { ...prev, ...ia } : ia);
+      }
+    });
+    const merged = Array.from(map.values()).sort(
+      (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+    );
+    setStored(KEYS.ANNOUNCEMENTS, merged);
+    return merged;
   },
   saveAuditLogs: (logs: AuditLog[]): void => {
+    const recent = logs.slice(-5);
+    const changed = diffChangedItems(KEYS.AUDIT_LOGS, recent, 'id');
     setStored(KEYS.AUDIT_LOGS, logs);
-    syncBatchToFirestore(COLLECTIONS.AUDIT_LOGS, logs.slice(-15), 'id');
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.AUDIT_LOGS, changed, 'id');
   },
   saveBarangays: (barangays: Barangay[]): void => {
+    const changed = diffChangedItems(KEYS.BARANGAYS, barangays, 'id');
     setStored(KEYS.BARANGAYS, barangays);
-    syncBatchToFirestore(COLLECTIONS.BARANGAYS, barangays, 'id');
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.BARANGAYS, changed, 'id');
   },
 
   findOrCreateBarangay: (barangayName: string): Barangay => {
@@ -1702,34 +1806,54 @@ export const mockDb = {
       return [];
     }
 
-    const filtered = list.filter(n => {
-      const nCleanAcc = (n.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
-      const nHasRealAcc = !isPlaceholderAccount(n.accountNumber);
-      const nUserId = (n.userId || '').trim().toLowerCase();
-      const nEmail = (n.consumerEmail || '').trim().toLowerCase();
-      const nConsumerId = (n.consumerId || '').trim().toLowerCase();
+    const readBroadcastSet = getReadBroadcastNotifSet();
+    const viewerIdentityKey = cleanEmail || cleanAccount || cleanUserId || cleanConsumerId;
 
-      // 1. Email is the authoritative personal identity: match if equal, exclude if explicitly a different email
-      if (cleanEmail && nEmail) {
-        return cleanEmail === nEmail;
-      }
+    const filtered = list
+      .filter(n => {
+        const nCleanAcc = (n.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
+        // District-wide broadcast notifications (public announcements & tariff advisories)
+        if (nCleanAcc === 'all' || nCleanAcc === 'broadcast' || nCleanAcc === 'district') {
+          return true;
+        }
 
-      // 2. Real issued Account Number match: match if equal, exclude if explicitly a different issued account
-      if (hasRealAccount && nHasRealAcc) {
-        return cleanAccount === nCleanAcc;
-      }
+        const nHasRealAcc = !isPlaceholderAccount(n.accountNumber);
+        const nUserId = (n.userId || '').trim().toLowerCase();
+        const nEmail = (n.consumerEmail || '').trim().toLowerCase();
+        const nConsumerId = (n.consumerId || '').trim().toLowerCase();
 
-      // 3. Exact User ID or Consumer ID Match (when email/account do not conflict)
-      if (cleanUserId && nUserId && nUserId === cleanUserId) {
-        return true;
-      }
-      if (cleanConsumerId && nConsumerId && nConsumerId === cleanConsumerId) {
-        return true;
-      }
+        // 1. Email is the authoritative personal identity: match if equal, exclude if explicitly a different email
+        if (cleanEmail && nEmail) {
+          return cleanEmail === nEmail;
+        }
 
-      // Strictly deny match for any unverified or cross-account notification
-      return false;
-    });
+        // 2. Real issued Account Number match: match if equal, exclude if explicitly a different issued account
+        if (hasRealAccount && nHasRealAcc) {
+          return cleanAccount === nCleanAcc;
+        }
+
+        // 3. Exact User ID or Consumer ID Match (when email/account do not conflict)
+        if (cleanUserId && nUserId && nUserId === cleanUserId) {
+          return true;
+        }
+        if (cleanConsumerId && nConsumerId && nConsumerId === cleanConsumerId) {
+          return true;
+        }
+
+        // Strictly deny match for any unverified or cross-account notification
+        return false;
+      })
+      .map(n => {
+        const nCleanAcc = (n.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
+        if (
+          (nCleanAcc === 'all' || nCleanAcc === 'broadcast' || nCleanAcc === 'district') &&
+          viewerIdentityKey &&
+          readBroadcastSet.has(`${viewerIdentityKey}::${n.id}`)
+        ) {
+          return { ...n, read: true };
+        }
+        return n;
+      });
 
     return filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   },
@@ -1838,6 +1962,17 @@ export const mockDb = {
 
   markNotificationRead: (id: string): void => {
     const list = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
+    const target = list.find(n => n.id === id);
+    const targetAcc = (target?.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
+    if (target && (targetAcc === 'all' || targetAcc === 'broadcast' || targetAcc === 'district')) {
+      const cur = mockDb.getCurrentUser();
+      const viewerKey = (cur?.email || cur?.linkedAccountNumber || cur?.id || 'viewer').trim().toLowerCase();
+      markBroadcastNotifReadForIdentity(id, viewerKey);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key: KEYS.NOTIFICATIONS, timestamp: Date.now() } }));
+      }
+      return;
+    }
     const updated = list.map(n => n.id === id ? { ...n, read: true } : n);
     setStored(KEYS.NOTIFICATIONS, updated);
     syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, id, { read: true });
@@ -1848,9 +1983,16 @@ export const mockDb = {
   getReports: (accountNumber?: string): ConsumerReport[] => {
     const list = getStored<ConsumerReport[]>(KEYS.REPORTS, INITIAL_REPORTS);
     if (accountNumber) {
-      return list.filter(r => r.accountNumber === accountNumber || (r.consumerEmail && r.consumerEmail.toLowerCase() === accountNumber.toLowerCase())).sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      const cleanTarget = accountNumber.trim().toLowerCase();
+      return list
+        .filter(
+          r =>
+            (r.accountNumber || '').trim().toLowerCase() === cleanTarget ||
+            (r.consumerEmail && r.consumerEmail.trim().toLowerCase() === cleanTarget)
+        )
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     }
-    return list.sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   },
 
   getReportById: (id: string): ConsumerReport | undefined => {
@@ -1859,8 +2001,63 @@ export const mockDb = {
   },
 
   saveReports: (reports: ConsumerReport[]): void => {
+    const changed = diffChangedItems(KEYS.REPORTS, reports, 'id');
     setStored(KEYS.REPORTS, reports);
-    syncBatchToFirestore(COLLECTIONS.REPORTS, reports, 'id');
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.REPORTS, changed, 'id');
+  },
+
+  mergeExternalReports: (incoming: ConsumerReport[]): ConsumerReport[] => {
+    const localList = getStored<ConsumerReport[]>(KEYS.REPORTS, INITIAL_REPORTS);
+    if (!Array.isArray(incoming) || incoming.length === 0) {
+      return localList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }
+    const map = new Map<string, ConsumerReport>();
+    localList.forEach(lr => {
+      if (lr && lr.id) map.set(lr.id, lr);
+    });
+    incoming.forEach(ir => {
+      if (!ir || (!ir.id && !ir.ticketNumber)) return;
+      // Match by ID or ticketNumber so client & server twins reconcile cleanly without duplicating or disappearing
+      let existingKey = ir.id && map.has(ir.id) ? ir.id : undefined;
+      if (!existingKey && ir.ticketNumber) {
+        const foundEntry = Array.from(map.entries()).find(([, v]) => v.ticketNumber === ir.ticketNumber);
+        if (foundEntry) existingKey = foundEntry[0];
+      }
+      if (!existingKey) {
+        const key = ir.id || ir.ticketNumber;
+        map.set(key, { ...ir, id: key, replies: Array.isArray(ir.replies) ? ir.replies : [] });
+      } else {
+        const prev = map.get(existingKey)!;
+        const prevReplies = Array.isArray(prev.replies) ? prev.replies : [];
+        const irReplies = Array.isArray(ir.replies) ? ir.replies : [];
+        // Merge replies deduplicated by reply id or message+timestamp
+        const replyMap = new Map<string, ConsumerReportReply>();
+        [...prevReplies, ...irReplies].forEach(rep => {
+          if (!rep) return;
+          const rk = rep.id || `${rep.senderRole}_${rep.message}_${rep.timestamp}`;
+          if (!replyMap.has(rk)) replyMap.set(rk, rep);
+        });
+        const mergedReplies = Array.from(replyMap.values()).sort(
+          (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
+        );
+        const irNewer = new Date(ir.updatedAt || 0).getTime() >= new Date(prev.updatedAt || 0).getTime();
+        const primary = irNewer ? ir : prev;
+        const secondary = irNewer ? prev : ir;
+        map.set(existingKey, {
+          ...secondary,
+          ...primary,
+          id: existingKey,
+          replies: mergedReplies,
+        });
+      }
+    });
+    const merged = Array.from(map.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+    const changed = diffChangedItems(KEYS.REPORTS, merged, 'id');
+    setStored(KEYS.REPORTS, merged);
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.REPORTS, changed, 'id');
+    return merged;
   },
 
   createReport: (reportData: Omit<ConsumerReport, 'id' | 'ticketNumber' | 'createdAt' | 'updatedAt' | 'replies' | 'status' | 'hasUnreadAdminReply' | 'hasUnreadConsumerUpdate'> & { status?: ConsumerReport['status']; initialReply?: string; hasUnreadAdminReply?: boolean; hasUnreadConsumerUpdate?: boolean }): ConsumerReport => {
@@ -2061,6 +2258,11 @@ export const mockDb = {
     saveActiveTariffConfig(config);
     setStored(KEYS.TARIFF_CONFIG, config);
     syncDocToFirestore(COLLECTIONS.SETTINGS, 'tariff_config', config as unknown as Record<string, unknown>);
+    safeBackendFetch('/api/tariff-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    }).catch(() => {});
   },
 
   initFirestore: (): void => {
@@ -2235,9 +2437,6 @@ export const mockDb = {
               body: JSON.stringify(issuedConfirmationNotif)
             }).catch(() => {});
           }
-
-          // Push issued consumer, linked user activation, and confirmation notification to Cloud Firestore (deduplicated)
-          pushIssuedConsumerToFirestore(c, issuedConfirmationNotif, matchedUser).catch(() => {});
         }
       });
 

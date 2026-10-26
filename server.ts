@@ -1883,12 +1883,12 @@ app.post("/api/consumers", (req, res) => {
 app.patch("/api/consumers/:identifier", (req, res) => {
   try {
     const { identifier } = req.params;
-    const updates = req.body;
+    const updates = req.body || {};
 
     const idx = syncedConsumers.findIndex(c => 
-      c.accountNumber === identifier || 
+      (c.accountNumber && c.accountNumber === identifier) || 
       (c.email && c.email.toLowerCase() === identifier.toLowerCase()) ||
-      c.linkedUserId === identifier
+      (c.linkedUserId && c.linkedUserId === identifier)
     );
 
     if (idx < 0) {
@@ -1898,28 +1898,170 @@ app.patch("/api/consumers/:identifier", (req, res) => {
       });
     }
 
+    const currentConsumer = syncedConsumers[idx];
+
+    // Validate & check duplicate phone number when contactNumber is updated
+    if (updates.contactNumber !== undefined && String(updates.contactNumber).trim() !== "") {
+      const cleanPhone = normalizePhone11Server(updates.contactNumber);
+      if (cleanPhone.length !== 11 || !cleanPhone.startsWith("09")) {
+        return res.status(400).json({
+          success: false,
+          message: "Mobile number must be a valid 11-digit Philippine mobile number starting with 09 (e.g., 09171234567)."
+        });
+      }
+
+      const dupConsumer = syncedConsumers.find((c, cIdx) => {
+        if (cIdx === idx) return false;
+        if (currentConsumer.accountNumber && c.accountNumber && c.accountNumber === currentConsumer.accountNumber) return false;
+        if (currentConsumer.email && c.email && c.email.toLowerCase() === currentConsumer.email.toLowerCase()) return false;
+        if (currentConsumer.linkedUserId && c.linkedUserId && c.linkedUserId === currentConsumer.linkedUserId) return false;
+        return normalizePhone11Server(c.contactNumber) === cleanPhone;
+      });
+
+      const dupUser = syncedPortalUsers.find(u => {
+        if (currentConsumer.linkedUserId && u.id === currentConsumer.linkedUserId) return false;
+        if (currentConsumer.email && u.email && u.email.toLowerCase() === currentConsumer.email.toLowerCase()) return false;
+        if (currentConsumer.accountNumber && u.linkedAccountNumber && u.linkedAccountNumber === currentConsumer.accountNumber) return false;
+        return normalizePhone11Server(u.contactNumber) === cleanPhone;
+      });
+
+      const dupStaff = registeredStaff.find(s => normalizePhone11Server((s as any).contactNumber || (s as any).phone) === cleanPhone);
+
+      const conflictName = dupConsumer?.name || dupUser?.name || dupStaff?.name;
+      if (conflictName) {
+        return res.status(409).json({
+          success: false,
+          message: `The mobile number ${cleanPhone} is already registered to another account (${conflictName}). Duplicate phone numbers are strictly prohibited.`
+        });
+      }
+
+      updates.contactNumber = cleanPhone;
+    }
+
     syncedConsumers[idx] = {
-      ...syncedConsumers[idx],
+      ...currentConsumer,
       ...updates
     };
 
-    if (isValidatedConsumerForReader(syncedConsumers[idx])) {
-      syncConsumerToServerPortalUser(syncedConsumers[idx]);
+    const updatedConsumer = syncedConsumers[idx];
+
+    // Sync matching portal user contact/email/name even if account is still pending
+    const uIdx = syncedPortalUsers.findIndex(u =>
+      (updatedConsumer.linkedUserId && u.id === updatedConsumer.linkedUserId) ||
+      (currentConsumer.email && u.email && u.email.toLowerCase() === currentConsumer.email.toLowerCase()) ||
+      (updatedConsumer.email && u.email && u.email.toLowerCase() === updatedConsumer.email.toLowerCase()) ||
+      (updatedConsumer.accountNumber && isIssuedAccountNumberServer(updatedConsumer.accountNumber) && u.linkedAccountNumber === updatedConsumer.accountNumber)
+    );
+    if (uIdx >= 0) {
+      syncedPortalUsers[uIdx] = {
+        ...syncedPortalUsers[uIdx],
+        name: updatedConsumer.name || syncedPortalUsers[uIdx].name,
+        email: updatedConsumer.email || syncedPortalUsers[uIdx].email,
+        contactNumber: updatedConsumer.contactNumber || syncedPortalUsers[uIdx].contactNumber
+      };
+    }
+
+    if (isValidatedConsumerForReader(updatedConsumer)) {
+      syncConsumerToServerPortalUser(updatedConsumer);
     }
     savePortalSyncStore();
 
     broadcast("CONSUMER_UPDATED", {
-      consumer: syncedConsumers[idx],
+      consumer: updatedConsumer,
       message: `Consumer ${identifier} details updated.`
     });
 
     res.json({
       success: true,
       message: `Consumer ${identifier} updated successfully.`,
-      consumer: syncedConsumers[idx]
+      consumer: updatedConsumer
     });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to update consumer." });
+  }
+});
+
+// POST /api/consumers/change-password - Securely validate and persist consumer password updates
+app.post("/api/consumers/change-password", (req, res) => {
+  try {
+    const { userId, email, accountNumber, currentPassword, newPassword } = req.body || {};
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    const cleanUid = String(userId || "").trim();
+    const cleanAcc = String(accountNumber || "").trim().toUpperCase();
+    const oldPwd = String(currentPassword || "");
+    const nextPwd = String(newPassword || "");
+
+    if (!oldPwd || !nextPwd) {
+      return res.status(400).json({
+        success: false,
+        message: "Both current password and new password are required."
+      });
+    }
+
+    if (nextPwd.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "New password must be at least 6 characters long."
+      });
+    }
+
+    if (nextPwd === oldPwd) {
+      return res.status(400).json({
+        success: false,
+        message: "New password cannot be the same as your current/old password."
+      });
+    }
+
+    const uIdx = syncedPortalUsers.findIndex(u =>
+      (cleanUid && u.id === cleanUid) ||
+      (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) ||
+      (cleanAcc && isIssuedAccountNumberServer(cleanAcc) && u.linkedAccountNumber === cleanAcc)
+    );
+
+    if (uIdx >= 0) {
+      const existing = syncedPortalUsers[uIdx];
+      if (existing.password && existing.password !== oldPwd) {
+        return res.status(401).json({
+          success: false,
+          message: "Current password is incorrect."
+        });
+      }
+      if (existing.password && existing.password === nextPwd) {
+        return res.status(400).json({
+          success: false,
+          message: "New password cannot be the same as your previous password."
+        });
+      }
+      syncedPortalUsers[uIdx] = {
+        ...existing,
+        password: nextPwd
+      };
+    } else {
+      const matchedConsumer = syncedConsumers.find(c =>
+        (cleanAcc && isIssuedAccountNumberServer(cleanAcc) && c.accountNumber === cleanAcc) ||
+        (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) ||
+        (cleanUid && c.linkedUserId === cleanUid)
+      );
+      syncedPortalUsers.push({
+        id: cleanUid || matchedConsumer?.linkedUserId || `user-${Date.now()}`,
+        email: cleanEmail || matchedConsumer?.email || "",
+        name: matchedConsumer?.name || "Consumer",
+        password: nextPwd,
+        role: "consumer",
+        status: matchedConsumer && isValidatedConsumerForReader(matchedConsumer) ? "active" : "pending_approval",
+        linkedAccountNumber: matchedConsumer && isIssuedAccountNumberServer(matchedConsumer.accountNumber) ? matchedConsumer.accountNumber : undefined,
+        contactNumber: matchedConsumer?.contactNumber
+      });
+    }
+
+    savePortalSyncStore();
+
+    res.json({
+      success: true,
+      message: "Account password updated and saved successfully."
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to update password." });
   }
 });
 
@@ -2719,13 +2861,15 @@ app.post("/api/reports", (req, res) => {
       });
     }
 
-    const id = `REP-${Date.now()}`;
+    const id = req.body.id || `REP-${Date.now()}`;
     const randNum = Math.floor(1000 + Math.random() * 9000);
-    const ticketNumber = `TWD-CR-${new Date().getFullYear()}-${randNum}`;
+    const ticketNumber = req.body.ticketNumber || `TWD-CR-${new Date().getFullYear()}-${randNum}`;
     const now = new Date().toISOString();
 
-    const replies: ServerReportReply[] = [];
-    if (description) {
+    const replies: ServerReportReply[] = Array.isArray(req.body.replies) && req.body.replies.length > 0
+      ? req.body.replies
+      : [];
+    if (replies.length === 0 && description) {
       replies.push({
         id: `REP-MSG-${Date.now()}-1`,
         reportId: id,
@@ -2733,7 +2877,7 @@ app.post("/api/reports", (req, res) => {
         senderName: consumerName || "Consumer",
         senderRole: "consumer",
         message: description,
-        timestamp: now
+        timestamp: req.body.createdAt || now
       });
     }
 
@@ -2751,8 +2895,8 @@ app.post("/api/reports", (req, res) => {
       title: title.trim(),
       description: (description || "").trim(),
       urgency: urgency || "normal",
-      status: "pending",
-      createdAt: now,
+      status: req.body.status || "pending",
+      createdAt: req.body.createdAt || now,
       updatedAt: now,
       photoUrl: photoUrl || "",
       replies,
@@ -2760,7 +2904,13 @@ app.post("/api/reports", (req, res) => {
       hasUnreadConsumerUpdate: true
     };
 
-    inMemoryReports.unshift(newReport);
+    const existingIdx = inMemoryReports.findIndex(r => r.id === id || r.ticketNumber === ticketNumber);
+    if (existingIdx >= 0) {
+      inMemoryReports[existingIdx] = { ...inMemoryReports[existingIdx], ...newReport };
+    } else {
+      inMemoryReports.unshift(newReport);
+    }
+    savePortalSyncStore();
 
     // Broadcast report creation to Admin Portal and all WebSocket clients
     broadcast("CONSUMER_REPORT_CREATED", {
@@ -2794,19 +2944,46 @@ app.post("/api/reports", (req, res) => {
 app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
   try {
     const { id } = req.params;
-    const { senderId, senderName, senderRole, message, statusUpdate, assignedStaff } = req.body;
+    const { senderId, senderName, senderRole, message, statusUpdate, assignedStaff, report: clientReport } = req.body || {};
 
     if (!message || !message.trim()) {
       return res.status(400).json({ success: false, message: "Reply message cannot be empty." });
     }
 
-    const idx = inMemoryReports.findIndex(r => r.id === id || r.ticketNumber === id);
+    const now = new Date().toISOString();
+    let idx = inMemoryReports.findIndex(r => r.id === id || r.ticketNumber === id);
+    if (idx === -1 && clientReport && typeof clientReport === "object") {
+      const hydrated: ServerConsumerReport = {
+        ...clientReport,
+        id: clientReport.id || id,
+        ticketNumber: clientReport.ticketNumber || id,
+        accountNumber: clientReport.accountNumber || "UNASSIGNED",
+        consumerName: clientReport.consumerName || "Consumer",
+        consumerEmail: clientReport.consumerEmail || "",
+        consumerPhone: clientReport.consumerPhone || "",
+        barangay: clientReport.barangay || "Poblacion",
+        address: clientReport.address || "",
+        meterNumber: clientReport.meterNumber || "",
+        category: clientReport.category || "other",
+        title: clientReport.title || "Consumer Inquiry",
+        description: clientReport.description || "",
+        urgency: clientReport.urgency || "normal",
+        status: clientReport.status || "pending",
+        createdAt: clientReport.createdAt || now,
+        updatedAt: now,
+        replies: Array.isArray(clientReport.replies) ? clientReport.replies : [],
+        hasUnreadAdminReply: Boolean(clientReport.hasUnreadAdminReply),
+        hasUnreadConsumerUpdate: Boolean(clientReport.hasUnreadConsumerUpdate)
+      };
+      inMemoryReports.unshift(hydrated);
+      idx = 0;
+    }
+
     if (idx === -1) {
       return res.status(404).json({ success: false, message: `Report ${id} not found.` });
     }
 
     const report = inMemoryReports[idx];
-    const now = new Date().toISOString();
     const replyItem: ServerReportReply = {
       id: `REP-MSG-${Date.now()}`,
       reportId: report.id,
@@ -2818,6 +2995,13 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
       statusUpdate: statusUpdate || undefined
     };
 
+    const existingReplies = Array.isArray(report.replies) ? report.replies : [];
+    const duplicateRecent =
+      existingReplies.length > 0 &&
+      existingReplies[existingReplies.length - 1].message === replyItem.message &&
+      existingReplies[existingReplies.length - 1].senderRole === replyItem.senderRole &&
+      Math.abs(new Date(existingReplies[existingReplies.length - 1].timestamp || 0).getTime() - Date.now()) < 5000;
+
     const nextStatus = statusUpdate || report.status;
     const isResolved = nextStatus === "resolved";
 
@@ -2827,15 +3011,27 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
       updatedAt: now,
       resolvedAt: isResolved ? (report.resolvedAt || now) : report.resolvedAt,
       assignedStaff: assignedStaff !== undefined ? assignedStaff : report.assignedStaff,
-      replies: [...report.replies, replyItem],
+      replies: duplicateRecent ? existingReplies : [...existingReplies, replyItem],
       hasUnreadAdminReply: replyItem.senderRole === "admin",
       hasUnreadConsumerUpdate: replyItem.senderRole === "consumer"
     };
 
     inMemoryReports[idx] = updated;
+    savePortalSyncStore();
 
     // Broadcast reply event to all connected sockets
     if (replyItem.senderRole === "admin") {
+      if (updated.accountNumber && updated.accountNumber !== "UNASSIGNED") {
+        pushServerNotification({
+          accountNumber: updated.accountNumber.toUpperCase(),
+          consumerEmail: updated.consumerEmail ? updated.consumerEmail.toLowerCase() : undefined,
+          title: `Official Reply on Concern #${updated.ticketNumber}`,
+          message: `Admin ${replyItem.senderName} replied: "${replyItem.message.slice(0, 90)}" (Status: ${nextStatus.toUpperCase()})`,
+          type: "report",
+          reportId: updated.id,
+          ticketNumber: updated.ticketNumber
+        });
+      }
       broadcast("ADMIN_REPLIED_TO_REPORT", {
         report: updated,
         reply: replyItem,
@@ -2878,15 +3074,42 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
 app.all(["/api/reports/:id/status"], (req, res) => {
   try {
     const { id } = req.params;
-    const { status, assignedStaff } = req.body;
+    const { status, assignedStaff, report: clientReport } = req.body || {};
 
-    const idx = inMemoryReports.findIndex(r => r.id === id || r.ticketNumber === id);
+    const now = new Date().toISOString();
+    let idx = inMemoryReports.findIndex(r => r.id === id || r.ticketNumber === id);
+    if (idx === -1 && clientReport && typeof clientReport === "object") {
+      const hydrated: ServerConsumerReport = {
+        ...clientReport,
+        id: clientReport.id || id,
+        ticketNumber: clientReport.ticketNumber || id,
+        accountNumber: clientReport.accountNumber || "UNASSIGNED",
+        consumerName: clientReport.consumerName || "Consumer",
+        consumerEmail: clientReport.consumerEmail || "",
+        consumerPhone: clientReport.consumerPhone || "",
+        barangay: clientReport.barangay || "Poblacion",
+        address: clientReport.address || "",
+        meterNumber: clientReport.meterNumber || "",
+        category: clientReport.category || "other",
+        title: clientReport.title || "Consumer Inquiry",
+        description: clientReport.description || "",
+        urgency: clientReport.urgency || "normal",
+        status: clientReport.status || "pending",
+        createdAt: clientReport.createdAt || now,
+        updatedAt: now,
+        replies: Array.isArray(clientReport.replies) ? clientReport.replies : [],
+        hasUnreadAdminReply: true,
+        hasUnreadConsumerUpdate: false
+      };
+      inMemoryReports.unshift(hydrated);
+      idx = 0;
+    }
+
     if (idx === -1) {
       return res.status(404).json({ success: false, message: `Report ${id} not found.` });
     }
 
     const report = inMemoryReports[idx];
-    const now = new Date().toISOString();
     const isResolved = status === "resolved";
 
     const updated: ServerConsumerReport = {
@@ -2899,6 +3122,7 @@ app.all(["/api/reports/:id/status"], (req, res) => {
     };
 
     inMemoryReports[idx] = updated;
+    savePortalSyncStore();
 
     broadcast("REPORT_STATUS_CHANGED", {
       report: updated,
@@ -2943,10 +3167,13 @@ interface ServerConsumerNotification {
 }
 
 let inMemoryNotifications: ServerConsumerNotification[] = [];
+let inMemoryAnnouncements: any[] = [];
+let deletedServerAnnouncementIds: string[] = [];
+let inMemoryTariffConfig: any = null;
 
 // ==========================================
 // PERSISTENT PORTAL SYNC STORE (.data/portal_sync_store.json)
-// Preserves issued consumer IDs, registered consumer users & notifications across server restarts
+// Preserves issued consumer IDs, registered consumer users, notifications, reports, announcements & tariff schedule across server restarts
 // ==========================================
 const PORTAL_SYNC_DIR = path.join(process.cwd(), ".data");
 const PORTAL_SYNC_FILE = path.join(PORTAL_SYNC_DIR, "portal_sync_store.json");
@@ -2960,7 +3187,11 @@ function savePortalSyncStore(): void {
       updatedAt: new Date().toISOString(),
       consumers: syncedConsumers,
       users: syncedPortalUsers,
-      notifications: inMemoryNotifications
+      notifications: inMemoryNotifications,
+      reports: inMemoryReports,
+      announcements: inMemoryAnnouncements,
+      deletedAnnouncementIds: deletedServerAnnouncementIds,
+      tariffConfig: inMemoryTariffConfig
     };
     fs.writeFileSync(PORTAL_SYNC_FILE, JSON.stringify(payload, null, 2), "utf8");
   } catch (err) {
@@ -3138,6 +3369,32 @@ function loadPortalSyncStore(): void {
       inMemoryNotifications = parsed.notifications;
     }
 
+    if (Array.isArray(parsed?.reports) && parsed.reports.length > 0) {
+      parsed.reports.forEach((pr: ServerConsumerReport) => {
+        if (!pr || !pr.id) return;
+        const idx = inMemoryReports.findIndex(r => r.id === pr.id || (pr.ticketNumber && r.ticketNumber === pr.ticketNumber));
+        if (idx >= 0) {
+          inMemoryReports[idx] = { ...inMemoryReports[idx], ...pr };
+        } else {
+          inMemoryReports.unshift(pr);
+        }
+      });
+    }
+
+    if (Array.isArray(parsed?.deletedAnnouncementIds)) {
+      deletedServerAnnouncementIds = parsed.deletedAnnouncementIds;
+    }
+
+    if (Array.isArray(parsed?.announcements)) {
+      inMemoryAnnouncements = parsed.announcements.filter(
+        (a: any) => a && a.id && !deletedServerAnnouncementIds.includes(a.id)
+      );
+    }
+
+    if (parsed?.tariffConfig && typeof parsed.tariffConfig === "object") {
+      inMemoryTariffConfig = parsed.tariffConfig;
+    }
+
     if (Array.isArray(parsed?.consumers) && parsed.consumers.length > 0) {
       parsed.consumers.forEach((pc: MobileConsumerSync) => {
         if (!pc || !pc.name) return;
@@ -3253,6 +3510,9 @@ app.get("/api/notifications", (req, res) => {
 
     const filtered = inMemoryNotifications.filter(n => {
       const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
+      if (nAcc === "all" || nAcc === "broadcast" || nAcc === "district") {
+        return true;
+      }
       const nHasRealAcc = !isPlaceholder(n.accountNumber);
       const nUid = (n.userId || "").trim().toLowerCase();
       const nEmail = (n.consumerEmail || "").trim().toLowerCase();
@@ -3297,11 +3557,114 @@ app.post("/api/notifications", (req, res) => {
 app.patch("/api/notifications/:id/read", (req, res) => {
   const { id } = req.params;
   const found = inMemoryNotifications.find(n => n.id === id);
-  if (found) {
+  const isBroadcast = found && (found.accountNumber || "").trim().toUpperCase() === "ALL";
+  if (found && !isBroadcast) {
     found.read = true;
     savePortalSyncStore();
   }
   res.json({ success: true });
+});
+
+// ==========================================
+// 8. OFFICIAL DISTRICT ANNOUNCEMENTS & TARIFF SCHEDULE SYNC APIS
+// ==========================================
+app.get("/api/announcements", (_req, res) => {
+  const activeList = inMemoryAnnouncements.filter(
+    (a) => a && a.id && !deletedServerAnnouncementIds.includes(a.id)
+  );
+  res.json({
+    success: true,
+    count: activeList.length,
+    announcements: activeList,
+    data: activeList
+  });
+});
+
+app.post("/api/announcements", (req, res) => {
+  try {
+    const body = req.body || {};
+    const id = body.id || `ann-${Date.now()}`;
+    const ann = {
+      id,
+      title: String(body.title || "Official Advisory").trim(),
+      content: String(body.content || "").trim(),
+      type: body.type || "info",
+      date: body.date || new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+      author: body.author || "TWD Operations",
+      createdAt: body.createdAt || new Date().toISOString()
+    };
+    deletedServerAnnouncementIds = deletedServerAnnouncementIds.filter((delId) => delId !== id);
+    const idx = inMemoryAnnouncements.findIndex((a) => a.id === id);
+    if (idx >= 0) {
+      inMemoryAnnouncements[idx] = { ...inMemoryAnnouncements[idx], ...ann };
+    } else {
+      inMemoryAnnouncements.unshift(ann);
+    }
+    savePortalSyncStore();
+    broadcast("ANNOUNCEMENT_PUBLISHED", {
+      announcement: ann,
+      message: `Official Advisory Published: ${ann.title}`
+    });
+    res.status(201).json({ success: true, announcement: ann, data: ann });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to publish announcement." });
+  }
+});
+
+app.put("/api/announcements/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+    const idx = inMemoryAnnouncements.findIndex((a) => a.id === id);
+    const updated = {
+      ...(idx >= 0 ? inMemoryAnnouncements[idx] : {}),
+      ...body,
+      id,
+      updatedAt: new Date().toISOString()
+    };
+    if (idx >= 0) {
+      inMemoryAnnouncements[idx] = updated;
+    } else {
+      inMemoryAnnouncements.unshift(updated);
+    }
+    savePortalSyncStore();
+    broadcast("ANNOUNCEMENT_UPDATED", { announcement: updated });
+    res.json({ success: true, announcement: updated, data: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to update announcement." });
+  }
+});
+
+app.delete("/api/announcements/:id", (req, res) => {
+  const { id } = req.params;
+  if (!deletedServerAnnouncementIds.includes(id)) {
+    deletedServerAnnouncementIds.push(id);
+  }
+  inMemoryAnnouncements = inMemoryAnnouncements.filter((a) => a.id !== id);
+  savePortalSyncStore();
+  broadcast("ANNOUNCEMENT_DELETED", { id });
+  res.json({ success: true });
+});
+
+app.get("/api/tariff-config", (_req, res) => {
+  res.json({ success: true, config: inMemoryTariffConfig });
+});
+
+app.post("/api/tariff-config", (req, res) => {
+  try {
+    const cfg = req.body || {};
+    inMemoryTariffConfig = cfg;
+    savePortalSyncStore();
+    broadcast("tariff:updated", {
+      config: cfg,
+      version: cfg.version,
+      effectiveDate: cfg.effectiveDate,
+      resolutionNumber: cfg.resolutionNumber
+    });
+    res.json({ success: true, config: cfg });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to save tariff configuration." });
+  }
 });
 
 // WebSocket Connection Management

@@ -28,7 +28,6 @@ import {
   AlertOctagon,
   ChevronRight,
   ExternalLink,
-  Sparkles,
   Zap,
   Maximize2,
   ShieldCheck,
@@ -37,8 +36,11 @@ import {
 import { ConsumerReport, ConsumerReportReply, User as UserType, Barangay } from '../../types';
 import { mockDb } from '../../mockDb';
 import { apiClient } from '../../services/apiClient';
+import { sendRealtimeMessage } from '../../services/realtimeSocket';
 import { useToast } from '../../context/ToastContext';
 import { TablePagination } from '../common/TablePagination';
+import { SmartSearchBar } from '../common/SmartSearchBar';
+import { smartMatch } from '../../utils/smartSearch';
 
 interface ConsumerReportsManagerProps {
   currentUser: UserType;
@@ -162,13 +164,27 @@ export function ConsumerReportsManager({
     if (barangayFilter !== 'all' && r.barangay !== barangayFilter) return false;
 
     if (searchTerm.trim()) {
-      const q = searchTerm.trim().toLowerCase();
-      const matchTicket = r.ticketNumber.toLowerCase().includes(q);
-      const matchName = r.consumerName.toLowerCase().includes(q);
-      const matchAcc = r.accountNumber.toLowerCase().includes(q);
-      const matchTitle = r.title.toLowerCase().includes(q);
-      const matchDesc = r.description.toLowerCase().includes(q);
-      if (!matchTicket && !matchName && !matchAcc && !matchTitle && !matchDesc) return false;
+      const catLabel = CATEGORY_MAP[r.category]?.label || r.category;
+      const replyMessages = (r.replies || []).map(rep => rep.message);
+      const matches = smartMatch(searchTerm, [
+        r.ticketNumber,
+        r.consumerName,
+        r.accountNumber,
+        r.consumerPhone,
+        r.consumerEmail,
+        r.barangay,
+        r.address,
+        r.meterNumber,
+        r.category,
+        catLabel,
+        r.urgency,
+        r.status,
+        r.title,
+        r.description,
+        r.assignedStaff,
+        replyMessages,
+      ]);
+      if (!matches) return false;
     }
 
     return true;
@@ -216,11 +232,24 @@ export function ConsumerReportsManager({
       // 1. Save in mockDb (which also adds notification to consumer!)
       const updated = mockDb.replyToReport(activeReport.id, replyData, replyStatus, assignedCrew.trim() || undefined);
 
-      // 2. Sync to backend API
+      // 2. Sync to backend API (include report snapshot so server upserts cleanly and never 404s)
       try {
-        await apiClient.replyToReport(activeReport.id, replyData);
+        await apiClient.replyToReport(activeReport.id, {
+          ...replyData,
+          report: activeReport,
+        });
       } catch (apiErr) {
         console.warn('[Admin Reply API Sync Warning]:', apiErr);
+      }
+
+      // 3. Broadcast real-time reply over WebSocket to Consumer Portal
+      if (updated) {
+        sendRealtimeMessage('ADMIN_REPLIED_TO_REPORT', {
+          report: updated,
+          accountNumber: updated.accountNumber,
+          ticketNumber: updated.ticketNumber,
+          message: `Admin ${replyData.senderName} responded to Ticket #${updated.ticketNumber}: "${replyData.message}" (Status: ${(replyStatus || updated.status).toUpperCase()})`,
+        });
       }
 
       toast.success(
@@ -341,15 +370,16 @@ export function ConsumerReportsManager({
       <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4">
         <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
           
-          {/* Search bar */}
-          <div className="relative flex-grow max-w-md">
-            <Search className="h-4 w-4 text-slate-400 absolute left-3.5 top-3" />
-            <input
-              type="text"
-              placeholder="Search by Ticket #, Consumer Name, Account #, or Title..."
+          {/* Smart Search bar */}
+          <div className="flex-1 lg:max-w-lg w-full">
+            <SmartSearchBar
+              variant="light"
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden transition"
+              onChange={setSearchTerm}
+              resultCount={filteredReports.length}
+              totalCount={reports.length}
+              placeholder="Smart search Ticket #, consumer, account #, phone, barangay, or issue..."
+              id="admin-reports-smart-search"
             />
           </div>
 

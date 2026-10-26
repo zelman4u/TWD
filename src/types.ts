@@ -14,6 +14,7 @@ export interface User {
   assignedBarangay?: string;
   readerId?: string;
   status: 'active' | 'inactive' | 'pending_approval';
+  contactNumber?: string;
   password?: string;
   registrationDate?: string;
 }
@@ -125,7 +126,8 @@ export interface MeterReading {
   gpsLocation?: string;
   meterImageUrl?: string;
   dueDate?: string;
-  billAmount?: number; // Basic water charge (Bill Amt.)
+  billAmount?: number; // Basic water charge (Bill Amt.) locked at reading creation/approval
+  appliedTariffVersion?: number; // Tariff version in effect when reading was billed
   franchiseTax?: number; // 2% Franchise Tax
   arrears?: number; // Unpaid balance from previous bills
   totalAmount?: number; // Bill Amt + Franchise Tax + Arrears
@@ -188,7 +190,7 @@ export interface ConsumerNotification {
   title: string;
   message: string;
   timestamp: string;
-  type: 'payment' | 'billing' | 'announcement' | 'disconnection' | 'receipt_upload' | 'report' | 'account_issue';
+  type: 'payment' | 'billing' | 'balance' | 'announcement' | 'disconnection' | 'receipt_upload' | 'report' | 'account_issue';
   read: boolean;
   orNumber?: string;
   amountPaid?: number;
