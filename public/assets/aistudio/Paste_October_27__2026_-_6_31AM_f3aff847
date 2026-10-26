@@ -1,0 +1,950 @@
+initial theme: light
+index-C7Blx5ch.js:3880 [Firestore] Read quota limit reached; falling back to REST/WebSocket sync.
+vl @ index-C7Blx5ch.js:3880
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (353ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (357ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (352ms)
+(index):1 Access to fetch at 'https://www.useblackbox.io/tlm' from origin 'https://twd-zeta.vercel.app' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+www.useblackbox.io/tlm:1  Failed to load resource: net::ERR_FAILED
+index.iife.js:123   Uncaught (in promise) TypeError: Failed to fetch
+    at ds (index.iife.js:123:39008)
+index-C7Blx5ch.js:849 [2026-10-26T22:21:04.250Z]  @firebase/firestore: Firestore (12.19.0): FirebaseError: [code=resource-exhausted]: Quota limit exceeded. Retry after quota limits are reset or enable billing for this project to avoid quota checks. Cause - Quota exceeded for quota metric 'Free daily write units per project (free tier database)' and limit 'Free daily write units per project (free tier database) per day' of service 'firestore.googleapis.com' for consumer 'project_number:140365844334'. This database cannot exceed free quota limits even when a billing instrument is enabled.
+Rle @ index-C7Blx5ch.js:849
+index-C7Blx5ch.js:849 [2026-10-26T22:21:04.251Z]  @firebase/firestore: Firestore (12.19.0): Using maximum backoff delay to prevent overloading the backend.
+Rle @ index-C7Blx5ch.js:849
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (354ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (362ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (426ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (354ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (424ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (603ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (353ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (360ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (482ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (436ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (436ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (437ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (340ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (415ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (505ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (362ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (364ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (451ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (355ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (366ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (435ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (340ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (349ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (573ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (358ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (391ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (456ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (351ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (374ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (426ms)
+index-C7Blx5ch.js:3887 [API Client ✓] POST /api/reports 201 (399ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (389ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (388ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (437ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (364ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (363ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (426ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (328ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (412ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (423ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (357ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (492ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (491ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (342ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (349ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (429ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (414ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (446ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (534ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (394ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (438ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (612ms)
+index-C7Blx5ch.js:849 [2026-10-26T22:22:28.892Z]  @firebase/firestore: Firestore (12.19.0): FirebaseError: [code=resource-exhausted]: Quota limit exceeded. Retry after quota limits are reset or enable billing for this project to avoid quota checks. Cause - Quota exceeded for quota metric 'Free daily write units per project (free tier database)' and limit 'Free daily write units per project (free tier database) per day' of service 'firestore.googleapis.com' for consumer 'project_number:140365844334'. This database cannot exceed free quota limits even when a billing instrument is enabled.
+Rle @ index-C7Blx5ch.js:849
+index-C7Blx5ch.js:849 [2026-10-26T22:22:28.892Z]  @firebase/firestore: Firestore (12.19.0): Using maximum backoff delay to prevent overloading the backend.
+Rle @ index-C7Blx5ch.js:849
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (438ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (439ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (590ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (675ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (664ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (666ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (427ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (474ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (475ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (350ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (360ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (359ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (361ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (366ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (403ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (365ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (370ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (375ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (345ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (346ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (372ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (331ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (373ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (421ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (330ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (417ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (418ms)
+index-C7Blx5ch.js:849 [2026-10-26T22:23:13.177Z]  @firebase/firestore: Firestore (12.19.0): FirebaseError: [code=resource-exhausted]: Quota limit exceeded. Retry after quota limits are reset or enable billing for this project to avoid quota checks. Cause - Quota exceeded for quota metric 'Free daily write units per project (free tier database)' and limit 'Free daily write units per project (free tier database) per day' of service 'firestore.googleapis.com' for consumer 'project_number:140365844334'. This database cannot exceed free quota limits even when a billing instrument is enabled.
+Rle @ index-C7Blx5ch.js:849
+index-C7Blx5ch.js:849 [2026-10-26T22:23:13.177Z]  @firebase/firestore: Firestore (12.19.0): Using maximum backoff delay to prevent overloading the backend.
+Rle @ index-C7Blx5ch.js:849
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (361ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (363ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (423ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (331ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (345ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (559ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (386ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (391ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (443ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (369ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (368ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (376ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (360ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (362ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (389ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (348ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (385ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (473ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (350ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (355ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (442ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (348ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (354ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (434ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (404ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (405ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (407ms)
+index-C7Blx5ch.js:849 [2026-10-26T22:24:17.001Z]  @firebase/firestore: Firestore (12.19.0): FirebaseError: [code=resource-exhausted]: Quota limit exceeded. Retry after quota limits are reset or enable billing for this project to avoid quota checks. Cause - Quota exceeded for quota metric 'Free daily write units per project (free tier database)' and limit 'Free daily write units per project (free tier database) per day' of service 'firestore.googleapis.com' for consumer 'project_number:140365844334'. This database cannot exceed free quota limits even when a billing instrument is enabled.
+Rle @ index-C7Blx5ch.js:849
+error @ index-C7Blx5ch.js:849
+$f @ index-C7Blx5ch.js:1105
+close @ index-C7Blx5ch.js:1915
+cn @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Vt @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+(anonymous) @ index-C7Blx5ch.js:1885
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+xr.qa @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Ka @ index-C7Blx5ch.js:1036
+t.Da @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+Ur @ index-C7Blx5ch.js:1036
+R @ index-C7Blx5ch.js:1036
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+Fi @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Ka @ index-C7Blx5ch.js:1036
+t.Wa @ index-C7Blx5ch.js:1036
+(anonymous) @ index-C7Blx5ch.js:1028
+setTimeout
+nr @ index-C7Blx5ch.js:1028
+t.Da @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+Ur @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Wr @ index-C7Blx5ch.js:1032
+t.Ea @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+zs @ index-C7Blx5ch.js:1036
+t.connect @ index-C7Blx5ch.js:1036
+sn.m @ index-C7Blx5ch.js:1036
+ot @ index-C7Blx5ch.js:1885
+send @ index-C7Blx5ch.js:1870
+nn @ index-C7Blx5ch.js:1915
+fn @ index-C7Blx5ch.js:1915
+bme @ index-C7Blx5ch.js:2586
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+At @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+setTimeout
+vt @ index-C7Blx5ch.js:1885
+En @ index-C7Blx5ch.js:1915
+un @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Promise.then
+auth @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1900
+(anonymous) @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+handleDelayElapsed @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2616
+index-C7Blx5ch.js:849 [2026-10-26T22:24:17.002Z]  @firebase/firestore: Firestore (12.19.0): Using maximum backoff delay to prevent overloading the backend.
+Rle @ index-C7Blx5ch.js:849
+error @ index-C7Blx5ch.js:849
+$f @ index-C7Blx5ch.js:1105
+close @ index-C7Blx5ch.js:1915
+cn @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Vt @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+(anonymous) @ index-C7Blx5ch.js:1885
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+xr.qa @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Ka @ index-C7Blx5ch.js:1036
+t.Da @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+Ur @ index-C7Blx5ch.js:1036
+R @ index-C7Blx5ch.js:1036
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+Fi @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Ka @ index-C7Blx5ch.js:1036
+t.Wa @ index-C7Blx5ch.js:1036
+(anonymous) @ index-C7Blx5ch.js:1028
+setTimeout
+nr @ index-C7Blx5ch.js:1028
+t.Da @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+Ur @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Wr @ index-C7Blx5ch.js:1032
+t.Ea @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+zs @ index-C7Blx5ch.js:1036
+t.connect @ index-C7Blx5ch.js:1036
+sn.m @ index-C7Blx5ch.js:1036
+ot @ index-C7Blx5ch.js:1885
+send @ index-C7Blx5ch.js:1870
+nn @ index-C7Blx5ch.js:1915
+fn @ index-C7Blx5ch.js:1915
+bme @ index-C7Blx5ch.js:2586
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+At @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+setTimeout
+vt @ index-C7Blx5ch.js:1885
+En @ index-C7Blx5ch.js:1915
+un @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Promise.then
+auth @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1900
+(anonymous) @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+handleDelayElapsed @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2616
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (362ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (419ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (594ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (347ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (384ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (484ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (362ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (360ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (566ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (365ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (459ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (461ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (340ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (344ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (419ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (452ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (453ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (509ms)
+index-C7Blx5ch.js:849 [2026-10-26T22:24:46.422Z]  @firebase/firestore: Firestore (12.19.0): FirebaseError: [code=resource-exhausted]: Quota limit exceeded. Retry after quota limits are reset or enable billing for this project to avoid quota checks. Cause - Quota exceeded for quota metric 'Free daily write units per project (free tier database)' and limit 'Free daily write units per project (free tier database) per day' of service 'firestore.googleapis.com' for consumer 'project_number:140365844334'. This database cannot exceed free quota limits even when a billing instrument is enabled.
+Rle @ index-C7Blx5ch.js:849
+error @ index-C7Blx5ch.js:849
+$f @ index-C7Blx5ch.js:1105
+close @ index-C7Blx5ch.js:1915
+cn @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Vt @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+(anonymous) @ index-C7Blx5ch.js:1885
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+xr.qa @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Ka @ index-C7Blx5ch.js:1036
+t.Da @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+Ur @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Wr @ index-C7Blx5ch.js:1032
+t.Ea @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+zs @ index-C7Blx5ch.js:1036
+t.connect @ index-C7Blx5ch.js:1036
+sn.m @ index-C7Blx5ch.js:1036
+ot @ index-C7Blx5ch.js:1885
+send @ index-C7Blx5ch.js:1870
+nn @ index-C7Blx5ch.js:1915
+fn @ index-C7Blx5ch.js:1915
+bme @ index-C7Blx5ch.js:2586
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+At @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+setTimeout
+vt @ index-C7Blx5ch.js:1885
+En @ index-C7Blx5ch.js:1915
+un @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Promise.then
+auth @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1900
+(anonymous) @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+handleDelayElapsed @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2616
+setTimeout
+start @ index-C7Blx5ch.js:2616
+createAndSchedule @ index-C7Blx5ch.js:2616
+enqueueAfterDelay @ index-C7Blx5ch.js:2754
+kt @ index-C7Blx5ch.js:1900
+Zt @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+qG @ index-C7Blx5ch.js:2586
+Bme @ index-C7Blx5ch.js:2586
+await in Bme
+close @ index-C7Blx5ch.js:1915
+cn @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Vt @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+(anonymous) @ index-C7Blx5ch.js:1885
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+xr.qa @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Ka @ index-C7Blx5ch.js:1036
+t.Da @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+Ur @ index-C7Blx5ch.js:1036
+R @ index-C7Blx5ch.js:1036
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+Fi @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Ka @ index-C7Blx5ch.js:1036
+t.Wa @ index-C7Blx5ch.js:1036
+(anonymous) @ index-C7Blx5ch.js:1028
+setTimeout
+nr @ index-C7Blx5ch.js:1028
+t.Da @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+Ur @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Wr @ index-C7Blx5ch.js:1032
+t.Ea @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+zs @ index-C7Blx5ch.js:1036
+t.connect @ index-C7Blx5ch.js:1036
+sn.m @ index-C7Blx5ch.js:1036
+ot @ index-C7Blx5ch.js:1885
+send @ index-C7Blx5ch.js:1870
+nn @ index-C7Blx5ch.js:1915
+fn @ index-C7Blx5ch.js:1915
+bme @ index-C7Blx5ch.js:2586
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+At @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+setTimeout
+vt @ index-C7Blx5ch.js:1885
+En @ index-C7Blx5ch.js:1915
+un @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Promise.then
+auth @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1900
+(anonymous) @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+handleDelayElapsed @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2616
+index-C7Blx5ch.js:849 [2026-10-26T22:24:46.424Z]  @firebase/firestore: Firestore (12.19.0): Using maximum backoff delay to prevent overloading the backend.
+Rle @ index-C7Blx5ch.js:849
+error @ index-C7Blx5ch.js:849
+$f @ index-C7Blx5ch.js:1105
+close @ index-C7Blx5ch.js:1915
+cn @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Vt @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+(anonymous) @ index-C7Blx5ch.js:1885
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+xr.qa @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Ka @ index-C7Blx5ch.js:1036
+t.Da @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+Ur @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Wr @ index-C7Blx5ch.js:1032
+t.Ea @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+zs @ index-C7Blx5ch.js:1036
+t.connect @ index-C7Blx5ch.js:1036
+sn.m @ index-C7Blx5ch.js:1036
+ot @ index-C7Blx5ch.js:1885
+send @ index-C7Blx5ch.js:1870
+nn @ index-C7Blx5ch.js:1915
+fn @ index-C7Blx5ch.js:1915
+bme @ index-C7Blx5ch.js:2586
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+At @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+setTimeout
+vt @ index-C7Blx5ch.js:1885
+En @ index-C7Blx5ch.js:1915
+un @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Promise.then
+auth @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1900
+(anonymous) @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+handleDelayElapsed @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2616
+setTimeout
+start @ index-C7Blx5ch.js:2616
+createAndSchedule @ index-C7Blx5ch.js:2616
+enqueueAfterDelay @ index-C7Blx5ch.js:2754
+kt @ index-C7Blx5ch.js:1900
+Zt @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+qG @ index-C7Blx5ch.js:2586
+Bme @ index-C7Blx5ch.js:2586
+await in Bme
+close @ index-C7Blx5ch.js:1915
+cn @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Vt @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+(anonymous) @ index-C7Blx5ch.js:1885
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+xr.qa @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Ka @ index-C7Blx5ch.js:1036
+t.Da @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+Ur @ index-C7Blx5ch.js:1036
+R @ index-C7Blx5ch.js:1036
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+Fi @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Ka @ index-C7Blx5ch.js:1036
+t.Wa @ index-C7Blx5ch.js:1036
+(anonymous) @ index-C7Blx5ch.js:1028
+setTimeout
+nr @ index-C7Blx5ch.js:1028
+t.Da @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+Ur @ index-C7Blx5ch.js:1036
+ji @ index-C7Blx5ch.js:1033
+Ci.Y @ index-C7Blx5ch.js:1032
+Ci.ba @ index-C7Blx5ch.js:1032
+st @ index-C7Blx5ch.js:1028
+Bt @ index-C7Blx5ch.js:1028
+St @ index-C7Blx5ch.js:1035
+t.Xa @ index-C7Blx5ch.js:1035
+t.Ca @ index-C7Blx5ch.js:1035
+ro @ index-C7Blx5ch.js:1034
+t.Ma @ index-C7Blx5ch.js:1033
+Promise.then
+Tl @ index-C7Blx5ch.js:1033
+t.Pa @ index-C7Blx5ch.js:1033
+Promise.then
+t.send @ index-C7Blx5ch.js:1033
+t.ea @ index-C7Blx5ch.js:1035
+Hs @ index-C7Blx5ch.js:1032
+Wr @ index-C7Blx5ch.js:1032
+t.Ea @ index-C7Blx5ch.js:1036
+I @ index-C7Blx5ch.js:1028
+Promise.then
+z @ index-C7Blx5ch.js:1028
+zs @ index-C7Blx5ch.js:1036
+t.connect @ index-C7Blx5ch.js:1036
+sn.m @ index-C7Blx5ch.js:1036
+ot @ index-C7Blx5ch.js:1885
+send @ index-C7Blx5ch.js:1870
+nn @ index-C7Blx5ch.js:1915
+fn @ index-C7Blx5ch.js:1915
+bme @ index-C7Blx5ch.js:2586
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+At @ index-C7Blx5ch.js:1870
+(anonymous) @ index-C7Blx5ch.js:1885
+setTimeout
+vt @ index-C7Blx5ch.js:1885
+En @ index-C7Blx5ch.js:1915
+un @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+Promise.then
+auth @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+start @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1915
+(anonymous) @ index-C7Blx5ch.js:1900
+(anonymous) @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2754
+(anonymous) @ index-C7Blx5ch.js:2754
+Promise.then
+Zc @ index-C7Blx5ch.js:2754
+enqueue @ index-C7Blx5ch.js:2754
+enqueueAndForget @ index-C7Blx5ch.js:2754
+handleDelayElapsed @ index-C7Blx5ch.js:2616
+(anonymous) @ index-C7Blx5ch.js:2616
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (377ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (384ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (388ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/announcements 200 (334ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/reports?accountNumber=PB-01-8848 200 (410ms)
+index-C7Blx5ch.js:3887 [API Client ✓] GET /api/tariff-config 200 (419ms)

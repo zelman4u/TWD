@@ -33,6 +33,33 @@ const MAX_QUEUE_SIZE = 30;
 const messageListeners = new Set<(data: WebSocketMessage) => void>();
 const stateListeners = new Set<(state: SocketState) => void>();
 
+// Instant Cross-Tab BroadcastChannel Bus (works in 0ms even on Vercel/serverless without WebSockets)
+const CLIENT_INSTANCE_ID = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+let broadcastBus: BroadcastChannel | null = null;
+
+function ensureBroadcastBus() {
+  if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return null;
+  if (!broadcastBus) {
+    try {
+      broadcastBus = new BroadcastChannel('twd_realtime_bus_v1');
+      broadcastBus.onmessage = (event) => {
+        const data = event?.data;
+        if (!data || !data.type || data.__senderTab === CLIENT_INSTANCE_ID) return;
+        messageListeners.forEach((cb) => {
+          try {
+            cb(data);
+          } catch (err) {
+            console.warn('[Realtime Bus] Subscriber error:', err);
+          }
+        });
+      };
+    } catch {
+      broadcastBus = null;
+    }
+  }
+  return broadcastBus;
+}
+
 export function getSocketState(): SocketState {
   return currentSocketState;
 }
@@ -98,23 +125,40 @@ function flushOutboundQueue() {
 }
 
 /**
- * Sends a real-time event to the server and all connected clients.
+ * Sends a real-time event to the server and all connected clients (plus instant BroadcastChannel across tabs).
  * Queues the message if the connection is currently reconnecting.
  */
 export function sendRealtimeMessage(type: string, payload?: any): boolean {
-  if (!getRealtimeSocketUrl()) {
-    return false;
-  }
-
-  const msg: WebSocketMessage = {
+  const msg: WebSocketMessage & { __senderTab?: string } = {
     type,
     payload,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    __senderTab: CLIENT_INSTANCE_ID,
+  };
+
+  // 1. Always deliver instantly across open browser tabs/windows via BroadcastChannel (0ms latency)
+  let deliveredLocally = false;
+  try {
+    const bus = ensureBroadcastBus();
+    if (bus) {
+      bus.postMessage(msg);
+      deliveredLocally = true;
+    }
+  } catch {}
+
+  if (!getRealtimeSocketUrl()) {
+    return deliveredLocally;
+  }
+
+  const wsMsg: WebSocketMessage = {
+    type,
+    payload,
+    timestamp: msg.timestamp,
   };
 
   if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
     try {
-      activeSocket.send(JSON.stringify(msg));
+      activeSocket.send(JSON.stringify(wsMsg));
       return true;
     } catch (err) {
       console.warn(`[WebSocket Client] Failed to send ${type}:`, err);
@@ -123,9 +167,9 @@ export function sendRealtimeMessage(type: string, payload?: any): boolean {
 
   // Queue message for delivery once reconnected
   if (outboundQueue.length < MAX_QUEUE_SIZE) {
-    outboundQueue.push(msg);
+    outboundQueue.push(wsMsg);
   }
-  return false;
+  return deliveredLocally;
 }
 
 /**
@@ -314,6 +358,7 @@ export function initRealtimeSocket(onMessage: (data: WebSocketMessage) => void):
   if (typeof window === 'undefined') return () => {};
 
   isManuallyClosed = false;
+  ensureBroadcastBus();
   messageListeners.add(onMessage);
 
   // If not currently connected or connecting, start connection

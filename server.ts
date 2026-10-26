@@ -2783,38 +2783,77 @@ app.post("/api/readings/:id/approve", (req, res) => {
 // 6. CONSUMER SERVICE REPORTS & ADMIN REPLY APIS
 // ==========================================
 
+function mergeInMemoryReportPair(existing: ServerConsumerReport, incoming: ServerConsumerReport): ServerConsumerReport {
+  const exReplies = Array.isArray(existing.replies) ? existing.replies : [];
+  const inReplies = Array.isArray(incoming.replies) ? incoming.replies : [];
+  const replyMap = new Map<string, ServerReportReply>();
+  for (const rep of [...exReplies, ...inReplies]) {
+    if (!rep) continue;
+    const rk = rep.id || `${rep.senderRole}_${rep.message}_${rep.timestamp}`;
+    if (!replyMap.has(rk)) replyMap.set(rk, rep);
+  }
+  const mergedReplies = Array.from(replyMap.values()).sort(
+    (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
+  );
+  const inTime = new Date(incoming.updatedAt || incoming.createdAt || 0).getTime();
+  const exTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+  const incomingNewer = inTime > exTime || (inTime === exTime && inReplies.length >= exReplies.length);
+  const primary = incomingNewer ? incoming : existing;
+  const secondary = incomingNewer ? existing : incoming;
+  return {
+    ...secondary,
+    ...primary,
+    id: existing.id || incoming.id,
+    ticketNumber: primary.ticketNumber || secondary.ticketNumber,
+    replies: mergedReplies
+  };
+}
+
+function filterInMemoryReports(
+  source: ServerConsumerReport[],
+  filters: { accountNumber?: unknown; email?: unknown; status?: unknown; category?: unknown; search?: unknown }
+): ServerConsumerReport[] {
+  let list = [...source];
+  const accRaw = typeof filters.accountNumber === "string" ? filters.accountNumber.trim().toLowerCase() : "";
+  const emailRaw = typeof filters.email === "string" ? filters.email.trim().toLowerCase() : "";
+  const validAcc = accRaw && !accRaw.startsWith("pending") && accRaw !== "unassigned" ? accRaw : "";
+
+  if (validAcc || emailRaw) {
+    list = list.filter(r => {
+      const rAcc = (r.accountNumber || "").trim().toLowerCase();
+      const rEmail = (r.consumerEmail || "").trim().toLowerCase();
+      return (
+        (validAcc && (rAcc === validAcc || rEmail === validAcc)) ||
+        (emailRaw && (rEmail === emailRaw || rAcc === emailRaw))
+      );
+    });
+  }
+
+  if (typeof filters.status === "string" && filters.status.trim() && filters.status !== "all") {
+    list = list.filter(r => r.status === filters.status);
+  }
+
+  if (typeof filters.category === "string" && filters.category.trim() && filters.category !== "all") {
+    list = list.filter(r => r.category === filters.category);
+  }
+
+  if (typeof filters.search === "string" && filters.search.trim()) {
+    const q = filters.search.trim().toLowerCase();
+    list = list.filter(r =>
+      r.ticketNumber.toLowerCase().includes(q) ||
+      r.title.toLowerCase().includes(q) ||
+      r.consumerName.toLowerCase().includes(q) ||
+      (r.description && r.description.toLowerCase().includes(q))
+    );
+  }
+
+  return list;
+}
+
 // GET /api/reports - Fetch reports with optional filters
 app.get("/api/reports", (req, res) => {
   try {
-    const { accountNumber, status, category, search } = req.query;
-    let list = [...inMemoryReports];
-
-    if (accountNumber && typeof accountNumber === "string" && accountNumber.trim()) {
-      const acc = accountNumber.trim().toLowerCase();
-      list = list.filter(r => 
-        (r.accountNumber && r.accountNumber.toLowerCase() === acc) ||
-        (r.consumerEmail && r.consumerEmail.toLowerCase() === acc)
-      );
-    }
-
-    if (status && typeof status === "string" && status.trim() && status !== "all") {
-      list = list.filter(r => r.status === status);
-    }
-
-    if (category && typeof category === "string" && category.trim() && category !== "all") {
-      list = list.filter(r => r.category === category);
-    }
-
-    if (search && typeof search === "string" && search.trim()) {
-      const q = search.trim().toLowerCase();
-      list = list.filter(r => 
-        r.ticketNumber.toLowerCase().includes(q) ||
-        r.title.toLowerCase().includes(q) ||
-        r.consumerName.toLowerCase().includes(q) ||
-        (r.description && r.description.toLowerCase().includes(q))
-      );
-    }
-
+    const list = filterInMemoryReports(inMemoryReports, req.query);
     res.json({
       success: true,
       count: list.length,
@@ -2823,6 +2862,50 @@ app.get("/api/reports", (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to fetch consumer reports." });
+  }
+});
+
+// POST /api/reports/reconcile - Bidirectional report & reply reconciliation
+app.post("/api/reports/reconcile", (req, res) => {
+  try {
+    const incoming: ServerConsumerReport[] = Array.isArray(req.body?.reports) ? req.body.reports : [];
+    let changed = false;
+    for (const ir of incoming) {
+      if (!ir || (!ir.id && !ir.ticketNumber)) continue;
+      const idx = inMemoryReports.findIndex(
+        r => (ir.id && r.id === ir.id) || (ir.ticketNumber && r.ticketNumber === ir.ticketNumber)
+      );
+      if (idx === -1) {
+        inMemoryReports.unshift({
+          ...ir,
+          id: ir.id || ir.ticketNumber,
+          replies: Array.isArray(ir.replies) ? ir.replies : []
+        });
+        changed = true;
+      } else {
+        const merged = mergeInMemoryReportPair(inMemoryReports[idx], ir);
+        if (JSON.stringify(merged) !== JSON.stringify(inMemoryReports[idx])) {
+          inMemoryReports[idx] = merged;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      inMemoryReports.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      savePortalSyncStore();
+    }
+    const list = filterInMemoryReports(inMemoryReports, {
+      accountNumber: req.body?.accountNumber,
+      email: req.body?.email
+    });
+    res.json({
+      success: true,
+      count: list.length,
+      reports: list,
+      data: list
+    });
+  } catch {
+    res.json({ success: true, count: inMemoryReports.length, reports: inMemoryReports, data: inMemoryReports });
   }
 });
 
@@ -2906,7 +2989,7 @@ app.post("/api/reports", (req, res) => {
 
     const existingIdx = inMemoryReports.findIndex(r => r.id === id || r.ticketNumber === ticketNumber);
     if (existingIdx >= 0) {
-      inMemoryReports[existingIdx] = { ...inMemoryReports[existingIdx], ...newReport };
+      inMemoryReports[existingIdx] = mergeInMemoryReportPair(inMemoryReports[existingIdx], newReport);
     } else {
       inMemoryReports.unshift(newReport);
     }
@@ -2921,13 +3004,13 @@ app.post("/api/reports", (req, res) => {
       category: newReport.category,
       title: newReport.title,
       urgency: newReport.urgency,
-      message: `🚨 New Consumer Concern Filed [${newReport.ticketNumber}] by ${newReport.consumerName} (${newReport.accountNumber}): "${newReport.title}"`
+      message: `New Consumer Concern Filed [${newReport.ticketNumber}] by ${newReport.consumerName} (${newReport.accountNumber}): "${newReport.title}"`
     });
 
     broadcast("consumer:report:created", {
       report: newReport,
       ticketNumber: newReport.ticketNumber,
-      message: `🚨 New report ${newReport.ticketNumber} filed for ${newReport.barangay}.`
+      message: `New report ${newReport.ticketNumber} filed for ${newReport.barangay}.`
     });
 
     res.status(201).json({
@@ -3019,11 +3102,12 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
     inMemoryReports[idx] = updated;
     savePortalSyncStore();
 
+    let createdNotif: ServerConsumerNotification | undefined;
     // Broadcast reply event to all connected sockets
     if (replyItem.senderRole === "admin") {
-      if (updated.accountNumber && updated.accountNumber !== "UNASSIGNED") {
-        pushServerNotification({
-          accountNumber: updated.accountNumber.toUpperCase(),
+      if ((updated.accountNumber && updated.accountNumber !== "UNASSIGNED") || updated.consumerEmail) {
+        createdNotif = pushServerNotification({
+          accountNumber: (updated.accountNumber || "PENDING").toUpperCase(),
           consumerEmail: updated.consumerEmail ? updated.consumerEmail.toLowerCase() : undefined,
           title: `Official Reply on Concern #${updated.ticketNumber}`,
           message: `Admin ${replyItem.senderName} replied: "${replyItem.message.slice(0, 90)}" (Status: ${nextStatus.toUpperCase()})`,
@@ -3035,14 +3119,18 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
       broadcast("ADMIN_REPLIED_TO_REPORT", {
         report: updated,
         reply: replyItem,
+        notification: createdNotif,
         accountNumber: updated.accountNumber,
+        consumerEmail: updated.consumerEmail,
         ticketNumber: updated.ticketNumber,
         message: `Admin ${replyItem.senderName} responded to Ticket #${updated.ticketNumber}: "${replyItem.message}" (Status: ${nextStatus.toUpperCase()})`
       });
       broadcast("consumer:report:replied", {
         report: updated,
         reply: replyItem,
+        notification: createdNotif,
         accountNumber: updated.accountNumber,
+        consumerEmail: updated.consumerEmail,
         ticketNumber: updated.ticketNumber
       });
     } else {
@@ -3063,7 +3151,8 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
       success: true,
       message: "Reply logged successfully.",
       report: updated,
-      reply: replyItem
+      reply: replyItem,
+      notification: createdNotif
     });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to post reply." });

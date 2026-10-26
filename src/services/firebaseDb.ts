@@ -352,7 +352,11 @@ try {
     if (savedReadUntil > Date.now()) {
       memoryReadQuotaUntil = savedReadUntil;
     }
-    enableNetwork(db).catch(() => {});
+    if (memoryWriteQuotaUntil > Date.now() || memoryReadQuotaUntil > Date.now()) {
+      disableNetwork(db).catch(() => {});
+    } else {
+      enableNetwork(db).catch(() => {});
+    }
   }
 } catch {}
 
@@ -420,6 +424,10 @@ export function markFirestoreQuotaExceeded(err?: any, mode: 'write' | 'read' = '
       sessionStorage.setItem(WRITE_QUOTA_SESSION_KEY, String(until));
     } catch {}
   }
+
+  // Detach active listeners & disable Firestore network transport during quota cooldown so SDK stops exponential backoff retry storms
+  stopRealtimeFirestoreListeners();
+  disableNetwork(db).catch(() => {});
 }
 
 /**
@@ -1129,7 +1137,7 @@ export function startRealtimeFirestoreListeners() {
     );
     realtimeUnsubscribes.push(unsubNotifs);
 
-    // 9. Live CONSUMER REPORTS Listener
+    // 9. Live CONSUMER REPORTS Listener (merges replies without overwriting newer local/API replies)
     const unsubReports = onSnapshot(
       collection(db, COLLECTIONS.REPORTS),
       (snapshot) => {
@@ -1142,25 +1150,46 @@ export function startRealtimeFirestoreListeners() {
           const mergedMap = new Map<string, ConsumerReport>();
 
           localReports.forEach((lr) => {
-            if (lr.id) mergedMap.set(lr.id, lr);
+            if (lr && lr.id) mergedMap.set(lr.id, lr);
           });
           cloudReports.forEach((cr) => {
-            if (!cr.id) return;
-            const prev = mergedMap.get(cr.id);
-            if (!prev) {
-              mergedMap.set(cr.id, cr);
+            if (!cr || (!cr.id && !cr.ticketNumber)) return;
+            let key = cr.id && mergedMap.has(cr.id) ? cr.id : undefined;
+            if (!key && cr.ticketNumber) {
+              const found = Array.from(mergedMap.entries()).find(([, v]) => v.ticketNumber === cr.ticketNumber);
+              if (found) key = found[0];
+            }
+            if (!key) {
+              const newKey = cr.id || cr.ticketNumber;
+              mergedMap.set(newKey, { ...cr, id: newKey, replies: Array.isArray(cr.replies) ? cr.replies : [] });
             } else {
-              const prevReplies = prev.replies?.length || 0;
-              const crReplies = cr.replies?.length || 0;
-              const crNewer =
-                crReplies > prevReplies ||
-                new Date(cr.updatedAt || 0).getTime() >= new Date(prev.updatedAt || 0).getTime();
-              mergedMap.set(cr.id, crNewer ? cr : prev);
+              const prev = mergedMap.get(key)!;
+              const replyMap = new Map<string, any>();
+              [...(prev.replies || []), ...(cr.replies || [])].forEach((rep) => {
+                if (!rep) return;
+                const rk = rep.id || `${rep.senderRole}_${rep.message}_${rep.timestamp}`;
+                if (!replyMap.has(rk)) replyMap.set(rk, rep);
+              });
+              const mergedReplies = Array.from(replyMap.values()).sort(
+                (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
+              );
+              const crNewer = new Date(cr.updatedAt || 0).getTime() >= new Date(prev.updatedAt || 0).getTime();
+              const primary = crNewer ? cr : prev;
+              const secondary = crNewer ? prev : cr;
+              mergedMap.set(key, {
+                ...secondary,
+                ...primary,
+                id: key,
+                replies: mergedReplies,
+              });
             }
           });
 
-          localStorage.setItem(KEYS.REPORTS, JSON.stringify(Array.from(mergedMap.values())));
-          triggerLocalUpdateEvent(KEYS.REPORTS);
+          const nextJson = JSON.stringify(Array.from(mergedMap.values()));
+          if (localRaw !== nextJson) {
+            localStorage.setItem(KEYS.REPORTS, nextJson);
+            triggerLocalUpdateEvent(KEYS.REPORTS);
+          }
         }
       },
       (err) => {

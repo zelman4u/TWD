@@ -793,21 +793,29 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         // Fallback gracefully if running purely client-side
       });
 
-    // 4. Fetch Reports from Backend API (merge without wiping local/Firestore reports)
-    safeBackendFetch('/api/reports')
-      .then(res => (res ? res.json() : null))
-      .then(data => {
-        if (data && data.reports && Array.isArray(data.reports) && data.reports.length > 0) {
-          const merged = mockDb.mergeExternalReports(data.reports);
+    // 4. Reconcile & Fetch Reports from Backend API (bi-directional sync without wiping local/Firestore reports)
+    apiClient
+      .reconcileReports({ reports: mockDb.getReports().slice(0, 30) }, { skipLogging: true })
+      .then(res => {
+        if (res?.reports && Array.isArray(res.reports) && res.reports.length > 0) {
+          const merged = mockDb.mergeExternalReports(res.reports);
           setReports(merged);
         }
       })
       .catch(() => {
-        // Fallback to mockDb
+        apiClient
+          .getReports(undefined, { skipLogging: true })
+          .then(res => {
+            if (res?.reports && Array.isArray(res.reports) && res.reports.length > 0) {
+              const merged = mockDb.mergeExternalReports(res.reports);
+              setReports(merged);
+            }
+          })
+          .catch(() => {});
       });
 
     // 4b. Sync Announcements & Tariff Config from Backend API
-    apiClient.getAnnouncements()
+    apiClient.getAnnouncements({ skipLogging: true })
       .then(res => {
         if (res?.announcements && Array.isArray(res.announcements)) {
           const mergedAnns = mockDb.mergeExternalAnnouncements(res.announcements);
@@ -816,7 +824,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       })
       .catch(() => {});
 
-    apiClient.getTariffConfig()
+    apiClient.getTariffConfig({ skipLogging: true })
       .then(res => {
         if (res?.config && (res.config.version || 0) > (getActiveTariffConfig().version || 0)) {
           saveActiveTariffConfig(res.config);
@@ -901,12 +909,37 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       });
   };
 
+  const syncAdminReportsLive = () => {
+    const localReports = mockDb.getReports();
+    setReports(localReports);
+    apiClient
+      .reconcileReports({ reports: localReports.slice(0, 30) }, { skipLogging: true })
+      .then(res => {
+        if (res?.reports && Array.isArray(res.reports)) {
+          const merged = mockDb.mergeExternalReports(res.reports);
+          setReports(merged);
+        }
+      })
+      .catch(() => {
+        apiClient
+          .getReports(undefined, { skipLogging: true })
+          .then(res => {
+            if (res?.reports && Array.isArray(res.reports)) {
+              const merged = mockDb.mergeExternalReports(res.reports);
+              setReports(merged);
+            }
+          })
+          .catch(() => {});
+      });
+  };
+
   useEffect(() => {
     ensureRealtimeFirestoreListeners();
     loadAllDataFromStore();
 
     // 1. Instantaneous reactive sync when consumer or other components modify data in same window
     const handleDbUpdate = () => {
+      setReports(mockDb.getReports());
       loadAllDataFromStore(false);
     };
     window.addEventListener('twd_database_updated', handleDbUpdate);
@@ -914,6 +947,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // 2. Cross-tab synchronization when data changes in another browser tab
     const handleStorage = (e: StorageEvent) => {
       if (e.key?.startsWith('twd_') || e.key === 'twd_sync_ping') {
+        setReports(mockDb.getReports());
         loadAllDataFromStore(false);
       }
     };
@@ -926,8 +960,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       }
     }, 10000);
 
+    // 3b. Dedicated fast 2-second Customer Service Reports & Replies sync across devices/serverless
+    const reportPollTimer = setInterval(() => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        syncAdminReportsLive();
+      }
+    }, 2000);
+
     const handleVisibilityChange = () => {
       if (typeof document !== 'undefined' && !document.hidden) {
+        syncAdminReportsLive();
         loadAllDataFromStore(false);
       }
     };
@@ -940,7 +982,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       setCurrentTimeStr(d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }));
     }, 1000);
 
-    // 5. Dedicated Live WebSocket Stream for instant push events
+    // 5. Dedicated Live WebSocket + BroadcastChannel Stream for instant 0ms push events
     const cleanupWs = initRealtimeSocket((data) => {
       if (data.type === 'READER_REGISTERED_ACTIVE' || data.type === 'READER_REGISTERED_PENDING' || data.type === 'staff:registered') {
         toast.info('Meter Reader Registered', data.payload?.message || 'New field staff registered via mobile app.');
@@ -980,19 +1022,28 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       ) {
         loadAllDataFromStore(false);
       } else if (data.type === 'CONSUMER_REPORT_CREATED' || data.type === 'consumer:report:created') {
+        if (data.payload?.report) {
+          const merged = mockDb.mergeExternalReports([data.payload.report]);
+          setReports(merged);
+        }
         toast.warning(
           'New Consumer Concern Filed',
-          data.payload?.message || `${data.payload?.consumerName || 'A consumer'} submitted report #${data.payload?.reportId || ''}`
+          data.payload?.message || `${data.payload?.consumerName || 'A consumer'} submitted report #${data.payload?.ticketNumber || data.payload?.reportId || ''}`
         );
-        loadAllDataFromStore(false);
+        syncAdminReportsLive();
       } else if (
         data.type === 'CONSUMER_REPORT_REPLY' ||
         data.type === 'CONSUMER_REPLIED_TO_REPORT' ||
+        data.type === 'consumer:report:replied' ||
         data.type === 'ADMIN_REPLIED_TO_REPORT' ||
         data.type === 'REPORT_STATUS_CHANGED' ||
         data.type === 'CONSUMER_REPORT_UPDATED'
       ) {
-        loadAllDataFromStore(false);
+        if (data.payload?.report) {
+          const merged = mockDb.mergeExternalReports([data.payload.report]);
+          setReports(merged);
+        }
+        syncAdminReportsLive();
       }
     });
 
@@ -1017,6 +1068,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       window.removeEventListener('twd_tariff_updated', handleTariffUpdated);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearInterval(pollTimer);
+      clearInterval(reportPollTimer);
       clearInterval(clockInterval);
       cleanupWs();
       unsubscribeScanner();
@@ -6152,7 +6204,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     currentUser={currentUser}
                     reports={reports}
                     barangays={barangayList}
-                    onRefreshReports={() => loadAllDataFromStore(true)}
+                    onRefreshReports={syncAdminReportsLive}
                   />
                 </div>
               )}

@@ -369,6 +369,68 @@ let syncedAnnouncements: any[] = [];
 const deletedAnnouncementIds = new Set<string>();
 let syncedTariffConfig: any = null;
 
+// Server-side Firestore quota cooldown circuit breaker so /api/* responds in <10ms instead of 400-675ms when free daily quota is full
+let fsReadCooldownUntil = 0;
+let fsWriteCooldownUntil = 0;
+
+function isFsQuotaErr(err: unknown): boolean {
+  if (!err) return false;
+  const code = (err as { code?: string })?.code || "";
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    code === "resource-exhausted" ||
+    msg.includes("resource-exhausted") ||
+    msg.includes("Quota exceeded") ||
+    msg.includes("Quota limit exceeded") ||
+    msg.includes("Free daily write units") ||
+    msg.includes("Free daily read units")
+  );
+}
+
+function canReadFs(): boolean {
+  return Date.now() >= fsReadCooldownUntil;
+}
+
+function canWriteFs(): boolean {
+  return Date.now() >= fsWriteCooldownUntil;
+}
+
+function recordFsErr(err: unknown, mode: "read" | "write"): void {
+  if (!isFsQuotaErr(err)) return;
+  const cooldown = 10 * 60 * 1000; // 10 minutes
+  if (mode === "read") {
+    fsReadCooldownUntil = Date.now() + cooldown;
+  } else {
+    fsWriteCooldownUntil = Date.now() + cooldown;
+  }
+}
+
+function mergeServerReportPair(existing: ServerConsumerReport, incoming: ServerConsumerReport): ServerConsumerReport {
+  const exReplies = Array.isArray(existing.replies) ? existing.replies : [];
+  const inReplies = Array.isArray(incoming.replies) ? incoming.replies : [];
+  const replyMap = new Map<string, ServerReportReply>();
+  for (const rep of [...exReplies, ...inReplies]) {
+    if (!rep) continue;
+    const key = rep.id || `${rep.senderRole}_${rep.message}_${rep.timestamp}`;
+    if (!replyMap.has(key)) replyMap.set(key, rep);
+  }
+  const mergedReplies = Array.from(replyMap.values()).sort(
+    (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
+  );
+  const inTime = new Date(incoming.updatedAt || incoming.createdAt || 0).getTime();
+  const exTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+  const incomingNewer = inTime > exTime || (inTime === exTime && inReplies.length >= exReplies.length);
+  const primary = incomingNewer ? incoming : existing;
+  const secondary = incomingNewer ? existing : incoming;
+  return {
+    ...secondary,
+    ...primary,
+    id: existing.id || incoming.id,
+    ticketNumber: primary.ticketNumber || secondary.ticketNumber,
+    replies: mergedReplies,
+  };
+}
+
 function mergeConsumersList(items: MobileConsumerRecord[]): MobileConsumerRecord[] {
   const merged: MobileConsumerRecord[] = [];
   for (const c of items) {
@@ -446,18 +508,20 @@ function mergeConsumersList(items: MobileConsumerRecord[]): MobileConsumerRecord
 }
 
 async function fetchAllConsumersFromFirestore(): Promise<MobileConsumerRecord[]> {
+  if (!canReadFs()) return syncedConsumers;
   try {
     const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), limit(450)));
     const fsList: MobileConsumerRecord[] = [];
     snap.forEach((d) => fsList.push(d.data() as MobileConsumerRecord));
     syncedConsumers = mergeConsumersList([...fsList, ...syncedConsumers]);
-  } catch {
-    // Graceful fallback to warm cache
+  } catch (err) {
+    recordFsErr(err, "read");
   }
   return syncedConsumers;
 }
 
 async function fetchAllUsersFromFirestore(): Promise<PortalSyncUser[]> {
+  if (!canReadFs()) return syncedUsers;
   try {
     const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.USERS), limit(300)));
     const map = new Map<string, PortalSyncUser>();
@@ -487,8 +551,8 @@ async function fetchAllUsersFromFirestore(): Promise<PortalSyncUser[]> {
       upsert({ ...data, id: data.id || d.id });
     });
     syncedUsers = Array.from(map.values());
-  } catch {
-    // Graceful fallback to warm cache
+  } catch (err) {
+    recordFsErr(err, "read");
   }
   return syncedUsers;
 }
@@ -1426,25 +1490,34 @@ app.get("/api/notifications", async (req, res) => {
     }
 
     const collect = async (field: string, val: string) => {
-      if (!val || val.toUpperCase().startsWith("PENDING")) return;
+      if (!canReadFs() || !val || val.toUpperCase().startsWith("PENDING")) return;
       const snap = await getDocs(
         query(collection(fsDb, FS_COLLECTIONS.NOTIFICATIONS), where(field, "==", val), limit(40))
-      ).catch(() => null);
+      ).catch((err) => {
+        recordFsErr(err, "read");
+        return null;
+      });
       if (snap) {
         snap.forEach((d) => {
           const n = d.data() as PortalNotification;
-          if (n && n.title) notifMap.set(n.id || d.id, { ...n, id: n.id || d.id });
+          if (n && n.title) {
+            const key = n.id || d.id;
+            const prev = notifMap.get(key);
+            notifMap.set(key, prev ? { ...n, ...prev, read: Boolean(prev.read || n.read) } : { ...n, id: key });
+          }
         });
       }
     };
 
-    await Promise.all([
-      collect("accountNumber", accountNumber),
-      collect("accountNumber", "ALL"),
-      collect("consumerEmail", email),
-      ...(rawEmail && rawEmail !== email ? [collect("consumerEmail", rawEmail)] : []),
-      collect("userId", userId),
-    ]);
+    if (canReadFs()) {
+      await Promise.all([
+        collect("accountNumber", accountNumber),
+        collect("accountNumber", "ALL"),
+        collect("consumerEmail", email),
+        ...(rawEmail && rawEmail !== email ? [collect("consumerEmail", rawEmail)] : []),
+        collect("userId", userId),
+      ]);
+    }
 
     const list = Array.from(notifMap.values()).sort(
       (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
@@ -1478,9 +1551,11 @@ app.post("/api/notifications", async (req, res) => {
     } else {
       syncedNotifications.unshift(notif);
     }
-    await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(notif.id)), sanitizePayload(notif), {
-      merge: true,
-    }).catch(() => {});
+    if (canWriteFs()) {
+      await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(notif.id)), sanitizePayload(notif), {
+        merge: true,
+      }).catch((err) => recordFsErr(err, "write"));
+    }
     res.status(201).json({ success: true, notification: notif });
   } catch {
     res.status(200).json({ success: false, message: "Failed to save notification." });
@@ -1495,9 +1570,9 @@ app.patch("/api/notifications/:id/read", async (req, res) => {
     if (found && !isBroadcast) {
       found.read = true;
     }
-    if (!isBroadcast) {
+    if (!isBroadcast && canWriteFs()) {
       await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(id)), { read: true }, { merge: true }).catch(
-        () => {}
+        (err) => recordFsErr(err, "write")
       );
     }
     res.json({ success: true });
@@ -1509,54 +1584,94 @@ app.patch("/api/notifications/:id/read", async (req, res) => {
 // ==========================================
 // 3. CONSUMER SERVICE REPORTS & ADMIN REPLIES
 // ==========================================
+function upsertReportsIntoSynced(incomingList: ServerConsumerReport[]): ServerConsumerReport[] {
+  const map = new Map<string, ServerConsumerReport>();
+  for (const r of syncedReports) {
+    if (r && (r.id || r.ticketNumber)) {
+      const k = r.id || r.ticketNumber;
+      map.set(k, { ...r, id: k, replies: Array.isArray(r.replies) ? r.replies : [] });
+    }
+  }
+  for (const ir of incomingList) {
+    if (!ir || (!ir.id && !ir.ticketNumber)) continue;
+    let matchKey = ir.id && map.has(ir.id) ? ir.id : undefined;
+    if (!matchKey && ir.ticketNumber) {
+      const entry = Array.from(map.entries()).find(([, v]) => v.ticketNumber === ir.ticketNumber);
+      if (entry) matchKey = entry[0];
+    }
+    if (!matchKey) {
+      const newKey = ir.id || ir.ticketNumber;
+      map.set(newKey, { ...ir, id: newKey, replies: Array.isArray(ir.replies) ? ir.replies : [] });
+    } else {
+      map.set(matchKey, mergeServerReportPair(map.get(matchKey)!, ir));
+    }
+  }
+  syncedReports = Array.from(map.values()).sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
+  return syncedReports;
+}
+
 async function loadReportsFromFirestore(): Promise<ServerConsumerReport[]> {
+  if (!canReadFs()) return syncedReports;
   try {
     const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.REPORTS), limit(200)));
-    const map = new Map<string, ServerConsumerReport>();
-    syncedReports.forEach((r) => {
-      if (r.id) map.set(r.id, r);
-    });
+    const fsReports: ServerConsumerReport[] = [];
     snap.forEach((d) => {
       const r = d.data() as ServerConsumerReport;
-      if (r && r.id) map.set(r.id, r);
+      if (r && (r.id || d.id)) {
+        fsReports.push({ ...r, id: r.id || d.id });
+      }
     });
-    syncedReports = Array.from(map.values()).sort(
-      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    );
-  } catch {
-    // Graceful fallback
+    upsertReportsIntoSynced(fsReports);
+  } catch (err) {
+    recordFsErr(err, "read");
   }
   return syncedReports;
 }
 
+function filterServerReports(
+  source: ServerConsumerReport[],
+  filters: { accountNumber?: unknown; email?: unknown; status?: unknown; category?: unknown; search?: unknown }
+): ServerConsumerReport[] {
+  let list = [...source];
+  const accRaw = typeof filters.accountNumber === "string" ? filters.accountNumber.trim().toLowerCase() : "";
+  const emailRaw = typeof filters.email === "string" ? filters.email.trim().toLowerCase() : "";
+  const validAcc = accRaw && !accRaw.startsWith("pending") && accRaw !== "unassigned" ? accRaw : "";
+
+  if (validAcc || emailRaw) {
+    list = list.filter((r) => {
+      const rAcc = (r.accountNumber || "").trim().toLowerCase();
+      const rEmail = (r.consumerEmail || "").trim().toLowerCase();
+      return (
+        (validAcc && (rAcc === validAcc || rEmail === validAcc)) ||
+        (emailRaw && (rEmail === emailRaw || rAcc === emailRaw))
+      );
+    });
+  }
+  if (typeof filters.status === "string" && filters.status.trim() !== "" && filters.status !== "all") {
+    list = list.filter((r) => r.status === filters.status);
+  }
+  if (typeof filters.category === "string" && filters.category.trim() !== "" && filters.category !== "all") {
+    list = list.filter((r) => r.category === filters.category);
+  }
+  if (typeof filters.search === "string" && filters.search.trim() !== "") {
+    const q = filters.search.trim().toLowerCase();
+    list = list.filter(
+      (r) =>
+        (r.ticketNumber || "").toLowerCase().includes(q) ||
+        (r.title || "").toLowerCase().includes(q) ||
+        (r.consumerName || "").toLowerCase().includes(q) ||
+        (r.accountNumber || "").toLowerCase().includes(q)
+    );
+  }
+  return list;
+}
+
 app.get("/api/reports", async (req, res) => {
   try {
-    const { accountNumber, status, category, search } = req.query;
-    let list = await loadReportsFromFirestore();
-
-    if (accountNumber && typeof accountNumber === "string" && accountNumber.trim() !== "") {
-      const target = accountNumber.trim().toLowerCase();
-      list = list.filter(
-        (r) => (r.accountNumber || "").toLowerCase() === target || (r.consumerEmail || "").toLowerCase() === target
-      );
-    }
-    if (status && typeof status === "string" && status !== "all") {
-      list = list.filter((r) => r.status === status);
-    }
-    if (category && typeof category === "string" && category !== "all") {
-      list = list.filter((r) => r.category === category);
-    }
-    if (search && typeof search === "string" && search.trim() !== "") {
-      const q = search.trim().toLowerCase();
-      list = list.filter(
-        (r) =>
-          (r.ticketNumber || "").toLowerCase().includes(q) ||
-          (r.title || "").toLowerCase().includes(q) ||
-          (r.consumerName || "").toLowerCase().includes(q) ||
-          (r.accountNumber || "").toLowerCase().includes(q)
-      );
-    }
-
+    const all = await loadReportsFromFirestore();
+    const list = filterServerReports(all, req.query);
     res.json({
       success: true,
       count: list.length,
@@ -1565,6 +1680,38 @@ app.get("/api/reports", async (req, res) => {
     });
   } catch {
     res.json({ success: true, count: 0, reports: [], data: [] });
+  }
+});
+
+// POST /api/reports/reconcile - Fast bidirectional report & reply reconciliation across devices/instances
+app.post("/api/reports/reconcile", async (req, res) => {
+  try {
+    const incoming: ServerConsumerReport[] = Array.isArray(req.body?.reports) ? req.body.reports : [];
+    await loadReportsFromFirestore();
+    if (incoming.length > 0) {
+      upsertReportsIntoSynced(incoming);
+      if (canWriteFs()) {
+        for (const r of incoming.slice(0, 25)) {
+          if (r && r.id) {
+            setDoc(doc(fsDb, FS_COLLECTIONS.REPORTS, sanitizeDocId(r.id)), sanitizePayload(r), { merge: true }).catch(
+              (err) => recordFsErr(err, "write")
+            );
+          }
+        }
+      }
+    }
+    const list = filterServerReports(syncedReports, {
+      accountNumber: req.body?.accountNumber,
+      email: req.body?.email,
+    });
+    res.json({
+      success: true,
+      count: list.length,
+      reports: list,
+      data: list,
+    });
+  } catch {
+    res.json({ success: true, count: syncedReports.length, reports: syncedReports, data: syncedReports });
   }
 });
 
@@ -1623,20 +1770,18 @@ app.post("/api/reports", async (req, res) => {
       status: body.status || "pending",
       createdAt: body.createdAt || now,
       updatedAt: now,
+      photoUrl: body.photoUrl || "",
       replies,
       hasUnreadAdminReply: false,
       hasUnreadConsumerUpdate: true,
     };
 
-    const existingIdx = syncedReports.findIndex((r) => r.id === id || r.ticketNumber === ticketNumber);
-    if (existingIdx >= 0) {
-      syncedReports[existingIdx] = { ...syncedReports[existingIdx], ...report };
-    } else {
-      syncedReports.unshift(report);
+    upsertReportsIntoSynced([report]);
+    if (canWriteFs()) {
+      await setDoc(doc(fsDb, FS_COLLECTIONS.REPORTS, sanitizeDocId(id)), sanitizePayload(report), { merge: true }).catch(
+        (err) => recordFsErr(err, "write")
+      );
     }
-    await setDoc(doc(fsDb, FS_COLLECTIONS.REPORTS, sanitizeDocId(id)), sanitizePayload(report), { merge: true }).catch(
-      () => {}
-    );
 
     res.status(201).json({
       success: true,
@@ -1664,6 +1809,7 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], async (req, res
         ticketNumber: clientReport.ticketNumber || id,
         accountNumber: clientReport.accountNumber || "",
         consumerName: clientReport.consumerName || "Consumer",
+        consumerEmail: clientReport.consumerEmail ? String(clientReport.consumerEmail).trim().toLowerCase() : undefined,
         category: clientReport.category || "other",
         title: clientReport.title || "Consumer Inquiry",
         description: clientReport.description || "",
@@ -1714,14 +1860,17 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], async (req, res
     };
 
     syncedReports[idx] = updated;
-    await setDoc(doc(fsDb, FS_COLLECTIONS.REPORTS, sanitizeDocId(existing.id)), sanitizePayload(updated), {
-      merge: true,
-    }).catch(() => {});
+    if (canWriteFs()) {
+      await setDoc(doc(fsDb, FS_COLLECTIONS.REPORTS, sanitizeDocId(existing.id)), sanitizePayload(updated), {
+        merge: true,
+      }).catch((err) => recordFsErr(err, "write"));
+    }
 
-    if (reply.senderRole === "admin" && updated.accountNumber) {
-      const notif: PortalNotification = {
+    let createdNotif: PortalNotification | undefined;
+    if (reply.senderRole === "admin" && (updated.accountNumber || updated.consumerEmail)) {
+      createdNotif = {
         id: `notif-rep-${Date.now()}`,
-        accountNumber: updated.accountNumber.toUpperCase(),
+        accountNumber: (updated.accountNumber || "PENDING").toUpperCase(),
         consumerEmail: updated.consumerEmail?.toLowerCase(),
         title: `Official Reply on Concern #${updated.ticketNumber}`,
         message: `Admin ${reply.senderName} replied: "${reply.message.slice(0, 90)}" (Status: ${nextStatus.toUpperCase()})`,
@@ -1731,13 +1880,15 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], async (req, res
         reportId: updated.id,
         ticketNumber: updated.ticketNumber,
       };
-      syncedNotifications.unshift(notif);
-      await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(notif.id)), sanitizePayload(notif), {
-        merge: true,
-      }).catch(() => {});
+      syncedNotifications.unshift(createdNotif);
+      if (canWriteFs()) {
+        await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(createdNotif.id)), sanitizePayload(createdNotif), {
+          merge: true,
+        }).catch((err) => recordFsErr(err, "write"));
+      }
     }
 
-    res.json({ success: true, message: "Reply posted.", report: updated, reply });
+    res.json({ success: true, message: "Reply posted.", report: updated, reply, notification: createdNotif });
   } catch {
     res.status(200).json({ success: false, message: "Failed to reply to report." });
   }
@@ -1784,9 +1935,11 @@ app.all("/api/reports/:id/status", async (req, res) => {
       hasUnreadAdminReply: true,
     };
     syncedReports[idx] = updated;
-    await setDoc(doc(fsDb, FS_COLLECTIONS.REPORTS, sanitizeDocId(existing.id)), sanitizePayload(updated), {
-      merge: true,
-    }).catch(() => {});
+    if (canWriteFs()) {
+      await setDoc(doc(fsDb, FS_COLLECTIONS.REPORTS, sanitizeDocId(existing.id)), sanitizePayload(updated), {
+        merge: true,
+      }).catch((err) => recordFsErr(err, "write"));
+    }
     res.json({ success: true, message: "Report status updated.", report: updated });
   } catch {
     res.status(200).json({ success: false, message: "Failed to update report status." });
@@ -2193,6 +2346,9 @@ app.post("/api/readings/:id/approve", async (req, res) => {
 // 6. ANNOUNCEMENTS, TARIFF CONFIG, BARANGAYS & HEALTH
 // ==========================================
 async function loadAnnouncementsFromFirestore(): Promise<any[]> {
+  if (!canReadFs()) {
+    return syncedAnnouncements.filter((a) => a && a.id && !deletedAnnouncementIds.has(a.id));
+  }
   try {
     const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS), limit(100)));
     const map = new Map<string, any>();
@@ -2210,8 +2366,8 @@ async function loadAnnouncementsFromFirestore(): Promise<any[]> {
     syncedAnnouncements = Array.from(map.values()).sort(
       (a, b) => new Date(b.createdAt || b.date || 0).getTime() - new Date(a.createdAt || a.date || 0).getTime()
     );
-  } catch {
-    // Graceful fallback to syncedAnnouncements
+  } catch (err) {
+    recordFsErr(err, "read");
   }
   return syncedAnnouncements.filter((a) => a && a.id && !deletedAnnouncementIds.has(a.id));
 }
@@ -2245,9 +2401,11 @@ app.post("/api/announcements", async (req, res) => {
     } else {
       syncedAnnouncements.unshift(ann);
     }
-    await setDoc(doc(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS, sanitizeDocId(id)), sanitizePayload(ann), {
-      merge: true,
-    }).catch(() => {});
+    if (canWriteFs()) {
+      await setDoc(doc(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS, sanitizeDocId(id)), sanitizePayload(ann), {
+        merge: true,
+      }).catch((err) => recordFsErr(err, "write"));
+    }
     res.status(201).json({ success: true, announcement: ann, data: ann });
   } catch {
     res.status(200).json({ success: false, message: "Failed to publish announcement." });
@@ -2270,9 +2428,11 @@ app.put("/api/announcements/:id", async (req, res) => {
     } else {
       syncedAnnouncements.unshift(updated);
     }
-    await setDoc(doc(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS, sanitizeDocId(id)), sanitizePayload(updated), {
-      merge: true,
-    }).catch(() => {});
+    if (canWriteFs()) {
+      await setDoc(doc(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS, sanitizeDocId(id)), sanitizePayload(updated), {
+        merge: true,
+      }).catch((err) => recordFsErr(err, "write"));
+    }
     res.json({ success: true, announcement: updated, data: updated });
   } catch {
     res.status(200).json({ success: false, message: "Failed to update announcement." });
@@ -2284,7 +2444,9 @@ app.delete("/api/announcements/:id", async (req, res) => {
     const { id } = req.params;
     deletedAnnouncementIds.add(id);
     syncedAnnouncements = syncedAnnouncements.filter((a) => a.id !== id);
-    await deleteDoc(doc(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS, sanitizeDocId(id))).catch(() => {});
+    if (canWriteFs()) {
+      await deleteDoc(doc(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS, sanitizeDocId(id))).catch((err) => recordFsErr(err, "write"));
+    }
     res.json({ success: true });
   } catch {
     res.json({ success: true });
@@ -2292,16 +2454,21 @@ app.delete("/api/announcements/:id", async (req, res) => {
 });
 
 app.get("/api/tariff-config", async (_req, res) => {
-  try {
-    const tDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.SETTINGS, "tariff_config")).catch(() => null);
-    if (tDoc && tDoc.exists()) {
-      const remoteCfg = tDoc.data();
-      if (!syncedTariffConfig || (Number(remoteCfg?.version || 0) >= Number(syncedTariffConfig?.version || 0))) {
-        syncedTariffConfig = remoteCfg;
+  if (canReadFs()) {
+    try {
+      const tDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.SETTINGS, "tariff_config")).catch((err) => {
+        recordFsErr(err, "read");
+        return null;
+      });
+      if (tDoc && tDoc.exists()) {
+        const remoteCfg = tDoc.data();
+        if (!syncedTariffConfig || Number(remoteCfg?.version || 0) >= Number(syncedTariffConfig?.version || 0)) {
+          syncedTariffConfig = remoteCfg;
+        }
       }
+    } catch (err) {
+      recordFsErr(err, "read");
     }
-  } catch {
-    // Graceful fallback
   }
   res.json({ success: true, config: syncedTariffConfig });
 });
@@ -2310,9 +2477,11 @@ app.post("/api/tariff-config", async (req, res) => {
   try {
     const cfg = req.body || {};
     syncedTariffConfig = cfg;
-    await setDoc(doc(fsDb, FS_COLLECTIONS.SETTINGS, "tariff_config"), sanitizePayload(cfg), { merge: true }).catch(
-      () => {}
-    );
+    if (canWriteFs()) {
+      await setDoc(doc(fsDb, FS_COLLECTIONS.SETTINGS, "tariff_config"), sanitizePayload(cfg), { merge: true }).catch(
+        (err) => recordFsErr(err, "write")
+      );
+    }
     res.json({ success: true, config: cfg });
   } catch {
     res.json({ success: true, config: syncedTariffConfig || req.body || {} });

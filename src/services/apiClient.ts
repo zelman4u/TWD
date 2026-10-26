@@ -396,18 +396,36 @@ export const apiClient = {
   },
 
   // Consumer Service Reports & Admin Replies
-  getReports: async (filters?: { accountNumber?: string; status?: string; category?: string; search?: string }) => {
+  getReports: async (
+    filters?: { accountNumber?: string; email?: string; status?: string; category?: string; search?: string },
+    options?: RequestOptions
+  ) => {
     const params = new URLSearchParams();
     if (filters?.accountNumber) params.append('accountNumber', filters.accountNumber);
+    if (filters?.email) params.append('email', filters.email);
     if (filters?.status && filters.status !== 'all') params.append('status', filters.status);
     if (filters?.category && filters.category !== 'all') params.append('category', filters.category);
     if (filters?.search) params.append('search', filters.search);
     const queryString = params.toString() ? `?${params.toString()}` : '';
-    return apiClient.get<{ success: boolean; count?: number; reports: any[]; data: any[] }>(`/api/reports${queryString}`);
+    return apiClient.get<{ success: boolean; count?: number; reports: any[]; data: any[] }>(
+      `/api/reports${queryString}`,
+      options
+    );
   },
 
-  getReportById: async (id: string) => {
-    return apiClient.get<{ success: boolean; report: any }>(`/api/reports/${encodeURIComponent(id)}`);
+  reconcileReports: async (
+    payload: { reports?: any[]; accountNumber?: string; email?: string },
+    options?: RequestOptions
+  ) => {
+    return apiClient.post<{ success: boolean; count?: number; reports: any[]; data: any[] }>(
+      '/api/reports/reconcile',
+      payload,
+      options
+    );
+  },
+
+  getReportById: async (id: string, options?: RequestOptions) => {
+    return apiClient.get<{ success: boolean; report: any }>(`/api/reports/${encodeURIComponent(id)}`, options);
   },
 
   createReport: async (reportData: any) => {
@@ -426,7 +444,7 @@ export const apiClient = {
       report?: any;
     }
   ) => {
-    return apiClient.post<{ success: boolean; message: string; report: any; reply: any }>(
+    return apiClient.post<{ success: boolean; message: string; report: any; reply: any; notification?: any }>(
       `/api/reports/${encodeURIComponent(id)}/reply`,
       replyData
     );
@@ -440,8 +458,8 @@ export const apiClient = {
   },
 
   // District Public Announcements
-  getAnnouncements: async () => {
-    return apiClient.get<{ success: boolean; announcements: any[]; data?: any[] }>('/api/announcements');
+  getAnnouncements: async (options?: RequestOptions) => {
+    return apiClient.get<{ success: boolean; announcements: any[]; data?: any[] }>('/api/announcements', options);
   },
 
   createAnnouncement: async (announcement: any) => {
@@ -460,8 +478,8 @@ export const apiClient = {
   },
 
   // Water Tariff Schedule Sync
-  getTariffConfig: async () => {
-    return apiClient.get<{ success: boolean; config: any }>('/api/tariff-config');
+  getTariffConfig: async (options?: RequestOptions) => {
+    return apiClient.get<{ success: boolean; config: any }>('/api/tariff-config', options);
   },
 
   saveTariffConfig: async (config: any) => {

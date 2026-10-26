@@ -72,21 +72,89 @@ export function ConsumerReportsSection({
   const [showNewReportModal, setShowNewReportModal] = useState(false);
   const [activeThreadReport, setActiveThreadReport] = useState<ConsumerReport | null>(() => {
     if (selectedReportId) {
-      return reports.find(r => r.id === selectedReportId || r.ticketNumber === selectedReportId) || null;
+      const cleanSel = selectedReportId.replace(/^#/, '').trim().toUpperCase();
+      return (
+        reports.find(
+          r =>
+            r.id === selectedReportId ||
+            r.ticketNumber.toUpperCase() === cleanSel ||
+            r.id.toUpperCase() === cleanSel
+        ) || null
+      );
     }
     return null;
   });
+  const threadEndRef = React.useRef<HTMLDivElement>(null);
 
-  // Sync if selectedReportId changes from outside (e.g. notification click)
+  // Sync if selectedReportId changes from outside (e.g. notification click) OR if activeThreadReport receives live Admin replies
   React.useEffect(() => {
     if (selectedReportId) {
-      const target = reports.find(r => r.id === selectedReportId || r.ticketNumber === selectedReportId);
+      const cleanSel = selectedReportId.replace(/^#/, '').trim().toUpperCase();
+      const target = reports.find(
+        r =>
+          r.id === selectedReportId ||
+          r.ticketNumber.toUpperCase() === cleanSel ||
+          r.id.toUpperCase() === cleanSel
+      );
       if (target) {
-        setActiveThreadReport(target);
-        mockDb.markReportReadByConsumer(target.id);
+        setActiveThreadReport(prev => {
+          if (
+            !prev ||
+            prev.id !== target.id ||
+            prev.updatedAt !== target.updatedAt ||
+            prev.status !== target.status ||
+            prev.assignedStaff !== target.assignedStaff ||
+            prev.replies.length !== target.replies.length
+          ) {
+            return target;
+          }
+          return prev;
+        });
+        if (target.hasUnreadAdminReply) {
+          mockDb.markReportReadByConsumer(target.id);
+        }
+        return;
       }
     }
-  }, [selectedReportId, reports]);
+
+    if (activeThreadReport) {
+      const latest = reports.find(
+        r => r.id === activeThreadReport.id || r.ticketNumber === activeThreadReport.ticketNumber
+      );
+      if (
+        latest &&
+        (latest.updatedAt !== activeThreadReport.updatedAt ||
+          latest.status !== activeThreadReport.status ||
+          latest.assignedStaff !== activeThreadReport.assignedStaff ||
+          latest.replies.length !== activeThreadReport.replies.length)
+      ) {
+        setActiveThreadReport(latest);
+        if (latest.hasUnreadAdminReply) {
+          mockDb.markReportReadByConsumer(latest.id);
+        }
+      }
+    }
+  }, [selectedReportId, reports, activeThreadReport?.id]);
+
+  // Smoothly scroll conversation thread to latest reply when new messages arrive
+  React.useEffect(() => {
+    if (activeThreadReport && threadEndRef.current) {
+      threadEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [activeThreadReport?.id, activeThreadReport?.replies?.length]);
+
+  // Fast 2-second live sync while Consumer is viewing the Reports & Inquiries module
+  const refreshCallbackRef = React.useRef(onRefreshReports);
+  refreshCallbackRef.current = onRefreshReports;
+  React.useEffect(() => {
+    refreshCallbackRef.current();
+    const timer = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        refreshCallbackRef.current();
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Close modal on Escape key
   React.useEffect(() => {
@@ -140,7 +208,7 @@ export function ConsumerReportsSection({
     ]);
   });
 
-  // Handle Create Report
+  // Handle Create Report (Instantaneous Optimistic UI + Background Server Sync)
   const handleSubmitReport = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
@@ -157,7 +225,7 @@ export function ConsumerReportsSection({
       const payload = {
         accountNumber: consumer.accountNumber || 'PENDING',
         consumerName: consumer.name,
-        consumerEmail: consumer.email || '',
+        consumerEmail: (consumer.email || currentUser.email || '').trim().toLowerCase(),
         consumerPhone: phoneContact.trim() || consumer.contactNumber,
         barangay: consumer.barangay || 'Poblacion',
         address: addressDetails.trim() || consumer.address,
@@ -169,48 +237,55 @@ export function ConsumerReportsSection({
         photoUrl: photoUrl.trim()
       };
 
-      // 1. Create in mockDb
+      // 1. Create immediately in local store (0ms)
       const newReport = mockDb.createReport(payload);
 
-      // 2. Sync to Backend REST API preserving exact id, ticketNumber, createdAt & initial reply
-      try {
-        await apiClient.createReport({
-          ...payload,
-          id: newReport.id,
-          ticketNumber: newReport.ticketNumber,
-          createdAt: newReport.createdAt,
-          replies: newReport.replies,
-        } as any);
-      } catch (apiErr) {
-        console.warn('[Consumer Report API Sync]: Handled offline / local store fallback', apiErr);
-      }
-
-      // 3. Broadcast via WebSocket so Admin Portal receives inquiry immediately even if Firestore quota is paused
+      // 2. Broadcast immediately via BroadcastChannel + WebSocket (0ms across tabs & connected clients)
       sendRealtimeMessage('CONSUMER_REPORT_CREATED', {
         report: newReport,
         ticketNumber: newReport.ticketNumber,
         consumerName: newReport.consumerName,
         accountNumber: newReport.accountNumber,
+        consumerEmail: newReport.consumerEmail,
         category: newReport.category,
         title: newReport.title,
         urgency: newReport.urgency,
         message: `New Consumer Concern Filed [${newReport.ticketNumber}] by ${newReport.consumerName} (${newReport.accountNumber}): "${newReport.title}"`,
       });
 
-      toast.success(
-        'Concern Submitted Successfully!',
-        `Your report has been logged under Tracking Ticket #${newReport.ticketNumber}. Water District Admins have been notified.`
-      );
-
-      // Reset form & state
+      // 3. Update UI immediately without waiting for network latency
       setTitle('');
       setDescription('');
       setCategory('leak');
       setUrgency('normal');
       setPhotoUrl('');
       setShowNewReportModal(false);
-      onRefreshReports();
       setActiveThreadReport(newReport);
+      onRefreshReports();
+
+      toast.success(
+        'Concern Submitted Successfully!',
+        `Your report has been logged under Tracking Ticket #${newReport.ticketNumber}. Water District Admins have been notified.`
+      );
+
+      // 4. Persist asynchronously to Backend REST API
+      apiClient
+        .createReport({
+          ...payload,
+          id: newReport.id,
+          ticketNumber: newReport.ticketNumber,
+          createdAt: newReport.createdAt,
+          replies: newReport.replies,
+        } as any)
+        .then((res) => {
+          if (res?.report) {
+            mockDb.mergeExternalReports([res.report]);
+            onRefreshReports();
+          }
+        })
+        .catch((apiErr) => {
+          console.warn('[Consumer Report API Sync]: Handled offline / local store fallback', apiErr);
+        });
     } catch (err: any) {
       toast.error('Submission Failed', err?.message || 'Unable to submit report. Please try again.');
     } finally {
@@ -218,34 +293,26 @@ export function ConsumerReportsSection({
     }
   };
 
-  // Handle Post Consumer Reply
+  // Handle Post Consumer Reply (Instantaneous Optimistic UI + Background Server Sync)
   const handleSendReply = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeThreadReport || !replyMessage.trim()) return;
 
+    const cleanMessage = replyMessage.trim();
+    const targetReportSnapshot = activeThreadReport;
     setIsSendingReply(true);
     try {
       const replyData = {
         senderId: currentUser.id || consumer.accountNumber,
         senderName: consumer.name,
         senderRole: 'consumer' as const,
-        message: replyMessage.trim()
+        message: cleanMessage
       };
 
-      // 1. Update in mockDb
-      const updated = mockDb.replyToReport(activeThreadReport.id, replyData);
+      // 1. Update immediately in local store (0ms)
+      const updated = mockDb.replyToReport(targetReportSnapshot.id, replyData);
 
-      // 2. Sync to Backend REST API (include report snapshot so server upserts if not yet in memory)
-      try {
-        await apiClient.replyToReport(activeThreadReport.id, {
-          ...replyData,
-          report: activeThreadReport,
-        });
-      } catch (apiErr) {
-        console.warn('[Consumer Reply Sync Warning]:', apiErr);
-      }
-
-      // 3. Broadcast live follow-up over WebSocket
+      // 2. Broadcast immediately via BroadcastChannel + WebSocket (0ms)
       if (updated) {
         sendRealtimeMessage('CONSUMER_REPLIED_TO_REPORT', {
           report: updated,
@@ -255,9 +322,26 @@ export function ConsumerReportsSection({
         });
         setActiveThreadReport(updated);
       }
+
       setReplyMessage('');
       onRefreshReports();
       toast.success('Message Sent', 'Your follow-up has been transmitted to Tagoloan Water District staff.');
+
+      // 3. Persist asynchronously to Backend REST API
+      apiClient
+        .replyToReport(targetReportSnapshot.id, {
+          ...replyData,
+          report: updated || targetReportSnapshot,
+        })
+        .then((res) => {
+          if (res?.report) {
+            mockDb.mergeExternalReports([res.report]);
+            onRefreshReports();
+          }
+        })
+        .catch((apiErr) => {
+          console.warn('[Consumer Reply Sync Warning]:', apiErr);
+        });
     } catch (err: any) {
       toast.error('Send Failed', 'Failed to submit reply. Please retry.');
     } finally {
@@ -680,6 +764,7 @@ export function ConsumerReportsSection({
                   </div>
                 );
               })}
+              <div ref={threadEndRef} />
             </div>
 
             {/* Reply Composer Input Form */}

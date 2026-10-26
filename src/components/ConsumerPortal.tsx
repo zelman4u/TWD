@@ -229,6 +229,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const readingsRef = useRef<MeterReading[]>([]);
   const notifsRef = useRef<any[]>([]);
   const announcementsRef = useRef<any[]>([]);
+  const lastMetaSyncRef = useRef<number>(0);
   const syncTimeoutRef = useRef<any>(null);
   const debounceDbUpdateRef = useRef<any>(null);
   const alertedOverdueRef = useRef<Set<string>>(new Set());
@@ -272,20 +273,149 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     return true;
   };
 
+  // Helper: Detect whether a notification is a Consumer Report / Concern Reply notification
+  const isReportNotification = (n?: ConsumerNotification | null): boolean => {
+    if (!n) return false;
+    if (n.type === 'report' || Boolean(n.reportId || n.ticketNumber)) return true;
+    const combined = `${n.title || ''} ${n.message || ''}`;
+    return /concern\s*#?twd-cr-|ticket\s*#?twd-cr-|official reply on concern/i.test(combined);
+  };
+
+  // Helper: Resolve exact report ID or ticket number from a notification
+  const resolveNotificationReportTarget = (n?: ConsumerNotification | null): string | null => {
+    if (!n) return null;
+    if (n.reportId) return n.reportId;
+    if (n.ticketNumber) return n.ticketNumber;
+    const combined = `${n.title || ''} ${n.message || ''}`;
+    const match = combined.match(/TWD-CR-\d{4}-\d+/i);
+    if (match?.[0]) {
+      const cleanTicket = match[0].toUpperCase();
+      const found = mockDb.getReports().find(r => r.ticketNumber.toUpperCase() === cleanTicket);
+      return found ? found.id : cleanTicket;
+    }
+    return null;
+  };
+
+  // Helper: Read local reports strictly belonging to this consumer (by accountNumber or email)
+  const getConsumerReportsFromLocal = (rec?: Consumer | null): ConsumerReport[] => {
+    const activeRec = rec ?? consumerRecordRef.current;
+    const acc = (activeRec?.accountNumber || currentUser.linkedAccountNumber || '').trim();
+    const byAcc =
+      acc && !acc.toUpperCase().startsWith('PENDING')
+        ? mockDb.getReports(acc)
+        : [];
+    const myEmail = (activeRec?.email || currentUser.email || '').trim().toLowerCase();
+    const byEmail = myEmail
+      ? mockDb.getReports().filter(rep => (rep.consumerEmail || '').trim().toLowerCase() === myEmail)
+      : [];
+    const seenIds = new Set<string>();
+    return [...byAcc, ...byEmail]
+      .filter(rep => {
+        if (!rep?.id || seenIds.has(rep.id)) return false;
+        seenIds.add(rep.id);
+        return true;
+      })
+      .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
+  };
+
+  // Helper: Read local notifications strictly belonging to this consumer
+  const getConsumerNotificationsFromLocal = (rec?: Consumer | null): ConsumerNotification[] => {
+    const activeRec = rec ?? consumerRecordRef.current;
+    if (activeRec) {
+      return mockDb.getNotifications(activeRec.accountNumber, {
+        userId: activeRec.linkedUserId || currentUser.id,
+        email: activeRec.email || currentUser.email,
+        consumerId: activeRec.id
+      });
+    }
+    return mockDb.getNotifications(currentUser.linkedAccountNumber, {
+      userId: currentUser.id,
+      email: currentUser.email
+    });
+  };
+
+  // Fast bi-directional reconciliation of reports & notifications (works in <2s on Vercel even when Firestore quota is full)
+  const syncConsumerReportsAndNotifications = (silent = true) => {
+    const activeRec = consumerRecordRef.current;
+    const localReports = getConsumerReportsFromLocal(activeRec);
+    setReports(localReports);
+
+    const localNotifs = getConsumerNotificationsFromLocal(activeRec);
+    if (JSON.stringify(notifsRef.current) !== JSON.stringify(localNotifs)) {
+      notifsRef.current = localNotifs;
+      setNotifications(localNotifs);
+    }
+
+    const acc = (activeRec?.accountNumber || currentUser.linkedAccountNumber || '').trim();
+    const validAcc = acc && !acc.toUpperCase().startsWith('PENDING') ? acc : undefined;
+    const myEmail = (activeRec?.email || currentUser.email || '').trim().toLowerCase() || undefined;
+
+    if (validAcc || myEmail) {
+      apiClient
+        .reconcileReports(
+          {
+            reports: localReports.slice(0, 20),
+            accountNumber: validAcc,
+            email: myEmail
+          },
+          { skipLogging: silent }
+        )
+        .then(res => {
+          if (res?.success && Array.isArray(res.reports)) {
+            if (res.reports.length > 0) {
+              mockDb.mergeExternalReports(res.reports);
+            }
+            setReports(getConsumerReportsFromLocal());
+          }
+        })
+        .catch(() => {
+          apiClient
+            .getReports({ accountNumber: validAcc, email: myEmail }, { skipLogging: silent })
+            .then(res => {
+              if (res?.success && Array.isArray(res.reports) && res.reports.length > 0) {
+                mockDb.mergeExternalReports(res.reports);
+                setReports(getConsumerReportsFromLocal());
+              }
+            })
+            .catch(() => {});
+        });
+    }
+
+    const notifParams = new URLSearchParams();
+    if (validAcc) notifParams.set('accountNumber', validAcc);
+    if (activeRec?.linkedUserId || currentUser.id) notifParams.set('userId', activeRec?.linkedUserId || currentUser.id);
+    if (myEmail) notifParams.set('email', myEmail);
+    if (activeRec?.id) notifParams.set('consumerId', activeRec.id);
+    if ([...notifParams.keys()].length > 0) {
+      safeBackendFetch(`/api/notifications?${notifParams.toString()}`)
+        .then(res => (res ? res.json() : null))
+        .then(nData => {
+          if (nData?.success && Array.isArray(nData.notifications) && nData.notifications.length > 0) {
+            if (mockDb.mergeExternalNotifications(nData.notifications)) {
+              const refreshed = getConsumerNotificationsFromLocal();
+              notifsRef.current = refreshed;
+              setNotifications(refreshed);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  };
+
   // Helper: Match whether an incoming consumer or notification payload belongs to the logged-in consumer
   const doesPayloadBelongToCurrentUser = (payload: any): boolean => {
     if (!payload) return false;
-    const targetConsumer = payload.consumer || payload;
+    const targetConsumer = payload.consumer || payload.report || payload;
     const myEmail = (currentUser.email || consumerRecordRef.current?.email || '').trim().toLowerCase();
     const myUid = (currentUser.id || consumerRecordRef.current?.linkedUserId || '').trim();
     const myAcc = (currentUser.linkedAccountNumber || consumerRecordRef.current?.accountNumber || '').trim().toUpperCase();
     const myName = (currentUser.name || consumerRecordRef.current?.name || '').trim().toLowerCase();
 
-    const pEmail = (targetConsumer.email || payload.email || payload.consumerEmail || '').trim().toLowerCase();
+    const pEmail = (targetConsumer.email || targetConsumer.consumerEmail || payload.email || payload.consumerEmail || '').trim().toLowerCase();
     const pUid = (targetConsumer.linkedUserId || payload.linkedUserId || payload.userId || '').trim();
     const pAcc = (targetConsumer.accountNumber || payload.accountNumber || '').trim().toUpperCase();
     const pPrevAcc = (payload.previousAccountNumber || '').trim().toUpperCase();
-    const pName = (targetConsumer.name || '').trim().toLowerCase();
+    const pName = (targetConsumer.name || targetConsumer.consumerName || '').trim().toLowerCase();
 
     if (pAcc === 'ALL' || pAcc === 'BROADCAST' || pAcc === 'DISTRICT') return true;
     if (myUid && pUid && myUid === pUid) return true;
@@ -830,99 +960,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         }
         setAllHistoryReadings(allCustomerReads);
 
-        // Load consumer notifications strictly for this consumer account (local + backend API sync)
-        const notifs = mockDb.getNotifications(record.accountNumber, {
-          userId: record.linkedUserId || currentUser.id,
-          email: record.email || currentUser.email,
-          consumerId: record.id
-        });
-        if (JSON.stringify(notifsRef.current) !== JSON.stringify(notifs)) {
-          notifsRef.current = notifs;
-          setNotifications(notifs);
-        }
-
-        const notifParams = new URLSearchParams();
-        if (record.accountNumber) notifParams.set('accountNumber', record.accountNumber);
-        if (record.linkedUserId || currentUser.id) notifParams.set('userId', record.linkedUserId || currentUser.id);
-        if (record.email || currentUser.email) notifParams.set('email', record.email || currentUser.email || '');
-        if (record.id) notifParams.set('consumerId', record.id);
-        safeBackendFetch(`/api/notifications?${notifParams.toString()}`)
-          .then(res => (res ? res.json() : null))
-          .then(nData => {
-            if (nData?.success && Array.isArray(nData.notifications) && nData.notifications.length > 0) {
-              const mergedChanged = mockDb.mergeExternalNotifications(nData.notifications);
-              if (mergedChanged) {
-                const updatedNotifs = mockDb.getNotifications(record!.accountNumber, {
-                  userId: record!.linkedUserId || currentUser.id,
-                  email: record!.email || currentUser.email,
-                  consumerId: record!.id
-                });
-                notifsRef.current = updatedNotifs;
-                setNotifications(updatedNotifs);
-              }
-            }
-          })
-          .catch(() => {});
-
-        // Load consumer reports & concerns (merge external reports without wiping local/Firestore tickets)
-        const getFilteredConsumerReports = () => {
-          const byAcc =
-            record!.accountNumber && !record!.accountNumber.toUpperCase().startsWith('PENDING')
-              ? mockDb.getReports(record!.accountNumber)
-              : [];
-          const myEmail = (record!.email || currentUser.email || '').trim().toLowerCase();
-          const byEmail = myEmail
-            ? mockDb.getReports().filter(rep => (rep.consumerEmail || '').trim().toLowerCase() === myEmail)
-            : [];
-          const seenIds = new Set<string>();
-          return [...byAcc, ...byEmail].filter(rep => {
-            if (!rep?.id || seenIds.has(rep.id)) return false;
-            seenIds.add(rep.id);
-            return true;
-          });
-        };
-        setReports(getFilteredConsumerReports());
-        apiClient.getReports({ accountNumber: record.accountNumber })
-          .then(res => {
-            if (res?.success && Array.isArray(res.reports) && res.reports.length > 0) {
-              mockDb.mergeExternalReports(res.reports);
-              setReports(getFilteredConsumerReports());
-            }
-          })
-          .catch(() => {});
+        // Synchronize consumer notifications & concern reports (local + bi-directional backend sync)
+        syncConsumerReportsAndNotifications(true);
       } else {
         if (consumerRecordRef.current !== null) {
           consumerRecordRef.current = null;
           setConsumerRecord(null);
         }
-        // Load fallback notifications strictly for this user (e.g. self-registered awaiting issuance)
-        const userNotifs = mockDb.getNotifications(currentUser.linkedAccountNumber, {
-          userId: currentUser.id,
-          email: currentUser.email
-        });
-        if (JSON.stringify(notifsRef.current) !== JSON.stringify(userNotifs)) {
-          notifsRef.current = userNotifs;
-          setNotifications(userNotifs);
-        }
-        const fallbackParams = new URLSearchParams();
-        if (currentUser.linkedAccountNumber) fallbackParams.set('accountNumber', currentUser.linkedAccountNumber);
-        if (currentUser.id) fallbackParams.set('userId', currentUser.id);
-        if (currentUser.email) fallbackParams.set('email', currentUser.email);
-        safeBackendFetch(`/api/notifications?${fallbackParams.toString()}`)
-          .then(res => (res ? res.json() : null))
-          .then(nData => {
-            if (nData?.success && Array.isArray(nData.notifications) && nData.notifications.length > 0) {
-              if (mockDb.mergeExternalNotifications(nData.notifications)) {
-                const refreshed = mockDb.getNotifications(currentUser.linkedAccountNumber, {
-                  userId: currentUser.id,
-                  email: currentUser.email
-                });
-                notifsRef.current = refreshed;
-                setNotifications(refreshed);
-              }
-            }
-          })
-          .catch(() => {});
+        syncConsumerReportsAndNotifications(true);
       }
 
       const allAnnouncements = mockDb.getAnnouncements();
@@ -931,32 +976,36 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         setAnnouncements(allAnnouncements);
       }
 
-      // Live REST pull for District Advisories & Active Tariff Schedule across devices
-      apiClient.getAnnouncements()
-        .then(res => {
-          if (res?.announcements && Array.isArray(res.announcements)) {
-            const mergedAnns = mockDb.mergeExternalAnnouncements(res.announcements);
-            if (JSON.stringify(announcementsRef.current) !== JSON.stringify(mergedAnns)) {
-              announcementsRef.current = mergedAnns;
-              setAnnouncements(mergedAnns);
+      // Throttle District Advisories & Tariff Config background REST checks to once per 30s (instant push still via WS/BroadcastChannel)
+      const nowMs = Date.now();
+      if (!silent || nowMs - lastMetaSyncRef.current >= 30000) {
+        lastMetaSyncRef.current = nowMs;
+        apiClient.getAnnouncements({ skipLogging: true })
+          .then(res => {
+            if (res?.announcements && Array.isArray(res.announcements)) {
+              const mergedAnns = mockDb.mergeExternalAnnouncements(res.announcements);
+              if (JSON.stringify(announcementsRef.current) !== JSON.stringify(mergedAnns)) {
+                announcementsRef.current = mergedAnns;
+                setAnnouncements(mergedAnns);
+              }
             }
-          }
-        })
-        .catch(() => {});
+          })
+          .catch(() => {});
 
-      apiClient.getTariffConfig()
-        .then(res => {
-          if (res?.config && (res.config.version || 0) > (getActiveTariffConfig().version || 0)) {
-            saveActiveTariffConfig(res.config);
-            setActiveTariff(res.config);
-          }
-        })
-        .catch(() => {});
+        apiClient.getTariffConfig({ skipLogging: true })
+          .then(res => {
+            if (res?.config && (res.config.version || 0) > (getActiveTariffConfig().version || 0)) {
+              saveActiveTariffConfig(res.config);
+              setActiveTariff(res.config);
+            }
+          })
+          .catch(() => {});
+      }
 
       setLastSyncTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       setIsInitialLoading(false);
       setIsSyncing(false);
-    }, silent ? 50 : 250);
+    }, silent ? 0 : 40);
   };
 
   // Initial Load & Real-Time Sync Event Listeners
@@ -1005,34 +1054,46 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       }
     );
 
-    // 1. Instantaneous reactive sync with debounce to prevent state loops
+    // 1. Instantaneous reactive sync with minimal 40ms debounce
     const handleDbUpdate = () => {
+      setReports(getConsumerReportsFromLocal());
+      const freshNotifs = getConsumerNotificationsFromLocal();
+      if (JSON.stringify(notifsRef.current) !== JSON.stringify(freshNotifs)) {
+        notifsRef.current = freshNotifs;
+        setNotifications(freshNotifs);
+      }
       if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
       debounceDbUpdateRef.current = setTimeout(() => {
         loadConsumerInfo(true);
-      }, 300);
+      }, 40);
     };
     window.addEventListener('twd_database_updated', handleDbUpdate);
 
     // 2. Cross-tab synchronization when Admin modifies data in another browser tab
     const handleStorage = (e: StorageEvent) => {
       if (e.key?.startsWith('twd_') || e.key === 'twd_sync_ping') {
+        setReports(getConsumerReportsFromLocal());
+        const freshNotifs = getConsumerNotificationsFromLocal();
+        if (JSON.stringify(notifsRef.current) !== JSON.stringify(freshNotifs)) {
+          notifsRef.current = freshNotifs;
+          setNotifications(freshNotifs);
+        }
         if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
         debounceDbUpdateRef.current = setTimeout(() => {
           loadConsumerInfo(true);
-        }, 300);
+        }, 40);
       }
     };
     window.addEventListener('storage', handleStorage);
 
     // 3. Tariff rate update listener for instant price hike propagation
-    const handleTariffUpdated = (e: any) => {
+    const handleTariffUpdated = () => {
       setActiveTariff(getActiveTariffConfig());
       loadConsumerInfo(true);
     };
     window.addEventListener('twd_tariff_updated', handleTariffUpdated);
 
-    // 4. Dedicated Live WebSocket Stream for immediate ID confirmation, notifications & report updates
+    // 4. Dedicated Live WebSocket + BroadcastChannel Stream for 0ms ID confirmation, notifications & report replies
     const cleanupWs = initRealtimeSocket((data) => {
       if (
         data.type === 'CONSUMER_IDS_ISSUED' ||
@@ -1057,17 +1118,38 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         const notif = data.payload?.notification;
         if (notif && doesPayloadBelongToCurrentUser(notif)) {
           mockDb.mergeExternalNotifications([notif]);
-          loadConsumerInfo(true);
+          const refreshedNotifs = getConsumerNotificationsFromLocal();
+          notifsRef.current = refreshedNotifs;
+          setNotifications(refreshedNotifs);
+          syncConsumerReportsAndNotifications(true);
         }
-      } else if (data.type === 'CONSUMER_REPORT_REPLY' || data.type === 'ADMIN_REPLIED_TO_REPORT') {
+      } else if (
+        data.type === 'CONSUMER_REPORT_REPLY' ||
+        data.type === 'ADMIN_REPLIED_TO_REPORT' ||
+        data.type === 'consumer:report:replied'
+      ) {
         const payload = data.payload;
-        if (payload?.accountNumber && consumerRecordRef.current?.accountNumber === payload.accountNumber) {
+        const belongsToMe =
+          doesPayloadBelongToCurrentUser(payload) ||
+          doesPayloadBelongToCurrentUser(payload?.report) ||
+          doesPayloadBelongToCurrentUser(payload?.notification);
+        if (payload?.report) {
+          mockDb.mergeExternalReports([payload.report]);
+        }
+        if (payload?.notification && belongsToMe) {
+          mockDb.mergeExternalNotifications([payload.notification]);
+        }
+        if (belongsToMe) {
+          setReports(getConsumerReportsFromLocal());
+          const refreshedNotifs = getConsumerNotificationsFromLocal();
+          notifsRef.current = refreshedNotifs;
+          setNotifications(refreshedNotifs);
           toast.info(
             'New Administrative Reply',
-            payload.message || 'The water district desk replied to your report.'
+            payload?.message || 'The water district desk replied to your report.'
           );
         }
-        loadConsumerInfo(true);
+        syncConsumerReportsAndNotifications(true);
       } else if (data.type === 'ANNOUNCEMENT_PUBLISHED') {
         const ann = data.payload?.announcement;
         if (ann) {
@@ -1094,6 +1176,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         data.type === 'CONSUMER_REPORT_UPDATED' ||
         data.type === 'REPORT_STATUS_CHANGED' ||
         data.type === 'CONSUMER_REPORT_CREATED' ||
+        data.type === 'consumer:report:created' ||
+        data.type === 'CONSUMER_REPLIED_TO_REPORT'
+      ) {
+        if (data.payload?.report) {
+          mockDb.mergeExternalReports([data.payload.report]);
+          setReports(getConsumerReportsFromLocal());
+        }
+        syncConsumerReportsAndNotifications(true);
+      } else if (
         data.type === 'READING_APPROVED_BILL_ISSUED' ||
         data.type === 'bill:issued'
       ) {
@@ -1101,15 +1192,34 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       }
     });
 
-    // 5. Fallback automated polling every 5 seconds
+    // 5a. Fast 2-second lightweight live sync for Reports, Replies & Notifications
+    const reportSyncInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        syncConsumerReportsAndNotifications(true);
+      }
+    }, 2000);
+
+    // 5b. Full consumer account & billing sync every 8 seconds
     const interval = setInterval(() => {
-      loadConsumerInfo(true);
-    }, 5000);
+      if (typeof document !== 'undefined' && !document.hidden) {
+        loadConsumerInfo(true);
+      }
+    }, 8000);
+
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        syncConsumerReportsAndNotifications(true);
+        loadConsumerInfo(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
       window.removeEventListener('twd_database_updated', handleDbUpdate);
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('twd_tariff_updated', handleTariffUpdated);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      clearInterval(reportSyncInterval);
       clearInterval(interval);
       cleanupFirestoreIdentity();
       cleanupWs();
@@ -1194,7 +1304,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Unread admin reply count on filed reports
   const unreadReportsCount = reports.filter(r => r.hasUnreadAdminReply).length;
 
-  // Action: Handle clicking a notification to route accurately to the requested view (Profile, Dashboard, Bills, Reports, or Announcements)
+  // Action: Handle clicking a notification to route accurately to the requested view (Reports & Inquiries ONLY for report replies)
   const handleNotificationClick = (
     notif: ConsumerNotification,
     targetPreference?: 'dashboard' | 'bills' | 'announcements' | 'profile' | 'reports'
@@ -1212,15 +1322,25 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       }, 60);
     };
 
-    // Determine effective target: explicit button preference ALWAYS takes priority over default notification type!
+    // STRICT RULE: Report / Concern Reply notifications MUST ONLY route to Reports & Inquiries (never Dashboard or Profile)
+    if (isReportNotification(notif)) {
+      const targetReport = resolveNotificationReportTarget(notif);
+      if (targetReport) {
+        setSelectedReportId(targetReport);
+      }
+      syncConsumerReportsAndNotifications(true);
+      setActiveTab('reports');
+      scrollMainToTop();
+      return;
+    }
+
+    // Determine effective target for non-report notifications
     const effectiveTarget: 'dashboard' | 'bills' | 'announcements' | 'profile' | 'reports' =
       targetPreference ||
       (notif.type === 'account_issue'
         ? 'profile'
         : notif.type === 'announcement'
         ? 'announcements'
-        : notif.type === 'report' || notif.reportId
-        ? 'reports'
         : notif.type === 'billing' || notif.type === 'balance'
         ? 'bills'
         : 'dashboard');
@@ -1239,8 +1359,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
 
     if (effectiveTarget === 'reports') {
-      if (notif.reportId) {
-        setSelectedReportId(notif.reportId);
+      const targetReport = resolveNotificationReportTarget(notif);
+      if (targetReport) {
+        setSelectedReportId(targetReport);
       }
       setActiveTab('reports');
       scrollMainToTop();
@@ -2196,13 +2317,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       </div>
                     ) : (
                       notifications.slice(0, 6).map((n, idx) => {
-                        const isBilling = n.type === 'billing' || n.type === 'balance';
-                        const isPayment = n.type === 'payment' || n.type === 'receipt_upload';
-                        const isAccountIssue = n.type === 'account_issue';
-                        const isDisconnection = n.type === 'disconnection';
-                        const isReport = n.type === 'report';
-                        const isPartialAlert = (n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining');
-                        const defaultTarget = isAccountIssue ? 'profile' : isBilling ? 'bills' : isReport ? 'reports' : 'dashboard';
+                        const isReport = isReportNotification(n);
+                        const isBilling = !isReport && (n.type === 'billing' || n.type === 'balance');
+                        const isPayment = !isReport && (n.type === 'payment' || n.type === 'receipt_upload');
+                        const isAccountIssue = !isReport && n.type === 'account_issue';
+                        const isDisconnection = !isReport && n.type === 'disconnection';
+                        const isPartialAlert = !isReport && ((n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining'));
+                        const defaultTarget = isReport ? 'reports' : isAccountIssue ? 'profile' : isBilling ? 'bills' : 'dashboard';
 
                         return (
                           <div
@@ -2213,26 +2334,26 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             }`}
                           >
                             <div className={`p-2 rounded-xl shrink-0 mt-0.5 border ${
-                              isDisconnection
+                              isReport
+                                ? 'bg-indigo-950/80 text-indigo-300 border-indigo-800/60'
+                                : isDisconnection
                                 ? 'bg-rose-950/80 text-rose-300 border-rose-800/60'
                                 : isAccountIssue
                                 ? 'bg-purple-950/80 text-purple-300 border-purple-800/60'
                                 : isPartialAlert
                                 ? 'bg-amber-950/80 text-amber-300 border-amber-800/60'
-                                : isReport
-                                ? 'bg-indigo-950/80 text-indigo-300 border-indigo-800/60'
                                 : isBilling
                                 ? 'bg-blue-950/80 text-blue-300 border-blue-800/60'
                                 : 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
                             }`}>
-                              {isDisconnection ? (
+                              {isReport ? (
+                                <MessageSquare className="h-4 w-4" />
+                              ) : isDisconnection ? (
                                 <AlertOctagon className="h-4 w-4" />
                               ) : isAccountIssue ? (
                                 <UserCheck className="h-4 w-4" />
                               ) : isPartialAlert ? (
                                 <AlertTriangle className="h-4 w-4" />
-                              ) : isReport ? (
-                                <MessageSquare className="h-4 w-4" />
                               ) : isBilling ? (
                                 <ReceiptText className="h-4 w-4" />
                               ) : (
@@ -2256,53 +2377,57 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   {new Date(n.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                                 </span>
                                 <div className="flex items-center gap-2">
-                                  {isAccountIssue && (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleNotificationClick(n, 'profile');
-                                      }}
-                                      className="text-[10px] font-black text-purple-300 hover:text-purple-200 bg-purple-950/70 hover:bg-purple-900/70 border border-purple-700/60 px-2 py-0.5 rounded-lg transition cursor-pointer"
-                                    >
-                                      Account Profile
-                                    </button>
-                                  )}
-                                  {(isBilling || isPayment) && (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleNotificationClick(n, 'bills');
-                                      }}
-                                      className="text-[10px] font-black text-emerald-300 hover:text-emerald-200 bg-emerald-950/70 hover:bg-emerald-900/70 border border-emerald-700/60 px-2 py-0.5 rounded-lg transition cursor-pointer"
-                                    >
-                                      My Bills
-                                    </button>
-                                  )}
-                                  {isReport && (
+                                  {isReport ? (
                                     <button
                                       type="button"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         handleNotificationClick(n, 'reports');
                                       }}
-                                      className="text-[10px] font-black text-indigo-300 hover:text-indigo-200 bg-indigo-950/70 hover:bg-indigo-900/70 border border-indigo-700/60 px-2 py-0.5 rounded-lg transition cursor-pointer"
+                                      className="text-[10px] font-black text-indigo-300 hover:text-indigo-200 bg-indigo-950/70 hover:bg-indigo-900/70 border border-indigo-700/60 px-2.5 py-0.5 rounded-lg transition flex items-center space-x-1 cursor-pointer"
                                     >
-                                      Ticket
+                                      <span>Reports & Inquiries</span>
+                                      <ChevronRight className="h-3 w-3" />
                                     </button>
+                                  ) : (
+                                    <>
+                                      {isAccountIssue && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleNotificationClick(n, 'profile');
+                                          }}
+                                          className="text-[10px] font-black text-purple-300 hover:text-purple-200 bg-purple-950/70 hover:bg-purple-900/70 border border-purple-700/60 px-2 py-0.5 rounded-lg transition cursor-pointer"
+                                        >
+                                          Account Profile
+                                        </button>
+                                      )}
+                                      {(isBilling || isPayment) && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleNotificationClick(n, 'bills');
+                                          }}
+                                          className="text-[10px] font-black text-emerald-300 hover:text-emerald-200 bg-emerald-950/70 hover:bg-emerald-900/70 border border-emerald-700/60 px-2 py-0.5 rounded-lg transition cursor-pointer"
+                                        >
+                                          My Bills
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleNotificationClick(n, 'dashboard');
+                                        }}
+                                        className="text-[10px] font-black text-blue-300 hover:text-blue-200 bg-blue-950/70 hover:bg-blue-900/70 border border-blue-700/60 px-2 py-0.5 rounded-lg transition flex items-center space-x-0.5 cursor-pointer"
+                                      >
+                                        <span>Dashboard</span>
+                                        <ChevronRight className="h-3 w-3" />
+                                      </button>
+                                    </>
                                   )}
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleNotificationClick(n, 'dashboard');
-                                    }}
-                                    className="text-[10px] font-black text-blue-300 hover:text-blue-200 bg-blue-950/70 hover:bg-blue-900/70 border border-blue-700/60 px-2 py-0.5 rounded-lg transition flex items-center space-x-0.5 cursor-pointer"
-                                  >
-                                    <span>Dashboard</span>
-                                    <ChevronRight className="h-3 w-3" />
-                                  </button>
                                 </div>
                               </div>
                             </div>
@@ -4171,7 +4296,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             consumer={consumerRecord}
             currentUser={currentUser}
             reports={reports}
-            onRefreshReports={loadConsumerInfo}
+            onRefreshReports={() => syncConsumerReportsAndNotifications(false)}
             selectedReportId={selectedReportId}
             onClearSelectedReport={() => setSelectedReportId(null)}
           />
@@ -4190,7 +4315,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   if (notifFilter === 'all') return true;
                   if (notifFilter === 'billing') return n.type === 'billing' || n.type === 'balance';
                   if (notifFilter === 'payment') return n.type === 'payment' || n.type === 'receipt_upload';
-                  if (notifFilter === 'account_issue') return n.type === 'account_issue' || n.type === 'disconnection' || n.type === 'report';
+                  if (notifFilter === 'account_issue') return n.type === 'account_issue' || n.type === 'disconnection' || isReportNotification(n);
                   if (notifFilter === 'announcement') return false;
                   return notifFilter === n.type;
                 })
@@ -4329,45 +4454,46 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     <div className="grid grid-cols-1 gap-4">
                   {/* Account, Payment & Billing Notifications */}
                   {filteredNotifications.map((n, idx) => {
-                    const isBilling = n.type === 'billing' || n.type === 'balance';
-                    const isPayment = n.type === 'payment' || n.type === 'receipt_upload';
-                    const isAccountIssue = n.type === 'account_issue';
-                    const isDisconnection = n.type === 'disconnection';
-                    const isReport = n.type === 'report';
-                    const isReceiptUpload = n.type === 'receipt_upload';
-                    const isPartialAlert = (n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining');
+                    const isReport = isReportNotification(n);
+                    const isBilling = !isReport && (n.type === 'billing' || n.type === 'balance');
+                    const isPayment = !isReport && (n.type === 'payment' || n.type === 'receipt_upload');
+                    const isAccountIssue = !isReport && n.type === 'account_issue';
+                    const isDisconnection = !isReport && n.type === 'disconnection';
+                    const isReceiptUpload = !isReport && n.type === 'receipt_upload';
+                    const isPartialAlert = !isReport && ((n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining'));
 
                     return (
                       <div 
-                        key={`notif-tab-${n.id || idx}`} 
-                        className={`border rounded-2xl p-5 shadow-md flex flex-col lg:flex-row items-start justify-between gap-4 transition ${
+                        key={`notif-tab-${n.id || idx}`}
+                        onClick={() => handleNotificationClick(n)}
+                        className={`border rounded-2xl p-5 shadow-md flex flex-col lg:flex-row items-start justify-between gap-4 transition cursor-pointer ${
                           !n.read
-                            ? 'bg-blue-950/30 border-blue-500/50 text-white'
+                            ? 'bg-blue-950/30 border-blue-500/50 text-white hover:border-blue-400/70'
                             : 'bg-slate-900 border-slate-800 text-slate-100 hover:border-slate-700'
                         }`}
                       >
                         <div className="flex items-start space-x-3.5">
                           <div className={`p-2.5 rounded-xl border shrink-0 mt-0.5 ${
-                            isDisconnection
+                            isReport
+                              ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
+                              : isDisconnection
                               ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
                               : isAccountIssue
                               ? 'bg-purple-500/15 text-purple-400 border-purple-500/30'
                               : isPartialAlert
                               ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                              : isReport
-                              ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
                               : isBilling
                               ? 'bg-sky-500/15 text-sky-400 border-sky-500/30'
                               : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
                           }`}>
-                            {isDisconnection ? (
+                            {isReport ? (
+                              <MessageSquare className="h-5 w-5" />
+                            ) : isDisconnection ? (
                               <AlertOctagon className="h-5 w-5" />
                             ) : isAccountIssue ? (
                               <UserCheck className="h-5 w-5" />
                             ) : isPartialAlert ? (
                               <AlertTriangle className="h-5 w-5" />
-                            ) : isReport ? (
-                              <MessageSquare className="h-5 w-5" />
                             ) : isBilling ? (
                               <ReceiptText className="h-5 w-5" />
                             ) : (
@@ -4377,12 +4503,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           <div className="space-y-1">
                             <div className="flex flex-wrap items-center gap-2 text-xs">
                               <span className={`font-bold ${
-                                isDisconnection
+                                isReport
+                                  ? 'text-indigo-400'
+                                  : isDisconnection
                                   ? 'text-rose-400'
                                   : isAccountIssue
                                   ? 'text-purple-400'
-                                  : isReport
-                                  ? 'text-indigo-400'
                                   : isPartialAlert
                                   ? 'text-amber-400'
                                   : isBilling
@@ -4391,7 +4517,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   ? 'text-emerald-400'
                                   : 'text-emerald-400'
                               }`}>
-                                {isDisconnection ? 'Disconnection Notice' : isAccountIssue ? 'Account & ID Notice' : isReport ? 'Concern Reply' : isPartialAlert ? 'Remaining Balance' : isBilling ? 'Bill Issued' : isReceiptUpload ? 'Receipt Verified' : 'Payment Success'}
+                                {isReport ? 'Reports & Inquiries' : isDisconnection ? 'Disconnection Notice' : isAccountIssue ? 'Account & ID Notice' : isPartialAlert ? 'Remaining Balance' : isBilling ? 'Bill Issued' : isReceiptUpload ? 'Receipt Verified' : 'Payment Success'}
                               </span>
                               <span aria-hidden="true" className="text-slate-600">·</span>
                               <span className="text-[11px] font-mono tabular-nums text-slate-400">
@@ -4410,73 +4536,91 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 self-end lg:self-center shrink-0">
-                          {/* View Account Profile Button */}
-                          <button
-                            type="button"
-                            onClick={() => handleNotificationClick(n, 'profile')}
-                            className="px-3.5 py-2 bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 font-bold text-xs rounded-xl border border-purple-700/60 transition flex items-center space-x-1.5 cursor-pointer"
-                            title="Navigate to My Account Profile"
-                          >
-                            <UserCheck className="h-3.5 w-3.5 text-purple-400" />
-                            <span>View Account Profile</span>
-                          </button>
-
-                          {/* View on Dashboard Button */}
-                          <button
-                            type="button"
-                            onClick={() => handleNotificationClick(n, 'dashboard')}
-                            className="px-3.5 py-2 bg-blue-950/60 hover:bg-blue-900/80 text-blue-200 font-bold text-xs rounded-xl border border-blue-700/60 transition flex items-center space-x-1.5 cursor-pointer"
-                            title="Navigate to Consumer Dashboard"
-                          >
-                            <LayoutDashboard className="h-3.5 w-3.5 text-blue-400" />
-                            <span>View on Dashboard</span>
-                          </button>
-
-                          {/* View in Reports Button */}
-                          {isReport && (
+                          {isReport ? (
                             <button
                               type="button"
-                              onClick={() => handleNotificationClick(n, 'reports')}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleNotificationClick(n, 'reports');
+                              }}
                               className="px-3.5 py-2 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-200 font-bold text-xs rounded-xl border border-indigo-700/60 transition flex items-center space-x-1.5 cursor-pointer"
+                              title="Open in Reports & Inquiries"
                             >
                               <MessageSquare className="h-3.5 w-3.5 text-indigo-400" />
-                              <span>View Concern Ticket</span>
+                              <span>Reports & Inquiries</span>
                             </button>
-                          )}
+                          ) : (
+                            <>
+                              {/* View Account Profile Button (for Account & ID notifications) */}
+                              {isAccountIssue && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleNotificationClick(n, 'profile');
+                                  }}
+                                  className="px-3.5 py-2 bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 font-bold text-xs rounded-xl border border-purple-700/60 transition flex items-center space-x-1.5 cursor-pointer"
+                                  title="Navigate to My Account Profile"
+                                >
+                                  <UserCheck className="h-3.5 w-3.5 text-purple-400" />
+                                  <span>View Account Profile</span>
+                                </button>
+                              )}
 
-                          {/* View in Bills Button */}
-                          {(isBilling || isPayment) && (
-                            <button
-                              type="button"
-                              onClick={() => handleNotificationClick(n, 'bills')}
-                              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl border border-slate-700 transition flex items-center space-x-1.5 cursor-pointer"
-                              title="View Statement in My Bills"
-                            >
-                              <ReceiptText className="h-3.5 w-3.5 text-sky-400" />
-                              <span>View in Bills</span>
-                            </button>
-                          )}
+                              {/* View on Dashboard Button */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleNotificationClick(n, 'dashboard');
+                                }}
+                                className="px-3.5 py-2 bg-blue-950/60 hover:bg-blue-900/80 text-blue-200 font-bold text-xs rounded-xl border border-blue-700/60 transition flex items-center space-x-1.5 cursor-pointer"
+                                title="Navigate to Consumer Dashboard"
+                              >
+                                <LayoutDashboard className="h-3.5 w-3.5 text-blue-400" />
+                                <span>View on Dashboard</span>
+                              </button>
 
-                          {/* Direct Pay Action if Unpaid */}
-                          {isBilling && unpaidBills.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const targetBill = readings.find(r => r.id === n.readingId || r.billingPeriod === n.billingPeriod) || unpaidBills[0];
-                                setActiveTab('bills');
-                                handleStartPayment(targetBill, 'full');
-                              }}
-                              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
-                            >
-                              <CreditCard className="h-3.5 w-3.5" />
-                              <span>Settle Now</span>
-                            </button>
+                              {/* View in Bills Button */}
+                              {(isBilling || isPayment) && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleNotificationClick(n, 'bills');
+                                  }}
+                                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl border border-slate-700 transition flex items-center space-x-1.5 cursor-pointer"
+                                  title="View Statement in My Bills"
+                                >
+                                  <ReceiptText className="h-3.5 w-3.5 text-sky-400" />
+                                  <span>View in Bills</span>
+                                </button>
+                              )}
+
+                              {/* Direct Pay Action if Unpaid */}
+                              {isBilling && unpaidBills.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const targetBill = readings.find(r => r.id === n.readingId || r.billingPeriod === n.billingPeriod) || unpaidBills[0];
+                                    setActiveTab('bills');
+                                    handleStartPayment(targetBill, 'full');
+                                  }}
+                                  className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
+                                >
+                                  <CreditCard className="h-3.5 w-3.5" />
+                                  <span>Settle Now</span>
+                                </button>
+                              )}
+                            </>
                           )}
 
                           {!n.read && (
                             <button
                               type="button"
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 mockDb.markNotificationRead(n.id);
                                 setNotifications(prev => prev.map(item => item.id === n.id ? { ...item, read: true } : item));
                               }}

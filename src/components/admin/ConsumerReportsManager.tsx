@@ -156,6 +156,38 @@ export function ConsumerReportsManager({
     }
   }, [activeReport?.replies?.length]);
 
+  // Keep activeReport live-synced when reports prop receives new consumer follow-up messages
+  React.useEffect(() => {
+    if (!activeReport) return;
+    const latest = reports.find(
+      r => r.id === activeReport.id || r.ticketNumber === activeReport.ticketNumber
+    );
+    if (
+      latest &&
+      (latest.updatedAt !== activeReport.updatedAt ||
+        latest.status !== activeReport.status ||
+        latest.replies.length !== activeReport.replies.length)
+    ) {
+      setActiveReport(latest);
+      if (latest.hasUnreadConsumerUpdate) {
+        mockDb.markReportReadByAdmin(latest.id);
+      }
+    }
+  }, [reports, activeReport?.id]);
+
+  // Fast 2-second live sync while Admin is viewing Customer Service & Consumer Inquiries
+  const refreshReportsRef = React.useRef(onRefreshReports);
+  refreshReportsRef.current = onRefreshReports;
+  React.useEffect(() => {
+    refreshReportsRef.current();
+    const timer = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        refreshReportsRef.current();
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, []);
+
   // Filtered reports
   const filteredReports = reports.filter(r => {
     if (statusFilter !== 'all' && r.status !== statusFilter) return false;
@@ -218,50 +250,80 @@ export function ConsumerReportsManager({
       return;
     }
 
+    const cleanReplyText = replyText.trim();
+    const cleanCrew = assignedCrew.trim() || undefined;
+    const targetReportSnapshot = activeReport;
+
     setIsSubmittingReply(true);
     try {
       const replyData = {
         senderId: currentUser.id || 'admin',
         senderName: currentUser.name || 'Admin',
         senderRole: 'admin' as const,
-        message: replyText.trim(),
+        message: cleanReplyText,
         statusUpdate: replyStatus,
-        assignedStaff: assignedCrew.trim() || undefined
+        assignedStaff: cleanCrew
       };
 
-      // 1. Save in mockDb (which also adds notification to consumer!)
-      const updated = mockDb.replyToReport(activeReport.id, replyData, replyStatus, assignedCrew.trim() || undefined);
+      // 1. Save immediately in local store (0ms — also generates consumer report notification)
+      const updated = mockDb.replyToReport(targetReportSnapshot.id, replyData, replyStatus, cleanCrew);
 
-      // 2. Sync to backend API (include report snapshot so server upserts cleanly and never 404s)
-      try {
-        await apiClient.replyToReport(activeReport.id, {
-          ...replyData,
-          report: activeReport,
-        });
-      } catch (apiErr) {
-        console.warn('[Admin Reply API Sync Warning]:', apiErr);
-      }
+      // Find the newly generated report notification so BroadcastChannel / WebSocket delivers it in 0ms
+      const createdReportNotif = updated
+        ? mockDb
+            .getNotifications(updated.accountNumber, { email: updated.consumerEmail })
+            .find(n => n.type === 'report' && (n.reportId === updated.id || n.ticketNumber === updated.ticketNumber))
+        : undefined;
 
-      // 3. Broadcast real-time reply over WebSocket to Consumer Portal
+      // 2. Broadcast immediately via BroadcastChannel + WebSocket (0ms across tabs & connected clients)
       if (updated) {
         sendRealtimeMessage('ADMIN_REPLIED_TO_REPORT', {
           report: updated,
+          notification: createdReportNotif,
           accountNumber: updated.accountNumber,
+          consumerEmail: updated.consumerEmail,
           ticketNumber: updated.ticketNumber,
           message: `Admin ${replyData.senderName} responded to Ticket #${updated.ticketNumber}: "${replyData.message}" (Status: ${(replyStatus || updated.status).toUpperCase()})`,
         });
+        if (createdReportNotif) {
+          sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
+            notification: createdReportNotif,
+            accountNumber: updated.accountNumber,
+            consumerEmail: updated.consumerEmail,
+          });
+        }
       }
 
-      toast.success(
-        'Reply Transmitted to Consumer',
-        `Official response logged for Ticket #${activeReport.ticketNumber}. Consumer Account #${activeReport.accountNumber} has been notified.`
-      );
-
+      // 3. Update Admin UI immediately without waiting for network roundtrip
       setReplyText('');
       if (updated) {
         setActiveReport(updated);
       }
       onRefreshReports();
+
+      toast.success(
+        'Reply Transmitted to Consumer',
+        `Official response logged for Ticket #${targetReportSnapshot.ticketNumber}. Consumer Account #${targetReportSnapshot.accountNumber} has been notified.`
+      );
+
+      // 4. Persist asynchronously to backend API (include report snapshot so server upserts cleanly)
+      apiClient
+        .replyToReport(targetReportSnapshot.id, {
+          ...replyData,
+          report: updated || targetReportSnapshot,
+        })
+        .then((res) => {
+          if (res?.report) {
+            mockDb.mergeExternalReports([res.report]);
+            onRefreshReports();
+          }
+          if (res?.notification) {
+            mockDb.mergeExternalNotifications([res.notification]);
+          }
+        })
+        .catch((apiErr) => {
+          console.warn('[Admin Reply API Sync Warning]:', apiErr);
+        });
     } catch (err: any) {
       toast.error('Failed to Send Reply', err?.message || 'Error communicating with server.');
     } finally {
