@@ -261,6 +261,7 @@ interface PortalSyncUser {
   email: string;
   name: string;
   password?: string;
+  passwordUpdatedAt?: number;
   role: string;
   status: string;
   linkedAccountNumber?: string;
@@ -405,18 +406,59 @@ function recordFsErr(err: unknown, mode: "read" | "write"): void {
   }
 }
 
+function dedupeServerReplies(replies: ServerReportReply[]): ServerReportReply[] {
+  if (!Array.isArray(replies)) return [];
+  const sorted = [...replies]
+    .filter((r) => r && typeof r.message === "string" && r.message.trim().length > 0)
+    .sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
+
+  const byId = new Set<string>();
+  const result: ServerReportReply[] = [];
+  let hasAutoAck = false;
+
+  for (const rep of sorted) {
+    const cleanId = String(rep.id || "").trim();
+    if (cleanId && byId.has(cleanId)) continue;
+
+    const isAutoAck =
+      cleanId.startsWith("ACK-") ||
+      rep.senderId === "system-admin-ack" ||
+      (rep.senderRole === "admin" && rep.message.includes("officially received by Tagoloan Water District"));
+    if (isAutoAck) {
+      if (hasAutoAck) continue;
+      hasAutoAck = true;
+    }
+
+    const normMsg = rep.message.trim().replace(/\s+/g, " ").toLowerCase();
+    const repTime = new Date(rep.timestamp || 0).getTime();
+    const semanticDupIdx = result.findIndex((existing) => {
+      if (existing.senderRole !== rep.senderRole) return false;
+      const exMsg = existing.message.trim().replace(/\s+/g, " ").toLowerCase();
+      if (exMsg !== normMsg) return false;
+      const exTime = new Date(existing.timestamp || 0).getTime();
+      if (!exTime || !repTime) return true;
+      return Math.abs(repTime - exTime) < 5 * 60 * 1000;
+    });
+
+    if (semanticDupIdx >= 0) {
+      if (rep.statusUpdate && !result[semanticDupIdx].statusUpdate) {
+        result[semanticDupIdx] = { ...result[semanticDupIdx], statusUpdate: rep.statusUpdate };
+      }
+      if (cleanId) byId.add(cleanId);
+      continue;
+    }
+
+    if (cleanId) byId.add(cleanId);
+    result.push(rep);
+  }
+
+  return result;
+}
+
 function mergeServerReportPair(existing: ServerConsumerReport, incoming: ServerConsumerReport): ServerConsumerReport {
   const exReplies = Array.isArray(existing.replies) ? existing.replies : [];
   const inReplies = Array.isArray(incoming.replies) ? incoming.replies : [];
-  const replyMap = new Map<string, ServerReportReply>();
-  for (const rep of [...exReplies, ...inReplies]) {
-    if (!rep) continue;
-    const key = rep.id || `${rep.senderRole}_${rep.message}_${rep.timestamp}`;
-    if (!replyMap.has(key)) replyMap.set(key, rep);
-  }
-  const mergedReplies = Array.from(replyMap.values()).sort(
-    (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
-  );
+  const mergedReplies = dedupeServerReplies([...exReplies, ...inReplies]);
   const inTime = new Date(incoming.updatedAt || incoming.createdAt || 0).getTime();
   const exTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
   const incomingNewer = inTime > exTime || (inTime === exTime && inReplies.length >= exReplies.length);
@@ -535,13 +577,23 @@ async function fetchAllUsersFromFirestore(): Promise<PortalSyncUser[]> {
       } else {
         const uHasAcc = isRealAccountNumber(u.linkedAccountNumber);
         const prevHasAcc = isRealAccountNumber(prev.linkedAccountNumber);
+        const uPwTs = Number(u.passwordUpdatedAt || 0);
+        const prevPwTs = Number(prev.passwordUpdatedAt || 0);
+        const chosenPassword =
+          uPwTs > prevPwTs
+            ? u.password || prev.password
+            : prevPwTs > uPwTs
+              ? prev.password || u.password
+              : u.password || prev.password;
+        const chosenPwTs = Math.max(uPwTs, prevPwTs) || undefined;
         map.set(key, {
           ...prev,
           ...u,
           id: prev.id && !prev.id.startsWith("email_") ? prev.id : u.id,
           linkedAccountNumber: uHasAcc ? u.linkedAccountNumber : prevHasAcc ? prev.linkedAccountNumber : u.linkedAccountNumber,
           status: uHasAcc || prevHasAcc || u.status === "active" || prev.status === "active" ? "active" : u.status || prev.status,
-          password: u.password || prev.password,
+          password: chosenPassword,
+          ...(chosenPwTs ? { passwordUpdatedAt: chosenPwTs } : {}),
         });
       }
     };
@@ -562,6 +614,7 @@ async function saveConsumerToFirestore(
   userPatch?: Partial<PortalSyncUser>,
   notif?: PortalNotification
 ): Promise<void> {
+  if (!canWriteFs()) return;
   const cleanEmail = String(record.email || "").trim().toLowerCase();
   const acc = isRealAccountNumber(record.accountNumber) ? String(record.accountNumber).replace(/^#/, "").trim().toUpperCase() : "";
   const uid = String(record.linkedUserId || "").trim();
@@ -586,7 +639,9 @@ async function saveConsumerToFirestore(
 
   const writes: Promise<unknown>[] = [];
   for (const id of docIds) {
-    writes.push(setDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, id), cleanRecord, { merge: true }).catch(() => {}));
+    writes.push(
+      setDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, id), cleanRecord, { merge: true }).catch((err) => recordFsErr(err, "write"))
+    );
   }
 
   // When saving an issued consumer, also delete any stale pending twin documents in Firestore
@@ -833,7 +888,7 @@ app.post("/api/consumers/reconcile", async (req, res) => {
 // POST /api/consumers/resolve-account - Authoritative Case-Insensitive Cross-Device Account & ID Resolution
 app.post("/api/consumers/resolve-account", async (req, res) => {
   try {
-    const { email, userId, accountNumber, name, contactNumber, password, verifyPassword } = req.body || {};
+    const { email, userId, accountNumber, name, contactNumber, password, verifyPassword, includeAuthMeta } = req.body || {};
     const rawEmail = String(email || "").trim();
     const cleanEmail = rawEmail.toLowerCase();
     const cleanUid = String(userId || "").trim();
@@ -841,34 +896,60 @@ app.post("/api/consumers/resolve-account", async (req, res) => {
     const cleanName = String(name || "").trim().toLowerCase();
     const cleanPhone = normalizePhone(contactNumber);
 
-    // 1. Resolve User from Firestore (including case-insensitive scan fallback)
+    // 1. Prepend warm in-memory users first so password updates take immediate effect even during Firestore quota cooldown
     const userCandidates: PortalSyncUser[] = [];
-    if (cleanEmail) {
-      const eDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.USERS, sanitizeEmailDocId(cleanEmail))).catch(() => null);
-      if (eDoc && eDoc.exists()) userCandidates.push(eDoc.data() as PortalSyncUser);
-      const uSnap = await getDocs(
-        query(collection(fsDb, FS_COLLECTIONS.USERS), where("email", "==", cleanEmail), limit(5))
-      ).catch(() => null);
-      if (uSnap) uSnap.forEach((d) => userCandidates.push({ id: d.id, ...(d.data() as PortalSyncUser) }));
-      if (rawEmail && rawEmail !== cleanEmail) {
-        const rawSnap = await getDocs(
-          query(collection(fsDb, FS_COLLECTIONS.USERS), where("email", "==", rawEmail), limit(5))
-        ).catch(() => null);
-        if (rawSnap) rawSnap.forEach((d) => userCandidates.push({ id: d.id, ...(d.data() as PortalSyncUser) }));
+    syncedUsers.forEach((u) => {
+      const uEmail = (u.email || "").trim().toLowerCase();
+      const uAcc = isRealAccountNumber(u.linkedAccountNumber) ? u.linkedAccountNumber!.trim().toUpperCase() : "";
+      if (
+        (cleanEmail && uEmail === cleanEmail) ||
+        (cleanUid && u.id === cleanUid) ||
+        (cleanAcc && uAcc === cleanAcc)
+      ) {
+        userCandidates.push(u);
       }
-    }
-    if (cleanUid) {
-      const idDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.USERS, sanitizeDocId(cleanUid))).catch(() => null);
-      if (idDoc && idDoc.exists()) userCandidates.push(idDoc.data() as PortalSyncUser);
-    }
+    });
 
-    if (userCandidates.length === 0 && (cleanEmail || cleanUid)) {
-      const allUsers = await fetchAllUsersFromFirestore();
-      allUsers.forEach((u) => {
-        if ((cleanEmail && (u.email || "").trim().toLowerCase() === cleanEmail) || (cleanUid && u.id === cleanUid)) {
-          userCandidates.push(u);
+    if (canReadFs()) {
+      if (cleanEmail) {
+        const eDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.USERS, sanitizeEmailDocId(cleanEmail))).catch((err) => {
+          recordFsErr(err, "read");
+          return null;
+        });
+        if (eDoc && eDoc.exists()) userCandidates.push(eDoc.data() as PortalSyncUser);
+        const uSnap = await getDocs(
+          query(collection(fsDb, FS_COLLECTIONS.USERS), where("email", "==", cleanEmail), limit(5))
+        ).catch((err) => {
+          recordFsErr(err, "read");
+          return null;
+        });
+        if (uSnap) uSnap.forEach((d) => userCandidates.push({ id: d.id, ...(d.data() as PortalSyncUser) }));
+        if (rawEmail && rawEmail !== cleanEmail) {
+          const rawSnap = await getDocs(
+            query(collection(fsDb, FS_COLLECTIONS.USERS), where("email", "==", rawEmail), limit(5))
+          ).catch((err) => {
+            recordFsErr(err, "read");
+            return null;
+          });
+          if (rawSnap) rawSnap.forEach((d) => userCandidates.push({ id: d.id, ...(d.data() as PortalSyncUser) }));
         }
-      });
+      }
+      if (cleanUid) {
+        const idDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.USERS, sanitizeDocId(cleanUid))).catch((err) => {
+          recordFsErr(err, "read");
+          return null;
+        });
+        if (idDoc && idDoc.exists()) userCandidates.push(idDoc.data() as PortalSyncUser);
+      }
+
+      if (userCandidates.length === 0 && (cleanEmail || cleanUid)) {
+        const allUsers = await fetchAllUsersFromFirestore();
+        allUsers.forEach((u) => {
+          if ((cleanEmail && (u.email || "").trim().toLowerCase() === cleanEmail) || (cleanUid && u.id === cleanUid)) {
+            userCandidates.push(u);
+          }
+        });
+      }
     }
 
     let resolvedUser: PortalSyncUser | null = null;
@@ -878,6 +959,15 @@ app.post("/api/consumers/resolve-account", async (req, res) => {
       } else {
         const hasAcc = isRealAccountNumber(u.linkedAccountNumber);
         const prevAcc = isRealAccountNumber(resolvedUser.linkedAccountNumber);
+        const uPwTs = Number(u.passwordUpdatedAt || 0);
+        const prevPwTs = Number(resolvedUser.passwordUpdatedAt || 0);
+        const chosenPassword =
+          uPwTs > prevPwTs
+            ? u.password || resolvedUser.password
+            : prevPwTs > uPwTs
+              ? resolvedUser.password || u.password
+              : resolvedUser.password || u.password;
+        const chosenPwTs = Math.max(uPwTs, prevPwTs) || undefined;
         resolvedUser = {
           ...resolvedUser,
           ...u,
@@ -891,16 +981,21 @@ app.post("/api/consumers/resolve-account", async (req, res) => {
             hasAcc || prevAcc || u.status === "active" || resolvedUser.status === "active"
               ? "active"
               : u.status || resolvedUser.status,
-          password: resolvedUser.password || u.password,
+          password: chosenPassword,
+          ...(chosenPwTs ? { passwordUpdatedAt: chosenPwTs } : {}),
         };
       }
     }
+
+    const passwordVerified = Boolean(
+      resolvedUser?.password && password !== undefined && resolvedUser.password === String(password).trim()
+    );
 
     if (
       verifyPassword &&
       resolvedUser?.password &&
       password !== undefined &&
-      resolvedUser.password !== String(password).trim()
+      !passwordVerified
     ) {
       return res.status(401).json({
         success: false,
@@ -917,59 +1012,96 @@ app.post("/api/consumers/resolve-account", async (req, res) => {
     const effectiveEmail = cleanEmail || (resolvedUser?.email || "").trim().toLowerCase();
     const effectiveUid = cleanUid || (resolvedUser?.id || "").trim();
 
-    // 2. Resolve Consumer from Firestore (direct + case-insensitive full scan fallback)
+    // 2. Resolve Consumer from warm cache + Firestore
     const consumerCandidates: MobileConsumerRecord[] = [];
-    if (effectiveAcc) {
-      const aDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeDocId(effectiveAcc))).catch(() => null);
-      if (aDoc && aDoc.exists()) consumerCandidates.push(aDoc.data() as MobileConsumerRecord);
-      const aSnap = await getDocs(
-        query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), where("accountNumber", "==", effectiveAcc), limit(3))
-      ).catch(() => null);
-      if (aSnap) aSnap.forEach((d) => consumerCandidates.push(d.data() as MobileConsumerRecord));
-    }
-    if (effectiveEmail) {
-      const eDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeEmailDocId(effectiveEmail))).catch(() => null);
-      if (eDoc && eDoc.exists()) consumerCandidates.push(eDoc.data() as MobileConsumerRecord);
-      const eSnap = await getDocs(
-        query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), where("email", "==", effectiveEmail), limit(5))
-      ).catch(() => null);
-      if (eSnap) eSnap.forEach((d) => consumerCandidates.push(d.data() as MobileConsumerRecord));
-      if (rawEmail && rawEmail !== effectiveEmail) {
-        const rawCSnap = await getDocs(
-          query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), where("email", "==", rawEmail), limit(5))
-        ).catch(() => null);
-        if (rawCSnap) rawCSnap.forEach((d) => consumerCandidates.push(d.data() as MobileConsumerRecord));
+    syncedConsumers.forEach((c) => {
+      const cEmail = (c.email || "").trim().toLowerCase();
+      const cPhone = normalizePhone(c.contactNumber);
+      const cName = (c.name || "").trim().toLowerCase();
+      if (
+        (effectiveAcc && (c.accountNumber || "").toUpperCase() === effectiveAcc) ||
+        (effectiveEmail && cEmail === effectiveEmail) ||
+        (effectiveUid && c.linkedUserId === effectiveUid) ||
+        (cleanPhone && cPhone && cleanPhone === cPhone) ||
+        (cleanName && cName === cleanName && (!effectiveEmail || !cEmail || effectiveEmail === cEmail))
+      ) {
+        consumerCandidates.push(c);
       }
-    }
-    if (effectiveUid) {
-      const uDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeDocId(effectiveUid))).catch(() => null);
-      if (uDoc && uDoc.exists()) consumerCandidates.push(uDoc.data() as MobileConsumerRecord);
-      const uSnap = await getDocs(
-        query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), where("linkedUserId", "==", effectiveUid), limit(5))
-      ).catch(() => null);
-      if (uSnap) uSnap.forEach((d) => consumerCandidates.push(d.data() as MobileConsumerRecord));
-    }
+    });
 
-    // Case-insensitive scan across all consumers if no active issued record found yet
-    const hasIssuedDirect = consumerCandidates.some(
-      (c) => isRealAccountNumber(c.accountNumber) && c.status !== "pending_approval"
-    );
-    if (!hasIssuedDirect) {
-      const allConsumers = await fetchAllConsumersFromFirestore();
-      allConsumers.forEach((c) => {
-        const cEmail = (c.email || "").trim().toLowerCase();
-        const cPhone = normalizePhone(c.contactNumber);
-        const cName = (c.name || "").trim().toLowerCase();
-        if (
-          (effectiveAcc && (c.accountNumber || "").toUpperCase() === effectiveAcc) ||
-          (effectiveEmail && cEmail === effectiveEmail) ||
-          (effectiveUid && c.linkedUserId === effectiveUid) ||
-          (cleanPhone && cPhone && cleanPhone === cPhone) ||
-          (cleanName && cName === cleanName && (!effectiveEmail || !cEmail || effectiveEmail === cEmail))
-        ) {
-          consumerCandidates.push(c);
+    if (canReadFs()) {
+      if (effectiveAcc) {
+        const aDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeDocId(effectiveAcc))).catch((err) => {
+          recordFsErr(err, "read");
+          return null;
+        });
+        if (aDoc && aDoc.exists()) consumerCandidates.push(aDoc.data() as MobileConsumerRecord);
+        const aSnap = await getDocs(
+          query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), where("accountNumber", "==", effectiveAcc), limit(3))
+        ).catch((err) => {
+          recordFsErr(err, "read");
+          return null;
+        });
+        if (aSnap) aSnap.forEach((d) => consumerCandidates.push(d.data() as MobileConsumerRecord));
+      }
+      if (effectiveEmail) {
+        const eDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeEmailDocId(effectiveEmail))).catch((err) => {
+          recordFsErr(err, "read");
+          return null;
+        });
+        if (eDoc && eDoc.exists()) consumerCandidates.push(eDoc.data() as MobileConsumerRecord);
+        const eSnap = await getDocs(
+          query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), where("email", "==", effectiveEmail), limit(5))
+        ).catch((err) => {
+          recordFsErr(err, "read");
+          return null;
+        });
+        if (eSnap) eSnap.forEach((d) => consumerCandidates.push(d.data() as MobileConsumerRecord));
+        if (rawEmail && rawEmail !== effectiveEmail) {
+          const rawCSnap = await getDocs(
+            query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), where("email", "==", rawEmail), limit(5))
+          ).catch((err) => {
+            recordFsErr(err, "read");
+            return null;
+          });
+          if (rawCSnap) rawCSnap.forEach((d) => consumerCandidates.push(d.data() as MobileConsumerRecord));
         }
-      });
+      }
+      if (effectiveUid) {
+        const uDoc = await getDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeDocId(effectiveUid))).catch((err) => {
+          recordFsErr(err, "read");
+          return null;
+        });
+        if (uDoc && uDoc.exists()) consumerCandidates.push(uDoc.data() as MobileConsumerRecord);
+        const uSnap = await getDocs(
+          query(collection(fsDb, FS_COLLECTIONS.CONSUMERS), where("linkedUserId", "==", effectiveUid), limit(5))
+        ).catch((err) => {
+          recordFsErr(err, "read");
+          return null;
+        });
+        if (uSnap) uSnap.forEach((d) => consumerCandidates.push(d.data() as MobileConsumerRecord));
+      }
+
+      const hasIssuedDirect = consumerCandidates.some(
+        (c) => isRealAccountNumber(c.accountNumber) && c.status !== "pending_approval"
+      );
+      if (!hasIssuedDirect) {
+        const allConsumers = await fetchAllConsumersFromFirestore();
+        allConsumers.forEach((c) => {
+          const cEmail = (c.email || "").trim().toLowerCase();
+          const cPhone = normalizePhone(c.contactNumber);
+          const cName = (c.name || "").trim().toLowerCase();
+          if (
+            (effectiveAcc && (c.accountNumber || "").toUpperCase() === effectiveAcc) ||
+            (effectiveEmail && cEmail === effectiveEmail) ||
+            (effectiveUid && c.linkedUserId === effectiveUid) ||
+            (cleanPhone && cPhone && cleanPhone === cPhone) ||
+            (cleanName && cName === cleanName && (!effectiveEmail || !cEmail || effectiveEmail === cEmail))
+          ) {
+            consumerCandidates.push(c);
+          }
+        });
+      }
     }
 
     const mergedConsumers = mergeConsumersList(consumerCandidates);
@@ -1015,31 +1147,46 @@ app.post("/api/consumers/resolve-account", async (req, res) => {
       };
     }
 
-    // 3. Resolve Notifications from Firestore
+    // 3. Resolve Notifications from warm cache + Firestore
     const notifMap = new Map<string, PortalNotification>();
-    const collectNotifs = async (field: string, value: string) => {
-      if (!value) return;
-      const snap = await getDocs(
-        query(collection(fsDb, FS_COLLECTIONS.NOTIFICATIONS), where(field, "==", value), limit(30))
-      ).catch(() => null);
-      if (snap) {
-        snap.forEach((d) => {
-          const n = d.data() as PortalNotification;
-          if (n && n.title) notifMap.set(n.id || d.id, { ...n, id: n.id || d.id });
-        });
+    syncedNotifications.forEach((n) => {
+      if (
+        (finalAcc && (n.accountNumber || "").toUpperCase() === finalAcc) ||
+        (effectiveEmail && (n.consumerEmail || "").toLowerCase() === effectiveEmail) ||
+        (effectiveUid && n.userId === effectiveUid)
+      ) {
+        notifMap.set(n.id, n);
       }
-    };
+    });
 
-    await Promise.all([
-      collectNotifs("accountNumber", finalAcc),
-      collectNotifs("consumerEmail", effectiveEmail),
-      ...(rawEmail && rawEmail !== effectiveEmail ? [collectNotifs("consumerEmail", rawEmail)] : []),
-      collectNotifs("userId", effectiveUid || resolvedConsumer?.linkedUserId || ""),
-    ]);
+    if (canReadFs()) {
+      const collectNotifs = async (field: string, value: string) => {
+        if (!value) return;
+        const snap = await getDocs(
+          query(collection(fsDb, FS_COLLECTIONS.NOTIFICATIONS), where(field, "==", value), limit(30))
+        ).catch((err) => {
+          recordFsErr(err, "read");
+          return null;
+        });
+        if (snap) {
+          snap.forEach((d) => {
+            const n = d.data() as PortalNotification;
+            if (n && n.title) notifMap.set(n.id || d.id, { ...n, id: n.id || d.id });
+          });
+        }
+      };
+
+      await Promise.all([
+        collectNotifs("accountNumber", finalAcc),
+        collectNotifs("consumerEmail", effectiveEmail),
+        ...(rawEmail && rawEmail !== effectiveEmail ? [collectNotifs("consumerEmail", rawEmail)] : []),
+        collectNotifs("userId", effectiveUid || resolvedConsumer?.linkedUserId || ""),
+      ]);
+    }
 
     const notifications = Array.from(notifMap.values());
 
-    // Self-heal issuance notification & active user link in Firestore if issued
+    // Self-heal issuance notification & active user link ONLY when notification was genuinely missing
     if (isIssued && resolvedConsumer) {
       const hasIssuanceNotif = notifications.some(
         (n) => n.type === "account_issue" && !(n.title || "").toLowerCase().includes("registration application submitted")
@@ -1069,19 +1216,24 @@ app.post("/api/consumers/resolve-account", async (req, res) => {
         };
       }
 
-      await saveConsumerToFirestore(resolvedConsumer, resolvedUser || undefined, backfilledNotif);
+      if (backfilledNotif && canWriteFs()) {
+        await saveConsumerToFirestore(resolvedConsumer, resolvedUser || undefined, backfilledNotif);
+      }
     }
 
     const safeUser = resolvedUser
-      ? (() => {
-          const { password: _pw, ...rest } = resolvedUser;
-          return rest;
-        })()
+      ? includeAuthMeta
+        ? resolvedUser
+        : (() => {
+            const { password: _pw, ...rest } = resolvedUser;
+            return rest;
+          })()
       : null;
 
     res.json({
       success: true,
       isIssued,
+      passwordVerified,
       user: safeUser,
       consumer: resolvedConsumer,
       notifications,
@@ -1093,6 +1245,138 @@ app.post("/api/consumers/resolve-account", async (req, res) => {
       user: null,
       consumer: null,
       notifications: [],
+    });
+  }
+});
+
+// POST /api/consumers/change-password - Authoritative Consumer Password Update across all user documents
+app.post("/api/consumers/change-password", async (req, res) => {
+  try {
+    const { userId, email, accountNumber, currentPassword, newPassword, passwordUpdatedAt } = req.body || {};
+    const cleanNewPassword = String(newPassword || "").trim();
+    const cleanCurrentPassword = currentPassword !== undefined ? String(currentPassword).trim() : "";
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    const cleanUid = String(userId || "").trim();
+    const cleanAcc = isRealAccountNumber(accountNumber) ? String(accountNumber).replace(/^#/, "").trim().toUpperCase() : "";
+    const updatedTs = Number(passwordUpdatedAt) || Date.now();
+
+    if (!cleanNewPassword || cleanNewPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "New password must be at least 6 characters long.",
+      });
+    }
+
+    if (cleanCurrentPassword && cleanNewPassword === cleanCurrentPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "New password cannot be the same as your current or previous password.",
+      });
+    }
+
+    const allUsers = await fetchAllUsersFromFirestore();
+    const matchingUsers = allUsers.filter((u) => {
+      const uEmail = (u.email || "").trim().toLowerCase();
+      const uAcc = isRealAccountNumber(u.linkedAccountNumber) ? u.linkedAccountNumber!.trim().toUpperCase() : "";
+      return (
+        (cleanUid && u.id === cleanUid) ||
+        (cleanEmail && uEmail === cleanEmail) ||
+        (cleanAcc && uAcc === cleanAcc)
+      );
+    });
+
+    // Pick candidate with newest passwordUpdatedAt to verify currentPassword accurately
+    let primaryUser: PortalSyncUser | null = null;
+    for (const u of matchingUsers) {
+      if (!primaryUser || Number(u.passwordUpdatedAt || 0) >= Number(primaryUser.passwordUpdatedAt || 0)) {
+        primaryUser = { ...(primaryUser || {}), ...u, password: u.password || primaryUser?.password };
+      }
+    }
+
+    if (primaryUser?.password) {
+      if (primaryUser.password === cleanNewPassword) {
+        return res.status(400).json({
+          success: false,
+          message: "New password cannot be the same as your current or previous password.",
+        });
+      }
+      if (cleanCurrentPassword && primaryUser.password !== cleanCurrentPassword) {
+        return res.status(400).json({
+          success: false,
+          message: "Current password entered is incorrect.",
+        });
+      }
+    }
+
+    const effectiveId =
+      (primaryUser?.id && !primaryUser.id.startsWith("email_") ? primaryUser.id : "") ||
+      cleanUid ||
+      (cleanEmail ? sanitizeEmailDocId(cleanEmail) : `user-${Date.now()}`);
+    const effectiveEmail = cleanEmail || (primaryUser?.email || "").trim().toLowerCase();
+
+    const updatedUserRecord: PortalSyncUser = {
+      id: effectiveId,
+      email: effectiveEmail,
+      name: primaryUser?.name || "Consumer",
+      role: primaryUser?.role || "consumer",
+      status: primaryUser?.status || (cleanAcc ? "active" : "pending_approval"),
+      linkedAccountNumber: cleanAcc || primaryUser?.linkedAccountNumber,
+      contactNumber: primaryUser?.contactNumber,
+      registrationDate: primaryUser?.registrationDate,
+      password: cleanNewPassword,
+      passwordUpdatedAt: updatedTs,
+    };
+
+    let matchedInMem = false;
+    syncedUsers = syncedUsers.map((u) => {
+      const uEmail = (u.email || "").trim().toLowerCase();
+      const uAcc = isRealAccountNumber(u.linkedAccountNumber) ? u.linkedAccountNumber!.trim().toUpperCase() : "";
+      if (
+        (effectiveId && u.id === effectiveId) ||
+        (cleanUid && u.id === cleanUid) ||
+        (effectiveEmail && uEmail === effectiveEmail) ||
+        (cleanAcc && uAcc === cleanAcc)
+      ) {
+        matchedInMem = true;
+        return {
+          ...u,
+          password: cleanNewPassword,
+          passwordUpdatedAt: updatedTs,
+        };
+      }
+      return u;
+    });
+    if (!matchedInMem) {
+      syncedUsers.unshift(updatedUserRecord);
+    }
+
+    if (canWriteFs()) {
+      const userDocIds = new Set<string>();
+      if (effectiveId && !effectiveId.startsWith("email_")) userDocIds.add(sanitizeDocId(effectiveId));
+      if (cleanUid && !cleanUid.startsWith("email_")) userDocIds.add(sanitizeDocId(cleanUid));
+      if (effectiveEmail) userDocIds.add(sanitizeEmailDocId(effectiveEmail));
+
+      const cleanPayload = sanitizePayload(updatedUserRecord);
+      await Promise.all(
+        Array.from(userDocIds).map((docId) =>
+          setDoc(doc(fsDb, FS_COLLECTIONS.USERS, docId), cleanPayload, { merge: true }).catch((err) =>
+            recordFsErr(err, "write")
+          )
+        )
+      );
+    }
+
+    const { password: _pw, ...safeUser } = updatedUserRecord;
+    res.json({
+      success: true,
+      message: "Account password updated successfully.",
+      passwordUpdatedAt: updatedTs,
+      user: safeUser,
+    });
+  } catch {
+    res.status(500).json({
+      success: false,
+      message: "Unable to update account password right now.",
     });
   }
 });
@@ -1733,25 +2017,48 @@ app.post("/api/reports", async (req, res) => {
   try {
     const body = req.body || {};
     const now = new Date().toISOString();
+    const createdAt = body.createdAt || now;
     const id = body.id || `REP-${Date.now()}`;
     const ticketNumber =
       body.ticketNumber || `TWD-CR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const replies: ServerReportReply[] =
+    const rawReplies: ServerReportReply[] =
       Array.isArray(body.replies) && body.replies.length > 0
         ? body.replies
         : body.description
           ? [
               {
-                id: `REP-MSG-${Date.now()}`,
+                id: `INIT-${ticketNumber}`,
                 reportId: id,
                 senderId: body.accountNumber || "consumer",
                 senderName: body.consumerName || "Consumer",
                 senderRole: "consumer",
                 message: body.description,
-                timestamp: now,
+                timestamp: createdAt,
               },
             ]
           : [];
+
+    const ackTimestamp = new Date(new Date(createdAt).getTime() + 1).toISOString();
+    const ackId = `ACK-${ticketNumber}`;
+    const hasAckAlready = rawReplies.some(
+      (r) =>
+        r &&
+        (String(r.id || "").startsWith("ACK-") ||
+          r.senderId === "system-admin-ack" ||
+          (r.senderRole === "admin" && String(r.message || "").includes("officially received by Tagoloan Water District")))
+    );
+    if (!hasAckAlready) {
+      rawReplies.push({
+        id: ackId,
+        reportId: id,
+        senderId: "system-admin-ack",
+        senderName: "TWD Customer Service Desk",
+        senderRole: "admin",
+        message: `Thank you for reaching out! Your inquiry/report (${ticketNumber}) has been officially received by Tagoloan Water District Administration. Our Customer Service team has been notified—please wait momentarily while our staff reviews your concern and prepares an official response.`,
+        timestamp: ackTimestamp,
+      });
+    }
+    const replies = dedupeServerReplies(rawReplies);
 
     const report: ServerConsumerReport = {
       id,
@@ -1768,8 +2075,8 @@ app.post("/api/reports", async (req, res) => {
       description: body.description || "",
       urgency: body.urgency || "normal",
       status: body.status || "pending",
-      createdAt: body.createdAt || now,
-      updatedAt: now,
+      createdAt,
+      updatedAt: ackTimestamp,
       photoUrl: body.photoUrl || "",
       replies,
       hasUnreadAdminReply: false,
@@ -1797,11 +2104,23 @@ app.post("/api/reports", async (req, res) => {
 app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], async (req, res) => {
   try {
     const { id } = req.params;
-    const { senderId, senderName, senderRole, message, statusUpdate, assignedStaff, report: clientReport } = req.body || {};
+    const {
+      id: clientReplyId,
+      replyId,
+      timestamp: clientReplyTimestamp,
+      senderId,
+      senderName,
+      senderRole,
+      message,
+      statusUpdate,
+      assignedStaff,
+      report: clientReport,
+    } = req.body || {};
     const list = await loadReportsFromFirestore();
     let idx = list.findIndex((r) => r.id === id || r.ticketNumber === id);
 
     const now = new Date().toISOString();
+    const replyTs = clientReplyTimestamp || now;
     if (idx < 0 && clientReport && typeof clientReport === "object") {
       const hydrated: ServerConsumerReport = {
         ...clientReport,
@@ -1817,7 +2136,7 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], async (req, res
         status: clientReport.status || "pending",
         createdAt: clientReport.createdAt || now,
         updatedAt: now,
-        replies: Array.isArray(clientReport.replies) ? clientReport.replies : [],
+        replies: dedupeServerReplies(Array.isArray(clientReport.replies) ? clientReport.replies : []),
       };
       syncedReports.unshift(hydrated);
       idx = 0;
@@ -1828,25 +2147,33 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], async (req, res
     }
 
     const existing = syncedReports[idx];
+    const cleanMessage = String(message || "").trim();
+    const deterministicReplyId = String(clientReplyId || replyId || "").trim() || `REP-MSG-${Date.now()}`;
+
     const reply: ServerReportReply = {
-      id: `REP-MSG-${Date.now()}`,
+      id: deterministicReplyId,
       reportId: existing.id,
       senderId: senderId || "admin-1",
       senderName: senderName || "TWD Operations",
       senderRole: senderRole || "admin",
-      message: message || "",
-      timestamp: now,
+      message: cleanMessage,
+      timestamp: replyTs,
       statusUpdate,
     };
 
-    const existingReplies = Array.isArray(existing.replies) ? existing.replies : [];
-    const alreadyHasSameLastReply =
-      existingReplies.length > 0 &&
-      existingReplies[existingReplies.length - 1].message === reply.message &&
-      existingReplies[existingReplies.length - 1].senderRole === reply.senderRole &&
-      Math.abs(new Date(existingReplies[existingReplies.length - 1].timestamp || 0).getTime() - Date.now()) < 5000;
+    const existingReplies = dedupeServerReplies(Array.isArray(existing.replies) ? existing.replies : []);
+    const normNewMsg = cleanMessage.replace(/\s+/g, " ").toLowerCase();
+    const newReplyMs = new Date(replyTs).getTime();
+    const isDuplicateSubmission = existingReplies.some((r) => {
+      if (r.id === deterministicReplyId) return true;
+      if (r.senderRole !== reply.senderRole) return false;
+      const rNorm = String(r.message || "").trim().replace(/\s+/g, " ").toLowerCase();
+      if (rNorm !== normNewMsg) return false;
+      const rMs = new Date(r.timestamp || 0).getTime();
+      return !rMs || !newReplyMs || Math.abs(newReplyMs - rMs) < 5 * 60 * 1000;
+    });
 
-    const mergedReplies = alreadyHasSameLastReply ? existingReplies : [...existingReplies, reply];
+    const mergedReplies = dedupeServerReplies([...existingReplies, reply]);
     const nextStatus = statusUpdate || existing.status;
     const updated: ServerConsumerReport = {
       ...existing,
@@ -1867,9 +2194,10 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], async (req, res
     }
 
     let createdNotif: PortalNotification | undefined;
-    if (reply.senderRole === "admin" && (updated.accountNumber || updated.consumerEmail)) {
+    if (!isDuplicateSubmission && reply.senderRole === "admin" && (updated.accountNumber || updated.consumerEmail)) {
+      const deterministicNotifId = `notif-rep-${sanitizeDocId(deterministicReplyId)}`;
       createdNotif = {
-        id: `notif-rep-${Date.now()}`,
+        id: deterministicNotifId,
         accountNumber: (updated.accountNumber || "PENDING").toUpperCase(),
         consumerEmail: updated.consumerEmail?.toLowerCase(),
         title: `Official Reply on Concern #${updated.ticketNumber}`,
@@ -1880,9 +2208,11 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], async (req, res
         reportId: updated.id,
         ticketNumber: updated.ticketNumber,
       };
-      syncedNotifications.unshift(createdNotif);
+      if (!syncedNotifications.some((n) => n.id === deterministicNotifId)) {
+        syncedNotifications.unshift(createdNotif);
+      }
       if (canWriteFs()) {
-        await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(createdNotif.id)), sanitizePayload(createdNotif), {
+        await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, deterministicNotifId), sanitizePayload(createdNotif), {
           merge: true,
         }).catch((err) => recordFsErr(err, "write"));
       }

@@ -1082,21 +1082,101 @@ function getStored<T>(key: string, initial: T): T {
     if (key === KEYS.USERS) {
       const users = parsed as User[];
       let modified = false;
-      const seenUsers = new Set<string>();
+      let overrides: Record<string, { password: string; passwordUpdatedAt: number }> = {};
+      try {
+        const rawOv = localStorage.getItem('twd_live_v4_password_overrides');
+        if (rawOv) overrides = JSON.parse(rawOv) || {};
+      } catch {}
+
+      const applyOverride = (u: User): User => {
+        const keysToCheck = [
+          u.email ? u.email.trim().toLowerCase() : '',
+          u.id ? u.id.trim().toLowerCase() : '',
+          u.linkedAccountNumber ? u.linkedAccountNumber.trim().toLowerCase() : '',
+        ].filter(Boolean);
+        let bestPw = u.password;
+        let bestTs = u.passwordUpdatedAt || 0;
+        for (const k of keysToCheck) {
+          const ov = overrides[k];
+          if (ov && ov.password && ov.passwordUpdatedAt >= bestTs) {
+            if (bestPw !== ov.password || bestTs !== ov.passwordUpdatedAt) {
+              modified = true;
+            }
+            bestPw = ov.password;
+            bestTs = ov.passwordUpdatedAt;
+          }
+        }
+        return bestTs > 0 ? { ...u, password: bestPw, passwordUpdatedAt: bestTs } : { ...u, password: bestPw };
+      };
+
+      const mergeTwoUsers = (a: User, b: User): User => {
+        const aReal = isRealIssuedAccountNumber(a.linkedAccountNumber);
+        const bReal = isRealIssuedAccountNumber(b.linkedAccountNumber);
+        const preferredId =
+          a.id && !a.id.startsWith('email_')
+            ? a.id
+            : b.id && !b.id.startsWith('email_')
+              ? b.id
+              : a.id || b.id;
+        const aPwTs = a.passwordUpdatedAt || 0;
+        const bPwTs = b.passwordUpdatedAt || 0;
+        const useBPw = bPwTs > aPwTs || (bPwTs === aPwTs && Boolean(b.password) && !a.password);
+        const chosenPassword = useBPw ? b.password || a.password : a.password || b.password;
+        const chosenPwTs = Math.max(aPwTs, bPwTs);
+        return applyOverride({
+          ...a,
+          ...b,
+          id: preferredId,
+          email: (b.email || a.email || '').trim(),
+          name: b.name || a.name,
+          role: a.role === 'admin' || b.role === 'admin' ? 'admin' : b.role || a.role || 'consumer',
+          status:
+            aReal || bReal || a.status === 'active' || b.status === 'active'
+              ? a.status === 'inactive' && b.status === 'inactive'
+                ? 'inactive'
+                : 'active'
+              : b.status || a.status || 'pending_approval',
+          linkedAccountNumber: bReal
+            ? b.linkedAccountNumber!.trim().toUpperCase()
+            : aReal
+              ? a.linkedAccountNumber!.trim().toUpperCase()
+              : b.linkedAccountNumber || a.linkedAccountNumber,
+          password: chosenPassword,
+          ...(chosenPwTs > 0 ? { passwordUpdatedAt: chosenPwTs } : {}),
+        });
+      };
+
       const deduplicatedUsers: User[] = [];
-      users.forEach(u => {
-        if (isAccountTerminated(u)) {
+      users.forEach(rawU => {
+        if (!rawU) return;
+        if (isAccountTerminated(rawU)) {
           modified = true;
           return;
         }
-        const userKey = (u.id || u.email || u.username || '').trim().toLowerCase();
-        if (userKey && !seenUsers.has(userKey)) {
-          seenUsers.add(userKey);
-          if (u.email) seenUsers.add(u.email.trim().toLowerCase());
-          if (u.username) seenUsers.add(u.username.trim().toLowerCase());
+        const u = applyOverride(rawU);
+        const uEmail = (u.email || '').trim().toLowerCase();
+        const uId = (u.id || '').trim().toLowerCase();
+        const uUsername = (u.username || '').trim().toLowerCase();
+
+        const existingIdx = deduplicatedUsers.findIndex(ex => {
+          const exEmail = (ex.email || '').trim().toLowerCase();
+          const exId = (ex.id || '').trim().toLowerCase();
+          const exUsername = (ex.username || '').trim().toLowerCase();
+          return (
+            (uEmail && exEmail && uEmail === exEmail) ||
+            (uId && exId && uId === exId) ||
+            (uUsername && exUsername && uUsername === exUsername)
+          );
+        });
+
+        if (existingIdx >= 0) {
+          deduplicatedUsers[existingIdx] = mergeTwoUsers(deduplicatedUsers[existingIdx], u);
+          modified = true;
+        } else {
           deduplicatedUsers.push(u);
         }
       });
+
       if (deduplicatedUsers.length !== users.length) {
         modified = true;
       }
@@ -1106,7 +1186,7 @@ function getStored<T>(key: string, initial: T): T {
             u.name = 'Admin';
             modified = true;
           }
-          if (u.password !== 'AdminWater2025!') {
+          if (!u.password) {
             u.password = 'AdminWater2025!';
             modified = true;
           }
@@ -1128,7 +1208,7 @@ function getStored<T>(key: string, initial: T): T {
       // Ensure essential baseline users exist (Admin + Acero demo account) only if NOT terminated
       INITIAL_USERS.forEach(iu => {
         if (!isAccountTerminated(iu) && !deduplicatedUsers.some(u => (iu.email && u.email?.toLowerCase() === iu.email.toLowerCase()) || (iu.id && u.id === iu.id))) {
-          deduplicatedUsers.push(iu);
+          deduplicatedUsers.push(applyOverride(iu));
           modified = true;
         }
       });
@@ -1443,6 +1523,24 @@ export const mockDb = {
           localStorage.setItem(KEYS.CURRENT_USER, JSON.stringify(user));
         }
       }
+      try {
+        const rawOv = localStorage.getItem('twd_live_v4_password_overrides');
+        if (rawOv) {
+          const ovMap = JSON.parse(rawOv) || {};
+          const keys = [
+            user.email ? user.email.trim().toLowerCase() : '',
+            user.id ? user.id.trim().toLowerCase() : '',
+            user.linkedAccountNumber ? user.linkedAccountNumber.trim().toLowerCase() : '',
+          ].filter(Boolean);
+          for (const k of keys) {
+            const ov = ovMap[k];
+            if (ov && ov.password && ov.passwordUpdatedAt >= (user.passwordUpdatedAt || 0)) {
+              user.password = ov.password;
+              user.passwordUpdatedAt = ov.passwordUpdatedAt;
+            }
+          }
+        }
+      } catch {}
       return user;
     } catch {
       return null;
@@ -1474,6 +1572,100 @@ export const mockDb = {
     const changed = diffChangedItems(KEYS.USERS, users, 'id');
     setStored(KEYS.USERS, users);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.USERS, changed, 'id');
+  },
+
+  updateUserPassword: (
+    identity: { userId?: string; email?: string; accountNumber?: string },
+    newPassword: string,
+    passwordUpdatedAt?: number
+  ): User | null => {
+    const ts = passwordUpdatedAt || Date.now();
+    const cleanEmail = (identity.email || '').trim().toLowerCase();
+    const cleanId = (identity.userId || '').trim();
+    const cleanAcc = (identity.accountNumber || '').trim().toUpperCase();
+
+    // 1. Persist authoritative local override so stale cloud/seed snapshots can never revert the password
+    try {
+      const rawOv = localStorage.getItem('twd_live_v4_password_overrides');
+      const ovMap: Record<string, { password: string; passwordUpdatedAt: number }> = rawOv ? JSON.parse(rawOv) : {};
+      if (cleanEmail) ovMap[cleanEmail] = { password: newPassword, passwordUpdatedAt: ts };
+      if (cleanId) ovMap[cleanId.toLowerCase()] = { password: newPassword, passwordUpdatedAt: ts };
+      if (cleanAcc && !cleanAcc.startsWith('PENDING')) {
+        ovMap[cleanAcc.toLowerCase()] = { password: newPassword, passwordUpdatedAt: ts };
+      }
+      localStorage.setItem('twd_live_v4_password_overrides', JSON.stringify(ovMap));
+    } catch {}
+
+    // 2. Update ALL matching user records in localStorage KEYS.USERS
+    const allUsers = getStored<User[]>(KEYS.USERS, INITIAL_USERS);
+    let primaryUpdated: User | null = null;
+    const nextUsers = allUsers.map((u) => {
+      const uEmail = (u.email || '').trim().toLowerCase();
+      const uAcc = (u.linkedAccountNumber || '').trim().toUpperCase();
+      const matches =
+        (cleanId && u.id === cleanId) ||
+        (cleanEmail && uEmail && uEmail === cleanEmail) ||
+        (cleanAcc && !cleanAcc.startsWith('PENDING') && uAcc === cleanAcc);
+      if (!matches) return u;
+      const updatedUser: User = {
+        ...u,
+        password: newPassword,
+        passwordUpdatedAt: ts,
+      };
+      if (!primaryUpdated || !u.id.startsWith('email_')) {
+        primaryUpdated = updatedUser;
+      }
+      return updatedUser;
+    });
+
+    if (!primaryUpdated && (cleanEmail || cleanId)) {
+      primaryUpdated = {
+        id: cleanId || `user-${ts}`,
+        email: cleanEmail,
+        name: cleanEmail.split('@')[0] || 'Consumer',
+        role: 'consumer',
+        status: cleanAcc && !cleanAcc.startsWith('PENDING') ? 'active' : 'pending_approval',
+        linkedAccountNumber: cleanAcc || undefined,
+        password: newPassword,
+        passwordUpdatedAt: ts,
+      };
+      nextUsers.unshift(primaryUpdated);
+    }
+
+    setStored(KEYS.USERS, nextUsers);
+
+    // 3. Update active session user if matching
+    const cur = mockDb.getCurrentUser();
+    if (cur) {
+      const curEmail = (cur.email || '').trim().toLowerCase();
+      const curAcc = (cur.linkedAccountNumber || '').trim().toUpperCase();
+      if (
+        (cleanId && cur.id === cleanId) ||
+        (cleanEmail && curEmail === cleanEmail) ||
+        (cleanAcc && !cleanAcc.startsWith('PENDING') && curAcc === cleanAcc)
+      ) {
+        mockDb.setCurrentUser({
+          ...cur,
+          password: newPassword,
+          passwordUpdatedAt: ts,
+        });
+      }
+    }
+
+    // 4. Sync BOTH primary ID doc and email_ doc in Firestore so resolve-account never reads an outdated twin
+    if (primaryUpdated) {
+      const targetUser = primaryUpdated as User;
+      if (targetUser.id) {
+        syncDocToFirestore(COLLECTIONS.USERS, targetUser.id, targetUser, true);
+      }
+      const emailForDoc = (targetUser.email || cleanEmail || '').trim().toLowerCase();
+      if (emailForDoc) {
+        const emailDocKey = `email_${emailForDoc.replace(/[^a-zA-Z0-9_-]/g, '_')}`.slice(0, 120);
+        syncDocToFirestore(COLLECTIONS.USERS, emailDocKey, targetUser, true);
+      }
+    }
+
+    return primaryUpdated;
   },
   saveConsumers: (consumers: Consumer[]): void => {
     const normalizedList = consumers.map(c => normalizeConsumerRecord(c));
@@ -1980,8 +2172,66 @@ export const mockDb = {
   },
 
   // Consumer Service Reports & Admin Reply Methods
+  dedupeReplies: (replies?: ConsumerReportReply[]): ConsumerReportReply[] => {
+    if (!Array.isArray(replies) || replies.length === 0) return [];
+    const sorted = [...replies]
+      .filter(Boolean)
+      .sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
+    const result: ConsumerReportReply[] = [];
+    const seenIds = new Set<string>();
+    let hasAutoAck = false;
+
+    for (const rep of sorted) {
+      const rid = (rep.id || '').trim();
+      if (rid && seenIds.has(rid)) continue;
+
+      const isAutoAck =
+        rid.startsWith('ACK-') ||
+        rep.senderId === 'system-admin-ack' ||
+        (rep.senderRole === 'admin' &&
+          (rep.message || '').toLowerCase().includes('successfully delivered to the tagoloan water district'));
+      if (isAutoAck) {
+        if (hasAutoAck) continue;
+        hasAutoAck = true;
+        if (rid) seenIds.add(rid);
+        result.push(rep);
+        continue;
+      }
+
+      const normMsg = (rep.message || '').trim().replace(/\s+/g, ' ').toLowerCase();
+      const repTime = new Date(rep.timestamp || 0).getTime();
+
+      const dupIdx = result.findIndex((existing) => {
+        if (existing.senderRole !== rep.senderRole) return false;
+        const exMsg = (existing.message || '').trim().replace(/\s+/g, ' ').toLowerCase();
+        if (exMsg !== normMsg) return false;
+        const exTime = new Date(existing.timestamp || 0).getTime();
+        // Treat identical message from same role within 5 minutes as optimistic/server sync duplicate
+        return Math.abs(repTime - exTime) <= 5 * 60 * 1000;
+      });
+
+      if (dupIdx >= 0) {
+        // Keep statusUpdate metadata if the incoming copy carries it
+        if (!result[dupIdx].statusUpdate && rep.statusUpdate) {
+          result[dupIdx] = { ...result[dupIdx], statusUpdate: rep.statusUpdate };
+        }
+        if (rid) seenIds.add(rid);
+        continue;
+      }
+
+      if (rid) seenIds.add(rid);
+      result.push(rep);
+    }
+
+    return result;
+  },
+
   getReports: (accountNumber?: string): ConsumerReport[] => {
-    const list = getStored<ConsumerReport[]>(KEYS.REPORTS, INITIAL_REPORTS);
+    const rawList = getStored<ConsumerReport[]>(KEYS.REPORTS, INITIAL_REPORTS);
+    const list = rawList.map((r) => ({
+      ...r,
+      replies: mockDb.dedupeReplies(r.replies),
+    }));
     if (accountNumber) {
       const cleanTarget = accountNumber.trim().toLowerCase();
       return list
@@ -1997,27 +2247,33 @@ export const mockDb = {
 
   getReportById: (id: string): ConsumerReport | undefined => {
     const list = getStored<ConsumerReport[]>(KEYS.REPORTS, INITIAL_REPORTS);
-    return list.find(r => r.id === id || r.ticketNumber === id);
+    const found = list.find(r => r.id === id || r.ticketNumber === id);
+    return found ? { ...found, replies: mockDb.dedupeReplies(found.replies) } : undefined;
   },
 
   saveReports: (reports: ConsumerReport[]): void => {
-    const changed = diffChangedItems(KEYS.REPORTS, reports, 'id');
-    setStored(KEYS.REPORTS, reports);
+    const cleaned = reports.map((r) => ({
+      ...r,
+      replies: mockDb.dedupeReplies(r.replies),
+    }));
+    const changed = diffChangedItems(KEYS.REPORTS, cleaned, 'id');
+    setStored(KEYS.REPORTS, cleaned);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.REPORTS, changed, 'id');
   },
 
   mergeExternalReports: (incoming: ConsumerReport[]): ConsumerReport[] => {
     const localList = getStored<ConsumerReport[]>(KEYS.REPORTS, INITIAL_REPORTS);
     if (!Array.isArray(incoming) || incoming.length === 0) {
-      return localList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      return localList
+        .map((r) => ({ ...r, replies: mockDb.dedupeReplies(r.replies) }))
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     }
     const map = new Map<string, ConsumerReport>();
     localList.forEach(lr => {
-      if (lr && lr.id) map.set(lr.id, lr);
+      if (lr && lr.id) map.set(lr.id, { ...lr, replies: mockDb.dedupeReplies(lr.replies) });
     });
     incoming.forEach(ir => {
       if (!ir || (!ir.id && !ir.ticketNumber)) return;
-      // Match by ID or ticketNumber so client & server twins reconcile cleanly without duplicating or disappearing
       let existingKey = ir.id && map.has(ir.id) ? ir.id : undefined;
       if (!existingKey && ir.ticketNumber) {
         const foundEntry = Array.from(map.entries()).find(([, v]) => v.ticketNumber === ir.ticketNumber);
@@ -2025,21 +2281,12 @@ export const mockDb = {
       }
       if (!existingKey) {
         const key = ir.id || ir.ticketNumber;
-        map.set(key, { ...ir, id: key, replies: Array.isArray(ir.replies) ? ir.replies : [] });
+        map.set(key, { ...ir, id: key, replies: mockDb.dedupeReplies(ir.replies) });
       } else {
         const prev = map.get(existingKey)!;
         const prevReplies = Array.isArray(prev.replies) ? prev.replies : [];
         const irReplies = Array.isArray(ir.replies) ? ir.replies : [];
-        // Merge replies deduplicated by reply id or message+timestamp
-        const replyMap = new Map<string, ConsumerReportReply>();
-        [...prevReplies, ...irReplies].forEach(rep => {
-          if (!rep) return;
-          const rk = rep.id || `${rep.senderRole}_${rep.message}_${rep.timestamp}`;
-          if (!replyMap.has(rk)) replyMap.set(rk, rep);
-        });
-        const mergedReplies = Array.from(replyMap.values()).sort(
-          (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
-        );
+        const mergedReplies = mockDb.dedupeReplies([...prevReplies, ...irReplies]);
         const irNewer = new Date(ir.updatedAt || 0).getTime() >= new Date(prev.updatedAt || 0).getTime();
         const primary = irNewer ? ir : prev;
         const secondary = irNewer ? prev : ir;
@@ -2065,12 +2312,14 @@ export const mockDb = {
     const id = `REP-${Date.now()}`;
     const randNum = Math.floor(1000 + Math.random() * 9000);
     const ticketNumber = `TWD-CR-${new Date().getFullYear()}-${randNum}`;
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    const ackTime = new Date(nowMs + 1).toISOString();
 
     const replies: ConsumerReportReply[] = [];
     if (reportData.description || reportData.initialReply) {
       replies.push({
-        id: `REP-MSG-${Date.now()}-1`,
+        id: `INIT-${ticketNumber}`,
         reportId: id,
         senderId: reportData.accountNumber || 'consumer',
         senderName: reportData.consumerName,
@@ -2080,13 +2329,24 @@ export const mockDb = {
       });
     }
 
+    // Immediate automated Admin acknowledgement message confirming delivery
+    replies.push({
+      id: `ACK-${ticketNumber}`,
+      reportId: id,
+      senderId: 'system-admin-ack',
+      senderName: 'TWD Customer Service Desk',
+      senderRole: 'admin',
+      message: `Good day, ${reportData.consumerName || 'Valued Consumer'}! Your inquiry/report (#${ticketNumber}) has been successfully delivered to the Tagoloan Water District Administration. Our Customer Service team has been notified and will review your concern—please wait shortly for an official reply. Thank you for reaching out and for your patience!`,
+      timestamp: ackTime
+    });
+
     const newReport: ConsumerReport = {
       ...reportData,
       id,
       ticketNumber,
       status: 'pending',
       createdAt: now,
-      updatedAt: now,
+      updatedAt: ackTime,
       replies,
       hasUnreadAdminReply: false,
       hasUnreadConsumerUpdate: true
@@ -2108,7 +2368,7 @@ export const mockDb = {
 
   replyToReport: (
     reportId: string, 
-    reply: Omit<ConsumerReportReply, 'id' | 'timestamp' | 'reportId'>, 
+    reply: Omit<ConsumerReportReply, 'id' | 'timestamp' | 'reportId'> & { id?: string; timestamp?: string }, 
     newStatus?: ConsumerReport['status'],
     assignedStaff?: string
   ): ConsumerReport | null => {
@@ -2117,14 +2377,19 @@ export const mockDb = {
     if (idx === -1) return null;
 
     const report = list[idx];
-    const now = new Date().toISOString();
+    const now = reply.timestamp || new Date().toISOString();
+    const deterministicId = reply.id || `REP-MSG-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const replyItem: ConsumerReportReply = {
       ...reply,
-      id: `REP-MSG-${Date.now()}`,
+      id: deterministicId,
       reportId: report.id,
       timestamp: now,
       statusUpdate: newStatus
     };
+
+    const prevDeduped = mockDb.dedupeReplies(report.replies);
+    const mergedReplies = mockDb.dedupeReplies([...prevDeduped, replyItem]);
+    const isDuplicateSubmission = mergedReplies.length === prevDeduped.length;
 
     const nextStatus = newStatus || report.status;
     const isResolved = nextStatus === 'resolved';
@@ -2135,7 +2400,7 @@ export const mockDb = {
       updatedAt: now,
       resolvedAt: isResolved ? (report.resolvedAt || now) : report.resolvedAt,
       assignedStaff: assignedStaff !== undefined ? assignedStaff : report.assignedStaff,
-      replies: [...report.replies, replyItem],
+      replies: mergedReplies,
       hasUnreadAdminReply: reply.senderRole === 'admin',
       hasUnreadConsumerUpdate: reply.senderRole === 'consumer'
     };
@@ -2143,39 +2408,41 @@ export const mockDb = {
     list[idx] = updated;
     mockDb.saveReports(list);
 
-    if (reply.senderRole === 'admin') {
-      const consumers = mockDb.getConsumers();
-      const matchedConsumer = consumers.find(c => 
-        (report.accountNumber && c.accountNumber === report.accountNumber) ||
-        (report.consumerEmail && c.email && c.email.toLowerCase() === report.consumerEmail.toLowerCase())
-      );
-      mockDb.addNotification({
-        accountNumber: report.accountNumber,
-        consumerId: matchedConsumer?.id,
-        userId: matchedConsumer?.linkedUserId,
-        consumerEmail: report.consumerEmail || matchedConsumer?.email,
-        title: `Official Reply on Concern #${report.ticketNumber}`,
-        message: `Admin ${reply.senderName} replied: "${reply.message.length > 90 ? reply.message.slice(0, 87) + '...' : reply.message}" (Status: ${nextStatus.toUpperCase()})`,
-        type: 'report',
-        reportId: report.id,
-        ticketNumber: report.ticketNumber
-      });
+    if (!isDuplicateSubmission) {
+      if (reply.senderRole === 'admin') {
+        const consumers = mockDb.getConsumers();
+        const matchedConsumer = consumers.find(c => 
+          (report.accountNumber && c.accountNumber === report.accountNumber) ||
+          (report.consumerEmail && c.email && c.email.toLowerCase() === report.consumerEmail.toLowerCase())
+        );
+        mockDb.addNotification({
+          accountNumber: report.accountNumber,
+          consumerId: matchedConsumer?.id,
+          userId: matchedConsumer?.linkedUserId,
+          consumerEmail: report.consumerEmail || matchedConsumer?.email,
+          title: `Official Reply on Concern #${report.ticketNumber}`,
+          message: `Admin ${reply.senderName} replied: "${reply.message.length > 90 ? reply.message.slice(0, 87) + '...' : reply.message}" (Status: ${nextStatus.toUpperCase()})`,
+          type: 'report',
+          reportId: report.id,
+          ticketNumber: report.ticketNumber
+        });
 
-      mockDb.addAuditLog(
-        reply.senderId,
-        reply.senderName,
-        'admin',
-        'Replied to Consumer Report',
-        `Responded to Ticket #${report.ticketNumber} for ${report.consumerName} (Status: ${nextStatus}).`
-      );
-    } else {
-      mockDb.addAuditLog(
-        reply.senderId,
-        reply.senderName,
-        'consumer',
-        'Updated Service Report',
-        `Added follow-up message to Ticket #${report.ticketNumber}.`
-      );
+        mockDb.addAuditLog(
+          reply.senderId,
+          reply.senderName,
+          'admin',
+          'Replied to Consumer Report',
+          `Responded to Ticket #${report.ticketNumber} for ${report.consumerName} (Status: ${nextStatus}).`
+        );
+      } else {
+        mockDb.addAuditLog(
+          reply.senderId,
+          reply.senderName,
+          'consumer',
+          'Updated Service Report',
+          `Added follow-up message to Ticket #${report.ticketNumber}.`
+        );
+      }
     }
 
     return updated;

@@ -256,7 +256,11 @@ export function ConsumerReportsManager({
 
     setIsSubmittingReply(true);
     try {
+      const replyId = `REP-MSG-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const replyTimestamp = new Date().toISOString();
       const replyData = {
+        id: replyId,
+        timestamp: replyTimestamp,
         senderId: currentUser.id || 'admin',
         senderName: currentUser.name || 'Admin',
         senderRole: 'admin' as const,
@@ -306,11 +310,12 @@ export function ConsumerReportsManager({
         `Official response logged for Ticket #${targetReportSnapshot.ticketNumber}. Consumer Account #${targetReportSnapshot.accountNumber} has been notified.`
       );
 
-      // 4. Persist asynchronously to backend API (include report snapshot so server upserts cleanly)
+      // 4. Persist asynchronously to backend API (pass pre-reply snapshot + deterministic replyId so server never duplicates)
       apiClient
         .replyToReport(targetReportSnapshot.id, {
           ...replyData,
-          report: updated || targetReportSnapshot,
+          replyId,
+          report: targetReportSnapshot,
         })
         .then((res) => {
           if (res?.report) {
@@ -848,18 +853,21 @@ export function ConsumerReportsManager({
                     <span>Conversation & Dispatch Thread</span>
                   </h4>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                    {activeReport.replies.length} {activeReport.replies.length === 1 ? 'Message' : 'Messages'}
+                    {mockDb.dedupeReplies(activeReport.replies).length}{' '}
+                    {mockDb.dedupeReplies(activeReport.replies).length === 1 ? 'Message' : 'Messages'}
                   </span>
                 </div>
                 
-                {activeReport.replies.length === 0 ? (
+                {mockDb.dedupeReplies(activeReport.replies).length === 0 ? (
                   <div className="p-6 bg-slate-900/60 border border-slate-800/80 rounded-2xl text-center text-slate-400 text-xs">
                     No official administrative responses recorded yet. Use the composer below or select a quick template to reply.
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {activeReport.replies.map((reply, idx) => {
+                    {mockDb.dedupeReplies(activeReport.replies).map((reply, idx) => {
                       const isAdmin = reply.senderRole === 'admin' || reply.senderRole === 'staff';
+                      const isAutoAck =
+                        (reply.id || '').startsWith('ACK-') || reply.senderId === 'system-admin-ack';
 
                       return (
                         <div
@@ -867,12 +875,18 @@ export function ConsumerReportsManager({
                           className={`flex flex-col ${isAdmin ? 'items-end' : 'items-start'}`}
                         >
                           <div className="max-w-[85%] space-y-1">
-                            <div className={`flex items-center gap-2 text-[10px] ${isAdmin ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`flex items-center gap-2 text-[10px] flex-wrap ${isAdmin ? 'justify-end' : 'justify-start'}`}>
                               {isAdmin ? (
                                 <>
-                                  <span className="font-bold text-blue-400">Official Admin Response ({reply.senderName})</span>
-                                  <span className="px-1.5 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800 font-bold uppercase text-[9px]">
-                                    Admin
+                                  <span className="font-bold text-blue-400">
+                                    {isAutoAck ? `Automated Acknowledgement (${reply.senderName})` : `Official Admin Response (${reply.senderName})`}
+                                  </span>
+                                  <span className={`px-1.5 py-0.5 rounded font-bold uppercase text-[9px] border ${
+                                    isAutoAck
+                                      ? 'bg-indigo-950 text-indigo-300 border-indigo-700'
+                                      : 'bg-blue-950 text-blue-300 border-blue-800'
+                                  }`}>
+                                    {isAutoAck ? 'Auto-Ack' : 'Admin'}
                                   </span>
                                 </>
                               ) : (
@@ -890,9 +904,11 @@ export function ConsumerReportsManager({
 
                             <div
                               className={`rounded-2xl p-4 text-xs sm:text-sm leading-relaxed shadow-sm ${
-                                isAdmin
-                                  ? 'bg-gradient-to-r from-blue-900/90 via-blue-800/90 to-indigo-900/90 text-white rounded-tr-xs border border-blue-500/40 shadow-md'
-                                  : 'bg-slate-800/95 text-slate-100 rounded-tl-xs border border-slate-700/80'
+                                isAutoAck
+                                  ? 'bg-slate-900/95 text-indigo-100 rounded-tr-xs border border-indigo-500/40'
+                                  : isAdmin
+                                    ? 'bg-gradient-to-r from-blue-900/90 via-blue-800/90 to-indigo-900/90 text-white rounded-tr-xs border border-blue-500/40 shadow-md'
+                                    : 'bg-slate-800/95 text-slate-100 rounded-tl-xs border border-slate-700/80'
                               }`}
                             >
                               <p className="whitespace-pre-wrap">{reply.message}</p>

@@ -14,7 +14,13 @@ import {
   disableNetwork,
   enableNetwork,
 } from 'firebase/firestore';
-import { db, auth, QUOTA_STORAGE_KEY } from '../firebase';
+import {
+  db,
+  auth,
+  QUOTA_STORAGE_KEY,
+  WRITE_QUOTA_SESSION_KEY,
+  READ_QUOTA_SESSION_KEY,
+} from '../firebase';
 import {
   User,
   Consumer,
@@ -325,8 +331,6 @@ function triggerLocalUpdateEvent(key: string) {
 // ============================================================================
 // FIRESTORE QUOTA CIRCUIT BREAKER (SEPARATE WRITE VS READ QUOTA PROTECTION)
 // ============================================================================
-const WRITE_QUOTA_SESSION_KEY = 'twd_fs_write_quota_until_v3';
-const READ_QUOTA_SESSION_KEY = 'twd_fs_read_quota_until_v3';
 const SEEDED_STORAGE_KEY = 'twd_fs_seeded_v4';
 const DELETED_ANNOUNCEMENTS_KEY = 'twd_live_v4_deleted_announcements';
 
@@ -344,11 +348,17 @@ try {
       localStorage.removeItem(k);
       sessionStorage.removeItem(k);
     });
-    const savedWriteUntil = Number(sessionStorage.getItem(WRITE_QUOTA_SESSION_KEY) || '0');
+    const savedWriteUntil = Math.max(
+      Number(sessionStorage.getItem(WRITE_QUOTA_SESSION_KEY) || '0'),
+      Number(localStorage.getItem(WRITE_QUOTA_SESSION_KEY) || '0')
+    );
     if (savedWriteUntil > Date.now()) {
       memoryWriteQuotaUntil = savedWriteUntil;
     }
-    const savedReadUntil = Number(sessionStorage.getItem(READ_QUOTA_SESSION_KEY) || '0');
+    const savedReadUntil = Math.max(
+      Number(sessionStorage.getItem(READ_QUOTA_SESSION_KEY) || '0'),
+      Number(localStorage.getItem(READ_QUOTA_SESSION_KEY) || '0')
+    );
     if (savedReadUntil > Date.now()) {
       memoryReadQuotaUntil = savedReadUntil;
     }
@@ -380,6 +390,7 @@ export function isFirestoreWriteQuotaExceeded(): boolean {
     memoryWriteQuotaUntil = 0;
     try {
       sessionStorage.removeItem(WRITE_QUOTA_SESSION_KEY);
+      localStorage.removeItem(WRITE_QUOTA_SESSION_KEY);
     } catch {}
   }
   return false;
@@ -391,6 +402,7 @@ export function isFirestoreReadQuotaExceeded(): boolean {
     memoryReadQuotaUntil = 0;
     try {
       sessionStorage.removeItem(READ_QUOTA_SESSION_KEY);
+      localStorage.removeItem(READ_QUOTA_SESSION_KEY);
     } catch {}
   }
   return false;
@@ -402,26 +414,24 @@ export function isFirestoreQuotaExceeded(): boolean {
 
 export function markFirestoreQuotaExceeded(err?: any, mode: 'write' | 'read' = 'write') {
   const msg = err?.message || String(err || '');
-  const isDailyLimit = msg.includes('Free daily write units') || msg.includes('Free daily read units');
-  // Pause 10 minutes on hard daily quota exhaustion (persisted in sessionStorage so reloads don't retry-storm), 60s on transient burst
-  const cooldownMs = isDailyLimit ? 10 * 60 * 1000 : 60 * 1000;
+  const isDailyLimit =
+    msg.includes('Free daily write units') ||
+    msg.includes('Free daily read units') ||
+    msg.includes('write stream stalled');
+  const cooldownMs = isDailyLimit ? 30 * 60 * 1000 : 2 * 60 * 1000;
   const until = Date.now() + cooldownMs;
 
   if (mode === 'read' || msg.includes('Free daily read units')) {
-    if (Date.now() >= memoryReadQuotaUntil) {
-      console.warn('[Firestore] Read quota limit reached; falling back to REST/WebSocket sync.');
-    }
     memoryReadQuotaUntil = until;
     try {
       sessionStorage.setItem(READ_QUOTA_SESSION_KEY, String(until));
+      localStorage.setItem(READ_QUOTA_SESSION_KEY, String(until));
     } catch {}
   } else {
-    if (Date.now() >= memoryWriteQuotaUntil) {
-      console.warn('[Firestore] Write quota limit reached; routing live writes through /api & WebSocket sync.');
-    }
     memoryWriteQuotaUntil = until;
     try {
       sessionStorage.setItem(WRITE_QUOTA_SESSION_KEY, String(until));
+      localStorage.setItem(WRITE_QUOTA_SESSION_KEY, String(until));
     } catch {}
   }
 
@@ -430,9 +440,55 @@ export function markFirestoreQuotaExceeded(err?: any, mode: 'write' | 'read' = '
   disableNetwork(db).catch(() => {});
 }
 
+function withWriteTimeout<T>(promise: Promise<T>, timeoutMs = 4000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const timeoutErr: any = new Error('Firestore write stream stalled / Free daily write units quota protection');
+      timeoutErr.code = 'resource-exhausted';
+      reject(timeoutErr);
+    }, timeoutMs);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+function applyUserPasswordOverride(u: User): User {
+  try {
+    if (typeof window === 'undefined') return u;
+    const raw = localStorage.getItem('twd_live_v4_password_overrides');
+    if (!raw) return u;
+    const ovMap = JSON.parse(raw) || {};
+    const keys = [
+      u.email ? u.email.trim().toLowerCase() : '',
+      u.id ? u.id.trim().toLowerCase() : '',
+      u.linkedAccountNumber ? u.linkedAccountNumber.trim().toLowerCase() : '',
+    ].filter(Boolean);
+    let bestPw = u.password;
+    let bestTs = u.passwordUpdatedAt || 0;
+    for (const k of keys) {
+      const ov = ovMap[k];
+      if (ov && ov.password && ov.passwordUpdatedAt >= bestTs) {
+        bestPw = ov.password;
+        bestTs = ov.passwordUpdatedAt;
+      }
+    }
+    return bestTs > 0 ? { ...u, password: bestPw, passwordUpdatedAt: bestTs } : { ...u, password: bestPw };
+  } catch {
+    return u;
+  }
+}
+
 /**
- * Merges two User objects belonging to the same identity, preserving password
- * and always preferring active status + real issued linkedAccountNumber.
+ * Merges two User objects belonging to the same identity, ALWAYS preferring
+ * the newer passwordUpdatedAt (and local password override) plus active issued linkedAccountNumber.
  */
 function mergeUserPair(a: User, b: User): User {
   const aHasRealAcc = isRealIssuedAccountNumber(a.linkedAccountNumber);
@@ -457,7 +513,14 @@ function mergeUserPair(a: User, b: User): User {
         ? b.id
         : b.id || a.id;
 
-  return {
+  const aPwTs = a.passwordUpdatedAt || 0;
+  const bPwTs = b.passwordUpdatedAt || 0;
+  // Prefer whichever record has a strictly newer passwordUpdatedAt; on tie (both 0), prefer `a` (local state) if it has a password!
+  const chooseBPassword = bPwTs > aPwTs || (bPwTs === aPwTs && !a.password && Boolean(b.password));
+  const chosenPassword = chooseBPassword ? b.password || a.password : a.password || b.password;
+  const chosenPwTs = Math.max(aPwTs, bPwTs);
+
+  return applyUserPasswordOverride({
     ...a,
     ...b,
     id: preferredId,
@@ -466,8 +529,9 @@ function mergeUserPair(a: User, b: User): User {
     role: a.role === 'admin' || b.role === 'admin' ? 'admin' : b.role || a.role || 'consumer',
     status: preferredStatus,
     linkedAccountNumber: preferredAcc,
-    password: b.password || a.password,
-  };
+    password: chosenPassword,
+    ...(chosenPwTs > 0 ? { passwordUpdatedAt: chosenPwTs } : {}),
+  });
 }
 
 /**
@@ -856,7 +920,7 @@ export function startRealtimeFirestoreListeners() {
               return (lcUid && rUid === lcUid) || (lcEmail && rEmail === lcEmail) || raw.accountNumber === lcAcc;
             });
 
-            if (!cloudHasIssuedAcc || cloudHasStalePendingTwin) {
+            if (!cloudHasIssuedAcc && !isFirestoreWriteQuotaExceeded()) {
               const matchedU = localUsersAll.find(
                 (u) =>
                   (lcUid && u.id === lcUid) ||
@@ -870,7 +934,7 @@ export function startRealtimeFirestoreListeners() {
                   ((n.accountNumber || '').toUpperCase() === lcAcc ||
                     (lcEmail && (n.consumerEmail || '').trim().toLowerCase() === lcEmail))
               );
-              pushIssuedConsumerToFirestore(lc, matchedN, matchedU, true).catch(() => {});
+              pushIssuedConsumerToFirestore(lc, matchedN, matchedU, false).catch(() => {});
             }
           });
 
@@ -1164,15 +1228,40 @@ export function startRealtimeFirestoreListeners() {
               mergedMap.set(newKey, { ...cr, id: newKey, replies: Array.isArray(cr.replies) ? cr.replies : [] });
             } else {
               const prev = mergedMap.get(key)!;
-              const replyMap = new Map<string, any>();
-              [...(prev.replies || []), ...(cr.replies || [])].forEach((rep) => {
-                if (!rep) return;
-                const rk = rep.id || `${rep.senderRole}_${rep.message}_${rep.timestamp}`;
-                if (!replyMap.has(rk)) replyMap.set(rk, rep);
-              });
-              const mergedReplies = Array.from(replyMap.values()).sort(
-                (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
-              );
+              const combined = [...(prev.replies || []), ...(cr.replies || [])]
+                .filter(Boolean)
+                .sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
+              const mergedReplies: any[] = [];
+              const seenIds = new Set<string>();
+              let hasAck = false;
+              for (const rep of combined) {
+                const rid = (rep.id || '').trim();
+                if (rid && seenIds.has(rid)) continue;
+                const isAck =
+                  rid.startsWith('ACK-') ||
+                  rep.senderId === 'system-admin-ack' ||
+                  (rep.senderRole === 'admin' &&
+                    (rep.message || '').toLowerCase().includes('successfully delivered to the tagoloan water district'));
+                if (isAck) {
+                  if (hasAck) continue;
+                  hasAck = true;
+                  if (rid) seenIds.add(rid);
+                  mergedReplies.push(rep);
+                  continue;
+                }
+                const normMsg = (rep.message || '').trim().replace(/\s+/g, ' ').toLowerCase();
+                const repTime = new Date(rep.timestamp || 0).getTime();
+                const isDup = mergedReplies.some((ex) => {
+                  if (ex.senderRole !== rep.senderRole) return false;
+                  const exMsg = (ex.message || '').trim().replace(/\s+/g, ' ').toLowerCase();
+                  if (exMsg !== normMsg) return false;
+                  return Math.abs(repTime - new Date(ex.timestamp || 0).getTime()) <= 5 * 60 * 1000;
+                });
+                if (!isDup) {
+                  if (rid) seenIds.add(rid);
+                  mergedReplies.push(rep);
+                }
+              }
               const crNewer = new Date(cr.updatedAt || 0).getTime() >= new Date(prev.updatedAt || 0).getTime();
               const primary = crNewer ? cr : prev;
               const secondary = crNewer ? prev : cr;
@@ -1250,6 +1339,7 @@ export function stopRealtimeFirestoreListeners() {
  * so password AND issued linkedAccountNumber are both preserved.
  */
 export async function directFindUserInFirestore(emailOrId: string): Promise<User | null> {
+  if (isFirestoreReadQuotaExceeded() || isFirestoreWriteQuotaExceeded()) return null;
   const rawInput = emailOrId.trim();
   const cleanSearch = rawInput.toLowerCase();
   if (!cleanSearch) return null;
@@ -1564,6 +1654,7 @@ export async function resolveConsumerAccountInFirestore(params: {
   const cleanPhone = normalizePhone11(params.contactNumber);
 
   if (!cleanEmail && !cleanUid && !cleanAcc && !cleanName) return null;
+  if (isFirestoreReadQuotaExceeded() || isFirestoreWriteQuotaExceeded()) return null;
 
   try {
     // 1. Resolve User docs
@@ -1974,7 +2065,7 @@ export async function initializeFirestoreSeed(initialData: {
             batch.set(doc(db, COLLECTIONS.BARANGAYS, sanitizeDocId(b.id)), sanitizeForFirestore(b));
           });
 
-          await batch.commit();
+          await withWriteTimeout(batch.commit());
         }
         try {
           localStorage.setItem(SEEDED_STORAGE_KEY, '1');
@@ -2008,11 +2099,11 @@ export async function syncDocToFirestore<T extends object>(
   if (!force && isPayloadAlreadySynced(collectionName, cleanId, cleanData)) return;
 
   try {
-    await setDoc(doc(db, collectionName, cleanId), cleanData, { merge: true });
+    await withWriteTimeout(setDoc(doc(db, collectionName, cleanId), cleanData, { merge: true }));
     markPayloadSynced(collectionName, cleanId, cleanData);
   } catch (error: any) {
     if (isQuotaError(error)) {
-      markFirestoreQuotaExceeded(error);
+      markFirestoreQuotaExceeded(error, 'write');
     } else if (isPermissionDeniedError(error)) {
       try {
         handleFirestoreError(error, OperationType.WRITE, `${collectionName}/${cleanId}`);
@@ -2066,23 +2157,24 @@ export async function syncBatchToFirestore<T extends object>(
     staged.forEach(({ cleanId, cleanItem }) => {
       batch.set(doc(db, collectionName, cleanId), cleanItem, { merge: true });
     });
-    await batch.commit();
+    await withWriteTimeout(batch.commit());
     staged.forEach(({ cleanId, cleanItem }) => {
       markPayloadSynced(collectionName, cleanId, cleanItem);
     });
   } catch (error: any) {
     if (isQuotaError(error)) {
-      markFirestoreQuotaExceeded(error);
+      markFirestoreQuotaExceeded(error, 'write');
       return;
     }
     // Fallback: write changed items individually so one legacy invalid record never blocks new users/IDs
     for (const { cleanId, cleanItem } of staged) {
+      if (isFirestoreWriteQuotaExceeded()) break;
       try {
-        await setDoc(doc(db, collectionName, cleanId), cleanItem, { merge: true });
+        await withWriteTimeout(setDoc(doc(db, collectionName, cleanId), cleanItem, { merge: true }));
         markPayloadSynced(collectionName, cleanId, cleanItem);
       } catch (innerErr: any) {
         if (isQuotaError(innerErr)) {
-          markFirestoreQuotaExceeded(innerErr);
+          markFirestoreQuotaExceeded(innerErr, 'write');
           break;
         }
       }
@@ -2099,10 +2191,10 @@ export async function deleteDocFromFirestore(collectionName: string, docId: stri
   const cleanId = sanitizeDocId(docId);
   try {
     syncedPayloadCache.delete(`${collectionName}/${cleanId}`);
-    await deleteDoc(doc(db, collectionName, cleanId));
+    await withWriteTimeout(deleteDoc(doc(db, collectionName, cleanId)));
   } catch (error: any) {
     if (isQuotaError(error)) {
-      markFirestoreQuotaExceeded(error);
+      markFirestoreQuotaExceeded(error, 'write');
     } else if (isPermissionDeniedError(error)) {
       try {
         handleFirestoreError(error, OperationType.DELETE, `${collectionName}/${cleanId}`);

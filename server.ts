@@ -245,6 +245,7 @@ interface PortalSyncUser {
   email: string;
   name: string;
   password?: string;
+  passwordUpdatedAt?: number;
   role: "admin" | "consumer" | "staff" | "cashier" | "meter_reader";
   status: "active" | "inactive" | "pending_approval";
   linkedAccountNumber?: string;
@@ -1984,17 +1985,18 @@ app.patch("/api/consumers/:identifier", (req, res) => {
 // POST /api/consumers/change-password - Securely validate and persist consumer password updates
 app.post("/api/consumers/change-password", (req, res) => {
   try {
-    const { userId, email, accountNumber, currentPassword, newPassword } = req.body || {};
+    const { userId, email, accountNumber, currentPassword, newPassword, passwordUpdatedAt } = req.body || {};
     const cleanEmail = String(email || "").trim().toLowerCase();
     const cleanUid = String(userId || "").trim();
-    const cleanAcc = String(accountNumber || "").trim().toUpperCase();
-    const oldPwd = String(currentPassword || "");
-    const nextPwd = String(newPassword || "");
+    const cleanAcc = String(accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const oldPwd = String(currentPassword || "").trim();
+    const nextPwd = String(newPassword || "").trim();
+    const updatedTs = Number(passwordUpdatedAt) || Date.now();
 
-    if (!oldPwd || !nextPwd) {
+    if (!nextPwd) {
       return res.status(400).json({
         success: false,
-        message: "Both current password and new password are required."
+        message: "New password is required."
       });
     }
 
@@ -2005,40 +2007,57 @@ app.post("/api/consumers/change-password", (req, res) => {
       });
     }
 
-    if (nextPwd === oldPwd) {
+    if (oldPwd && nextPwd === oldPwd) {
       return res.status(400).json({
         success: false,
         message: "New password cannot be the same as your current/old password."
       });
     }
 
-    const uIdx = syncedPortalUsers.findIndex(u =>
+    const matchingUsers = syncedPortalUsers.filter(u =>
       (cleanUid && u.id === cleanUid) ||
       (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) ||
-      (cleanAcc && isIssuedAccountNumberServer(cleanAcc) && u.linkedAccountNumber === cleanAcc)
+      (cleanAcc && isIssuedAccountNumberServer(cleanAcc) && u.linkedAccountNumber && u.linkedAccountNumber.toUpperCase() === cleanAcc)
     );
 
-    if (uIdx >= 0) {
-      const existing = syncedPortalUsers[uIdx];
-      if (existing.password && existing.password !== oldPwd) {
-        return res.status(401).json({
-          success: false,
-          message: "Current password is incorrect."
-        });
+    let primaryUser: PortalSyncUser | null = null;
+    for (const u of matchingUsers) {
+      if (!primaryUser || Number(u.passwordUpdatedAt || 0) >= Number(primaryUser.passwordUpdatedAt || 0)) {
+        primaryUser = { ...(primaryUser || {}), ...u, password: u.password || primaryUser?.password };
       }
-      if (existing.password && existing.password === nextPwd) {
+    }
+
+    if (primaryUser?.password) {
+      if (primaryUser.password === nextPwd) {
         return res.status(400).json({
           success: false,
           message: "New password cannot be the same as your previous password."
         });
       }
-      syncedPortalUsers[uIdx] = {
-        ...existing,
-        password: nextPwd
-      };
+      if (oldPwd && primaryUser.password !== oldPwd) {
+        return res.status(401).json({
+          success: false,
+          message: "Current password is incorrect."
+        });
+      }
+    }
+
+    if (matchingUsers.length > 0) {
+      syncedPortalUsers = syncedPortalUsers.map(u => {
+        const isMatch =
+          (cleanUid && u.id === cleanUid) ||
+          (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) ||
+          (cleanAcc && isIssuedAccountNumberServer(cleanAcc) && u.linkedAccountNumber && u.linkedAccountNumber.toUpperCase() === cleanAcc);
+        if (!isMatch) return u;
+        return {
+          ...u,
+          password: nextPwd,
+          passwordUpdatedAt: updatedTs
+        };
+      });
     } else {
       const matchedConsumer = syncedConsumers.find(c =>
-        (cleanAcc && isIssuedAccountNumberServer(cleanAcc) && c.accountNumber === cleanAcc) ||
+        (cleanAcc && isIssuedAccountNumberServer(cleanAcc) && c.accountNumber && c.accountNumber.toUpperCase() === cleanAcc) ||
         (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) ||
         (cleanUid && c.linkedUserId === cleanUid)
       );
@@ -2047,6 +2066,7 @@ app.post("/api/consumers/change-password", (req, res) => {
         email: cleanEmail || matchedConsumer?.email || "",
         name: matchedConsumer?.name || "Consumer",
         password: nextPwd,
+        passwordUpdatedAt: updatedTs,
         role: "consumer",
         status: matchedConsumer && isValidatedConsumerForReader(matchedConsumer) ? "active" : "pending_approval",
         linkedAccountNumber: matchedConsumer && isIssuedAccountNumberServer(matchedConsumer.accountNumber) ? matchedConsumer.accountNumber : undefined,
@@ -2058,6 +2078,7 @@ app.post("/api/consumers/change-password", (req, res) => {
 
     res.json({
       success: true,
+      passwordUpdatedAt: updatedTs,
       message: "Account password updated and saved successfully."
     });
   } catch (err) {
@@ -2208,11 +2229,21 @@ app.post("/api/consumers/reconcile", (req, res) => {
       if (uIdx >= 0) {
         const existing = syncedPortalUsers[uIdx];
         const existingHasAcc = isIssuedAccountNumberServer(existing.linkedAccountNumber);
+        const iuPwTs = Number(iu.passwordUpdatedAt || 0);
+        const exPwTs = Number(existing.passwordUpdatedAt || 0);
+        const chosenPassword =
+          iuPwTs > exPwTs
+            ? iu.password || existing.password
+            : exPwTs > iuPwTs
+              ? existing.password || iu.password
+              : existing.password || iu.password;
+        const chosenPwTs = Math.max(iuPwTs, exPwTs) || undefined;
         syncedPortalUsers[uIdx] = {
           ...existing,
           name: iu.name || existing.name,
           email: cleanEmail || existing.email,
-          password: iu.password || existing.password,
+          password: chosenPassword,
+          ...(chosenPwTs ? { passwordUpdatedAt: chosenPwTs } : {}),
           contactNumber: iu.contactNumber || existing.contactNumber,
           linkedAccountNumber: incomingHasAcc
             ? String(iu.linkedAccountNumber).trim().toUpperCase()
@@ -2227,6 +2258,7 @@ app.post("/api/consumers/reconcile", (req, res) => {
           email: cleanEmail,
           name: iu.name || "Consumer",
           password: iu.password,
+          ...(iu.passwordUpdatedAt ? { passwordUpdatedAt: Number(iu.passwordUpdatedAt) } : {}),
           role: "consumer",
           status: incomingHasAcc ? "active" : (iu.status || "pending_approval"),
           linkedAccountNumber: incomingHasAcc ? String(iu.linkedAccountNumber).trim().toUpperCase() : undefined,
@@ -2377,7 +2409,7 @@ app.post("/api/consumers/reconcile", (req, res) => {
 // POST /api/consumers/resolve-account - Authoritative consumer account + notification resolver for Consumer Portal & Login
 app.post("/api/consumers/resolve-account", (req, res) => {
   try {
-    const { email, userId, accountNumber, name, contactNumber, password, verifyPassword } = req.body || {};
+    const { email, userId, accountNumber, name, contactNumber, password, verifyPassword, includeAuthMeta } = req.body || {};
     const cleanEmail = (email || "").trim().toLowerCase();
     const cleanUid = (userId || "").trim();
     const cleanAcc = (accountNumber || "").replace(/^#/, "").trim().toUpperCase();
@@ -2388,15 +2420,43 @@ app.post("/api/consumers/resolve-account", (req, res) => {
     // Ensure server store is internally consistent first
     reconcileAllServerConsumersAndUsers();
 
-    // 1. Match Portal User if present
-    const matchedUser = syncedPortalUsers.find(u =>
+    // 1. Match ALL candidate Portal Users and pick authoritative password with highest passwordUpdatedAt
+    const matchingUsers = syncedPortalUsers.filter(u =>
       (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) ||
       (cleanUid && u.id === cleanUid) ||
       (hasValidAcc && u.linkedAccountNumber && u.linkedAccountNumber.toUpperCase() === cleanAcc)
     );
 
+    let matchedUser: PortalSyncUser | undefined;
+    for (const u of matchingUsers) {
+      if (!matchedUser) {
+        matchedUser = { ...u };
+      } else {
+        const uPwTs = Number(u.passwordUpdatedAt || 0);
+        const mPwTs = Number(matchedUser.passwordUpdatedAt || 0);
+        const chosenPassword =
+          uPwTs > mPwTs
+            ? u.password || matchedUser.password
+            : mPwTs > uPwTs
+              ? matchedUser.password || u.password
+              : matchedUser.password || u.password;
+        const chosenPwTs = Math.max(uPwTs, mPwTs) || undefined;
+        matchedUser = {
+          ...matchedUser,
+          ...u,
+          id: matchedUser.id && !matchedUser.id.startsWith("email_") ? matchedUser.id : u.id,
+          password: chosenPassword,
+          ...(chosenPwTs ? { passwordUpdatedAt: chosenPwTs } : {})
+        };
+      }
+    }
+
+    const passwordVerified = Boolean(
+      matchedUser && matchedUser.password && password !== undefined && String(password).trim() === matchedUser.password
+    );
+
     if (verifyPassword && matchedUser && matchedUser.password && password !== undefined) {
-      if (String(password).trim() !== matchedUser.password) {
+      if (!passwordVerified) {
         return res.status(401).json({
           success: false,
           authFailed: true,
@@ -2454,16 +2514,37 @@ app.post("/api/consumers/resolve-account", (req, res) => {
       return false;
     });
 
-    const refreshedUser = syncedPortalUsers.find(u =>
+    const refreshedCandidates = syncedPortalUsers.filter(u =>
       (effectiveEmail && u.email && u.email.toLowerCase() === effectiveEmail) ||
       (effectiveUid && u.id.toLowerCase() === effectiveUid)
-    ) || matchedUser || null;
+    );
+    let refreshedUser: PortalSyncUser | null = matchedUser || null;
+    for (const u of refreshedCandidates) {
+      if (!refreshedUser || Number(u.passwordUpdatedAt || 0) >= Number(refreshedUser.passwordUpdatedAt || 0)) {
+        refreshedUser = {
+          ...(refreshedUser || {}),
+          ...u,
+          password: u.password || refreshedUser?.password,
+          passwordUpdatedAt: Math.max(Number(u.passwordUpdatedAt || 0), Number(refreshedUser?.passwordUpdatedAt || 0)) || undefined
+        };
+      }
+    }
+
+    const safeUser = refreshedUser
+      ? includeAuthMeta
+        ? refreshedUser
+        : (() => {
+            const { password: _pw, ...rest } = refreshedUser;
+            return rest;
+          })()
+      : null;
 
     res.json({
       success: true,
       isIssued,
+      passwordVerified,
       consumer: resolvedConsumer,
-      user: refreshedUser,
+      user: safeUser,
       notifications: consumerNotifs
     });
   } catch (err) {
@@ -2783,18 +2864,59 @@ app.post("/api/readings/:id/approve", (req, res) => {
 // 6. CONSUMER SERVICE REPORTS & ADMIN REPLY APIS
 // ==========================================
 
+function dedupeInMemoryReplies(replies: ServerReportReply[]): ServerReportReply[] {
+  if (!Array.isArray(replies)) return [];
+  const sorted = [...replies]
+    .filter(r => r && typeof r.message === "string" && r.message.trim().length > 0)
+    .sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
+
+  const byId = new Set<string>();
+  const result: ServerReportReply[] = [];
+  let hasAutoAck = false;
+
+  for (const rep of sorted) {
+    const cleanId = String(rep.id || "").trim();
+    if (cleanId && byId.has(cleanId)) continue;
+
+    const isAutoAck =
+      cleanId.startsWith("ACK-") ||
+      rep.senderId === "system-admin-ack" ||
+      (rep.senderRole === "admin" && rep.message.includes("officially received by Tagoloan Water District"));
+    if (isAutoAck) {
+      if (hasAutoAck) continue;
+      hasAutoAck = true;
+    }
+
+    const normMsg = rep.message.trim().replace(/\s+/g, " ").toLowerCase();
+    const repTime = new Date(rep.timestamp || 0).getTime();
+    const semanticDupIdx = result.findIndex(existing => {
+      if (existing.senderRole !== rep.senderRole) return false;
+      const exMsg = existing.message.trim().replace(/\s+/g, " ").toLowerCase();
+      if (exMsg !== normMsg) return false;
+      const exTime = new Date(existing.timestamp || 0).getTime();
+      if (!exTime || !repTime) return true;
+      return Math.abs(repTime - exTime) < 5 * 60 * 1000;
+    });
+
+    if (semanticDupIdx >= 0) {
+      if (rep.statusUpdate && !result[semanticDupIdx].statusUpdate) {
+        result[semanticDupIdx] = { ...result[semanticDupIdx], statusUpdate: rep.statusUpdate };
+      }
+      if (cleanId) byId.add(cleanId);
+      continue;
+    }
+
+    if (cleanId) byId.add(cleanId);
+    result.push(rep);
+  }
+
+  return result;
+}
+
 function mergeInMemoryReportPair(existing: ServerConsumerReport, incoming: ServerConsumerReport): ServerConsumerReport {
   const exReplies = Array.isArray(existing.replies) ? existing.replies : [];
   const inReplies = Array.isArray(incoming.replies) ? incoming.replies : [];
-  const replyMap = new Map<string, ServerReportReply>();
-  for (const rep of [...exReplies, ...inReplies]) {
-    if (!rep) continue;
-    const rk = rep.id || `${rep.senderRole}_${rep.message}_${rep.timestamp}`;
-    if (!replyMap.has(rk)) replyMap.set(rk, rep);
-  }
-  const mergedReplies = Array.from(replyMap.values()).sort(
-    (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
-  );
+  const mergedReplies = dedupeInMemoryReplies([...exReplies, ...inReplies]);
   const inTime = new Date(incoming.updatedAt || incoming.createdAt || 0).getTime();
   const exTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
   const incomingNewer = inTime > exTime || (inTime === exTime && inReplies.length >= exReplies.length);
@@ -2879,7 +3001,7 @@ app.post("/api/reports/reconcile", (req, res) => {
         inMemoryReports.unshift({
           ...ir,
           id: ir.id || ir.ticketNumber,
-          replies: Array.isArray(ir.replies) ? ir.replies : []
+          replies: dedupeInMemoryReplies(Array.isArray(ir.replies) ? ir.replies : [])
         });
         changed = true;
       } else {
@@ -2948,21 +3070,44 @@ app.post("/api/reports", (req, res) => {
     const randNum = Math.floor(1000 + Math.random() * 9000);
     const ticketNumber = req.body.ticketNumber || `TWD-CR-${new Date().getFullYear()}-${randNum}`;
     const now = new Date().toISOString();
+    const createdAt = req.body.createdAt || now;
 
-    const replies: ServerReportReply[] = Array.isArray(req.body.replies) && req.body.replies.length > 0
-      ? req.body.replies
+    const rawReplies: ServerReportReply[] = Array.isArray(req.body.replies) && req.body.replies.length > 0
+      ? [...req.body.replies]
       : [];
-    if (replies.length === 0 && description) {
-      replies.push({
-        id: `REP-MSG-${Date.now()}-1`,
+    if (rawReplies.length === 0 && description) {
+      rawReplies.push({
+        id: `INIT-${ticketNumber}`,
         reportId: id,
         senderId: accountNumber || "consumer",
         senderName: consumerName || "Consumer",
         senderRole: "consumer",
         message: description,
-        timestamp: req.body.createdAt || now
+        timestamp: createdAt
       });
     }
+
+    const ackTimestamp = new Date(new Date(createdAt).getTime() + 1).toISOString();
+    const ackId = `ACK-${ticketNumber}`;
+    const hasAckAlready = rawReplies.some(
+      r =>
+        r &&
+        (String(r.id || "").startsWith("ACK-") ||
+          r.senderId === "system-admin-ack" ||
+          (r.senderRole === "admin" && String(r.message || "").includes("officially received by Tagoloan Water District")))
+    );
+    if (!hasAckAlready) {
+      rawReplies.push({
+        id: ackId,
+        reportId: id,
+        senderId: "system-admin-ack",
+        senderName: "TWD Customer Service Desk",
+        senderRole: "admin",
+        message: `Thank you for reaching out! Your inquiry/report (${ticketNumber}) has been officially received by Tagoloan Water District Administration. Our Customer Service team has been notified—please wait momentarily while our staff reviews your concern and prepares an official response.`,
+        timestamp: ackTimestamp
+      });
+    }
+    const replies = dedupeInMemoryReplies(rawReplies);
 
     const newReport: ServerConsumerReport = {
       id,
@@ -2979,8 +3124,8 @@ app.post("/api/reports", (req, res) => {
       description: (description || "").trim(),
       urgency: urgency || "normal",
       status: req.body.status || "pending",
-      createdAt: req.body.createdAt || now,
-      updatedAt: now,
+      createdAt,
+      updatedAt: ackTimestamp,
       photoUrl: photoUrl || "",
       replies,
       hasUnreadAdminReply: false,
@@ -2993,30 +3138,31 @@ app.post("/api/reports", (req, res) => {
     } else {
       inMemoryReports.unshift(newReport);
     }
+    const finalSavedReport = inMemoryReports[existingIdx >= 0 ? existingIdx : 0];
     savePortalSyncStore();
 
     // Broadcast report creation to Admin Portal and all WebSocket clients
     broadcast("CONSUMER_REPORT_CREATED", {
-      report: newReport,
-      ticketNumber: newReport.ticketNumber,
-      consumerName: newReport.consumerName,
-      accountNumber: newReport.accountNumber,
-      category: newReport.category,
-      title: newReport.title,
-      urgency: newReport.urgency,
-      message: `New Consumer Concern Filed [${newReport.ticketNumber}] by ${newReport.consumerName} (${newReport.accountNumber}): "${newReport.title}"`
+      report: finalSavedReport,
+      ticketNumber: finalSavedReport.ticketNumber,
+      consumerName: finalSavedReport.consumerName,
+      accountNumber: finalSavedReport.accountNumber,
+      category: finalSavedReport.category,
+      title: finalSavedReport.title,
+      urgency: finalSavedReport.urgency,
+      message: `New Consumer Concern Filed [${finalSavedReport.ticketNumber}] by ${finalSavedReport.consumerName} (${finalSavedReport.accountNumber}): "${finalSavedReport.title}"`
     });
 
     broadcast("consumer:report:created", {
-      report: newReport,
-      ticketNumber: newReport.ticketNumber,
-      message: `New report ${newReport.ticketNumber} filed for ${newReport.barangay}.`
+      report: finalSavedReport,
+      ticketNumber: finalSavedReport.ticketNumber,
+      message: `New report ${finalSavedReport.ticketNumber} filed for ${finalSavedReport.barangay}.`
     });
 
     res.status(201).json({
       success: true,
       message: `Concern filed successfully. Tracking Ticket: ${ticketNumber}`,
-      report: newReport
+      report: finalSavedReport
     });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to submit consumer report." });
@@ -3027,13 +3173,25 @@ app.post("/api/reports", (req, res) => {
 app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
   try {
     const { id } = req.params;
-    const { senderId, senderName, senderRole, message, statusUpdate, assignedStaff, report: clientReport } = req.body || {};
+    const {
+      id: clientReplyId,
+      replyId,
+      timestamp: clientReplyTimestamp,
+      senderId,
+      senderName,
+      senderRole,
+      message,
+      statusUpdate,
+      assignedStaff,
+      report: clientReport
+    } = req.body || {};
 
     if (!message || !message.trim()) {
       return res.status(400).json({ success: false, message: "Reply message cannot be empty." });
     }
 
     const now = new Date().toISOString();
+    const replyTs = clientReplyTimestamp || now;
     let idx = inMemoryReports.findIndex(r => r.id === id || r.ticketNumber === id);
     if (idx === -1 && clientReport && typeof clientReport === "object") {
       const hydrated: ServerConsumerReport = {
@@ -3054,7 +3212,7 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
         status: clientReport.status || "pending",
         createdAt: clientReport.createdAt || now,
         updatedAt: now,
-        replies: Array.isArray(clientReport.replies) ? clientReport.replies : [],
+        replies: dedupeInMemoryReplies(Array.isArray(clientReport.replies) ? clientReport.replies : []),
         hasUnreadAdminReply: Boolean(clientReport.hasUnreadAdminReply),
         hasUnreadConsumerUpdate: Boolean(clientReport.hasUnreadConsumerUpdate)
       };
@@ -3067,26 +3225,35 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
     }
 
     const report = inMemoryReports[idx];
+    const cleanMessage = message.trim();
+    const deterministicReplyId = String(clientReplyId || replyId || "").trim() || `REP-MSG-${Date.now()}`;
+
     const replyItem: ServerReportReply = {
-      id: `REP-MSG-${Date.now()}`,
+      id: deterministicReplyId,
       reportId: report.id,
       senderId: senderId || "staff",
       senderName: senderName || (senderRole === "admin" ? "TWD Admin" : "Consumer"),
       senderRole: senderRole || "admin",
-      message: message.trim(),
-      timestamp: now,
+      message: cleanMessage,
+      timestamp: replyTs,
       statusUpdate: statusUpdate || undefined
     };
 
-    const existingReplies = Array.isArray(report.replies) ? report.replies : [];
-    const duplicateRecent =
-      existingReplies.length > 0 &&
-      existingReplies[existingReplies.length - 1].message === replyItem.message &&
-      existingReplies[existingReplies.length - 1].senderRole === replyItem.senderRole &&
-      Math.abs(new Date(existingReplies[existingReplies.length - 1].timestamp || 0).getTime() - Date.now()) < 5000;
+    const existingReplies = dedupeInMemoryReplies(Array.isArray(report.replies) ? report.replies : []);
+    const normNewMsg = cleanMessage.replace(/\s+/g, " ").toLowerCase();
+    const newReplyMs = new Date(replyTs).getTime();
+    const isDuplicateSubmission = existingReplies.some(r => {
+      if (r.id === deterministicReplyId) return true;
+      if (r.senderRole !== replyItem.senderRole) return false;
+      const rNorm = String(r.message || "").trim().replace(/\s+/g, " ").toLowerCase();
+      if (rNorm !== normNewMsg) return false;
+      const rMs = new Date(r.timestamp || 0).getTime();
+      return !rMs || !newReplyMs || Math.abs(newReplyMs - rMs) < 5 * 60 * 1000;
+    });
 
     const nextStatus = statusUpdate || report.status;
     const isResolved = nextStatus === "resolved";
+    const mergedReplies = dedupeInMemoryReplies([...existingReplies, replyItem]);
 
     const updated: ServerConsumerReport = {
       ...report,
@@ -3094,7 +3261,7 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
       updatedAt: now,
       resolvedAt: isResolved ? (report.resolvedAt || now) : report.resolvedAt,
       assignedStaff: assignedStaff !== undefined ? assignedStaff : report.assignedStaff,
-      replies: duplicateRecent ? existingReplies : [...existingReplies, replyItem],
+      replies: mergedReplies,
       hasUnreadAdminReply: replyItem.senderRole === "admin",
       hasUnreadConsumerUpdate: replyItem.senderRole === "consumer"
     };
@@ -3103,48 +3270,50 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
     savePortalSyncStore();
 
     let createdNotif: ServerConsumerNotification | undefined;
-    // Broadcast reply event to all connected sockets
-    if (replyItem.senderRole === "admin") {
-      if ((updated.accountNumber && updated.accountNumber !== "UNASSIGNED") || updated.consumerEmail) {
-        createdNotif = pushServerNotification({
-          accountNumber: (updated.accountNumber || "PENDING").toUpperCase(),
-          consumerEmail: updated.consumerEmail ? updated.consumerEmail.toLowerCase() : undefined,
-          title: `Official Reply on Concern #${updated.ticketNumber}`,
-          message: `Admin ${replyItem.senderName} replied: "${replyItem.message.slice(0, 90)}" (Status: ${nextStatus.toUpperCase()})`,
-          type: "report",
-          reportId: updated.id,
+    if (!isDuplicateSubmission) {
+      if (replyItem.senderRole === "admin") {
+        if ((updated.accountNumber && updated.accountNumber !== "UNASSIGNED") || updated.consumerEmail) {
+          createdNotif = pushServerNotification({
+            id: `notif-rep-${deterministicReplyId.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
+            accountNumber: (updated.accountNumber || "PENDING").toUpperCase(),
+            consumerEmail: updated.consumerEmail ? updated.consumerEmail.toLowerCase() : undefined,
+            title: `Official Reply on Concern #${updated.ticketNumber}`,
+            message: `Admin ${replyItem.senderName} replied: "${replyItem.message.slice(0, 90)}" (Status: ${nextStatus.toUpperCase()})`,
+            type: "report",
+            reportId: updated.id,
+            ticketNumber: updated.ticketNumber
+          });
+        }
+        broadcast("ADMIN_REPLIED_TO_REPORT", {
+          report: updated,
+          reply: replyItem,
+          notification: createdNotif,
+          accountNumber: updated.accountNumber,
+          consumerEmail: updated.consumerEmail,
+          ticketNumber: updated.ticketNumber,
+          message: `Admin ${replyItem.senderName} responded to Ticket #${updated.ticketNumber}: "${replyItem.message}" (Status: ${nextStatus.toUpperCase()})`
+        });
+        broadcast("consumer:report:replied", {
+          report: updated,
+          reply: replyItem,
+          notification: createdNotif,
+          accountNumber: updated.accountNumber,
+          consumerEmail: updated.consumerEmail,
+          ticketNumber: updated.ticketNumber
+        });
+      } else {
+        broadcast("CONSUMER_REPLIED_TO_REPORT", {
+          report: updated,
+          reply: replyItem,
+          ticketNumber: updated.ticketNumber,
+          message: `Consumer ${replyItem.senderName} posted a follow-up on Ticket #${updated.ticketNumber}.`
+        });
+        broadcast("consumer:report:updated", {
+          report: updated,
+          reply: replyItem,
           ticketNumber: updated.ticketNumber
         });
       }
-      broadcast("ADMIN_REPLIED_TO_REPORT", {
-        report: updated,
-        reply: replyItem,
-        notification: createdNotif,
-        accountNumber: updated.accountNumber,
-        consumerEmail: updated.consumerEmail,
-        ticketNumber: updated.ticketNumber,
-        message: `Admin ${replyItem.senderName} responded to Ticket #${updated.ticketNumber}: "${replyItem.message}" (Status: ${nextStatus.toUpperCase()})`
-      });
-      broadcast("consumer:report:replied", {
-        report: updated,
-        reply: replyItem,
-        notification: createdNotif,
-        accountNumber: updated.accountNumber,
-        consumerEmail: updated.consumerEmail,
-        ticketNumber: updated.ticketNumber
-      });
-    } else {
-      broadcast("CONSUMER_REPLIED_TO_REPORT", {
-        report: updated,
-        reply: replyItem,
-        ticketNumber: updated.ticketNumber,
-        message: `Consumer ${replyItem.senderName} posted a follow-up on Ticket #${updated.ticketNumber}.`
-      });
-      broadcast("consumer:report:updated", {
-        report: updated,
-        reply: replyItem,
-        ticketNumber: updated.ticketNumber
-      });
     }
 
     res.json({

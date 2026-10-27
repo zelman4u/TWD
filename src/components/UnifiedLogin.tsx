@@ -129,7 +129,8 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
               accountNumber: matchedUser?.linkedAccountNumber,
               name: matchedUser?.name,
               password: inputPassword,
-              verifyPassword: !matchedUser
+              verifyPassword: false,
+              includeAuthMeta: true
             })
           });
           if (resp.status === 401) {
@@ -198,6 +199,47 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
       return;
     }
 
+    // Select authoritative password from whichever source (local override/user, server, or Firestore) has the highest passwordUpdatedAt
+    let authoritativePassword = matchedUser.password;
+    let authoritativePwTs = matchedUser.passwordUpdatedAt || 0;
+
+    try {
+      const rawOv = localStorage.getItem('twd_live_v4_password_overrides');
+      if (rawOv) {
+        const ovMap = JSON.parse(rawOv) || {};
+        for (const k of [inputEmail, (matchedUser.id || '').toLowerCase(), (matchedUser.linkedAccountNumber || '').toLowerCase()].filter(Boolean)) {
+          const ov = ovMap[k];
+          if (ov && ov.password && ov.passwordUpdatedAt >= authoritativePwTs) {
+            authoritativePassword = ov.password;
+            authoritativePwTs = ov.passwordUpdatedAt;
+          }
+        }
+      }
+    } catch {}
+
+    for (const rc of [serverResolved?.user, firestoreResolved?.user].filter(Boolean) as Array<{ password?: string; passwordUpdatedAt?: number }>) {
+      const rcTs = Number(rc.passwordUpdatedAt || 0);
+      if (rc.password && (rcTs > authoritativePwTs || (!authoritativePassword && rcTs === authoritativePwTs))) {
+        authoritativePassword = rc.password;
+        authoritativePwTs = rcTs;
+      }
+    }
+
+    if (authoritativePassword && authoritativePassword !== matchedUser.password) {
+      matchedUser = {
+        ...matchedUser,
+        password: authoritativePassword,
+        ...(authoritativePwTs > 0 ? { passwordUpdatedAt: authoritativePwTs } : {})
+      };
+      if (authoritativePwTs > 0) {
+        mockDb.updateUserPassword(
+          { userId: matchedUser.id, email: inputEmail, accountNumber: matchedUser.linkedAccountNumber },
+          authoritativePassword,
+          authoritativePwTs
+        );
+      }
+    }
+
     // Upgrade matchedUser if Firestore or Server has an active linkedAccountNumber
     const resolvedLinkedAcc =
       firestoreResolved?.user?.linkedAccountNumber ||
@@ -214,11 +256,16 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
         ...matchedUser,
         linkedAccountNumber: resolvedLinkedAcc.trim().toUpperCase(),
         status: 'active',
-        password: matchedUser.password || firestoreResolved?.user?.password || serverResolved?.user?.password
+        password: authoritativePassword || matchedUser.password,
+        ...(authoritativePwTs > 0 ? { passwordUpdatedAt: authoritativePwTs } : {})
       };
     }
 
-    if (matchedUser.password && matchedUser.password !== inputPassword) {
+    const serverExplicitlyVerifiedNewer =
+      Boolean(serverResolved?.passwordVerified) &&
+      Number(serverResolved?.user?.passwordUpdatedAt || 0) > authoritativePwTs;
+
+    if (!serverExplicitlyVerifiedNewer && authoritativePassword && authoritativePassword !== inputPassword) {
       hideLoading();
       setError("Incorrect account password. Please try again.");
       toast.error("Authentication Failed", "Incorrect account password. Please try again.");

@@ -16,6 +16,7 @@ export interface User {
   status: 'active' | 'inactive' | 'pending_approval';
   contactNumber?: string;
   password?: string;
+  passwordUpdatedAt?: number;
   registrationDate?: string;
 }
 

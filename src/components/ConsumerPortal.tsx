@@ -37,6 +37,7 @@ import {
   BarChart3,
   ListFilter,
   Eye,
+  EyeOff,
   Printer,
   RefreshCw,
   MapPin,
@@ -178,6 +179,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const [passwordOld, setPasswordOld] = useState('');
   const [passwordNew, setPasswordNew] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [showPasswordOld, setShowPasswordOld] = useState(false);
+  const [showPasswordNew, setShowPasswordNew] = useState(false);
+  const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'err'; msg: string } | null>(null);
   const [phoneValidationError, setPhoneValidationError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
@@ -1753,6 +1757,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     const myAccount = (consumerRecord?.accountNumber || currentUser.linkedAccountNumber || '').trim().toUpperCase();
 
     const storedUsers = mockDb.getUsers();
+    const sessionUserNow = mockDb.getCurrentUser();
     const matchedUser = storedUsers.find(
       (u) =>
         (myUserId && u.id === myUserId) ||
@@ -1760,7 +1765,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         (myAccount && !myAccount.startsWith('PENDING') && (u.linkedAccountNumber || '').trim().toUpperCase() === myAccount)
     );
 
-    const activeStoredPassword = matchedUser?.password ?? currentUser.password;
+    const activeStoredPassword =
+      (matchedUser && (matchedUser.passwordUpdatedAt || 0) >= (sessionUserNow?.passwordUpdatedAt || 0)
+        ? matchedUser.password
+        : sessionUserNow?.password) ??
+      matchedUser?.password ??
+      sessionUserNow?.password ??
+      currentUser.password;
 
     // 1. Verify current password matches stored password
     if (activeStoredPassword && passwordOld !== activeStoredPassword) {
@@ -1798,9 +1809,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       return;
     }
 
+    const pwUpdatedAt = Date.now();
     setIsUpdatingPassword(true);
     try {
-      // 5. Sync password change to Backend API
+      // 5. Sync password change to Backend API (/api/consumers/change-password)
       const res = await safeBackendFetch('/api/consumers/change-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1810,6 +1822,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           accountNumber: myAccount || undefined,
           currentPassword: passwordOld,
           newPassword: passwordNew,
+          passwordUpdatedAt: pwUpdatedAt,
         }),
       });
 
@@ -1826,57 +1839,34 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         return;
       }
 
-      // 6. Persist updated password in local Users store, Current Session, and Cloud Firestore
-      let updatedUserRecord: UserType | null = null;
-      let foundInList = false;
-      const updatedUsersList = storedUsers.map((u) => {
-        const isMe =
-          (myUserId && u.id === myUserId) ||
-          (myEmail && u.email && u.email.trim().toLowerCase() === myEmail) ||
-          (myAccount && !myAccount.startsWith('PENDING') && (u.linkedAccountNumber || '').trim().toUpperCase() === myAccount);
-        if (isMe) {
-          foundInList = true;
-          updatedUserRecord = { ...u, password: passwordNew };
-          return updatedUserRecord;
-        }
-        return u;
-      });
-
-      if (!foundInList) {
-        updatedUserRecord = {
-          ...(mockDb.getCurrentUser() || currentUser),
-          password: passwordNew,
-        };
-        updatedUsersList.push(updatedUserRecord);
-      }
-
-      mockDb.saveUsers(updatedUsersList);
-
-      const sessionNow = mockDb.getCurrentUser() || currentUser;
-      const nextSessionUser: UserType = { ...sessionNow, password: passwordNew };
-      mockDb.setCurrentUser(nextSessionUser);
-
-      if (updatedUserRecord) {
-        const docKey = updatedUserRecord.id || updatedUserRecord.email || currentUser.id;
-        if (docKey) {
-          await syncDocToFirestore(COLLECTIONS.USERS, docKey, updatedUserRecord, true);
-        }
-      }
+      // 6. Atomically persist updated password in local override authority, all matching User records, active session, and BOTH Firestore user docs (id + email_...)
+      mockDb.updateUserPassword(
+        {
+          userId: myUserId || currentUser.id,
+          email: myEmail || currentUser.email,
+          accountNumber: myAccount || currentUser.linkedAccountNumber,
+        },
+        passwordNew,
+        pwUpdatedAt
+      );
 
       mockDb.addAuditLog(
         currentUser.id,
         currentUser.name,
         'consumer',
         'Password Rotation',
-        `Changed access password for consumer user "${currentUser.email}".`
+        `Changed access password for consumer user "${myEmail || currentUser.email}".`
       );
 
       setPasswordOld('');
       setPasswordNew('');
       setPasswordConfirm('');
+      setShowPasswordOld(false);
+      setShowPasswordNew(false);
+      setShowPasswordConfirm(false);
       setPasswordError(null);
       setStatusMsg({ type: 'success', msg: 'Account password updated and saved! Use your new password on your next sign-in.' });
-      toast.success('Password Saved', 'Your new password has been saved across your account.');
+      toast.success('Password Saved', 'Your new password is now active. Please use your updated password the next time you sign in.');
       setTimeout(() => setStatusMsg(null), 4500);
     } finally {
       setIsUpdatingPassword(false);
@@ -4900,38 +4890,60 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <label className="block text-xs font-semibold text-slate-300 mb-1">
                         Current Password
                       </label>
-                      <input
-                        type="password"
-                        required
-                        value={passwordOld}
-                        onChange={(e) => {
-                          setPasswordOld(e.target.value);
-                          setPasswordError(null);
-                        }}
-                        placeholder="Enter current password"
-                        className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:outline-none rounded-xl py-2.5 px-3 text-xs text-white placeholder:text-slate-600"
-                      />
+                      <div className="relative">
+                        <input
+                          type={showPasswordOld ? 'text' : 'password'}
+                          required
+                          value={passwordOld}
+                          onChange={(e) => {
+                            setPasswordOld(e.target.value);
+                            setPasswordError(null);
+                          }}
+                          placeholder="Enter current password"
+                          className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:outline-none rounded-xl py-2.5 pl-3 pr-10 text-xs text-white placeholder:text-slate-600"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPasswordOld((prev) => !prev)}
+                          className="absolute inset-y-0 right-0 px-3 flex items-center text-slate-400 hover:text-white transition cursor-pointer"
+                          title={showPasswordOld ? 'Hide current password' : 'Show current password'}
+                          aria-label={showPasswordOld ? 'Hide current password' : 'Show current password'}
+                        >
+                          {showPasswordOld ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-slate-300 mb-1">
                         New Password
                       </label>
-                      <input
-                        type="password"
-                        required
-                        minLength={6}
-                        value={passwordNew}
-                        onChange={(e) => {
-                          setPasswordNew(e.target.value);
-                          setPasswordError(null);
-                        }}
-                        placeholder="At least 6 characters (must be new)"
-                        className={`w-full bg-slate-950 border rounded-xl py-2.5 px-3 text-xs text-white placeholder:text-slate-600 focus:outline-none ${
-                          passwordNew && passwordOld && passwordNew === passwordOld
-                            ? 'border-rose-500 focus:border-rose-400'
-                            : 'border-slate-700 focus:border-blue-500'
-                        }`}
-                      />
+                      <div className="relative">
+                        <input
+                          type={showPasswordNew ? 'text' : 'password'}
+                          required
+                          minLength={6}
+                          value={passwordNew}
+                          onChange={(e) => {
+                            setPasswordNew(e.target.value);
+                            setPasswordError(null);
+                          }}
+                          placeholder="At least 6 characters (must be new)"
+                          className={`w-full bg-slate-950 border rounded-xl py-2.5 pl-3 pr-10 text-xs text-white placeholder:text-slate-600 focus:outline-none ${
+                            passwordNew && passwordOld && passwordNew === passwordOld
+                              ? 'border-rose-500 focus:border-rose-400'
+                              : 'border-slate-700 focus:border-blue-500'
+                          }`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPasswordNew((prev) => !prev)}
+                          className="absolute inset-y-0 right-0 px-3 flex items-center text-slate-400 hover:text-white transition cursor-pointer"
+                          title={showPasswordNew ? 'Hide new password' : 'Show new password'}
+                          aria-label={showPasswordNew ? 'Hide new password' : 'Show new password'}
+                        >
+                          {showPasswordNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
                       {passwordNew && passwordOld && passwordNew === passwordOld && (
                         <p className="mt-1 text-[11px] text-rose-400 font-semibold">
                           New password cannot be the same as your current password.
@@ -4942,21 +4954,32 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <label className="block text-xs font-semibold text-slate-300 mb-1">
                         Confirm New Password
                       </label>
-                      <input
-                        type="password"
-                        required
-                        value={passwordConfirm}
-                        onChange={(e) => {
-                          setPasswordConfirm(e.target.value);
-                          setPasswordError(null);
-                        }}
-                        placeholder="Re-enter new password"
-                        className={`w-full bg-slate-950 border rounded-xl py-2.5 px-3 text-xs text-white placeholder:text-slate-600 focus:outline-none ${
-                          passwordConfirm && passwordNew && passwordConfirm !== passwordNew
-                            ? 'border-rose-500 focus:border-rose-400'
-                            : 'border-slate-700 focus:border-blue-500'
-                        }`}
-                      />
+                      <div className="relative">
+                        <input
+                          type={showPasswordConfirm ? 'text' : 'password'}
+                          required
+                          value={passwordConfirm}
+                          onChange={(e) => {
+                            setPasswordConfirm(e.target.value);
+                            setPasswordError(null);
+                          }}
+                          placeholder="Re-enter new password"
+                          className={`w-full bg-slate-950 border rounded-xl py-2.5 pl-3 pr-10 text-xs text-white placeholder:text-slate-600 focus:outline-none ${
+                            passwordConfirm && passwordNew && passwordConfirm !== passwordNew
+                              ? 'border-rose-500 focus:border-rose-400'
+                              : 'border-slate-700 focus:border-blue-500'
+                          }`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPasswordConfirm((prev) => !prev)}
+                          className="absolute inset-y-0 right-0 px-3 flex items-center text-slate-400 hover:text-white transition cursor-pointer"
+                          title={showPasswordConfirm ? 'Hide confirmation password' : 'Show confirmation password'}
+                          aria-label={showPasswordConfirm ? 'Hide confirmation password' : 'Show confirmation password'}
+                        >
+                          {showPasswordConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
                       {passwordConfirm && passwordNew && passwordConfirm !== passwordNew && (
                         <p className="mt-1 text-[11px] text-rose-400 font-semibold">
                           Confirmation does not match new password.

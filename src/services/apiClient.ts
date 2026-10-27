@@ -79,6 +79,7 @@ const CORE_BACKEND_ROUTES = new Set([
   '/api/consumers',
   '/api/consumers/reconcile',
   '/api/consumers/resolve-account',
+  '/api/consumers/change-password',
   '/api/health',
 ]);
 
@@ -409,7 +410,7 @@ export const apiClient = {
     const queryString = params.toString() ? `?${params.toString()}` : '';
     return apiClient.get<{ success: boolean; count?: number; reports: any[]; data: any[] }>(
       `/api/reports${queryString}`,
-      options
+      { skipLogging: true, ...options }
     );
   },
 
@@ -420,7 +421,7 @@ export const apiClient = {
     return apiClient.post<{ success: boolean; count?: number; reports: any[]; data: any[] }>(
       '/api/reports/reconcile',
       payload,
-      options
+      { skipLogging: true, ...options }
     );
   },
 
@@ -435,10 +436,13 @@ export const apiClient = {
   replyToReport: async (
     id: string,
     replyData: {
+      id?: string;
+      replyId?: string;
       senderId: string;
       senderName: string;
       senderRole: 'admin' | 'consumer' | 'staff';
       message: string;
+      timestamp?: string;
       statusUpdate?: string;
       assignedStaff?: string;
       report?: any;
@@ -457,9 +461,26 @@ export const apiClient = {
     );
   },
 
+  changeConsumerPassword: async (payload: {
+    userId?: string;
+    email?: string;
+    accountNumber?: string;
+    currentPassword?: string;
+    newPassword: string;
+    passwordUpdatedAt?: number;
+  }) => {
+    return apiClient.post<{ success: boolean; message?: string; user?: any; passwordUpdatedAt?: number }>(
+      '/api/consumers/change-password',
+      payload
+    );
+  },
+
   // District Public Announcements
   getAnnouncements: async (options?: RequestOptions) => {
-    return apiClient.get<{ success: boolean; announcements: any[]; data?: any[] }>('/api/announcements', options);
+    return apiClient.get<{ success: boolean; announcements: any[]; data?: any[] }>(
+      '/api/announcements',
+      { skipLogging: true, ...options }
+    );
   },
 
   createAnnouncement: async (announcement: any) => {
@@ -479,7 +500,10 @@ export const apiClient = {
 
   // Water Tariff Schedule Sync
   getTariffConfig: async (options?: RequestOptions) => {
-    return apiClient.get<{ success: boolean; config: any }>('/api/tariff-config', options);
+    return apiClient.get<{ success: boolean; config: any }>(
+      '/api/tariff-config',
+      { skipLogging: true, ...options }
+    );
   },
 
   saveTariffConfig: async (config: any) => {

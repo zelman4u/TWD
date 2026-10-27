@@ -264,8 +264,8 @@ export function ConsumerReportsSection({
       onRefreshReports();
 
       toast.success(
-        'Concern Submitted Successfully!',
-        `Your report has been logged under Tracking Ticket #${newReport.ticketNumber}. Water District Admins have been notified.`
+        'Concern Delivered to Administration!',
+        `Ticket #${newReport.ticketNumber} has been delivered. An automated confirmation from TWD Customer Service Desk is waiting in your thread.`
       );
 
       // 4. Persist asynchronously to Backend REST API
@@ -302,7 +302,11 @@ export function ConsumerReportsSection({
     const targetReportSnapshot = activeThreadReport;
     setIsSendingReply(true);
     try {
+      const replyId = `REP-MSG-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const replyTimestamp = new Date().toISOString();
       const replyData = {
+        id: replyId,
+        timestamp: replyTimestamp,
         senderId: currentUser.id || consumer.accountNumber,
         senderName: consumer.name,
         senderRole: 'consumer' as const,
@@ -327,11 +331,12 @@ export function ConsumerReportsSection({
       onRefreshReports();
       toast.success('Message Sent', 'Your follow-up has been transmitted to Tagoloan Water District staff.');
 
-      // 3. Persist asynchronously to Backend REST API
+      // 3. Persist asynchronously to Backend REST API (pass pre-reply snapshot + deterministic replyId)
       apiClient
         .replyToReport(targetReportSnapshot.id, {
           ...replyData,
-          report: updated || targetReportSnapshot,
+          replyId,
+          report: targetReportSnapshot,
         })
         .then((res) => {
           if (res?.report) {
@@ -708,9 +713,11 @@ export function ConsumerReportsSection({
                 )}
               </div>
 
-              {/* Chronological Replies */}
-              {activeThreadReport.replies.map((reply, idx) => {
+              {/* Chronological Replies (Deduplicated) */}
+              {mockDb.dedupeReplies(activeThreadReport.replies).map((reply, idx) => {
                 const isAdmin = reply.senderRole === 'admin' || reply.senderRole === 'staff';
+                const isAutoAck =
+                  (reply.id || '').startsWith('ACK-') || reply.senderId === 'system-admin-ack';
 
                 return (
                   <div
@@ -720,12 +727,14 @@ export function ConsumerReportsSection({
                     <div className="max-w-[85%] space-y-1">
                       
                       {/* Sender header */}
-                      <div className={`flex items-center gap-1.5 text-[11px] ${isAdmin ? 'justify-start' : 'justify-end'}`}>
+                      <div className={`flex items-center gap-1.5 text-[11px] flex-wrap ${isAdmin ? 'justify-start' : 'justify-end'}`}>
                         {isAdmin ? (
                           <>
-                            <span className="px-2 py-0.5 rounded-md bg-blue-600 text-white font-black text-[9px] uppercase tracking-wider flex items-center gap-1">
+                            <span className={`px-2 py-0.5 rounded-md text-white font-black text-[9px] uppercase tracking-wider flex items-center gap-1 ${
+                              isAutoAck ? 'bg-indigo-600 border border-indigo-400/40' : 'bg-blue-600'
+                            }`}>
                               <Building className="h-2.5 w-2.5" />
-                              Tagoloan Water District Admin
+                              {isAutoAck ? 'Automated Delivery Receipt' : 'Tagoloan Water District Admin'}
                             </span>
                             <span className="font-bold text-slate-200">{reply.senderName}</span>
                           </>
@@ -743,9 +752,11 @@ export function ConsumerReportsSection({
                       {/* Bubble */}
                       <div
                         className={`rounded-2xl p-3.5 sm:p-4 text-xs sm:text-sm leading-relaxed shadow-xs ${
-                          isAdmin
-                            ? 'bg-blue-600 text-white rounded-tl-xs border border-blue-500'
-                            : 'bg-slate-800 text-slate-100 rounded-tr-xs border border-slate-700'
+                          isAutoAck
+                            ? 'bg-slate-900/95 text-blue-100 rounded-tl-xs border border-indigo-500/60'
+                            : isAdmin
+                              ? 'bg-blue-600 text-white rounded-tl-xs border border-blue-500'
+                              : 'bg-slate-800 text-slate-100 rounded-tr-xs border border-slate-700'
                         }`}
                       >
                         <p>{reply.message}</p>
