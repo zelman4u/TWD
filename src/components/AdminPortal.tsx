@@ -98,7 +98,7 @@ import {
 } from '../services/firebaseDb';
 import { initRealtimeSocket, sendRealtimeMessage } from '../services/realtimeSocket';
 import { apiClient, safeBackendFetch } from '../services/apiClient';
-import { calculateWaterTariff, calculateFranchiseTax, getActiveTariffConfig, getReadingEffectiveBillAmount, saveActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
+import { calculateWaterTariff, calculateFranchiseTax, calculateLatePenalty, computeDefaultDueDate, getActiveTariffConfig, getReadingEffectiveBillAmount, isOfficialBillIssued, saveActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
 import { 
   checkDuplicateAccountNumber, 
   checkDuplicateRfidTag, 
@@ -247,6 +247,28 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [selectedPhotoAccount, setSelectedPhotoAccount] = useState<string | null>(null);
   const [selectedNoticeReading, setSelectedNoticeReading] = useState<MeterReading | null>(null);
   const [selectedNoticeConsumer, setSelectedNoticeConsumer] = useState<Consumer | null>(null);
+
+  const [createBillModal, setCreateBillModal] = useState<{
+    isOpen: boolean;
+    accountNumber: string;
+    billingPeriod: string;
+    readingDate: string;
+    dueDate: string;
+    previousReading: string;
+    currentReading: string;
+    notes: string;
+    sourceReadingId: string;
+  }>({
+    isOpen: false,
+    accountNumber: '',
+    billingPeriod: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+    readingDate: new Date().toISOString().split('T')[0],
+    dueDate: computeDefaultDueDate(),
+    previousReading: '0',
+    currentReading: '0',
+    notes: '',
+    sourceReadingId: '',
+  });
 
 
   const [newMeter, setNewMeter] = useState({
@@ -885,6 +907,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 meterReaderName: ar.readerName || ar.meterReaderName || 'Field Meter Officer',
                 route: ar.route || matchedConsumer?.barangay || 'Poblacion',
                 status: mappedStatus,
+                isBillingIssued: typeof ar.isBillingIssued === 'boolean' ? ar.isBillingIssued : false,
                 paymentStatus: 'unpaid',
                 imageUrl: photo,
                 meterImageUrl: photo,
@@ -907,6 +930,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       .catch(() => {
         // Fallback gracefully if running purely client-side
       });
+
+    apiClient
+      .getBillings(undefined, { skipLogging: true })
+      .then((res) => {
+        if (res?.billings && Array.isArray(res.billings) && res.billings.length > 0) {
+          const merged = mockDb.mergeExternalReadings(res.billings);
+          setReadings([...merged]);
+        }
+      })
+      .catch(() => {});
   };
 
   const syncAdminReportsLive = () => {
@@ -2590,26 +2623,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
   };
 
-  // Action: Verify Mobile Submitted Reading
+  // Action: Verify Mobile Submitted Reading (verifies field reading telemetry; official billing is issued separately in Bills)
   const handleVerifyReading = (readingId: string, status: 'verified' | 'flagged_abnormal') => {
-    let verifiedReading: MeterReading | undefined;
     const activeCfg = getActiveTariffConfig();
     const updated = readings.map(r => {
       if (r.id === readingId) {
         const billAmt = calculateCostOf(r, r.classification);
-        verifiedReading = { 
-          ...r, 
+        return {
+          ...r,
           status,
+          isBillingIssued: r.isBillingIssued === true ? true : false,
           billAmount: billAmt,
-          totalAmount: billAmt,
           appliedTariffVersion: r.appliedTariffVersion || activeCfg.version,
-          ...(status === 'verified' && !r.remainingBalance ? {
-            paymentStatus: (r.paymentStatus || 'unpaid') as any,
-            remainingBalance: billAmt,
-            paidAmount: r.paidAmount || 0
-          } : {})
         };
-        return verifiedReading;
       }
       return r;
     });
@@ -2617,44 +2643,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveReadings(updated);
     setReadings(updated);
 
-    if (status === 'verified' && verifiedReading) {
-      const vRead = verifiedReading;
-      const billCost = calculateCostOf(vRead, vRead.classification);
-      
-      // Recalculate consumer arrears
-      const consumerUnpaid = updated.filter(
-        r => r.accountNumber === vRead.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid'
+    if (status === 'verified') {
+      fetch(`/api/readings/${encodeURIComponent(readingId)}/approve`, { method: 'POST' }).catch(() => {});
+      const targetRead = updated.find(r => r.id === readingId);
+      toast.success(
+        'Meter Reading Verified',
+        `Reading for ${targetRead?.consumerName || 'Consumer'} (${targetRead?.consumption ?? 0} m³) verified. Open Bills to generate and issue the official billing statement.`,
+        4500
       );
-      const newArrears = consumerUnpaid.reduce((sum, r) => {
-        const gross = calculateCostOf(r, r.classification);
-        const paid = r.paidAmount || 0;
-        return sum + Math.max(0, gross - paid);
-      }, 0);
-
-      const updatedConsumers = consumers.map(c => 
-        c.accountNumber === vRead.accountNumber
-          ? { ...c, outstandingBalance: newArrears }
-          : c
-      );
-      mockDb.saveConsumers(updatedConsumers);
-      setConsumers(updatedConsumers);
-
-      const matchedConsumer = consumers.find(c => c.accountNumber === vRead.accountNumber);
-      mockDb.addNotification({
-        accountNumber: vRead.accountNumber,
-        consumerId: matchedConsumer?.id,
-        userId: matchedConsumer?.linkedUserId,
-        consumerEmail: matchedConsumer?.email,
-        title: `Water Bill Issued - ${vRead.billingPeriod || 'New Statement'}`,
-        message: `Your water billing statement for ${vRead.billingPeriod} has been computed and issued with ${vRead.consumption} m³ total consumption (₱${billCost.toFixed(2)}). Due date: ${vRead.dueDate || '20th of Month'}. Settle online or in-office.`,
-        type: 'billing',
-        readingId: vRead.id,
-        billingPeriod: vRead.billingPeriod,
-        remainingBalance: billCost
-      });
-
-      // Notify backend API so server updates consumer.previousReading for Mobile App's next sync pull
-      fetch(`/api/readings/${encodeURIComponent(vRead.id)}/approve`, { method: 'POST' }).catch(() => {});
     }
 
     mockDb.addAuditLog(
@@ -2662,128 +2658,422 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       currentUser.name,
       'admin',
       'Verify Meter Recording',
-      `Verification flag alter on reading transaction ID #${readingId} status saved as ${status.toUpperCase()}.`
+      `Verification flag updated on reading #${readingId} to ${status.toUpperCase()} (awaiting Admin billing issuance).`
     );
     loadAllDataFromStore();
   };
 
-
-  // Action: Approve Single Reading or Entire Reader Submission Batch
+  // Action: Approve Single Reading or Entire Reader Submission Batch (verifies meter readings; billing issued in Bills)
   const handleApproveReadingBatch = (readingsToApprove: MeterReading[], readerNameLabel?: string) => {
     if (!readingsToApprove || readingsToApprove.length === 0) return;
 
     const targetIds = new Set(readingsToApprove.map(r => r.id));
-    const readingBills = new Map<string, number>();
     const activeCfg = getActiveTariffConfig();
-
-    readingsToApprove.forEach(r => {
-      readingBills.set(r.id, calculateCostOf(r, r.classification));
-    });
 
     const updatedReadings = readings.map(r => {
       if (targetIds.has(r.id)) {
-        const totalCalculatedBill = readingBills.get(r.id) ?? calculateCostOf(r, r.classification);
+        const computedWaterAmt = calculateCostOf(r, r.classification);
         return {
           ...r,
           status: 'verified' as const,
-          paymentStatus: 'unpaid' as const,
-          remainingBalance: totalCalculatedBill,
-          billAmount: totalCalculatedBill,
-          totalAmount: totalCalculatedBill,
+          isBillingIssued: r.isBillingIssued === true ? true : false,
+          billAmount: computedWaterAmt,
           appliedTariffVersion: r.appliedTariffVersion || activeCfg.version,
-          paidAmount: 0
         };
       }
       return r;
     });
 
-    // Save readings (diffChangedItems syncs only modified readings to Firestore once)
     mockDb.saveReadings(updatedReadings);
     setReadings(updatedReadings);
 
-    // Backend API approval sync
     readingsToApprove.forEach(reading => {
       fetch(`/api/readings/${encodeURIComponent(reading.id)}/approve`, { method: 'POST' }).catch(() => {});
     });
 
-    // Recalculate consumer arrears for affected consumers
-    const affectedAccounts = new Set(readingsToApprove.map(r => (r.accountNumber || '').trim().toLowerCase()).filter(Boolean));
-    const affectedNames = new Set(readingsToApprove.map(r => (r.consumerName || '').trim().toLowerCase()).filter(Boolean));
-
-    const updatedConsumers = consumers.map(c => {
-      const cAcct = (c.accountNumber || '').trim().toLowerCase();
-      const cName = (c.name || '').trim().toLowerCase();
-
-      if (affectedAccounts.has(cAcct) || affectedNames.has(cName)) {
-        const consumerUnpaid = updatedReadings.filter(
-          r => ((r.accountNumber && r.accountNumber.trim().toLowerCase() === cAcct) ||
-                (r.consumerName && r.consumerName.trim().toLowerCase() === cName)) &&
-               r.status === 'verified' &&
-               r.paymentStatus !== 'paid'
-        );
-        const newArrears = consumerUnpaid.reduce((sum, r) => {
-          const gross = calculateCostOf(r, r.classification);
-          const paid = r.paidAmount || 0;
-          return sum + Math.max(0, gross - paid);
-        }, 0);
-        return { ...c, outstandingBalance: newArrears };
-      }
-      return c;
-    });
-
-    mockDb.saveConsumers(updatedConsumers);
-    setConsumers(updatedConsumers);
-
-    // Dispatch Smart Notifications
-    readingsToApprove.forEach(reading => {
-      const totalCalculatedBill = readingBills.get(reading.id) ?? calculateCostOf(reading, reading.classification);
-      const matchedConsumer = consumers.find(c => c.accountNumber === reading.accountNumber);
-      mockDb.addNotification({
-        accountNumber: reading.accountNumber,
-        consumerId: matchedConsumer?.id,
-        userId: matchedConsumer?.linkedUserId,
-        consumerEmail: matchedConsumer?.email,
-        title: `Water Bill Issued - ${reading.billingPeriod || 'New Statement'}`,
-        message: `Your water billing statement for ${reading.billingPeriod} has been verified and issued with ${reading.consumption} m³ total consumption (₱${totalCalculatedBill.toFixed(2)}). Due date: ${reading.dueDate || '20th of Month'}. Settle online or in-office.`,
-        type: 'billing',
-        readingId: reading.id,
-        billingPeriod: reading.billingPeriod,
-        remainingBalance: totalCalculatedBill
-      });
-    });
-
-    // Audit logs & Toast
+    const totalBatchConsumption = readingsToApprove.reduce((sum, r) => sum + (r.consumption || 0), 0);
     if (readingsToApprove.length === 1) {
       const reading = readingsToApprove[0];
-      const totalCalculatedBill = readingBills.get(reading.id) ?? calculateCostOf(reading.consumption, reading.classification);
       mockDb.addAuditLog(
         currentUser.id,
         currentUser.name,
         'admin',
-        'Approved Reading & Generated Bill',
-        `Approved reading #${reading.id} for ${reading.consumerName} (Account #${reading.accountNumber}, Reader: ${reading.meterReaderName}, Period: ${reading.billingPeriod}, ${reading.previousReading} → ${reading.currentReading} m³ = ${reading.consumption} m³). Auto-generated bill ₱${totalCalculatedBill.toFixed(2)} published to Consumer Portal.`
+        'Approved Meter Reading',
+        `Verified reading #${reading.id} for ${reading.consumerName} (Account #${reading.accountNumber}, ${reading.previousReading} → ${reading.currentReading} m³ = ${reading.consumption} m³). Ready for billing issuance.`
       );
       toast.success(
-        'Reading Approved & Bill Issued',
-        `Verified reading for ${reading.consumerName} (${reading.consumption} m³ by ${reading.meterReaderName || 'Field Reader'}). Monthly bill of ₱${totalCalculatedBill.toFixed(2)} for ${reading.billingPeriod} published.`,
+        'Reading Approved — Ready to Bill',
+        `Verified ${reading.consumption} m³ reading for ${reading.consumerName}. Issue the official billing statement in the Bills module to publish their receipt.`,
         5000
       );
     } else {
-      const totalBatchBill = Array.from(readingBills.values()).reduce((sum, val) => sum + val, 0);
-      const totalBatchConsumption = readingsToApprove.reduce((sum, r) => sum + (r.consumption || 0), 0);
       mockDb.addAuditLog(
         currentUser.id,
         currentUser.name,
         'admin',
-        'Batch Approved Reader Readings',
-        `Batch approved ${readingsToApprove.length} field readings submitted by ${readerNameLabel || 'Meter Reader'} totaling ${totalBatchConsumption} m³ and ₱${totalBatchBill.toFixed(2)} in bills.`
+        'Batch Approved Meter Readings',
+        `Batch verified ${readingsToApprove.length} field readings (${totalBatchConsumption} m³) submitted by ${readerNameLabel || 'Meter Reader'}. Ready for billing issuance.`
       );
       toast.success(
-        'Batch Approved Successfully',
-        `Approved all ${readingsToApprove.length} readings submitted by ${readerNameLabel || 'Field Reader'} (${totalBatchConsumption} m³, Total: ₱${totalBatchBill.toFixed(2)}). All statements and notifications issued.`,
+        'Batch Readings Verified',
+        `Verified ${readingsToApprove.length} readings (${totalBatchConsumption} m³). Open the Bills module to issue official consumer billing statements.`,
         5000
       );
     }
+  };
+
+  // Action: Issue Official Consumer Billing Statement(s) (Unlocks Receipt & Billing Notice on Consumer Portal)
+  const handleIssueBillings = (readingsToBill: MeterReading[], customDueDate?: string) => {
+    if (!readingsToBill || readingsToBill.length === 0) return;
+    const activeCfg = getActiveTariffConfig();
+    const targetIds = new Set(readingsToBill.map(r => r.id));
+    const issuedTimestamp = new Date().toISOString();
+    const issuedMap = new Map<string, MeterReading>();
+
+    const updatedReadings = readings.map(r => {
+      if (!targetIds.has(r.id)) return r;
+      const matchedConsumer = consumers.find(c => c.accountNumber === r.accountNumber);
+      const cls: 'Residential' | 'Commercial' =
+        (r.classification || matchedConsumer?.consumerType) === 'Commercial' ? 'Commercial' : 'Residential';
+      const priorUnpaid = readings.filter(
+        prev =>
+          prev.id !== r.id &&
+          prev.accountNumber === r.accountNumber &&
+          isOfficialBillIssued(prev) &&
+          prev.paymentStatus !== 'paid'
+      );
+      const computedArrears = Math.round(
+        priorUnpaid.reduce((sum, prev) => {
+          const prevGross = prev.totalAmount ?? calculateCostOf(prev, prev.classification);
+          const prevPaid = prev.paidAmount || 0;
+          return sum + Math.max(0, prevGross - prevPaid);
+        }, 0) * 100
+      ) / 100;
+
+      const waterCharge = calculateWaterTariff(r.consumption, cls, activeCfg);
+      const fTax = calculateFranchiseTax(waterCharge, activeCfg);
+      const lPenalty = calculateLatePenalty(waterCharge, activeCfg);
+      const totalDue = Math.round((waterCharge + fTax + computedArrears) * 100) / 100;
+      const afterDue = Math.round((totalDue + lPenalty) * 100) / 100;
+      const finalDueDate = (customDueDate && customDueDate.trim()) || r.dueDate || computeDefaultDueDate(r.readingDate);
+
+      const billedRecord: MeterReading = {
+        ...r,
+        status: 'verified',
+        classification: cls,
+        isBillingIssued: true,
+        billingIssuedAt: issuedTimestamp,
+        billingIssuedBy: currentUser.name,
+        invoiceNumber: r.invoiceNumber || `INV-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`,
+        dueDate: finalDueDate,
+        billAmount: waterCharge,
+        franchiseTax: fTax,
+        arrears: computedArrears,
+        totalAmount: totalDue,
+        penaltyAmount: lPenalty,
+        amountAfterDueDate: afterDue,
+        appliedTariffVersion: activeCfg.version,
+        paymentStatus: r.paymentStatus === 'paid' || r.paymentStatus === 'partial' ? r.paymentStatus : 'unpaid',
+        paidAmount: r.paidAmount || 0,
+        remainingBalance: Math.max(0, totalDue - (r.paidAmount || 0)),
+      };
+      issuedMap.set(r.id, billedRecord);
+      return billedRecord;
+    });
+
+    mockDb.saveReadings(updatedReadings);
+    setReadings(updatedReadings);
+
+    // Recalculate consumer outstandingBalance across officially issued unpaid bills
+    const affectedAccounts = new Set(Array.from(issuedMap.values()).map(b => (b.accountNumber || '').trim().toLowerCase()).filter(Boolean));
+    const updatedConsumers = consumers.map(c => {
+      const cAcct = (c.accountNumber || '').trim().toLowerCase();
+      if (!affectedAccounts.has(cAcct)) return c;
+      const consumerUnpaid = updatedReadings.filter(
+        r => (r.accountNumber || '').trim().toLowerCase() === cAcct && isOfficialBillIssued(r) && r.paymentStatus !== 'paid'
+      );
+      const newArrears = Math.round(
+        consumerUnpaid.reduce((sum, r) => {
+          const gross = calculateCostOf(r, r.classification);
+          const paid = r.paidAmount || 0;
+          return sum + Math.max(0, gross - paid);
+        }, 0) * 100
+      ) / 100;
+      return { ...c, outstandingBalance: newArrears };
+    });
+    mockDb.saveConsumers(updatedConsumers);
+    setConsumers(updatedConsumers);
+
+    // Dispatch Official Billing Notification + Cross-Device Reconcile
+    const createdNotifs: any[] = [];
+    issuedMap.forEach(bill => {
+      const matchedConsumer = updatedConsumers.find(c => c.accountNumber === bill.accountNumber);
+      const notif = mockDb.addNotification({
+        accountNumber: bill.accountNumber,
+        consumerId: matchedConsumer?.id,
+        userId: matchedConsumer?.linkedUserId,
+        consumerEmail: matchedConsumer?.email,
+        title: `Water Bill Issued - ${bill.billingPeriod || 'New Statement'}`,
+        message: `Your official water billing statement for ${bill.billingPeriod} (${bill.consumption} m³) has been issued by Tagoloan Water District Administration. Total Basic Charge: ₱${(bill.billAmount || 0).toFixed(2)} (Total Due: ₱${(bill.totalAmount || 0).toFixed(2)}). Due Date: ${bill.dueDate}. Your Water Billing Notice & Receipt is now available on your dashboard.`,
+        type: 'billing',
+        readingId: bill.id,
+        billingPeriod: bill.billingPeriod,
+        remainingBalance: bill.totalAmount || bill.billAmount || 0,
+      });
+      createdNotifs.push(notif);
+    });
+
+    if (createdNotifs.length > 0) {
+      safeBackendFetch('/api/consumers/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-portal': 'admin' },
+        body: JSON.stringify({
+          consumers: updatedConsumers.filter(c => affectedAccounts.has((c.accountNumber || '').trim().toLowerCase())),
+          notifications: createdNotifs,
+        }),
+      }).catch(() => {});
+    }
+
+    window.dispatchEvent(new Event('twd_database_updated'));
+
+    if (issuedMap.size === 1) {
+      const single = Array.from(issuedMap.values())[0];
+      mockDb.addAuditLog(
+        currentUser.id,
+        currentUser.name,
+        'admin',
+        'Issued Official Water Billing',
+        `Generated and issued billing ${single.invoiceNumber} for ${single.consumerName} (Account #${single.accountNumber}, ${single.billingPeriod}, ${single.consumption} m³, Total Due: ₱${(single.totalAmount || 0).toFixed(2)}).`
+      );
+      toast.success(
+        'Official Billing Issued',
+        `Billing statement for ${single.consumerName} (#${single.accountNumber}) — ₱${(single.totalAmount || 0).toFixed(2)} published to Consumer Portal.`,
+        5000
+      );
+    } else {
+      const totalIssuedAmt = Array.from(issuedMap.values()).reduce((s, b) => s + (b.totalAmount || 0), 0);
+      mockDb.addAuditLog(
+        currentUser.id,
+        currentUser.name,
+        'admin',
+        'Batch Issued Official Water Billings',
+        `Issued ${issuedMap.size} official billing statements totaling ₱${totalIssuedAmt.toFixed(2)} to Consumer Portal.`
+      );
+      toast.success(
+        'Batch Billings Issued',
+        `Published ${issuedMap.size} official billing statements (₱${totalIssuedAmt.toFixed(2)}) and unlocked consumer dashboard notices.`,
+        5000
+      );
+    }
+  };
+
+  // Action: Open Create / Issue Billing Modal (optionally pre-selecting a consumer or unbilled reading)
+  const openCreateBillModal = (preselectedAccount?: string, existingReading?: MeterReading) => {
+    const activeConsumers = consumers.filter(
+      c => c.accountNumber && !c.accountNumber.toUpperCase().startsWith('PENDING') && c.status !== 'archived'
+    );
+    const chosenConsumer =
+      activeConsumers.find(c => c.accountNumber === (existingReading?.accountNumber || preselectedAccount)) ||
+      activeConsumers[0];
+    const acc = chosenConsumer?.accountNumber || '';
+    const consumerReads = readings
+      .filter(r => r.accountNumber === acc && r.status !== 'cancelled')
+      .sort((a, b) => new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime());
+    const unbilledMatch = existingReading || consumerReads.find(r => !isOfficialBillIssued(r));
+    const latestIssued = consumerReads.find(r => isOfficialBillIssued(r));
+    const basePrev = unbilledMatch
+      ? unbilledMatch.previousReading
+      : latestIssued
+        ? latestIssued.currentReading
+        : 0;
+    const baseCurr = unbilledMatch ? unbilledMatch.currentReading : basePrev;
+    const rDate = unbilledMatch?.readingDate || new Date().toISOString().split('T')[0];
+
+    setCreateBillModal({
+      isOpen: true,
+      accountNumber: acc,
+      billingPeriod:
+        unbilledMatch?.billingPeriod ||
+        new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+      readingDate: rDate,
+      dueDate: unbilledMatch?.dueDate || computeDefaultDueDate(rDate),
+      previousReading: String(basePrev),
+      currentReading: String(baseCurr),
+      notes: unbilledMatch?.notes || '',
+      sourceReadingId: unbilledMatch?.id || '',
+    });
+  };
+
+  // Action: Create & Issue Billing directly from Modal
+  const handleCreateAndIssueBilling = () => {
+    const targetConsumer = consumers.find(c => c.accountNumber === createBillModal.accountNumber);
+    if (!targetConsumer) {
+      toast.warning('Select Consumer', 'Please choose a valid active consumer account to bill.');
+      return;
+    }
+    const prevVal = Math.max(0, Number(createBillModal.previousReading) || 0);
+    const currVal = Math.max(0, Number(createBillModal.currentReading) || 0);
+    if (currVal < prevVal) {
+      toast.warning('Invalid Meter Index', 'Present reading cannot be less than previous reading.');
+      return;
+    }
+    const usage = Math.max(0, currVal - prevVal);
+    if (usage <= 0) {
+      toast.warning('Zero Consumption', 'Consumption must be at least 1 m³ to generate an official water bill.');
+      return;
+    }
+    const periodLabel = createBillModal.billingPeriod.trim() || new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const readDate = createBillModal.readingDate || new Date().toISOString().split('T')[0];
+    const dueLabel = createBillModal.dueDate.trim() || computeDefaultDueDate(readDate);
+    const cls: 'Residential' | 'Commercial' = targetConsumer.consumerType === 'Commercial' ? 'Commercial' : 'Residential';
+
+    const existingIdx = createBillModal.sourceReadingId
+      ? readings.findIndex(r => r.id === createBillModal.sourceReadingId)
+      : -1;
+
+    const baseRecord: MeterReading =
+      existingIdx >= 0
+        ? {
+            ...readings[existingIdx],
+            previousReading: prevVal,
+            currentReading: currVal,
+            consumption: usage,
+            readingDate: readDate,
+            billingPeriod: periodLabel,
+            dueDate: dueLabel,
+            notes: createBillModal.notes || readings[existingIdx].notes,
+          }
+        : {
+            id: `BILL-${targetConsumer.accountNumber}-${Date.now().toString().slice(-6)}`,
+            accountNumber: targetConsumer.accountNumber,
+            consumerName: targetConsumer.name,
+            meterNumber: targetConsumer.meterNumber || `MT-${targetConsumer.accountNumber}`,
+            meterBrand: targetConsumer.meterBrand || 'EVER',
+            sequenceNo: targetConsumer.sequenceNo || Math.floor(100 + Math.random() * 899),
+            address: targetConsumer.address,
+            addressZone: targetConsumer.sitioZone || targetConsumer.barangay || '',
+            route: `${targetConsumer.barangay || 'Poblacion'} Route`,
+            previousReading: prevVal,
+            currentReading: currVal,
+            consumption: usage,
+            readingDate: readDate,
+            meterReaderDate: readDate,
+            status: 'verified',
+            meterReaderName: currentUser.name || 'Billing Desk Officer',
+            imageUrl: '',
+            billingPeriod: periodLabel,
+            dueDate: dueLabel,
+            classification: cls,
+            notes: createBillModal.notes || 'Official billing generated by Administration',
+          };
+
+    const seededReadings =
+      existingIdx >= 0
+        ? readings.map((r, i) => (i === existingIdx ? baseRecord : r))
+        : [baseRecord, ...readings];
+
+    // Temporarily ensure baseRecord is in list, then invoke handleIssueBillings logic cleanly
+    const activeCfg = getActiveTariffConfig();
+    const priorUnpaid = seededReadings.filter(
+      prev =>
+        prev.id !== baseRecord.id &&
+        prev.accountNumber === targetConsumer.accountNumber &&
+        isOfficialBillIssued(prev) &&
+        prev.paymentStatus !== 'paid'
+    );
+    const computedArrears = Math.round(
+      priorUnpaid.reduce((sum, prev) => {
+        const prevGross = prev.totalAmount ?? calculateCostOf(prev, prev.classification);
+        const prevPaid = prev.paidAmount || 0;
+        return sum + Math.max(0, prevGross - prevPaid);
+      }, 0) * 100
+    ) / 100;
+
+    const waterCharge = calculateWaterTariff(usage, cls, activeCfg);
+    const fTax = calculateFranchiseTax(waterCharge, activeCfg);
+    const lPenalty = calculateLatePenalty(waterCharge, activeCfg);
+    const totalDue = Math.round((waterCharge + fTax + computedArrears) * 100) / 100;
+    const afterDue = Math.round((totalDue + lPenalty) * 100) / 100;
+
+    const finalizedBill: MeterReading = {
+      ...baseRecord,
+      status: 'verified',
+      classification: cls,
+      isBillingIssued: true,
+      billingIssuedAt: new Date().toISOString(),
+      billingIssuedBy: currentUser.name,
+      invoiceNumber: baseRecord.invoiceNumber || `INV-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`,
+      dueDate: dueLabel,
+      billAmount: waterCharge,
+      franchiseTax: fTax,
+      arrears: computedArrears,
+      totalAmount: totalDue,
+      penaltyAmount: lPenalty,
+      amountAfterDueDate: afterDue,
+      appliedTariffVersion: activeCfg.version,
+      paymentStatus: 'unpaid',
+      paidAmount: 0,
+      remainingBalance: totalDue,
+    };
+
+    const nextReadings =
+      existingIdx >= 0
+        ? readings.map((r, i) => (i === existingIdx ? finalizedBill : r))
+        : [finalizedBill, ...readings];
+
+    mockDb.saveReadings(nextReadings);
+    setReadings(nextReadings);
+
+    const consumerUnpaid = nextReadings.filter(
+      r => r.accountNumber === targetConsumer.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid'
+    );
+    const newArrears = Math.round(
+      consumerUnpaid.reduce((sum, r) => sum + Math.max(0, calculateCostOf(r, r.classification) - (r.paidAmount || 0)), 0) * 100
+    ) / 100;
+
+    const updatedConsumers = consumers.map(c =>
+      c.accountNumber === targetConsumer.accountNumber ? { ...c, outstandingBalance: newArrears } : c
+    );
+    mockDb.saveConsumers(updatedConsumers);
+    setConsumers(updatedConsumers);
+
+    const createdNotif = mockDb.addNotification({
+      accountNumber: targetConsumer.accountNumber,
+      consumerId: targetConsumer.id,
+      userId: targetConsumer.linkedUserId,
+      consumerEmail: targetConsumer.email,
+      title: `Water Bill Issued - ${periodLabel}`,
+      message: `Your official water billing statement for ${periodLabel} (${usage} m³) has been generated and issued by Tagoloan Water District Administration. Total Basic Charge: ₱${waterCharge.toFixed(2)} (Total Due: ₱${totalDue.toFixed(2)}). Due Date: ${dueLabel}. Your Water Billing Notice & Receipt is now available on your dashboard.`,
+      type: 'billing',
+      readingId: finalizedBill.id,
+      billingPeriod: periodLabel,
+      remainingBalance: totalDue,
+    });
+
+    safeBackendFetch('/api/consumers/reconcile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-portal': 'admin' },
+      body: JSON.stringify({
+        consumers: updatedConsumers.filter(c => c.accountNumber === targetConsumer.accountNumber),
+        notifications: [createdNotif],
+      }),
+    }).catch(() => {});
+
+    mockDb.addAuditLog(
+      currentUser.id,
+      currentUser.name,
+      'admin',
+      'Created & Issued Official Consumer Billing',
+      `Created and issued billing ${finalizedBill.invoiceNumber} for ${targetConsumer.name} (Account #${targetConsumer.accountNumber}, ${periodLabel}, ${prevVal} → ${currVal} m³ = ${usage} m³, Total Due: ₱${totalDue.toFixed(2)}).`
+    );
+
+    window.dispatchEvent(new Event('twd_database_updated'));
+    setCreateBillModal(prev => ({ ...prev, isOpen: false }));
+    toast.success(
+      'Official Billing Created & Issued',
+      `Billing statement for ${targetConsumer.name} (#${targetConsumer.accountNumber}) — ₱${totalDue.toFixed(2)} published to Consumer Portal.`,
+      5000
+    );
   };
 
   // Filtered and sorted consumers list logic
@@ -2989,12 +3279,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           <button
             id="admin-nav-bills"
             onClick={() => handleTabChange('bills')}
-            className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'bills' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
           >
-            <FileSpreadsheet className="h-4 w-4 shrink-0 text-purple-400" />
-            <span>Bills</span>
+            <span className="flex items-center space-x-3">
+              <FileSpreadsheet className="h-4 w-4 shrink-0 text-purple-400" />
+              <span>Bills</span>
+            </span>
+            {readings.filter(r => r.status === 'verified' && !isOfficialBillIssued(r)).length > 0 && (
+              <span className="bg-amber-500 text-slate-950 text-[10px] font-black font-mono px-1.5 py-0.5 rounded-md">
+                {readings.filter(r => r.status === 'verified' && !isOfficialBillIssued(r)).length}
+              </span>
+            )}
           </button>
 
           {/* Process Payment Module */}
@@ -3519,7 +3816,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <div>
                   <h3 className="text-base sm:text-lg font-black text-white tracking-tight font-sans">Meter Reading Approvals</h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
-                    Review and verify field meter readings submitted by meter readers. Approving a reading generates the monthly billing statement and updates the consumer portal.
+                    Review and verify field meter readings submitted by meter readers. Once verified, generate and issue official consumer billing statements in the Bills module.
                   </p>
                 </div>
                 <div className="flex items-center space-x-3 shrink-0">
@@ -5982,11 +6279,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           <CheckCircle className="h-3.5 w-3.5 shrink-0" />
                                           <span>Approve</span>
                                         </button>
-                                      ) : (
+                                      ) : isOfficialBillIssued(r) ? (
                                         <span className="text-[10px] text-emerald-300 font-bold bg-emerald-950/80 px-2 py-1 rounded-lg border border-emerald-800/80 inline-flex items-center gap-1 shrink-0">
                                           <Check className="h-3 w-3 text-emerald-400 shrink-0" />
-                                          <span>Approved</span>
+                                          <span>Billed</span>
                                         </span>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleIssueBillings([r])}
+                                          className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-[11px] uppercase rounded-lg transition inline-flex items-center gap-1 shadow-xs cursor-pointer tracking-wider shrink-0"
+                                          title="Generate & Issue Official Consumer Billing Statement"
+                                        >
+                                          <ReceiptText className="h-3.5 w-3.5 shrink-0" />
+                                          <span>Issue Bill</span>
+                                        </button>
                                       )}
                                       <button
                                         type="button"
@@ -6236,9 +6543,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
               {/* Bills Module Summary KPI Header */}
               {(() => {
-                const verifiedReadings = readings.filter(r => r.status === 'verified');
-                const totalConsumptionVol = verifiedReadings.reduce((sum, r) => sum + (r.consumption || 0), 0);
-                const unpaidBills = verifiedReadings.filter(r => r.paymentStatus !== 'paid' && r.status !== 'cancelled');
+                const issuedBills = readings.filter(r => isOfficialBillIssued(r));
+                const unbilledVerified = readings.filter(r => r.status === 'verified' && !isOfficialBillIssued(r));
+                const totalConsumptionVol = issuedBills.reduce((sum, r) => sum + (r.consumption || 0), 0);
+                const unpaidBills = issuedBills.filter(r => r.paymentStatus !== 'paid' && r.status !== 'cancelled');
                 const unpaidTotal = unpaidBills.reduce((sum, r) => {
                   const gross = calculateCostOf(r, r.classification);
                   const paid = r.paidAmount || 0;
@@ -6246,43 +6554,134 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 }, 0);
 
                 return (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs flex items-center justify-between">
-                      <div>
-                        <p className="text-[11px] font-black uppercase tracking-wider text-slate-500">Verified Bills Count</p>
-                        <p className="text-2xl font-black text-slate-900 mt-0.5">{verifiedReadings.length}</p>
+                  <div className="space-y-5">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs flex items-center justify-between">
+                        <div>
+                          <p className="text-[11px] font-black uppercase tracking-wider text-slate-500">Issued Bills Count</p>
+                          <p className="text-2xl font-black text-slate-900 mt-0.5">{issuedBills.length}</p>
+                        </div>
+                        <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-700">
+                          <FileText className="h-5 w-5" />
+                        </div>
                       </div>
-                      <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-700">
-                        <FileText className="h-5 w-5" />
+
+                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs flex items-center justify-between">
+                        <div>
+                          <p className="text-[11px] font-black uppercase tracking-wider text-slate-500">Ready to Bill</p>
+                          <p className="text-2xl font-black text-indigo-950 mt-0.5">{unbilledVerified.length}</p>
+                        </div>
+                        <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-indigo-700">
+                          <ReceiptText className="h-5 w-5" />
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs flex items-center justify-between">
+                        <div>
+                          <p className="text-[11px] font-black uppercase tracking-wider text-slate-500">Total Billed Consumption</p>
+                          <p className="text-2xl font-black text-cyan-950 mt-0.5">{totalConsumptionVol.toLocaleString()} m³</p>
+                        </div>
+                        <div className="p-3 bg-cyan-50 border border-cyan-200 rounded-xl text-cyan-700">
+                          <Droplet className="h-5 w-5" />
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs flex items-center justify-between">
+                        <div>
+                          <p className="text-[11px] font-black uppercase tracking-wider text-slate-500">Unpaid Receivables</p>
+                          <p className="text-2xl font-black text-amber-950 mt-0.5">₱{unpaidTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                        </div>
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-700">
+                          <CreditCard className="h-5 w-5" />
+                        </div>
                       </div>
                     </div>
 
-                    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs flex items-center justify-between">
-                      <div>
-                        <p className="text-[11px] font-black uppercase tracking-wider text-slate-500">Total Billed Consumption</p>
-                        <p className="text-2xl font-black text-cyan-950 mt-0.5">{totalConsumptionVol.toLocaleString()} m³</p>
-                      </div>
-                      <div className="p-3 bg-cyan-50 border border-cyan-200 rounded-xl text-cyan-700">
-                        <Droplet className="h-5 w-5" />
-                      </div>
-                    </div>
+                    {/* UNBILLED VERIFIED READINGS QUEUE — ADMIN BILLING ISSUANCE TRIGGER */}
+                    {unbilledVerified.length > 0 && (
+                      <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl p-5 shadow-xl space-y-4 text-slate-100">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                          <div className="flex items-start space-x-3">
+                            <div className="p-2.5 bg-indigo-500/20 border border-indigo-500/30 rounded-xl text-indigo-300 shrink-0">
+                              <ReceiptText className="h-5 w-5" />
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-black text-white">
+                                Verified Readings Ready for Official Billing ({unbilledVerified.length})
+                              </h4>
+                              <p className="text-xs text-slate-400 mt-0.5">
+                                Consumer receipts and dashboard billing notices remain hidden until you issue their official billing statement below.
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleIssueBillings(unbilledVerified)}
+                            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-2 cursor-pointer shrink-0 shadow-md"
+                          >
+                            <CheckCheck className="h-4 w-4" />
+                            <span>Issue All Pending Billings ({unbilledVerified.length})</span>
+                          </button>
+                        </div>
 
-                    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs flex items-center justify-between">
-                      <div>
-                        <p className="text-[11px] font-black uppercase tracking-wider text-slate-500">Unpaid Receivables</p>
-                        <p className="text-2xl font-black text-amber-950 mt-0.5">₱{unpaidTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full text-xs text-left">
+                            <thead className="text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                              <tr>
+                                <th className="py-2 pr-3">Period</th>
+                                <th className="py-2 px-3">Account #</th>
+                                <th className="py-2 px-3">Consumer</th>
+                                <th className="py-2 px-3">Index (Prev → Curr)</th>
+                                <th className="py-2 px-3 text-right">Usage</th>
+                                <th className="py-2 px-3 text-right">Est. Water Charge</th>
+                                <th className="py-2 pl-3 text-right">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/70">
+                              {unbilledVerified.map((ur, uIdx) => {
+                                const estAmt = calculateWaterTariff(ur.consumption, ur.classification || 'Residential');
+                                return (
+                                  <tr key={`unbilled-row-${ur.id}-${uIdx}`} className="hover:bg-slate-800/50">
+                                    <td className="py-2.5 pr-3 font-bold text-white whitespace-nowrap">{ur.billingPeriod}</td>
+                                    <td className="py-2.5 px-3 font-mono font-bold text-sky-400 whitespace-nowrap">{ur.accountNumber}</td>
+                                    <td className="py-2.5 px-3 font-bold text-slate-200 whitespace-nowrap">{ur.consumerName}</td>
+                                    <td className="py-2.5 px-3 font-mono text-slate-300 whitespace-nowrap">{ur.previousReading} → {ur.currentReading} m³</td>
+                                    <td className="py-2.5 px-3 text-right font-mono font-black text-cyan-300 whitespace-nowrap">{ur.consumption} m³</td>
+                                    <td className="py-2.5 px-3 text-right font-mono font-black text-white whitespace-nowrap">₱{estAmt.toFixed(2)}</td>
+                                    <td className="py-2.5 pl-3 text-right whitespace-nowrap">
+                                      <div className="inline-flex items-center gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => openCreateBillModal(ur.accountNumber, ur)}
+                                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-[11px] rounded-lg transition cursor-pointer"
+                                        >
+                                          Review
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleIssueBillings([ur])}
+                                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[11px] uppercase tracking-wider rounded-lg transition inline-flex items-center space-x-1 cursor-pointer shadow-xs"
+                                        >
+                                          <ReceiptText className="h-3.5 w-3.5" />
+                                          <span>Issue Billing</span>
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
-                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-700">
-                        <CreditCard className="h-5 w-5" />
-                      </div>
-                    </div>
+                    )}
                   </div>
                 );
               })()}
 
               {/* Bills Smart Search, Filter & List Table */}
               {(() => {
-                const verifiedBillsAll = readings.filter(r => r.status === 'verified');
+                const verifiedBillsAll = readings.filter(r => isOfficialBillIssued(r) || r.status === 'cancelled');
                 const filteredBills = verifiedBillsAll
                   .filter(r => {
                     if (billStatusFilter === 'unpaid') return r.paymentStatus !== 'paid' && r.status !== 'cancelled';
@@ -6337,7 +6736,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         </select>
                       </div>
 
-                      <div className="flex items-center space-x-2 shrink-0">
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => openCreateBillModal()}
+                          className="min-h-[42px] px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl text-xs uppercase tracking-wider transition shadow-sm flex items-center space-x-2 cursor-pointer"
+                          id="admin-create-issue-bill-btn"
+                        >
+                          <Plus className="h-4 w-4 text-white" />
+                          <span>Create / Issue Billing</span>
+                        </button>
                         <button
                           onClick={() => {
                             toast.success('Export Completed', 'TWD Water Bills Ledger exported as PDF/CSV.');
@@ -6564,13 +6972,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         ])
                       )
                       .sort((a, b) => {
-                        const aUnpaid = readings.filter(r => r.accountNumber === a.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid').length;
-                        const bUnpaid = readings.filter(r => r.accountNumber === b.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid').length;
+                        const aUnpaid = readings.filter(r => r.accountNumber === a.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid').length;
+                        const bUnpaid = readings.filter(r => r.accountNumber === b.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid').length;
                         return bUnpaid - aUnpaid; // Prioritize unpaid consumers first
                       })
                       .map((c, cIdx) => {
                         const isSelected = selectedPaymentAccount?.accountNumber === c.accountNumber;
-                        const consumerReadings = readings.filter(r => r.accountNumber === c.accountNumber && r.status === 'verified');
+                        const consumerReadings = readings.filter(r => r.accountNumber === c.accountNumber && isOfficialBillIssued(r));
                         const unpaidReadings = consumerReadings.filter(r => r.paymentStatus !== 'paid');
                         const unpaidCount = unpaidReadings.length;
 
@@ -6589,7 +6997,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             key={`pos-cons-${c.accountNumber || cIdx}-${cIdx}`}
                             onClick={() => {
                               setSelectedPaymentAccount(c);
-                              const unpaidList = readings.filter(r => r.accountNumber === c.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid');
+                              const unpaidList = readings.filter(r => r.accountNumber === c.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid');
                               const unpaidIds = unpaidList.map(r => r.id);
                               setSelectedBillIds(unpaidIds);
                               
@@ -6673,15 +7081,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           <span className="text-[10px] font-bold text-slate-500">Select bills to settle</span>
                         </div>
 
-                        {readings.filter(r => r.accountNumber === selectedPaymentAccount.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid').length === 0 ? (
+                        {readings.filter(r => r.accountNumber === selectedPaymentAccount.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid').length === 0 ? (
                           <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-4 text-center text-xs font-bold space-y-1">
                             <CheckCircle className="h-6 w-6 text-emerald-600 mx-auto" />
-                            <p>All bills for this account are fully settled! Current balance is ₱0.00.</p>
+                            <p>No unpaid issued bills for this account. Current balance is ₱0.00.</p>
                           </div>
                         ) : (
                           <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
                             {readings
-                              .filter(r => r.accountNumber === selectedPaymentAccount.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid')
+                              .filter(r => r.accountNumber === selectedPaymentAccount.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid')
                               .map((r, bIdx) => {
                                 const waterAmount = calculateCostOf(r, r.classification);
                                 const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
@@ -6947,9 +7355,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           mockDb.saveReadings(updatedReadings);
                           setReadings(updatedReadings);
 
-                          // Recalculate Consumer Outstanding Arrears
+                          // Recalculate Consumer Outstanding Arrears across officially issued unpaid bills
                           const updatedUnpaid = updatedReadings.filter(
-                            r => r.accountNumber === selectedPaymentAccount.accountNumber && r.status === 'verified' && r.paymentStatus !== 'paid'
+                            r => r.accountNumber === selectedPaymentAccount.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid'
                           );
                           const newConsumerArrears = updatedUnpaid.reduce((acc, r) => {
                             const w = calculateCostOf(r, r.classification);
@@ -9524,6 +9932,209 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           </div>
         </div>
       )}
+
+      {/* CREATE & ISSUE OFFICIAL CONSUMER BILLING MODAL */}
+      {createBillModal.isOpen && (() => {
+        const activeConsumers = consumers.filter(
+          c => c.accountNumber && !c.accountNumber.toUpperCase().startsWith('PENDING') && c.status !== 'archived'
+        );
+        const selectedCons = activeConsumers.find(c => c.accountNumber === createBillModal.accountNumber);
+        const cls: 'Residential' | 'Commercial' = selectedCons?.consumerType === 'Commercial' ? 'Commercial' : 'Residential';
+        const prevIdx = Math.max(0, Number(createBillModal.previousReading) || 0);
+        const currIdx = Math.max(0, Number(createBillModal.currentReading) || 0);
+        const previewUsage = Math.max(0, currIdx - prevIdx);
+        const previewCfg = getActiveTariffConfig();
+        const previewWaterAmt = calculateWaterTariff(previewUsage, cls, previewCfg);
+        const previewTax = calculateFranchiseTax(previewWaterAmt, previewCfg);
+        const previewArrears = selectedCons
+          ? Math.round(
+              readings
+                .filter(
+                  r =>
+                    r.id !== createBillModal.sourceReadingId &&
+                    r.accountNumber === selectedCons.accountNumber &&
+                    isOfficialBillIssued(r) &&
+                    r.paymentStatus !== 'paid'
+                )
+                .reduce((s, r) => s + Math.max(0, (r.totalAmount ?? calculateCostOf(r, r.classification)) - (r.paidAmount || 0)), 0) * 100
+            ) / 100
+          : 0;
+        const previewTotal = Math.round((previewWaterAmt + previewTax + previewArrears) * 100) / 100;
+
+        return (
+          <div
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in"
+            onClick={() => setCreateBillModal(prev => ({ ...prev, isOpen: false }))}
+          >
+            <div
+              className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-5 text-slate-100 max-h-[92vh] overflow-y-auto"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between border-b border-slate-800 pb-4">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2.5 bg-blue-600/20 border border-blue-500/30 rounded-2xl text-blue-400">
+                    <ReceiptText className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-white">Create & Issue Official Consumer Billing</h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Issuing a billing unlocks the Water Billing Notice & Receipt on the consumer's dashboard.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCreateBillModal(prev => ({ ...prev, isOpen: false }))}
+                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="space-y-4 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-300 uppercase tracking-wider text-[11px] mb-1.5">
+                    Consumer Account <span className="text-rose-400">*</span>
+                  </label>
+                  <select
+                    value={createBillModal.accountNumber}
+                    onChange={e => {
+                      const nextAcc = e.target.value;
+                      const cReads = readings
+                        .filter(r => r.accountNumber === nextAcc && r.status !== 'cancelled')
+                        .sort((a, b) => new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime());
+                      const unbilled = cReads.find(r => !isOfficialBillIssued(r));
+                      const lastBilled = cReads.find(r => isOfficialBillIssued(r));
+                      const p = unbilled ? unbilled.previousReading : lastBilled ? lastBilled.currentReading : 0;
+                      const c = unbilled ? unbilled.currentReading : p;
+                      setCreateBillModal(prev => ({
+                        ...prev,
+                        accountNumber: nextAcc,
+                        sourceReadingId: unbilled?.id || '',
+                        billingPeriod: unbilled?.billingPeriod || prev.billingPeriod,
+                        readingDate: unbilled?.readingDate || prev.readingDate,
+                        dueDate: unbilled?.dueDate || computeDefaultDueDate(unbilled?.readingDate || prev.readingDate),
+                        previousReading: String(p),
+                        currentReading: String(c),
+                      }));
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-bold text-white focus:outline-none focus:border-blue-500 cursor-pointer"
+                  >
+                    {activeConsumers.map(c => (
+                      <option key={`bill-opt-${c.accountNumber}`} value={c.accountNumber}>
+                        #{c.accountNumber} — {c.name} ({c.consumerType || 'Residential'} · Meter #{c.meterNumber || 'N/A'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">Billing Period</label>
+                    <input
+                      type="text"
+                      value={createBillModal.billingPeriod}
+                      onChange={e => setCreateBillModal(prev => ({ ...prev, billingPeriod: e.target.value }))}
+                      placeholder="e.g. October 2026"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">Reading Date</label>
+                    <input
+                      type="date"
+                      value={createBillModal.readingDate}
+                      onChange={e =>
+                        setCreateBillModal(prev => ({
+                          ...prev,
+                          readingDate: e.target.value,
+                          dueDate: computeDefaultDueDate(e.target.value),
+                        }))
+                      }
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">Due Date</label>
+                    <input
+                      type="text"
+                      value={createBillModal.dueDate}
+                      onChange={e => setCreateBillModal(prev => ({ ...prev, dueDate: e.target.value }))}
+                      placeholder="e.g. November 11, 2026"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">Previous Reading (m³)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={createBillModal.previousReading}
+                      onChange={e => setCreateBillModal(prev => ({ ...prev, previousReading: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm font-mono font-black text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">Present Reading (m³)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={createBillModal.currentReading}
+                      onChange={e => setCreateBillModal(prev => ({ ...prev, currentReading: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm font-mono font-black text-sky-400 focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Live 3-Pillar Preview */}
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
+                  <div className="flex justify-between text-slate-400">
+                    <span>Net Consumption ({cls}):</span>
+                    <span className="font-mono font-black text-cyan-300">{previewUsage} m³</span>
+                  </div>
+                  <div className="flex justify-between text-slate-300">
+                    <span>Basic Water Charge (Bill Amt.):</span>
+                    <span className="font-mono font-bold text-white">₱{previewWaterAmt.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-300">
+                    <span>2% Local Franchise Tax:</span>
+                    <span className="font-mono font-bold text-white">₱{previewTax.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-300">
+                    <span>Unpaid Arrears:</span>
+                    <span className="font-mono font-bold text-amber-300">₱{previewArrears.toFixed(2)}</span>
+                  </div>
+                  <div className="pt-2 border-t border-slate-800 flex justify-between items-baseline">
+                    <span className="font-black text-white uppercase">Total Amount Due:</span>
+                    <span className="font-mono font-black text-lg text-emerald-400">₱{previewTotal.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setCreateBillModal(prev => ({ ...prev, isOpen: false }))}
+                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCreateAndIssueBilling}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition shadow-md flex items-center space-x-2 cursor-pointer"
+                >
+                  <ReceiptText className="h-4 w-4" />
+                  <span>Generate & Issue Billing</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
     </div>
   );

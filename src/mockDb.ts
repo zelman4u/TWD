@@ -858,6 +858,7 @@ const INITIAL_READINGS: MeterReading[] = [
     penaltyAmount: 12.45,
     amountAfterDueDate: 344.52,
     paymentStatus: 'unpaid',
+    isBillingIssued: true,
   },
   {
     id: 'R-011-302-053-202410',
@@ -887,6 +888,7 @@ const INITIAL_READINGS: MeterReading[] = [
     penaltyAmount: 138.75,
     amountAfterDueDate: 1554.57,
     paymentStatus: 'unpaid',
+    isBillingIssued: true,
   },
   {
     id: 'R-011-102-042-202410',
@@ -916,6 +918,7 @@ const INITIAL_READINGS: MeterReading[] = [
     penaltyAmount: 13.30,
     amountAfterDueDate: 148.76,
     paymentStatus: 'unpaid',
+    isBillingIssued: true,
   },
   {
     id: 'R-022-204-118-PENDING',
@@ -1884,7 +1887,65 @@ export const mockDb = {
   saveReadings: (readings: MeterReading[]): void => {
     const changed = diffChangedItems(KEYS.READINGS, readings, 'id');
     setStored(KEYS.READINGS, readings);
-    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.READINGS, changed, 'id');
+    if (changed.length > 0) {
+      syncBatchToFirestore(COLLECTIONS.READINGS, changed, 'id');
+      safeBackendFetch('/api/billings/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ readings: changed }),
+      }).catch(() => {});
+    }
+  },
+  mergeExternalReadings: (incoming: MeterReading[]): MeterReading[] => {
+    const localList = mockDb.getReadings();
+    if (!Array.isArray(incoming) || incoming.length === 0) return localList;
+    const map = new Map<string, MeterReading>();
+    localList.forEach(lr => {
+      if (lr?.id) map.set(lr.id, lr);
+    });
+    let changed = false;
+    incoming.forEach(ir => {
+      if (!ir?.id) return;
+      const prev = map.get(ir.id);
+      if (!prev) {
+        map.set(ir.id, ir);
+        changed = true;
+        return;
+      }
+      const next: MeterReading = {
+        ...prev,
+        ...ir,
+        isBillingIssued: Boolean(prev.isBillingIssued || ir.isBillingIssued),
+        billingIssuedAt: ir.billingIssuedAt || prev.billingIssuedAt,
+        billingIssuedBy: ir.billingIssuedBy || prev.billingIssuedBy,
+        invoiceNumber: ir.invoiceNumber || prev.invoiceNumber,
+        status:
+          prev.status === 'cancelled' || ir.status === 'cancelled'
+            ? 'cancelled'
+            : prev.status === 'verified' || ir.status === 'verified'
+              ? 'verified'
+              : (ir.status || prev.status),
+        paymentStatus:
+          prev.paymentStatus === 'paid' || ir.paymentStatus === 'paid'
+            ? 'paid'
+            : prev.paymentStatus === 'partial' || ir.paymentStatus === 'partial'
+              ? 'partial'
+              : (ir.paymentStatus || prev.paymentStatus),
+        paidAmount: Math.max(Number(prev.paidAmount || 0), Number(ir.paidAmount || 0)) || prev.paidAmount || ir.paidAmount,
+        orNumber: ir.orNumber || prev.orNumber,
+      };
+      if (JSON.stringify(prev) !== JSON.stringify(next)) {
+        map.set(ir.id, next);
+        changed = true;
+      }
+    });
+    const merged = Array.from(map.values()).sort(
+      (a, b) => new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime()
+    );
+    if (changed) {
+      setStored(KEYS.READINGS, merged);
+    }
+    return merged;
   },
   saveRoutes: (routes: RouteAssignment[]): void => {
     const changed = diffChangedItems(KEYS.ROUTES, routes, 'id');

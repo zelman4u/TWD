@@ -479,3 +479,51 @@ export function getTariffBreakdown(
     explanation: `Tagoloan Water District ${isComm ? 'COMM' : 'RES'} Tariff (${tariff.resolutionNumber}): Net consumption of ${consumption} m³ assessed at ₱${billAmount.toFixed(2)} basic bill + ₱${franchiseTax.toFixed(2)} franchise tax (${(tariff.franchiseTaxRate * 100).toFixed(0)}%).`,
   };
 }
+
+/**
+ * Determines whether a MeterReading has an official billing statement issued by Administration.
+ * - Unapproved ('pending' / 'flagged_abnormal') or 'cancelled' readings are never billed.
+ * - Readings explicitly marked `isBillingIssued: false` are verified field readings awaiting Admin billing issuance.
+ * - Readings explicitly marked `isBillingIssued: true` (or legacy historical records that already carry a finalized dueDate + billAmount or recorded payment) are active official billings.
+ */
+export function isOfficialBillIssued(
+  reading:
+    | {
+        status?: string;
+        isBillingIssued?: boolean;
+        paymentStatus?: string;
+        paidAmount?: number;
+        orNumber?: string;
+        billAmount?: number;
+        dueDate?: string;
+      }
+    | null
+    | undefined
+): boolean {
+  if (!reading) return false;
+  if (reading.status !== 'verified') return false;
+  if (typeof reading.isBillingIssued === 'boolean') {
+    return reading.isBillingIssued;
+  }
+  if (
+    reading.paymentStatus === 'paid' ||
+    reading.paymentStatus === 'partial' ||
+    (typeof reading.paidAmount === 'number' && reading.paidAmount > 0) ||
+    Boolean(reading.orNumber)
+  ) {
+    return true;
+  }
+  return typeof reading.billAmount === 'number' && Boolean(reading.dueDate);
+}
+
+/**
+ * Computes a clean formatted default due date (15 calendar days after reading/billing date).
+ */
+export function computeDefaultDueDate(referenceDate?: string): string {
+  const base = referenceDate ? new Date(referenceDate) : new Date();
+  const safeBase = Number.isNaN(base.getTime()) ? new Date() : base;
+  const due = new Date(safeBase.getTime());
+  due.setDate(due.getDate() + 15);
+  return due.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+

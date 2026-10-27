@@ -144,6 +144,10 @@ export interface MeterReading {
   receiptNotes?: string;
   isDisconnectionNoticeIssued?: boolean;
   disconnectionDate?: string;
+  isBillingIssued?: boolean;
+  billingIssuedAt?: string;
+  billingIssuedBy?: string;
+  invoiceNumber?: string;
 }
 
 export interface ConsumerReportReply {

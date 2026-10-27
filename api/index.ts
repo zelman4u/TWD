@@ -2661,14 +2661,103 @@ app.post("/api/readings/batch", async (req, res) => {
 app.post("/api/readings/:id/approve", async (req, res) => {
   try {
     const { id } = req.params;
-    await setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(id)), { status: "verified" }, { merge: true }).catch(
-      () => {}
-    );
+    if (canWriteFs()) {
+      await setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(id)), { status: "verified" }, { merge: true }).catch(
+        (err) => recordFsErr(err, "write")
+      );
+    }
     const idx = syncedReadings.findIndex((r) => r.id === id);
     if (idx >= 0) syncedReadings[idx].status = "verified";
-    res.json({ success: true, message: `Reading ${id} approved.` });
+    res.json({ success: true, message: `Reading ${id} verified.` });
   } catch {
     res.json({ success: true });
+  }
+});
+
+app.get("/api/billings", async (req, res) => {
+  try {
+    const accQuery = String(req.query.accountNumber || "").trim().toUpperCase();
+    if (canReadFs()) {
+      try {
+        const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.READINGS), limit(250)));
+        snap.forEach((d) => {
+          const r = d.data();
+          const id = (r && r.id) || d.id;
+          if (!r || !id) return;
+          const idx = syncedReadings.findIndex((x) => x.id === id);
+          if (idx >= 0) {
+            syncedReadings[idx] = {
+              ...r,
+              ...syncedReadings[idx],
+              id,
+              isBillingIssued: Boolean(r.isBillingIssued || syncedReadings[idx].isBillingIssued),
+            };
+          } else {
+            syncedReadings.push({ ...r, id });
+          }
+        });
+      } catch (err) {
+        recordFsErr(err, "read");
+      }
+    }
+    let list = [...syncedReadings];
+    if (accQuery) {
+      list = list.filter((r) => String(r.accountNumber || "").trim().toUpperCase() === accQuery);
+    }
+    list.sort((a, b) => new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime());
+    res.json({ success: true, count: list.length, readings: list });
+  } catch {
+    res.json({ success: true, count: 0, readings: [] });
+  }
+});
+
+app.post("/api/billings/reconcile", async (req, res) => {
+  try {
+    const incoming = Array.isArray(req.body?.readings) ? req.body.readings : [];
+    for (const r of incoming) {
+      if (!r || !r.id) continue;
+      const idx = syncedReadings.findIndex((x) => x.id === r.id);
+      if (idx >= 0) {
+        const prev = syncedReadings[idx];
+        syncedReadings[idx] = {
+          ...prev,
+          ...r,
+          isBillingIssued: Boolean(prev.isBillingIssued || r.isBillingIssued),
+          billingIssuedAt: r.billingIssuedAt || prev.billingIssuedAt,
+          billingIssuedBy: r.billingIssuedBy || prev.billingIssuedBy,
+          invoiceNumber: r.invoiceNumber || prev.invoiceNumber,
+          status:
+            prev.status === "cancelled" || r.status === "cancelled"
+              ? "cancelled"
+              : prev.status === "verified" || r.status === "verified"
+                ? "verified"
+                : (r.status || prev.status),
+          paymentStatus:
+            prev.paymentStatus === "paid" || r.paymentStatus === "paid"
+              ? "paid"
+              : prev.paymentStatus === "partial" || r.paymentStatus === "partial"
+                ? "partial"
+                : (r.paymentStatus || prev.paymentStatus),
+        };
+      } else {
+        syncedReadings.unshift({ ...r });
+      }
+      if (canWriteFs()) {
+        const target = syncedReadings.find((x) => x.id === r.id) || r;
+        await setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(r.id)), target, { merge: true }).catch((err) =>
+          recordFsErr(err, "write")
+        );
+      }
+    }
+    const accQuery = String(req.body?.accountNumber || "").trim().toUpperCase();
+    let list = [...syncedReadings];
+    if (accQuery) {
+      list = list.filter((r) => String(r.accountNumber || "").trim().toUpperCase() === accQuery);
+    }
+    list.sort((a, b) => new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime());
+    res.json({ success: true, count: list.length, readings: list });
+  } catch {
+    res.json({ success: true, count: 0, readings: [] });
   }
 });
 

@@ -77,7 +77,7 @@ import { BillDetails } from './consumer/BillDetails';
 import { ConsumerReportsSection } from './consumer/ConsumerReportsSection';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
-import { calculateWaterTariff, getActiveTariffConfig, getReadingEffectiveBillAmount, saveActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
+import { calculateWaterTariff, getActiveTariffConfig, getReadingEffectiveBillAmount, isOfficialBillIssued, saveActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
 import { apiClient, safeBackendFetch } from '../services/apiClient';
 import { initRealtimeSocket } from '../services/realtimeSocket';
 import {
@@ -383,6 +383,30 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             })
             .catch(() => {});
         });
+    }
+
+    if (validAcc) {
+      apiClient
+        .getBillings({ accountNumber: validAcc }, { skipLogging: true })
+        .then(bRes => {
+          if (bRes?.success && Array.isArray(bRes.readings) && bRes.readings.length > 0) {
+            const mergedReadings = mockDb.mergeExternalReadings(bRes.readings);
+            const customerVerified = mergedReadings
+              .filter(
+                r =>
+                  ((activeRec?.accountNumber && r.accountNumber === activeRec.accountNumber) ||
+                    (validAcc && r.accountNumber === validAcc) ||
+                    (activeRec?.meterNumber && r.meterNumber === activeRec.meterNumber)) &&
+                  r.status === 'verified'
+              )
+              .sort((a, b) => new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime());
+            if (JSON.stringify(readingsRef.current) !== JSON.stringify(customerVerified)) {
+              readingsRef.current = customerVerified;
+              setReadings(customerVerified);
+            }
+          }
+        })
+        .catch(() => {});
     }
 
     const notifParams = new URLSearchParams();
@@ -864,11 +888,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           });
         }
         
-        // Check and generate automated overdue alert notifications & 3-month disconnection notices ONLY for legitimate past verified bills that the consumer didn't pay!
-        const unpaidList = verifiedReads.filter(r => r.paymentStatus !== 'paid');
+        // Check and generate automated overdue alert notifications & 3-month disconnection notices ONLY for Admin-issued bills!
+        const issuedBills = verifiedReads.filter(r => isOfficialBillIssued(r));
+        const unpaidList = issuedBills.filter(r => r.paymentStatus !== 'paid');
         
-        // 1. Per-bill overdue alert (only for past approved unpaid bills)
-        verifiedReads.forEach(r => {
+        // 1. Per-bill overdue alert (only for past Admin-issued unpaid bills)
+        issuedBills.forEach(r => {
           if (r.paymentStatus !== 'paid') {
             let dueDateObj: Date;
             if (r.dueDate) {
@@ -1249,22 +1274,28 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Check Account Setup Pending Status (Awaiting Admin Account & Meter Issuance)
   const isAccountPending = !isConsumerRecordIssued(consumerRecord) && !isRealIssuedAccountNumber(currentUser.linkedAccountNumber);
 
-  // Compute Account Metrics & Arrears
+  // Compute Account Metrics & Arrears (strictly separating Verified Readings from Admin-Issued Billings)
   const latestRead = (readings && readings.length > 0) ? readings[0] : null;
   const currentConsumptionVal = latestRead ? latestRead.consumption : 0;
-  // If there are no issued readings for this account yet or account is pending issuance, current bill is 0.00
-  const currentBillAmount = (consumerRecord && latestRead && !isAccountPending)
-    ? (latestRead.paymentStatus === 'paid' ? 0 : Math.max(0, calculateCostOf(latestRead, consumerRecord.consumerType) - (latestRead.paidAmount || 0)))
+
+  // Official Billings issued by Administration
+  const billedReadings = readings.filter(r => isOfficialBillIssued(r));
+  const latestBill = billedReadings.length > 0 ? billedReadings[0] : null;
+
+  // If no billing has been issued by Administration yet (or account is pending), current bill is 0.00
+  const currentBillAmount = (consumerRecord && latestBill && !isAccountPending)
+    ? (latestBill.paymentStatus === 'paid' ? 0 : Math.max(0, calculateCostOf(latestBill, consumerRecord.consumerType) - (latestBill.paidAmount || 0)))
     : 0;
   
-  // Unpaid and Partial bills
-  const unpaidBills = readings.filter(r => r.paymentStatus !== 'paid');
-  const paidBills = readings.filter(r => r.paymentStatus === 'paid');
-  const partialBills = readings.filter(r => r.paymentStatus === 'partial');
-  const unpaidFullBills = readings.filter(r => r.paymentStatus === 'unpaid' || !r.paymentStatus);
+  // Unpaid, Paid, and Partial Admin-issued bills
+  const unpaidBills = billedReadings.filter(r => r.paymentStatus !== 'paid');
+  const paidBills = billedReadings.filter(r => r.paymentStatus === 'paid');
+  const partialBills = billedReadings.filter(r => r.paymentStatus === 'partial');
+  const unpaidFullBills = billedReadings.filter(r => r.paymentStatus === 'unpaid' || !r.paymentStatus);
 
-  // Helper to determine overdue status
+  // Helper to determine overdue status (only on Admin-issued billings)
   const isReadingOverdue = (reading: MeterReading) => {
+    if (!isOfficialBillIssued(reading)) return false;
     if (reading.paymentStatus === 'paid') return false;
     let dueDateObj: Date;
     if (reading.dueDate) {
@@ -1273,14 +1304,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       dueDateObj = new Date(reading.readingDate);
       dueDateObj.setDate(dueDateObj.getDate() + 15);
     } else {
-      dueDateObj = new Date('2026-06-20');
+      return false;
     }
+    if (Number.isNaN(dueDateObj.getTime())) return false;
     return new Date() > dueDateObj;
   };
 
-  const overdueBills = readings.filter(r => isReadingOverdue(r));
+  const overdueBills = billedReadings.filter(r => isReadingOverdue(r));
   
-  // Dynamic accurate outstanding sum
+  // Dynamic accurate outstanding sum across Admin-issued billings only
   const outstandingSum = unpaidBills.reduce((acc, b) => {
     const total = calculateCostOf(b, consumerRecord?.consumerType);
     const paid = b.paidAmount || 0;
@@ -1301,7 +1333,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     : null;
 
   // Chart Data preparation (chronological order)
-  const chartReadings = [...readings].reverse().slice(-6); // last 6 months in chronological order
+  const chartReadings = [...readings].reverse().slice(-6); // last 6 verified readings in chronological order
+  const chartBillings = [...billedReadings].reverse().slice(-6); // last 6 Admin-issued billings in chronological order
 
   // Unread notification count
   const unreadNotifCount = notifications.filter(n => !n.read).length;
@@ -2690,10 +2723,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           <div className="space-y-8 animate-fade-in" id="consumer-tab-dashboard">
             
             {/* DYNAMIC DUE ALERT & OVERDUE FLAGGING COMPONENT */}
-            {consumerRecord && (
+            {consumerRecord && billedReadings.length > 0 && (
               <DynamicDueAlert
                 consumerRecord={consumerRecord}
-                readings={readings}
+                readings={billedReadings}
                 overdueBills={overdueBills}
                 unpaidBills={unpaidBills}
                 onPayNow={(reading, mode) => handleOpenSimulatedPayment(reading, mode || 'full')}
@@ -2747,7 +2780,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             </div>
             
             {/* SPOTLIGHT: METER READING & BILL ISSUED NOTIFICATION FOCUS CARD */}
-            {spotlightReading && (
+            {spotlightReading && isOfficialBillIssued(spotlightReading) && (
               <div 
                 className="bg-slate-900 border border-blue-500/60 rounded-3xl p-6 shadow-xl relative overflow-hidden animate-slide-down ring-2 ring-blue-500/20 text-slate-100"
                 id="dashboard-reading-spotlight"
@@ -2995,39 +3028,55 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               {/* Card 3: Current Bill Amount */}
               <div 
                 onClick={() => {
-                  setBillDetailsReading(latestRead || (readings.length > 0 ? readings[0] : null));
-                  setIsBillDetailsOpen(true);
+                  if (latestBill && !isAccountPending) {
+                    setBillDetailsReading(latestBill);
+                    setIsBillDetailsOpen(true);
+                  }
                 }}
-                className="bg-slate-900 border border-slate-800 hover:border-indigo-500/60 hover:bg-slate-900/90 transition-all rounded-3xl p-5 shadow-md space-y-3 cursor-pointer group relative overflow-hidden"
+                className={`bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-md space-y-3 relative overflow-hidden ${
+                  latestBill && !isAccountPending
+                    ? 'hover:border-indigo-500/60 hover:bg-slate-900/90 transition-all cursor-pointer group'
+                    : ''
+                }`}
                 id="card-current-bill-amount"
-                title="Click to view full itemized bill breakdown"
+                title={latestBill && !isAccountPending ? 'Click to view full itemized bill breakdown' : 'Billing statement will be available once issued by Administration'}
               >
                 <div className="flex justify-between items-start">
                   <div>
                     <span className="text-xs font-semibold text-slate-400 block">
                       Current Bill Amount
                     </span>
-                    <span className="text-[11px] font-semibold text-indigo-400 group-hover:text-indigo-300 flex items-center mt-0.5">
-                      <span>View 3-Pillar Breakdown</span>
-                      <ArrowRight className="h-3 w-3 ml-1 group-hover:translate-x-0.5 transition-transform" />
-                    </span>
+                    {latestBill && !isAccountPending ? (
+                      <span className="text-[11px] font-semibold text-indigo-400 group-hover:text-indigo-300 flex items-center mt-0.5">
+                        <span>View 3-Pillar Breakdown</span>
+                        <ArrowRight className="h-3 w-3 ml-1 group-hover:translate-x-0.5 transition-transform" />
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-medium text-slate-500 block mt-0.5">
+                        Awaiting Admin Billing
+                      </span>
+                    )}
                   </div>
-                  <div className="p-2 bg-indigo-500/15 text-indigo-400 border border-indigo-500/20 rounded-xl group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                  <div className={`p-2 bg-indigo-500/15 text-indigo-400 border border-indigo-500/20 rounded-xl ${
+                    latestBill && !isAccountPending ? 'group-hover:bg-indigo-600 group-hover:text-white transition-colors' : 'opacity-70'
+                  }`}>
                     <Calculator className="h-5 w-5" />
                   </div>
                 </div>
                 <div>
                   <div className="flex items-baseline space-x-1">
-                    <span className="text-3xl font-black text-indigo-300 font-mono tabular-nums">
+                    <span className={`text-3xl font-black font-mono tabular-nums ${
+                      latestBill && !isAccountPending ? 'text-indigo-300' : 'text-slate-400'
+                    }`}>
                       ₱{currentBillAmount.toFixed(2)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1 font-medium">
                     <span>
-                      Cycle: {latestRead ? latestRead.billingPeriod : 'No Billing Cycle Yet'}
+                      Cycle: {latestBill ? latestBill.billingPeriod : 'No Billing Issued Yet'}
                     </span>
-                    <span className="text-[10px] font-semibold text-indigo-300">
-                      Fixed + Vol + Tax
+                    <span className="text-[10px] font-semibold text-slate-500">
+                      {latestBill ? 'Fixed + Vol + Tax' : 'No Receipt Yet'}
                     </span>
                   </div>
                 </div>
@@ -3221,56 +3270,85 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
             </div>
 
-            {/* EMBEDDED DASHBOARD BILL DETAILS BREAKDOWN COMPONENT */}
+            {/* EMBEDDED DASHBOARD BILL DETAILS BREAKDOWN COMPONENT — ONLY DISPLAY RECEIPT/STATEMENT WHEN ADMIN HAS ISSUED BILLING */}
             {consumerRecord && (
-              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-md space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2.5 bg-indigo-500/15 text-indigo-400 border border-indigo-500/25 rounded-2xl">
-                      <Calculator className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-base font-bold text-white">
-                          Current Water Bill Details & Tariff Itemization
-                        </h3>
-                        <span aria-hidden="true" className="text-slate-600">·</span>
-                        <span className="text-xs font-semibold text-indigo-400">
-                          Fixed + Volumetric + Taxes
-                        </span>
+              latestBill && !isAccountPending ? (
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-md space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                    <div className="flex items-center space-x-3">
+                      <div className="p-2.5 bg-indigo-500/15 text-indigo-400 border border-indigo-500/25 rounded-2xl">
+                        <Calculator className="h-6 w-6" />
                       </div>
-                      <p className="text-xs text-slate-400">
-                        Itemized accounting breakdown of your assessed water charges for <strong className="text-white font-bold">{latestRead ? latestRead.billingPeriod : 'Current Period'}</strong> ({consumerRecord.consumerType} classification)
-                      </p>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-base font-bold text-white">
+                            Current Water Bill Details & Tariff Itemization
+                          </h3>
+                          <span aria-hidden="true" className="text-slate-600">·</span>
+                          <span className="text-xs font-semibold text-indigo-400">
+                            Fixed + Volumetric + Taxes
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          Itemized accounting breakdown of your assessed water charges for <strong className="text-white font-bold">{latestBill.billingPeriod}</strong> ({consumerRecord.consumerType} classification)
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => {
+                          setBillDetailsReading(latestBill);
+                          setIsBillDetailsOpen(true);
+                        }}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 text-xs font-bold rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
+                        title="Open full interactive breakdown modal"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        <span>Expand Modal View</span>
+                      </button>
                     </div>
                   </div>
 
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => {
-                        setBillDetailsReading(latestRead || (readings.length > 0 ? readings[0] : null));
-                        setIsBillDetailsOpen(true);
-                      }}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 text-xs font-bold rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
-                      title="Open full interactive breakdown modal"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      <span>Expand Modal View</span>
-                    </button>
+                  <BillDetails
+                    reading={latestBill}
+                    consumer={consumerRecord}
+                    calculateCostOf={calculateCostOf}
+                    isModal={false}
+                    onPayBill={(r) => {
+                      setActiveTab('bills');
+                      handleStartPayment(r, 'full');
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-md" id="dashboard-no-billing-notice">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="flex items-start space-x-4">
+                      <div className="p-3 bg-slate-950 border border-slate-800 text-slate-400 rounded-2xl shrink-0">
+                        <ReceiptText className="h-6 w-6" />
+                      </div>
+                      <div className="space-y-1.5 max-w-2xl">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-base font-bold text-white">
+                            No Official Billing Statement or Receipt Issued Yet
+                          </h3>
+                          <span aria-hidden="true" className="text-slate-600">·</span>
+                          <span className="text-xs font-semibold text-amber-400">
+                            Awaiting Admin Billing
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 leading-relaxed">
+                          For transparency, your Water Billing Notice and official receipt are hidden until Tagoloan Water District Administration generates and issues a billing statement for Account <strong className="text-slate-200 font-mono">#{consumerRecord.accountNumber || 'PENDING'}</strong>.
+                          {latestRead
+                            ? ` Your latest verified meter reading (${latestRead.consumption} m³ recorded on ${latestRead.readingDate}) is on file and awaiting official billing issuance by Administration.`
+                            : ' No billing cycle has been issued for your account yet.'}
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 </div>
-
-                <BillDetails
-                  reading={latestRead || (readings.length > 0 ? readings[0] : null)}
-                  consumer={consumerRecord}
-                  calculateCostOf={calculateCostOf}
-                  isModal={false}
-                  onPayBill={(r) => {
-                    setActiveTab('bills');
-                    handleStartPayment(r, 'full');
-                  }}
-                />
-              </div>
+              )
             )}
 
             {/* TWO ANALYTICAL VISUAL CHARTS: CONSUMPTION CHART & BILLING CHART */}
@@ -3346,14 +3424,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   </span>
                 </div>
 
-                {chartReadings.length > 0 ? (
+                {chartBillings.length > 0 ? (
                   <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5 pt-8 h-64 flex items-end justify-around relative">
                     <div className="absolute left-4 top-3 text-[10px] font-mono text-slate-500">
                       Y-Axis: Billed Amount (₱)
                     </div>
-                    {chartReadings.map((r, idx) => {
+                    {chartBillings.map((r, idx) => {
                       const cost = calculateCostOf(r, consumerRecord.consumerType);
-                      const maxCost = Math.max(...chartReadings.map(c => calculateCostOf(c, consumerRecord.consumerType)), 500);
+                      const maxCost = Math.max(...chartBillings.map(c => calculateCostOf(c, consumerRecord.consumerType)), 500);
                       const barHeight = Math.max(20, Math.min(180, (cost / maxCost) * 170));
                       const isPaid = r.paymentStatus === 'paid';
 
@@ -3380,7 +3458,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   </div>
                 ) : (
                   <div className="h-64 bg-slate-950 border border-slate-800 rounded-2xl flex items-center justify-center text-xs text-slate-500">
-                    No billing history recorded yet.
+                    No official billings issued by Administration yet.
                   </div>
                 )}
               </div>
@@ -3407,14 +3485,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 </div>
 
                 <div className="divide-y divide-slate-800">
-                  {readings.length === 0 ? (
+                  {billedReadings.length === 0 ? (
                     <div className="py-8 text-center text-xs text-slate-400 space-y-2">
                       <ReceiptText className="h-8 w-8 mx-auto text-slate-600" />
-                      <p className="font-semibold text-slate-300">No billing statements recorded yet.</p>
-                      <p className="text-[11px] text-slate-500">Readings verified by the water district will appear here automatically.</p>
+                      <p className="font-semibold text-slate-300">No billing statements issued yet.</p>
+                      <p className="text-[11px] text-slate-500">Statements and receipts will appear here automatically once billing is issued by Administration.</p>
                     </div>
                   ) : (
-                    readings.slice(0, 3).map((r, idx) => {
+                    billedReadings.slice(0, 3).map((r, idx) => {
                       const cost = calculateCostOf(r, consumerRecord.consumerType);
                       const isPaid = r.paymentStatus === 'paid';
                       const isPartial = r.paymentStatus === 'partial';
@@ -3584,7 +3662,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             
             {/* Complete Bills Search, Filter & Responsive Ledger */}
             {(() => {
-              const filteredBills = readings
+              const filteredBills = billedReadings
                 .filter(r => {
                   if (billFilter === 'unpaid') return r.paymentStatus !== 'paid';
                   if (billFilter === 'paid') return r.paymentStatus === 'paid';
@@ -3647,7 +3725,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
                             billFilter === 'all' ? 'bg-black/30 text-white' : 'bg-slate-800 text-slate-300'
                           }`}>
-                            {readings.length}
+                            {billedReadings.length}
                           </span>
                         </button>
 
@@ -3712,7 +3790,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       value={consumerBillSearch}
                       onChange={setConsumerBillSearch}
                       resultCount={filteredBills.length}
-                      totalCount={readings.length}
+                      totalCount={billedReadings.length}
                       placeholder="Smart search bills by billing period, OR #, reference ID, amount, m³, due date, or status..."
                       id="consumer-bills-smart-search"
                     />
@@ -3736,7 +3814,25 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium">
-                        {paginatedBills.map((r, idx) => {
+                        {paginatedBills.length === 0 ? (
+                          <tr>
+                            <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
+                              <div className="max-w-md mx-auto space-y-2">
+                                <ReceiptText className="h-8 w-8 mx-auto text-slate-600" />
+                                <p className="text-sm font-bold text-slate-200">
+                                  {billedReadings.length === 0
+                                    ? 'No Official Billings or Receipts Issued Yet'
+                                    : 'No Matching Bills Found'}
+                                </p>
+                                <p className="text-xs text-slate-400 leading-relaxed">
+                                  {billedReadings.length === 0
+                                    ? 'Your billing statements and official receipts will appear here automatically once Tagoloan Water District Administration generates and issues your billing.'
+                                    : 'Try clearing your search query or switching the status filter above.'}
+                                </p>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : paginatedBills.map((r, idx) => {
                         const totalAmount = calculateCostOf(r, consumerRecord.consumerType);
                         const isPaid = r.paymentStatus === 'paid';
                         const isPartial = r.paymentStatus === 'partial';
@@ -3917,7 +4013,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
               {/* Mobile Card List View for Perfect Fitting on Small Screens */}
               <div className="block md:hidden divide-y divide-slate-800/80">
-                {paginatedBills.map((r, idx) => {
+                {paginatedBills.length === 0 ? (
+                  <div className="p-8 text-center space-y-2 text-slate-400">
+                    <ReceiptText className="h-8 w-8 mx-auto text-slate-600" />
+                    <p className="text-sm font-bold text-slate-200">
+                      {billedReadings.length === 0
+                        ? 'No Official Billings or Receipts Issued Yet'
+                        : 'No Matching Bills Found'}
+                    </p>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      {billedReadings.length === 0
+                        ? 'Statements and official receipts will appear here once Administration generates and issues your billing.'
+                        : 'Try clearing your search query or switching the status filter.'}
+                    </p>
+                  </div>
+                ) : paginatedBills.map((r, idx) => {
                     const totalAmount = calculateCostOf(r, consumerRecord.consumerType);
                     const isPaid = r.paymentStatus === 'paid';
                     const isPartial = r.paymentStatus === 'partial';
@@ -4593,7 +4703,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    const targetBill = readings.find(r => r.id === n.readingId || r.billingPeriod === n.billingPeriod) || unpaidBills[0];
+                                    const targetBill = billedReadings.find(r => r.id === n.readingId || r.billingPeriod === n.billingPeriod) || unpaidBills[0];
                                     setActiveTab('bills');
                                     handleStartPayment(targetBill, 'full');
                                   }}
@@ -5026,7 +5136,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       </main>
 
       {/* DIGITAL RECEIPT MODAL */}
-      {receiptDetailModal && (
+      {receiptDetailModal && isOfficialBillIssued(receiptDetailModal) && (receiptDetailModal.paymentStatus === 'paid' || receiptDetailModal.paymentStatus === 'partial' || (receiptDetailModal.paidAmount || 0) > 0) && (
         <div 
           className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in print:bg-white print:p-0"
           onClick={() => setReceiptDetailModal(null)}
@@ -5149,9 +5259,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       )}
 
       {/* BILL DETAILS ITEMIZED BREAKDOWN MODAL */}
-      {consumerRecord && isBillDetailsOpen && (
+      {consumerRecord && isBillDetailsOpen && (billDetailsReading || latestBill) && isOfficialBillIssued(billDetailsReading || latestBill) && (
         <BillDetails
-          reading={billDetailsReading || latestRead || (readings.length > 0 ? readings[0] : null)}
+          reading={billDetailsReading || latestBill}
           consumer={consumerRecord}
           calculateCostOf={calculateCostOf}
           isModal={true}
@@ -5172,8 +5282,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       {consumerRecord && (
         <UploadReceiptModal
           isOpen={isUploadReceiptOpen}
-          reading={uploadReceiptReading || unpaidBills[0] || (readings.length > 0 ? readings[0] : null)}
-          allReadings={readings}
+          reading={uploadReceiptReading || unpaidBills[0] || latestBill}
+          allReadings={billedReadings}
           consumerRecord={consumerRecord}
           onClose={() => {
             setIsUploadReceiptOpen(false);

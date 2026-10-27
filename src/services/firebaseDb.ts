@@ -599,7 +599,7 @@ export function ensureRealtimeFirestoreListeners() {
  * Starts live real-time two-way Firestore synchronization across all devices
  */
 export function startRealtimeFirestoreListeners() {
-  if (isFirestoreQuotaExceeded()) {
+  if (isFirestoreReadQuotaExceeded() || isFirestoreWriteQuotaExceeded()) {
     return;
   }
   stopRealtimeFirestoreListeners();
@@ -1051,13 +1051,30 @@ export function startRealtimeFirestoreListeners() {
               const cr = mergedMap.get(lr.id)!;
               const lrStatusStr = String(lr.status || '');
               const crStatusStr = String(cr.status || '');
+              const mergedBillingIssued =
+                lr.isBillingIssued === true || cr.isBillingIssued === true
+                  ? true
+                  : typeof lr.isBillingIssued === 'boolean'
+                    ? lr.isBillingIssued
+                    : cr.isBillingIssued;
               const isLocalMoreAdvanced =
                 ((lrStatusStr === 'verified' || lrStatusStr === 'approved') &&
                   (crStatusStr === 'pending' || crStatusStr === 'pending_approval')) ||
-                (lr.paymentStatus === 'paid' && cr.paymentStatus !== 'paid');
-              if (isLocalMoreAdvanced) {
-                mergedMap.set(lr.id, { ...cr, ...lr });
-              }
+                (lr.isBillingIssued === true && cr.isBillingIssued !== true) ||
+                (lr.paymentStatus === 'paid' && cr.paymentStatus !== 'paid') ||
+                (lr.paymentStatus === 'partial' && cr.paymentStatus === 'unpaid') ||
+                (lr.paidAmount || 0) > (cr.paidAmount || 0);
+              const base = isLocalMoreAdvanced ? { ...cr, ...lr } : { ...lr, ...cr };
+              mergedMap.set(lr.id, {
+                ...base,
+                ...(typeof mergedBillingIssued === 'boolean' ? { isBillingIssued: mergedBillingIssued } : {}),
+                billingIssuedAt: lr.billingIssuedAt || cr.billingIssuedAt,
+                billingIssuedBy: lr.billingIssuedBy || cr.billingIssuedBy,
+                invoiceNumber: lr.invoiceNumber || cr.invoiceNumber,
+                dueDate: lr.dueDate || cr.dueDate,
+                orNumber: lr.orNumber || cr.orNumber,
+                paidAmount: Math.max(Number(lr.paidAmount || 0), Number(cr.paidAmount || 0)) || base.paidAmount,
+              });
             }
           });
 
@@ -1456,7 +1473,7 @@ export async function pushIssuedConsumerToFirestore(
 
     for (const cDocId of consumerDocIds) {
       if (force || !isPayloadAlreadySynced(COLLECTIONS.CONSUMERS, cDocId, normalizedConsumer)) {
-        await setDoc(doc(db, COLLECTIONS.CONSUMERS, cDocId), normalizedConsumer, { merge: true });
+        await withWriteTimeout(setDoc(doc(db, COLLECTIONS.CONSUMERS, cDocId), normalizedConsumer, { merge: true }));
         markPayloadSynced(COLLECTIONS.CONSUMERS, cDocId, normalizedConsumer);
       }
     }
@@ -1553,14 +1570,14 @@ export async function pushIssuedConsumerToFirestore(
     if (linkedUid && !linkedUid.startsWith('email_')) {
       const uidDoc = sanitizeDocId(linkedUid);
       if (force || !isPayloadAlreadySynced(COLLECTIONS.USERS, uidDoc, userPatch)) {
-        await setDoc(doc(db, COLLECTIONS.USERS, uidDoc), userPatch, { merge: true });
+        await withWriteTimeout(setDoc(doc(db, COLLECTIONS.USERS, uidDoc), userPatch, { merge: true }));
         markPayloadSynced(COLLECTIONS.USERS, uidDoc, userPatch);
       }
     }
     if (cleanEmail) {
       const emailDoc = sanitizeEmailDocId(cleanEmail);
       if (force || !isPayloadAlreadySynced(COLLECTIONS.USERS, emailDoc, userPatch)) {
-        await setDoc(doc(db, COLLECTIONS.USERS, emailDoc), userPatch, { merge: true });
+        await withWriteTimeout(setDoc(doc(db, COLLECTIONS.USERS, emailDoc), userPatch, { merge: true }));
         markPayloadSynced(COLLECTIONS.USERS, emailDoc, userPatch);
       }
       // Also update any additional user-* documents sharing this email so every device session gets activated
@@ -1614,7 +1631,7 @@ export async function pushIssuedConsumerToFirestore(
 
     const nDocId = sanitizeDocId(notifToSync.id || deterministicNotifId);
     if (force || !isPayloadAlreadySynced(COLLECTIONS.NOTIFICATIONS, nDocId, notifToSync)) {
-      await setDoc(doc(db, COLLECTIONS.NOTIFICATIONS, nDocId), notifToSync, { merge: true });
+      await withWriteTimeout(setDoc(doc(db, COLLECTIONS.NOTIFICATIONS, nDocId), notifToSync, { merge: true }));
       markPayloadSynced(COLLECTIONS.NOTIFICATIONS, nDocId, notifToSync);
     }
   } catch (error: any) {

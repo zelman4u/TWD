@@ -25,6 +25,7 @@ import { Consumer, WaterMeter, MeterReading, AuditLog } from '../../types';
 import { TablePagination } from '../common/TablePagination';
 import { SmartSearchBar } from '../common/SmartSearchBar';
 import { smartMatch } from '../../utils/smartSearch';
+import { isOfficialBillIssued } from '../../utils/tariffCalculator';
 
 interface RecordsArchiveViewProps {
   recordsTab: 'consumers' | 'meters' | 'readings' | 'bills' | 'payments' | 'audit';
@@ -74,8 +75,8 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
   const totalReadings = readings.length;
   const verifiedReadings = readings.filter(r => r.status === 'verified').length;
 
-  const bills = readings.filter(r => r.status === 'verified');
-  const paidBills = readings.filter(r => r.paymentStatus === 'paid');
+  const bills = readings.filter(r => isOfficialBillIssued(r));
+  const paidBills = bills.filter(r => r.paymentStatus === 'paid');
   const totalCollectedAmount = paidBills.reduce((acc, r) => {
     const cost = r.paidAmount && r.paidAmount > 0 ? r.paidAmount : calculateCostOf(r, r.classification);
     return acc + cost;

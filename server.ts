@@ -2821,43 +2821,105 @@ app.get(["/api/readings", "/api/readings/pending", "/api/sync/readings"], (req, 
   });
 });
 
-// 7. Admin Approves Reading -> Issues Bill to Consumer (POST /api/readings/:id/approve)
+// 7. Admin Approves Reading -> Verifies Meter Reading Telemetry (POST /api/readings/:id/approve)
 app.post("/api/readings/:id/approve", (req, res) => {
   const { id } = req.params;
   const item = pendingMobileReadings.find(r => r.id === id);
 
-  if (!item) {
-    return res.status(404).json({ success: false, message: "Reading submission not found." });
+  if (item) {
+    item.status = "approved";
+    const targetConsumer = syncedConsumers.find(c => c.accountNumber === item.accountNumber);
+    if (targetConsumer) {
+      targetConsumer.previousReading = item.currentReading;
+      targetConsumer.lastReadingDate = item.readingDate;
+    }
+    broadcast("READING_VERIFIED", {
+      accountNumber: item.accountNumber,
+      billingPeriod: item.billingPeriod,
+      consumption: item.consumption,
+      message: `Meter reading for ${item.billingPeriod} has been verified and is ready for billing issuance.`
+    });
   }
-
-  item.status = "approved";
-
-  // Update consumer previous reading
-  const targetConsumer = syncedConsumers.find(c => c.accountNumber === item.accountNumber);
-  if (targetConsumer) {
-    targetConsumer.previousReading = item.currentReading;
-    targetConsumer.lastReadingDate = item.readingDate;
-  }
-
-  // Broadcast bill issuance to Consumer Portal
-  broadcast("READING_APPROVED_BILL_ISSUED", {
-    accountNumber: item.accountNumber,
-    billingPeriod: item.billingPeriod,
-    consumption: item.consumption,
-    message: `Official bill for ${item.billingPeriod} has been approved and published to Consumer Portal.`
-  });
-  broadcast("bill:issued", {
-    accountNumber: item.accountNumber,
-    billingPeriod: item.billingPeriod,
-    consumption: item.consumption,
-    message: `Official bill for ${item.billingPeriod} has been approved and published to Consumer Portal.`
-  });
 
   res.json({
     success: true,
-    message: `Reading #${id} approved. Statement issued to Consumer Portal for Account #${item.accountNumber}.`,
-    reading: item
+    message: `Reading #${id} verified.`,
+    reading: item || null
   });
+});
+
+// 7.1 Official Admin Billing Sync & Consumer Billing Feed (GET /api/billings, POST /api/billings/reconcile)
+const reconciledBillingRecords = new Map<string, any>();
+
+app.get("/api/billings", (req, res) => {
+  const accQuery = String(req.query.accountNumber || "").trim().toUpperCase();
+  let list = Array.from(reconciledBillingRecords.values());
+  if (accQuery) {
+    list = list.filter(r => String(r.accountNumber || "").trim().toUpperCase() === accQuery);
+  }
+  list.sort((a, b) => new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime());
+  res.json({ success: true, count: list.length, readings: list });
+});
+
+app.post("/api/billings/reconcile", (req, res) => {
+  const incoming = Array.isArray(req.body?.readings) ? req.body.readings : [];
+  const newlyBilled: any[] = [];
+
+  for (const r of incoming) {
+    if (!r || !r.id) continue;
+    const prev = reconciledBillingRecords.get(r.id);
+    const merged = prev
+      ? {
+          ...prev,
+          ...r,
+          isBillingIssued: Boolean(prev.isBillingIssued || r.isBillingIssued),
+          billingIssuedAt: r.billingIssuedAt || prev.billingIssuedAt,
+          billingIssuedBy: r.billingIssuedBy || prev.billingIssuedBy,
+          invoiceNumber: r.invoiceNumber || prev.invoiceNumber,
+          status:
+            prev.status === "cancelled" || r.status === "cancelled"
+              ? "cancelled"
+              : prev.status === "verified" || r.status === "verified"
+                ? "verified"
+                : (r.status || prev.status),
+          paymentStatus:
+            prev.paymentStatus === "paid" || r.paymentStatus === "paid"
+              ? "paid"
+              : prev.paymentStatus === "partial" || r.paymentStatus === "partial"
+                ? "partial"
+                : (r.paymentStatus || prev.paymentStatus),
+        }
+      : { ...r };
+    reconciledBillingRecords.set(r.id, merged);
+    if ((!prev || !prev.isBillingIssued) && merged.isBillingIssued) {
+      newlyBilled.push(merged);
+    }
+  }
+
+  for (const bill of newlyBilled) {
+    broadcast("READING_APPROVED_BILL_ISSUED", {
+      accountNumber: bill.accountNumber,
+      billingPeriod: bill.billingPeriod,
+      consumption: bill.consumption,
+      reading: bill,
+      message: `Official water billing statement for ${bill.billingPeriod} has been issued by Administration.`
+    });
+    broadcast("bill:issued", {
+      accountNumber: bill.accountNumber,
+      billingPeriod: bill.billingPeriod,
+      consumption: bill.consumption,
+      reading: bill,
+      message: `Official water billing statement for ${bill.billingPeriod} has been issued by Administration.`
+    });
+  }
+
+  const accQuery = String(req.body?.accountNumber || "").trim().toUpperCase();
+  let list = Array.from(reconciledBillingRecords.values());
+  if (accQuery) {
+    list = list.filter(r => String(r.accountNumber || "").trim().toUpperCase() === accQuery);
+  }
+  list.sort((a, b) => new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime());
+  res.json({ success: true, count: list.length, readings: list });
 });
 
 // ==========================================

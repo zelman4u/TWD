@@ -12,7 +12,6 @@ import {
   Calendar, 
   Layers, 
   Percent, 
-  Sparkles, 
   TrendingUp, 
   CheckCircle2, 
   AlertTriangle,
@@ -35,6 +34,7 @@ import {
   getTariffBreakdown,
   getActiveTariffConfig,
   getReadingEffectiveBillAmount,
+  isOfficialBillIssued,
   DEFAULT_TARIFF_CONFIG,
   WaterTariffConfig
 } from '../../utils/tariffCalculator';
@@ -152,18 +152,25 @@ export function computeBillBreakdown(
   const paidAmount = reading?.paidAmount || 0;
   const rawRemaining = Math.max(0, totalAmount - paidAmount);
 
-  const dueDate = reading?.dueDate || 'December 12, 2024';
-  const dueDateObj = reading?.dueDate ? new Date(reading.dueDate) : new Date('2024-12-12');
-  const isOverdue = Boolean(reading && new Date() > dueDateObj && rawRemaining > 0 && reading.paymentStatus !== 'paid');
+  const dueDate = reading?.dueDate || '—';
+  const dueDateObj = reading?.dueDate ? new Date(reading.dueDate) : null;
+  const isOverdue = Boolean(
+    reading &&
+      dueDateObj &&
+      !Number.isNaN(dueDateObj.getTime()) &&
+      new Date() > dueDateObj &&
+      rawRemaining > 0 &&
+      reading.paymentStatus !== 'paid'
+  );
 
   const netRemainingDue = isOverdue ? Math.max(0, amountAfterDueDate - paidAmount) : rawRemaining;
 
-  const sequenceNo = reading?.sequenceNo || consumer.sequenceNo || '135';
-  const meterBrand = reading?.meterBrand || consumer.meterBrand || 'EVER';
-  const meterNumber = reading?.meterNumber || consumer.meterNumber || '150307143';
-  const meterReaderName = reading?.meterReaderName || 'MARCO POLO';
-  const meterReaderDate = reading?.readingDate || '2024-10-15';
-  const addressZone = consumer.sitioZone || (consumer.address.includes('ZONE') ? consumer.address : `${consumer.address} (ZONE-11A)`);
+  const sequenceNo = reading?.sequenceNo || consumer.sequenceNo || '—';
+  const meterBrand = reading?.meterBrand || consumer.meterBrand || 'TWD';
+  const meterNumber = reading?.meterNumber || consumer.meterNumber || 'Unassigned';
+  const meterReaderName = reading?.meterReaderName || 'Authorized Field Officer';
+  const meterReaderDate = reading?.readingDate || '—';
+  const addressZone = consumer.sitioZone || consumer.barangay || consumer.address || 'Tagoloan Service Area';
 
   return {
     consumption,
@@ -176,7 +183,7 @@ export function computeBillBreakdown(
     meterNumber,
     meterReaderName,
     meterReaderDate,
-    addressFull: consumer.address || 'SIHAYON-LEFT (ZONE-11A)',
+    addressFull: consumer.address || 'Registered Service Address',
     addressZone,
     baseFixedCharge: isComm ? schedule.commercial.baseMinCharge : schedule.residential.baseMinCharge,
     tier1Rate: isComm ? schedule.commercial.tier1_rate : schedule.residential.tier1_rate,
@@ -189,7 +196,7 @@ export function computeBillBreakdown(
     paidAmount,
     netRemainingDue,
     dueDate,
-    billingPeriod: reading?.billingPeriod || 'October 2024',
+    billingPeriod: reading?.billingPeriod || 'No Active Billing Period',
     isOverdue,
   };
 }
@@ -207,6 +214,50 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
   const [showFormulaHelper, setShowFormulaHelper] = useState(false);
 
   if (!isOpen) return null;
+
+  if (!reading || !isOfficialBillIssued(reading)) {
+    const emptyNotice = (
+      <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 sm:p-8 text-center space-y-3 text-slate-200" id="bill-details-empty-state">
+        <div className="h-12 w-12 rounded-2xl bg-slate-900 border border-slate-800 text-slate-400 flex items-center justify-center mx-auto">
+          <ReceiptText className="h-6 w-6" />
+        </div>
+        <div className="space-y-1 max-w-lg mx-auto">
+          <h4 className="text-sm sm:text-base font-bold text-white">
+            No Official Billing Statement or Receipt Issued Yet
+          </h4>
+          <p className="text-xs text-slate-400 leading-relaxed">
+            Account <span className="font-mono font-semibold text-slate-200">#{consumer.accountNumber || 'PENDING'}</span> does not have an official billing statement yet. Your itemized Water Billing Notice and receipt will automatically appear here once Tagoloan Water District Administration generates and issues your billing.
+          </p>
+        </div>
+        {isModal && onClose && (
+          <div className="pt-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold rounded-xl transition cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </div>
+    );
+
+    if (isModal) {
+      return (
+        <div
+          className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-5 overflow-y-auto animate-fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && onClose) onClose();
+          }}
+        >
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-5 sm:p-7 shadow-2xl my-auto">
+            {emptyNotice}
+          </div>
+        </div>
+      );
+    }
+    return emptyNotice;
+  }
 
   const breakdown = computeBillBreakdown(reading, consumer, calculateCostOf);
   const isPaid = reading?.paymentStatus === 'paid';

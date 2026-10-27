@@ -51,11 +51,13 @@ function recordLog(entry: ApiLogEntry) {
   const icon = entry.success ? '✓' : '✗';
   const prefix = `[API Client ${icon}] ${entry.method} ${entry.url}`;
   if (entry.success) {
-    console.info(
-      `%c${prefix} %c${entry.status || 200} (${entry.durationMs}ms)${entry.retries > 0 ? ` [retries: ${entry.retries}]` : ''}`,
-      'color: #059669; font-weight: bold;',
-      'color: #64748b;'
-    );
+    if (entry.method !== 'GET') {
+      console.info(
+        `%c${prefix} %c${entry.status || 200} (${entry.durationMs}ms)${entry.retries > 0 ? ` [retries: ${entry.retries}]` : ''}`,
+        'color: #059669; font-weight: bold;',
+        'color: #64748b;'
+      );
+    }
   } else {
     console.warn(
       `%c${prefix} %c${entry.status || 'ERR'} (${entry.durationMs}ms) - ${entry.error || 'Request failed'}`,
@@ -71,6 +73,8 @@ let backendStaticOnlyUntil = 0;
 
 const CORE_BACKEND_ROUTES = new Set([
   '/api/readings',
+  '/api/billings',
+  '/api/billings/reconcile',
   '/api/reports',
   '/api/readers',
   '/api/notifications',
@@ -389,6 +393,21 @@ export const apiClient = {
 
   syncReadingsBatch: async (readings: any[]) => {
     return apiClient.post<{ success: boolean; processed?: number; readings?: any[] }>('/api/readings/batch', { readings });
+  },
+
+  getBillings: async (filters?: { accountNumber?: string }, options?: RequestOptions) => {
+    const qs = filters?.accountNumber ? `?accountNumber=${encodeURIComponent(filters.accountNumber)}` : '';
+    return apiClient.get<{ success: boolean; readings: any[] }>(`/api/billings${qs}`, {
+      skipLogging: true,
+      ...options,
+    });
+  },
+
+  reconcileBillings: async (payload: { readings?: any[]; accountNumber?: string }, options?: RequestOptions) => {
+    return apiClient.post<{ success: boolean; readings: any[] }>('/api/billings/reconcile', payload, {
+      skipLogging: true,
+      ...options,
+    });
   },
 
   // System Health
