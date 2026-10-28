@@ -934,8 +934,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     apiClient
       .getBillings(undefined, { skipLogging: true })
       .then((res) => {
-        if (res?.billings && Array.isArray(res.billings) && res.billings.length > 0) {
-          const merged = mockDb.mergeExternalReadings(res.billings);
+        if (res?.readings && Array.isArray(res.readings) && res.readings.length > 0) {
+          const merged = mockDb.mergeExternalReadings(res.readings);
           setReadings([...merged]);
         }
       })

@@ -297,16 +297,26 @@ interface MobileReadingSubmission {
   previousReading: number;
   currentReading: number;
   consumption: number;
-  readerId: string;
-  readerName: string;
+  readerId?: string;
+  readerName?: string;
+  meterReaderName?: string;
   route: string;
-  status: "pending_approval" | "pending" | "approved" | "verified" | "rejected";
+  status: "pending_approval" | "pending" | "approved" | "verified" | "rejected" | "flagged_abnormal" | "cancelled";
   paymentStatus?: "paid" | "unpaid" | "partial";
   paidAmount?: number;
+  billAmount?: number;
+  totalAmount?: number;
+  dueDate?: string;
+  orNumber?: string;
+  isBillingIssued?: boolean;
+  billingIssuedAt?: string;
+  billingIssuedBy?: string;
+  invoiceNumber?: string;
   photoUrl?: string;
   coordinates?: { latitude: number; longitude: number };
   notes?: string;
-  submittedAt: string;
+  submittedAt?: string;
+  [key: string]: unknown;
 }
 
 interface ServerReportReply {
@@ -2681,7 +2691,7 @@ app.get("/api/billings", async (req, res) => {
       try {
         const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.READINGS), limit(250)));
         snap.forEach((d) => {
-          const r = d.data();
+          const r = d.data() as MobileReadingSubmission;
           const id = (r && r.id) || d.id;
           if (!r || !id) return;
           const idx = syncedReadings.findIndex((x) => x.id === id);
