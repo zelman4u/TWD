@@ -491,6 +491,8 @@ export function isOfficialBillIssued(
     | {
         status?: string;
         isBillingIssued?: boolean;
+        billingIssuedAt?: string;
+        invoiceNumber?: string;
         paymentStatus?: string;
         paidAmount?: number;
         orNumber?: string;
@@ -501,17 +503,26 @@ export function isOfficialBillIssued(
     | undefined
 ): boolean {
   if (!reading) return false;
-  if (reading.status !== 'verified') return false;
-  if (typeof reading.isBillingIssued === 'boolean') {
-    return reading.isBillingIssued;
+  if (
+    reading.status === 'cancelled' ||
+    reading.status === 'pending' ||
+    reading.status === 'flagged_abnormal'
+  ) {
+    return false;
   }
   if (
     reading.paymentStatus === 'paid' ||
     reading.paymentStatus === 'partial' ||
     (typeof reading.paidAmount === 'number' && reading.paidAmount > 0) ||
-    Boolean(reading.orNumber)
+    Boolean(reading.orNumber) ||
+    Boolean(reading.billingIssuedAt) ||
+    Boolean(reading.invoiceNumber)
   ) {
     return true;
+  }
+  if (reading.status !== 'verified') return false;
+  if (typeof reading.isBillingIssued === 'boolean') {
+    return reading.isBillingIssued;
   }
   return typeof reading.billAmount === 'number' && Boolean(reading.dueDate);
 }

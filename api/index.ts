@@ -2867,6 +2867,63 @@ app.post("/api/readings/:id/approve", async (req, res) => {
   }
 });
 
+function mergeBillingRecordVercel(prev: any, incoming: any): any {
+  if (!prev) return { ...incoming };
+  const isPaid = prev.paymentStatus === "paid" || incoming.paymentStatus === "paid";
+  const isPartial = !isPaid && (prev.paymentStatus === "partial" || incoming.paymentStatus === "partial");
+  const prevBilled = Boolean(
+    prev.isBillingIssued || prev.billingIssuedAt || prev.invoiceNumber || prev.paymentStatus === "paid" || prev.paymentStatus === "partial"
+  );
+  const incBilled = Boolean(
+    incoming.isBillingIssued || incoming.billingIssuedAt || incoming.invoiceNumber || incoming.paymentStatus === "paid" || incoming.paymentStatus === "partial"
+  );
+  const mergedBilled = prevBilled || incBilled;
+  const billedSrc = incBilled ? incoming : prevBilled ? prev : incoming;
+  const altSrc = billedSrc === incoming ? prev : incoming;
+  const maxPaid = Math.max(Number(prev.paidAmount || 0), Number(incoming.paidAmount || 0));
+  const effBillAmt = Number(billedSrc.billAmount || altSrc.billAmount || 0) || prev.billAmount || incoming.billAmount;
+  const effTotalAmt = Number(billedSrc.totalAmount || altSrc.totalAmount || effBillAmt || 0) || prev.totalAmount || incoming.totalAmount;
+
+  return {
+    ...prev,
+    ...incoming,
+    isBillingIssued: mergedBilled ? true : Boolean(incoming.isBillingIssued ?? prev.isBillingIssued),
+    billingIssuedAt: incoming.billingIssuedAt || prev.billingIssuedAt,
+    billingIssuedBy: incoming.billingIssuedBy || prev.billingIssuedBy,
+    invoiceNumber: incoming.invoiceNumber || prev.invoiceNumber,
+    dueDate: billedSrc.dueDate || altSrc.dueDate,
+    billAmount: effBillAmt,
+    totalAmount: effTotalAmt,
+    franchiseTax: billedSrc.franchiseTax ?? altSrc.franchiseTax,
+    arrears: billedSrc.arrears ?? altSrc.arrears,
+    penaltyAmount: billedSrc.penaltyAmount ?? altSrc.penaltyAmount,
+    amountAfterDueDate: billedSrc.amountAfterDueDate ?? altSrc.amountAfterDueDate,
+    status:
+      prev.status === "cancelled" || incoming.status === "cancelled"
+        ? "cancelled"
+        : mergedBilled || prev.status === "verified" || incoming.status === "verified"
+          ? "verified"
+          : (incoming.status || prev.status),
+    paymentStatus: isPaid ? "paid" : isPartial ? "partial" : (incoming.paymentStatus || prev.paymentStatus),
+    paidAmount: maxPaid > 0 ? maxPaid : (prev.paidAmount ?? incoming.paidAmount),
+    remainingBalance: isPaid
+      ? 0
+      : isPartial
+        ? Math.max(0, Number(effTotalAmt || effBillAmt || 0) - maxPaid)
+        : (typeof billedSrc.remainingBalance === "number"
+            ? billedSrc.remainingBalance
+            : typeof altSrc.remainingBalance === "number"
+              ? altSrc.remainingBalance
+              : effTotalAmt),
+    orNumber: incoming.orNumber || prev.orNumber,
+    paymentDate: incoming.paymentDate || prev.paymentDate,
+    paymentMethod: incoming.paymentMethod || prev.paymentMethod,
+    cashierName: incoming.cashierName || prev.cashierName,
+    transactionId: incoming.transactionId || prev.transactionId,
+    paymentReceiptUrl: incoming.paymentReceiptUrl || prev.paymentReceiptUrl,
+  };
+}
+
 app.get("/api/billings", async (req, res) => {
   try {
     const accQuery = String(req.query.accountNumber || "").trim().toUpperCase();
@@ -2882,12 +2939,7 @@ app.get("/api/billings", async (req, res) => {
           if (!r || !id) return;
           const idx = syncedReadings.findIndex((x) => x.id === id);
           if (idx >= 0) {
-            syncedReadings[idx] = {
-              ...r,
-              ...syncedReadings[idx],
-              id,
-              isBillingIssued: Boolean(r.isBillingIssued || syncedReadings[idx].isBillingIssued),
-            };
+            syncedReadings[idx] = mergeBillingRecordVercel(syncedReadings[idx], { ...r, id });
           } else {
             syncedReadings.push({ ...r, id });
           }
@@ -2914,27 +2966,7 @@ app.post("/api/billings/reconcile", async (req, res) => {
       if (!r || !r.id) continue;
       const idx = syncedReadings.findIndex((x) => x.id === r.id);
       if (idx >= 0) {
-        const prev = syncedReadings[idx];
-        syncedReadings[idx] = {
-          ...prev,
-          ...r,
-          isBillingIssued: Boolean(prev.isBillingIssued || r.isBillingIssued),
-          billingIssuedAt: r.billingIssuedAt || prev.billingIssuedAt,
-          billingIssuedBy: r.billingIssuedBy || prev.billingIssuedBy,
-          invoiceNumber: r.invoiceNumber || prev.invoiceNumber,
-          status:
-            prev.status === "cancelled" || r.status === "cancelled"
-              ? "cancelled"
-              : prev.status === "verified" || r.status === "verified"
-                ? "verified"
-                : (r.status || prev.status),
-          paymentStatus:
-            prev.paymentStatus === "paid" || r.paymentStatus === "paid"
-              ? "paid"
-              : prev.paymentStatus === "partial" || r.paymentStatus === "partial"
-                ? "partial"
-                : (r.paymentStatus || prev.paymentStatus),
-        };
+        syncedReadings[idx] = mergeBillingRecordVercel(syncedReadings[idx], r);
       } else {
         syncedReadings.unshift({ ...r });
       }

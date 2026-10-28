@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   FolderLock, 
   Users, 
@@ -567,6 +567,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   };
 
   // Initial Load & State Sync (Local Store + Backend API Live Sync)
+  const lastAdminRemoteSyncRef = useRef<number>(0);
+
   const loadAllDataFromStore = (withDelay = false) => {
     if (withDelay) {
       setIsRefreshing(true);
@@ -592,6 +594,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     if (withDelay) {
       setTimeout(() => setIsRefreshing(false), 300);
     }
+
+    const nowMs = Date.now();
+    if (!withDelay && lastAdminRemoteSyncRef.current > 0 && nowMs - lastAdminRemoteSyncRef.current < 4000) {
+      return;
+    }
+    lastAdminRemoteSyncRef.current = nowMs;
 
     // 2. Fetch from Backend / Serverless API for any Mobile App Submissions
     safeBackendFetch('/api/readers')
@@ -701,7 +709,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // AND pulls any newly registered consumers from other browsers/devices
     const localConsumersToSync = mockDb.getConsumers();
     const localUsersToSync = mockDb.getUsers().filter(u => u.role !== 'admin');
-    const localNotifsToSync = mockDb.getAllNotifications().filter(n => n.type === 'account_issue');
+    const localNotifsToSync = mockDb
+      .getAllNotifications()
+      .filter(n => n.type === 'account_issue' || n.type === 'billing' || n.type === 'payment')
+      .slice(0, 80);
 
     safeBackendFetch('/api/consumers/reconcile', {
       method: 'POST',
@@ -907,8 +918,26 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 meterReaderName: ar.readerName || ar.meterReaderName || 'Field Meter Officer',
                 route: ar.route || matchedConsumer?.barangay || 'Poblacion',
                 status: mappedStatus,
-                isBillingIssued: typeof ar.isBillingIssued === 'boolean' ? ar.isBillingIssued : false,
-                paymentStatus: 'unpaid',
+                isBillingIssued: Boolean(
+                  ar.isBillingIssued ||
+                  ar.billingIssuedAt ||
+                  ar.invoiceNumber ||
+                  ar.paymentStatus === 'paid' ||
+                  ar.paymentStatus === 'partial'
+                ),
+                billingIssuedAt: ar.billingIssuedAt,
+                billingIssuedBy: ar.billingIssuedBy,
+                invoiceNumber: ar.invoiceNumber,
+                dueDate: ar.dueDate,
+                paymentStatus:
+                  ar.paymentStatus === 'paid' || ar.paymentStatus === 'partial'
+                    ? ar.paymentStatus
+                    : 'unpaid',
+                paidAmount: typeof ar.paidAmount === 'number' ? ar.paidAmount : undefined,
+                remainingBalance: typeof ar.remainingBalance === 'number' ? ar.remainingBalance : undefined,
+                orNumber: ar.orNumber,
+                paymentDate: ar.paymentDate,
+                paymentMethod: ar.paymentMethod,
                 imageUrl: photo,
                 meterImageUrl: photo,
                 gpsLocation: ar.coordinates
@@ -931,15 +960,29 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         // Fallback gracefully if running purely client-side
       });
 
+    const verifiedAndBilledLocal = mockDb
+      .getReadings()
+      .filter(r => r.status === 'verified' || isOfficialBillIssued(r));
+
     apiClient
-      .getBillings(undefined, { skipLogging: true })
+      .reconcileBillings({ readings: verifiedAndBilledLocal }, { skipLogging: true })
       .then((res) => {
         if (res?.readings && Array.isArray(res.readings) && res.readings.length > 0) {
           const merged = mockDb.mergeExternalReadings(res.readings);
           setReadings([...merged]);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        apiClient
+          .getBillings(undefined, { skipLogging: true })
+          .then((res) => {
+            if (res?.readings && Array.isArray(res.readings) && res.readings.length > 0) {
+              const merged = mockDb.mergeExternalReadings(res.readings);
+              setReadings([...merged]);
+            }
+          })
+          .catch(() => {});
+      });
   };
 
   const syncAdminReportsLive = () => {
@@ -971,7 +1014,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
 
     // 1. Instantaneous reactive sync when consumer or other components modify data in same window
-    const handleDbUpdate = () => {
+    const handleDbUpdate = (e: Event) => {
+      const changedKey = (e as CustomEvent)?.detail?.key as string | undefined;
+      if (changedKey === 'twd_live_v4_notifications' || changedKey === 'twd_live_v4_audit') {
+        setAuditLogs(mockDb.getAuditLogs());
+        return;
+      }
       setReports(mockDb.getReports());
       loadAllDataFromStore(false);
     };
@@ -979,6 +1027,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     // 2. Cross-tab synchronization when data changes in another browser tab
     const handleStorage = (e: StorageEvent) => {
+      if (
+        e.key === 'twd_live_v4_notifications' ||
+        e.key === 'twd_live_v4_audit' ||
+        (e.key === 'twd_sync_ping' && ((e.newValue || '').endsWith('_twd_live_v4_notifications') || (e.newValue || '').endsWith('_twd_live_v4_audit')))
+      ) {
+        setAuditLogs(mockDb.getAuditLogs());
+        return;
+      }
       if (e.key?.startsWith('twd_') || e.key === 'twd_sync_ping') {
         setReports(mockDb.getReports());
         loadAllDataFromStore(false);
@@ -2804,7 +2860,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveConsumers(updatedConsumers);
     setConsumers(updatedConsumers);
 
-    // Dispatch Official Billing Notification + Cross-Device Reconcile
+    // Dispatch Official Billing Notification + Cross-Device Reconcile + Real-Time Broadcast
+    const issuedBillsList = Array.from(issuedMap.values());
     const createdNotifs: any[] = [];
     issuedMap.forEach(bill => {
       const matchedConsumer = updatedConsumers.find(c => c.accountNumber === bill.accountNumber);
@@ -2821,7 +2878,30 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         remainingBalance: bill.totalAmount || bill.billAmount || 0,
       });
       createdNotifs.push(notif);
+
+      sendRealtimeMessage('READING_APPROVED_BILL_ISSUED', {
+        accountNumber: bill.accountNumber,
+        consumerEmail: matchedConsumer?.email,
+        userId: matchedConsumer?.linkedUserId,
+        billingPeriod: bill.billingPeriod,
+        consumption: bill.consumption,
+        reading: bill,
+        notification: notif,
+        message: `Official water bill for ${bill.billingPeriod} (${bill.consumption} m³ • ₱${(bill.totalAmount || bill.billAmount || 0).toFixed(2)}) has been issued.`,
+      });
+      sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
+        accountNumber: bill.accountNumber,
+        consumerEmail: matchedConsumer?.email,
+        userId: matchedConsumer?.linkedUserId,
+        notification: notif,
+      });
     });
+
+    if (issuedBillsList.length > 0) {
+      apiClient
+        .reconcileBillings({ readings: issuedBillsList }, { skipLogging: true })
+        .catch(() => {});
+    }
 
     if (createdNotifs.length > 0) {
       safeBackendFetch('/api/consumers/reconcile', {
@@ -3048,6 +3128,30 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       readingId: finalizedBill.id,
       billingPeriod: periodLabel,
       remainingBalance: totalDue,
+    });
+
+    apiClient
+      .reconcileBillings(
+        { readings: [finalizedBill], accountNumber: targetConsumer.accountNumber },
+        { skipLogging: true }
+      )
+      .catch(() => {});
+
+    sendRealtimeMessage('READING_APPROVED_BILL_ISSUED', {
+      accountNumber: targetConsumer.accountNumber,
+      consumerEmail: targetConsumer.email,
+      userId: targetConsumer.linkedUserId,
+      billingPeriod: periodLabel,
+      consumption: usage,
+      reading: finalizedBill,
+      notification: createdNotif,
+      message: `Official water bill for ${periodLabel} (${usage} m³ • ₱${totalDue.toFixed(2)}) has been issued.`,
+    });
+    sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
+      accountNumber: targetConsumer.accountNumber,
+      consumerEmail: targetConsumer.email,
+      userId: targetConsumer.linkedUserId,
+      notification: createdNotif,
     });
 
     safeBackendFetch('/api/consumers/reconcile', {
@@ -6863,13 +6967,56 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                         <>
                                           <button
                                             onClick={() => {
+                                              const matchedConsumer = consumers.find(c => c.accountNumber === bill.accountNumber);
+                                              if (matchedConsumer) {
+                                                setSelectedPaymentAccount(matchedConsumer);
+                                                setSelectedBillIds([bill.id]);
+                                                const exactDue = Math.max(
+                                                  0,
+                                                  calculateCostOf(bill, bill.classification || matchedConsumer.consumerType) - (bill.paidAmount || 0)
+                                                );
+                                                setPaymentAmountPaid(Math.round(exactDue * 100) / 100);
+                                                setPaymentType('full');
+                                                setAllocationMode('auto');
+                                                setManualAllocations({});
+                                                setActiveTab('payments');
+                                              }
+                                            }}
+                                            className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-md transition inline-flex items-center space-x-1 cursor-pointer shadow-2xs shrink-0"
+                                            title="Settle / Clear Bill in Process Payment"
+                                          >
+                                            <CreditCard className="h-3.5 w-3.5 text-white" />
+                                            <span>Settle</span>
+                                          </button>
+
+                                          <button
+                                            onClick={() => {
+                                              const matchedConsumer = consumers.find(c => c.accountNumber === bill.accountNumber);
+                                              const syncedBill: MeterReading = {
+                                                ...bill,
+                                                status: 'verified',
+                                                isBillingIssued: true,
+                                                billingIssuedAt: bill.billingIssuedAt || new Date().toISOString(),
+                                              };
+                                              apiClient
+                                                .reconcileBillings({ readings: [syncedBill], accountNumber: bill.accountNumber }, { skipLogging: true })
+                                                .catch(() => {});
+                                              sendRealtimeMessage('READING_APPROVED_BILL_ISSUED', {
+                                                accountNumber: bill.accountNumber,
+                                                consumerEmail: matchedConsumer?.email,
+                                                userId: matchedConsumer?.linkedUserId,
+                                                billingPeriod: bill.billingPeriod,
+                                                consumption: bill.consumption,
+                                                reading: syncedBill,
+                                                message: `Official water bill for ${bill.billingPeriod} (${bill.consumption} m³ • ₱${totalBill.toFixed(2)}) has been sent to your dashboard.`,
+                                              });
                                               toast.success(
-                                                'Notice Resent',
-                                                `SMS and Email bill notification resent to consumer ${bill.consumerName} (Account #${bill.accountNumber}).`
+                                                'Billing Notice Synced & Resent',
+                                                `Bill statement (₱${totalBill.toFixed(2)}) pushed live to ${bill.consumerName} (Account #${bill.accountNumber}).`
                                               );
                                             }}
                                             className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-md transition inline-flex items-center space-x-1 cursor-pointer shadow-2xs shrink-0"
-                                            title="Resend Notice"
+                                            title="Push & Resend Notice to Consumer Portal"
                                           >
                                             <Send className="h-3.5 w-3.5 text-white" />
                                             <span>Resend</span>
@@ -6981,13 +7128,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         const consumerReadings = readings.filter(r => r.accountNumber === c.accountNumber && isOfficialBillIssued(r));
                         const unpaidReadings = consumerReadings.filter(r => r.paymentStatus !== 'paid');
                         const unpaidCount = unpaidReadings.length;
+                        const unbilledVerifiedCount = readings.filter(
+                          r => r.accountNumber === c.accountNumber && r.status === 'verified' && !isOfficialBillIssued(r)
+                        ).length;
 
-                        // Total due calculation including overdue penalties
+                        // Total due calculation aligned with Consumer Portal official tariff breakdown
                         const totalArrears = unpaidReadings.reduce((acc, r) => {
-                          const w = calculateCostOf(r, r.classification);
-                          const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
-                          const pen = isOverdue ? Math.round(w * 0.10) : 0;
-                          const gross = w + pen;
+                          const gross = calculateCostOf(r, r.classification || c.consumerType);
                           const paid = r.paidAmount || 0;
                           return acc + Math.max(0, gross - paid);
                         }, 0);
@@ -7001,12 +7148,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               const unpaidIds = unpaidList.map(r => r.id);
                               setSelectedBillIds(unpaidIds);
                               
-                              // Auto calculate exact total due
+                              // Auto calculate exact total due matching Consumer Portal
                               const exactDue = unpaidList.reduce((acc, r) => {
-                                const w = calculateCostOf(r, r.classification);
-                                const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
-                                const pen = isOverdue ? Math.round(w * 0.10) : 0;
-                                const gross = w + pen;
+                                const gross = calculateCostOf(r, r.classification || c.consumerType);
                                 const paid = r.paidAmount || 0;
                                 return acc + Math.max(0, gross - paid);
                               }, 0);
@@ -7038,6 +7182,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                   </span>
                                   <span className="font-mono font-black text-amber-700 text-xs block">₱{totalArrears.toFixed(2)}</span>
                                 </div>
+                              ) : unbilledVerifiedCount > 0 ? (
+                                <span className="bg-indigo-100 text-indigo-800 text-[10px] font-black px-2.5 py-0.5 rounded-full inline-block">
+                                  {unbilledVerifiedCount} Unbilled Reading{unbilledVerifiedCount > 1 ? 's' : ''}
+                                </span>
                               ) : (
                                 <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2.5 py-0.5 rounded-full inline-block">
                                   Cleared (₱0.00)
@@ -7071,6 +7219,51 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         </div>
                       </div>
 
+                      {/* Quick Issue Billing Helper if Consumer has Verified Unbilled Readings */}
+                      {(() => {
+                        const unbilledForSelected = readings.filter(
+                          r =>
+                            r.accountNumber === selectedPaymentAccount.accountNumber &&
+                            r.status === 'verified' &&
+                            !isOfficialBillIssued(r)
+                        );
+                        if (unbilledForSelected.length === 0) return null;
+                        return (
+                          <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div>
+                              <span className="text-xs font-black text-indigo-950 block">
+                                {unbilledForSelected.length} Verified Meter Reading{unbilledForSelected.length > 1 ? 's' : ''} Pending Bill Issuance
+                              </span>
+                              <span className="text-[11px] text-indigo-700 font-medium">
+                                Issue the official billing statement first to unlock it on the Consumer Dashboard and enable payment settlement.
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const ids = unbilledForSelected.map(u => u.id);
+                                handleIssueBillings(ids);
+                                setTimeout(() => {
+                                  const latestReads = mockDb.getReadings();
+                                  const nowUnpaid = latestReads.filter(
+                                    r => r.accountNumber === selectedPaymentAccount.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid'
+                                  );
+                                  setSelectedBillIds(nowUnpaid.map(r => r.id));
+                                  const exactDue = nowUnpaid.reduce(
+                                    (acc, r) => acc + Math.max(0, calculateCostOf(r, r.classification || selectedPaymentAccount.consumerType) - (r.paidAmount || 0)),
+                                    0
+                                  );
+                                  setPaymentAmountPaid(Math.round(exactDue * 100) / 100);
+                                }, 60);
+                              }}
+                              className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition shadow-sm shrink-0 cursor-pointer"
+                            >
+                              Issue Billing Now
+                            </button>
+                          </div>
+                        );
+                      })()}
+
                       {/* Outstanding Itemized Bills Table */}
                       <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
                         <div className="flex justify-between items-center">
@@ -7091,10 +7284,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             {readings
                               .filter(r => r.accountNumber === selectedPaymentAccount.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid')
                               .map((r, bIdx) => {
-                                const waterAmount = calculateCostOf(r, r.classification);
-                                const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
-                                const penaltyAmount = isOverdue ? Math.round(waterAmount * 0.10) : 0;
-                                const grossTotal = waterAmount + penaltyAmount;
+                                const grossTotal = calculateCostOf(r, r.classification || selectedPaymentAccount.consumerType);
+                                const isOverdue = Boolean(r.dueDate && !Number.isNaN(new Date(r.dueDate).getTime()) && new Date() > new Date(r.dueDate));
                                 const alreadyPaid = r.paidAmount || 0;
                                 const netBalanceDue = Math.max(0, grossTotal - alreadyPaid);
                                 const isChecked = selectedBillIds.includes(r.id);
@@ -7111,10 +7302,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                         type="checkbox"
                                         checked={isChecked}
                                         onChange={(e) => {
-                                          if (e.target.checked) {
-                                            setSelectedBillIds([...selectedBillIds, r.id]);
-                                          } else {
-                                            setSelectedBillIds(selectedBillIds.filter(id => id !== r.id));
+                                          const nextIds = e.target.checked
+                                            ? [...selectedBillIds, r.id]
+                                            : selectedBillIds.filter(id => id !== r.id);
+                                          setSelectedBillIds(nextIds);
+                                          if (paymentType === 'full') {
+                                            const sel = readings.filter(x => nextIds.includes(x.id));
+                                            const exactDue = sel.reduce(
+                                              (acc, x) => acc + Math.max(0, calculateCostOf(x, x.classification || selectedPaymentAccount.consumerType) - (x.paidAmount || 0)),
+                                              0
+                                            );
+                                            setPaymentAmountPaid(Math.round(exactDue * 100) / 100);
                                           }
                                         }}
                                         className="h-4 w-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
@@ -7132,7 +7330,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           )}
                                         </div>
                                         <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                                          Usage: {r.consumption} m³ • Base: ₱{waterAmount.toFixed(2)} {penaltyAmount > 0 ? `• Penalty: ₱${penaltyAmount.toFixed(2)}` : ''}
+                                          Usage: {r.consumption} m³ • Bill Amount: ₱{grossTotal.toFixed(2)}
                                         </div>
                                       </div>
                                     </div>
@@ -7161,13 +7359,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 onClick={() => {
                                   setPaymentType('full');
                                   setAllocationMode('auto');
-                                  // Recalculate full total due
                                   const selectedReadings = readings.filter(r => selectedBillIds.includes(r.id));
                                   const exactDue = selectedReadings.reduce((acc, r) => {
-                                    const w = calculateCostOf(r, r.classification);
-                                    const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
-                                    const pen = isOverdue ? Math.round(w * 0.10) : 0;
-                                    const gross = w + pen;
+                                    const gross = calculateCostOf(r, r.classification || selectedPaymentAccount.consumerType);
                                     const paid = r.paidAmount || 0;
                                     return acc + Math.max(0, gross - paid);
                                   }, 0);
@@ -7262,10 +7456,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               ₱{(() => {
                                 const selectedReadings = readings.filter(r => selectedBillIds.includes(r.id));
                                 const totalNetDue = selectedReadings.reduce((acc, r) => {
-                                  const w = calculateCostOf(r, r.classification);
-                                  const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
-                                  const pen = isOverdue ? Math.round(w * 0.10) : 0;
-                                  const gross = w + pen;
+                                  const gross = calculateCostOf(r, r.classification || selectedPaymentAccount.consumerType);
                                   const paid = r.paidAmount || 0;
                                   return acc + Math.max(0, gross - paid);
                                 }, 0);
@@ -7298,10 +7489,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           const allocations: { [billId: string]: { allocated: number; newPaid: number; newRem: number; newStatus: 'paid' | 'partial'; grossTotal: number; penaltyAmount: number } } = {};
 
                           selectedReadings.forEach(r => {
-                            const waterAmount = calculateCostOf(r, r.classification);
-                            const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
-                            const penaltyAmount = isOverdue ? Math.round(waterAmount * 0.10) : 0;
-                            const grossTotal = waterAmount + penaltyAmount;
+                            const grossTotal = calculateCostOf(r, r.classification || selectedPaymentAccount.consumerType);
+                            const penaltyAmount = r.penaltyAmount || 0;
                             const alreadyPaid = r.paidAmount || 0;
                             const netDue = Math.max(0, grossTotal - alreadyPaid);
 
@@ -7313,12 +7502,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               alloc = Math.min(netDue, manualAllocations[r.id] || 0);
                             }
 
-                            const newPaid = alreadyPaid + alloc;
-                            const newRem = Math.max(0, grossTotal - newPaid);
-                            const newStatus: 'paid' | 'partial' = newRem <= 0.01 ? 'paid' : 'partial';
+                            const rawPaid = Math.round((alreadyPaid + alloc) * 100) / 100;
+                            const rawRem = Math.max(0, Math.round((grossTotal - rawPaid) * 100) / 100);
+                            const newStatus: 'paid' | 'partial' = rawRem <= 0.01 ? 'paid' : 'partial';
+                            const newPaid = newStatus === 'paid' ? Math.max(rawPaid, grossTotal) : rawPaid;
+                            const newRem = newStatus === 'paid' ? 0 : rawRem;
 
                             allocations[r.id] = {
-                              allocated: alloc,
+                              allocated: Math.round(alloc * 100) / 100,
                               newPaid,
                               newRem,
                               newStatus,
@@ -7327,46 +7518,77 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             };
                           });
 
-                          const totalApplied = Object.values(allocations).reduce((sum, a) => sum + a.allocated, 0);
-                          const cashChange = Math.max(0, paymentAmountPaid - totalApplied);
+                          const totalApplied = Math.round(
+                            Object.values(allocations).reduce((sum, a) => sum + a.allocated, 0) * 100
+                          ) / 100;
+                          if (totalApplied <= 0) {
+                            toast.warning('Zero Allocation', 'Allocated payment amount must be greater than ₱0.00.');
+                            return;
+                          }
+                          const cashChange = Math.max(0, Math.round((paymentAmountPaid - totalApplied) * 100) / 100);
                           const generatedOrNumber = `OR-2026-${Math.floor(100000 + Math.random() * 900000)}`;
+                          const paymentDateStr = new Date().toISOString().split('T')[0];
+                          const paidReadingsPayload: MeterReading[] = [];
 
-                          // Atomic Database Update
+                          // Atomic Database Update (guarantees isBillingIssued=true and remainingBalance=0 when settled)
                           const updatedReadings = readings.map(r => {
                             if (selectedBillIds.includes(r.id)) {
                               const alloc = allocations[r.id];
-                              return {
+                              const updatedRecord: MeterReading = {
                                 ...r,
+                                status: 'verified',
+                                isBillingIssued: true,
+                                billingIssuedAt: r.billingIssuedAt || new Date().toISOString(),
+                                billingIssuedBy: r.billingIssuedBy || currentUser.name,
+                                invoiceNumber: r.invoiceNumber || `INV-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`,
+                                dueDate: r.dueDate || computeDefaultDueDate(r.readingDate),
+                                billAmount: r.billAmount || alloc.grossTotal,
+                                totalAmount: r.totalAmount || alloc.grossTotal,
                                 paymentStatus: alloc.newStatus,
                                 paidAmount: alloc.newPaid,
                                 remainingBalance: alloc.newRem,
                                 penaltyAmount: alloc.penaltyAmount,
-                                paymentDate: new Date().toISOString().split('T')[0],
+                                paymentDate: paymentDateStr,
                                 paymentMethod: 'Cash',
                                 orNumber: generatedOrNumber,
                                 cashierName: currentUser.name,
                                 transactionId: `TXN-CASH-${selectedPaymentAccount.accountNumber}-${Date.now().toString().slice(-5)}`
                               };
+                              paidReadingsPayload.push(updatedRecord);
+                              return updatedRecord;
                             }
                             return r;
                           });
 
-                          // Commit atomic updates
+                          // Commit atomic updates locally + Firestore + /api/billings/reconcile
                           mockDb.saveReadings(updatedReadings);
                           setReadings(updatedReadings);
+
+                          if (paidReadingsPayload.length > 0) {
+                            apiClient
+                              .reconcileBillings(
+                                { readings: paidReadingsPayload, accountNumber: selectedPaymentAccount.accountNumber },
+                                { skipLogging: true }
+                              )
+                              .catch(() => {});
+                          }
 
                           // Recalculate Consumer Outstanding Arrears across officially issued unpaid bills
                           const updatedUnpaid = updatedReadings.filter(
                             r => r.accountNumber === selectedPaymentAccount.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid'
                           );
-                          const newConsumerArrears = updatedUnpaid.reduce((acc, r) => {
-                            const w = calculateCostOf(r, r.classification);
-                            const isOverdue = r.billingPeriod.includes('March') || r.billingPeriod.includes('April') || r.billingPeriod.includes('May');
-                            const pen = isOverdue ? Math.round(w * 0.10) : 0;
-                            const gross = w + pen;
-                            const paid = r.paidAmount || 0;
-                            return acc + Math.max(0, gross - paid);
-                          }, 0);
+                          const newConsumerArrears = Math.round(
+                            updatedUnpaid.reduce((acc, r) => {
+                              const gross = calculateCostOf(r, r.classification || selectedPaymentAccount.consumerType);
+                              const paid = r.paidAmount || 0;
+                              return acc + Math.max(0, gross - paid);
+                            }, 0) * 100
+                          ) / 100;
+
+                          const updatedTargetConsumer: Consumer = {
+                            ...selectedPaymentAccount,
+                            outstandingBalance: newConsumerArrears,
+                          };
 
                           const updatedConsumersList = consumers.map(c =>
                             c.accountNumber === selectedPaymentAccount.accountNumber
@@ -7375,6 +7597,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           );
                           mockDb.saveConsumers(updatedConsumersList);
                           setConsumers(updatedConsumersList);
+                          setSelectedPaymentAccount(updatedTargetConsumer);
+                          setSelectedBillIds(updatedUnpaid.map(r => r.id));
+                          setPaymentAmountPaid(newConsumerArrears);
 
                           // Immutable Audit Log
                           mockDb.addAuditLog(
@@ -7382,22 +7607,61 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             currentUser.name,
                             'admin',
                             'Processed In-Office Cash Payment',
-                            `Collected ₱${totalApplied.toFixed(2)} cash for Account #${selectedPaymentAccount.accountNumber}. OR #${generatedOrNumber}. Updated ${selectedBillIds.length} bill(s).`
+                            `Collected ₱${totalApplied.toFixed(2)} cash for Account #${selectedPaymentAccount.accountNumber}. OR #${generatedOrNumber}. Updated ${paidReadingsPayload.length} bill(s).`
                           );
 
                           // Real-Time Consumer Portal Sync & Notification
-                          mockDb.addNotification({
+                          const paymentNotif = mockDb.addNotification({
                             accountNumber: selectedPaymentAccount.accountNumber,
                             consumerId: selectedPaymentAccount.id,
                             userId: selectedPaymentAccount.linkedUserId,
                             consumerEmail: selectedPaymentAccount.email,
                             title: `Official Receipt Issued - OR #${generatedOrNumber}`,
-                            message: `In-office cash payment of ₱${totalApplied.toFixed(2)} processed at Tagoloan Water District Office Cashier. OR #${generatedOrNumber}. Updated ${selectedBillIds.length} bill(s). Remaining Arrears Balance: ₱${newConsumerArrears.toFixed(2)}.`,
+                            message: `In-office cash payment of ₱${totalApplied.toFixed(2)} processed at Tagoloan Water District Office Cashier. OR #${generatedOrNumber}. Updated ${paidReadingsPayload.length} bill(s). Remaining Arrears Balance: ₱${newConsumerArrears.toFixed(2)}.`,
                             type: 'payment',
+                            readingId: paidReadingsPayload[0]?.id,
+                            billingPeriod: paidReadingsPayload[0]?.billingPeriod,
                             orNumber: generatedOrNumber,
                             amountPaid: totalApplied,
                             remainingBalance: newConsumerArrears
                           });
+
+                          safeBackendFetch('/api/consumers/reconcile', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'x-portal': 'admin' },
+                            body: JSON.stringify({
+                              consumers: [updatedTargetConsumer],
+                              notifications: [paymentNotif],
+                            }),
+                          }).catch(() => {});
+
+                          sendRealtimeMessage('PAYMENT_RECORDED', {
+                            accountNumber: selectedPaymentAccount.accountNumber,
+                            consumerEmail: selectedPaymentAccount.email,
+                            userId: selectedPaymentAccount.linkedUserId,
+                            orNumber: generatedOrNumber,
+                            amountPaid: totalApplied,
+                            remainingBalance: newConsumerArrears,
+                            paymentDate: paymentDateStr,
+                            readings: paidReadingsPayload,
+                            reading: paidReadingsPayload[0],
+                            consumer: updatedTargetConsumer,
+                            notification: paymentNotif,
+                            message: `Official Receipt #${generatedOrNumber} issued — ₱${totalApplied.toFixed(2)} settled.`,
+                          });
+                          sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
+                            accountNumber: selectedPaymentAccount.accountNumber,
+                            consumerEmail: selectedPaymentAccount.email,
+                            userId: selectedPaymentAccount.linkedUserId,
+                            notification: paymentNotif,
+                          });
+
+                          window.dispatchEvent(new Event('twd_database_updated'));
+                          toast.success(
+                            'Payment Cleared & Official Receipt Issued',
+                            `OR #${generatedOrNumber} • Collected ₱${totalApplied.toFixed(2)} for #${selectedPaymentAccount.accountNumber}. Consumer portal updated.`,
+                            5000
+                          );
 
                           // Construct Receipt Object
                           const receiptData = {
@@ -8020,69 +8284,78 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   </div>
                 )}
 
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Administrator Name</label>
-                      <input
-                        type="text"
-                        value={adminProfile.name}
-                        onChange={(e) => setAdminProfile({ ...adminProfile, name: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold"
-                      />
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSaveAdminProfile();
+                  }}
+                  className="space-y-4"
+                >
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Administrator Name</label>
+                        <input
+                          type="text"
+                          autoComplete="name"
+                          value={adminProfile.name}
+                          onChange={(e) => setAdminProfile({ ...adminProfile, name: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Email Address</label>
+                        <input
+                          type="email"
+                          autoComplete="username"
+                          value={adminProfile.email}
+                          onChange={(e) => setAdminProfile({ ...adminProfile, email: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-medium"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Email Address</label>
-                      <input
-                        type="email"
-                        autoComplete="username"
-                        value={adminProfile.email}
-                        onChange={(e) => setAdminProfile({ ...adminProfile, email: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-medium"
-                      />
+
+                    <div className="border-t border-slate-100 pt-4 space-y-3">
+                      <h4 className="text-xs font-black uppercase text-slate-800">Change Password Security</h4>
+                      <div className="grid grid-cols-3 gap-3">
+                        <input
+                          type="password"
+                          autoComplete="current-password"
+                          placeholder="Current Password"
+                          value={adminProfile.currentPassword}
+                          onChange={(e) => setAdminProfile({ ...adminProfile, currentPassword: e.target.value })}
+                          className="bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs"
+                        />
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          placeholder="New Password"
+                          value={adminProfile.newPassword}
+                          onChange={(e) => setAdminProfile({ ...adminProfile, newPassword: e.target.value })}
+                          className="bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs"
+                        />
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          placeholder="Confirm Password"
+                          value={adminProfile.confirmPassword}
+                          onChange={(e) => setAdminProfile({ ...adminProfile, confirmPassword: e.target.value })}
+                          className="bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs"
+                        />
+                      </div>
                     </div>
                   </div>
 
-                  <div className="border-t border-slate-100 pt-4 space-y-3">
-                    <h4 className="text-xs font-black uppercase text-slate-800">Change Password Security</h4>
-                    <div className="grid grid-cols-3 gap-3">
-                      <input
-                        type="password"
-                        autoComplete="current-password"
-                        placeholder="Current Password"
-                        value={adminProfile.currentPassword}
-                        onChange={(e) => setAdminProfile({ ...adminProfile, currentPassword: e.target.value })}
-                        className="bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs"
-                      />
-                      <input
-                        type="password"
-                        autoComplete="new-password"
-                        placeholder="New Password"
-                        value={adminProfile.newPassword}
-                        onChange={(e) => setAdminProfile({ ...adminProfile, newPassword: e.target.value })}
-                        className="bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs"
-                      />
-                      <input
-                        type="password"
-                        autoComplete="new-password"
-                        placeholder="Confirm Password"
-                        value={adminProfile.confirmPassword}
-                        onChange={(e) => setAdminProfile({ ...adminProfile, confirmPassword: e.target.value })}
-                        className="bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs"
-                      />
-                    </div>
+                  <div className="flex justify-end pt-4 border-t border-slate-100">
+                    <button
+                      type="submit"
+                      className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition shadow-md flex items-center space-x-2"
+                    >
+                      <ShieldCheck className="h-4 w-4" />
+                      <span>Save Profile Changes</span>
+                    </button>
                   </div>
-                </div>
-
-                <div className="flex justify-end pt-4 border-t border-slate-100">
-                  <button
-                    onClick={handleSaveAdminProfile}
-                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition shadow-md flex items-center space-x-2"
-                  >
-                    <ShieldCheck className="h-4 w-4" />
-                    <span>Save Profile Changes</span>
-                  </button>
-                </div>
+                </form>
               </div>
 
               {/* Official District Profile, Mission, Vision, Core Values & Staffing Structure */}

@@ -1052,8 +1052,12 @@ export function startRealtimeFirestoreListeners() {
               const cr = mergedMap.get(lr.id)!;
               const lrStatusStr = String(lr.status || '');
               const crStatusStr = String(cr.status || '');
+              const isPaid = lr.paymentStatus === 'paid' || cr.paymentStatus === 'paid';
+              const isPartial = !isPaid && (lr.paymentStatus === 'partial' || cr.paymentStatus === 'partial');
+              const lrBilled = Boolean(lr.isBillingIssued || lr.billingIssuedAt || lr.invoiceNumber || lr.paymentStatus === 'paid' || lr.paymentStatus === 'partial');
+              const crBilled = Boolean(cr.isBillingIssued || cr.billingIssuedAt || cr.invoiceNumber || cr.paymentStatus === 'paid' || cr.paymentStatus === 'partial');
               const mergedBillingIssued =
-                lr.isBillingIssued === true || cr.isBillingIssued === true
+                lrBilled || crBilled
                   ? true
                   : typeof lr.isBillingIssued === 'boolean'
                     ? lr.isBillingIssued
@@ -1061,27 +1065,54 @@ export function startRealtimeFirestoreListeners() {
               const isLocalMoreAdvanced =
                 ((lrStatusStr === 'verified' || lrStatusStr === 'approved') &&
                   (crStatusStr === 'pending' || crStatusStr === 'pending_approval')) ||
-                (lr.isBillingIssued === true && cr.isBillingIssued !== true) ||
+                (lrBilled && !crBilled) ||
                 (lr.paymentStatus === 'paid' && cr.paymentStatus !== 'paid') ||
                 (lr.paymentStatus === 'partial' && cr.paymentStatus === 'unpaid') ||
                 (lr.paidAmount || 0) > (cr.paidAmount || 0);
               const base = isLocalMoreAdvanced ? { ...cr, ...lr } : { ...lr, ...cr };
+              const billedSrc = crBilled && !isLocalMoreAdvanced ? cr : lrBilled ? lr : cr;
+              const altSrc = billedSrc === cr ? lr : cr;
+              const maxPaid = Math.max(Number(lr.paidAmount || 0), Number(cr.paidAmount || 0));
+              const effBillAmt = Number(billedSrc.billAmount || altSrc.billAmount || 0) || base.billAmount;
+              const effTotalAmt = Number(billedSrc.totalAmount || altSrc.totalAmount || effBillAmt || 0) || base.totalAmount;
               mergedMap.set(lr.id, {
                 ...base,
                 ...(typeof mergedBillingIssued === 'boolean' ? { isBillingIssued: mergedBillingIssued } : {}),
+                status:
+                  lrStatusStr === 'cancelled' || crStatusStr === 'cancelled'
+                    ? 'cancelled'
+                    : mergedBillingIssued || lrStatusStr === 'verified' || crStatusStr === 'verified'
+                      ? 'verified'
+                      : base.status,
+                paymentStatus: isPaid ? 'paid' : isPartial ? 'partial' : base.paymentStatus,
                 billingIssuedAt: lr.billingIssuedAt || cr.billingIssuedAt,
                 billingIssuedBy: lr.billingIssuedBy || cr.billingIssuedBy,
                 invoiceNumber: lr.invoiceNumber || cr.invoiceNumber,
-                dueDate: lr.dueDate || cr.dueDate,
+                dueDate: billedSrc.dueDate || altSrc.dueDate,
+                billAmount: effBillAmt,
+                totalAmount: effTotalAmt,
                 orNumber: lr.orNumber || cr.orNumber,
-                paidAmount: Math.max(Number(lr.paidAmount || 0), Number(cr.paidAmount || 0)) || base.paidAmount,
+                paymentDate: lr.paymentDate || cr.paymentDate,
+                paymentMethod: lr.paymentMethod || cr.paymentMethod,
+                cashierName: lr.cashierName || cr.cashierName,
+                transactionId: lr.transactionId || cr.transactionId,
+                paidAmount: maxPaid > 0 ? maxPaid : base.paidAmount,
+                remainingBalance: isPaid
+                  ? 0
+                  : isPartial
+                    ? Math.max(0, Number(effTotalAmt || effBillAmt || 0) - maxPaid)
+                    : (typeof billedSrc.remainingBalance === 'number' ? billedSrc.remainingBalance : base.remainingBalance),
               });
             }
           });
 
           const finalReadings = Array.from(mergedMap.values());
-          localStorage.setItem(KEYS.READINGS, JSON.stringify(finalReadings));
-          triggerLocalUpdateEvent(KEYS.READINGS);
+          const nextJson = JSON.stringify(finalReadings);
+          const prevJson = localStorage.getItem(KEYS.READINGS) || '';
+          if (prevJson !== nextJson) {
+            localStorage.setItem(KEYS.READINGS, nextJson);
+            triggerLocalUpdateEvent(KEYS.READINGS);
+          }
         }
       },
       (err) => {

@@ -2853,7 +2853,95 @@ app.post("/api/readings/:id/approve", (req, res) => {
 });
 
 // 7.1 Official Admin Billing Sync & Consumer Billing Feed (GET /api/billings, POST /api/billings/reconcile)
+const BILLINGS_SYNC_FILE = path.join(process.cwd(), ".twd-billings-sync.json");
 const reconciledBillingRecords = new Map<string, any>();
+
+function loadBillingsSyncStore() {
+  try {
+    if (fs.existsSync(BILLINGS_SYNC_FILE)) {
+      const raw = fs.readFileSync(BILLINGS_SYNC_FILE, "utf8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((r) => {
+          if (r && r.id) reconciledBillingRecords.set(r.id, r);
+        });
+      }
+    }
+  } catch {
+    // Ignore corrupt cache
+  }
+}
+
+function saveBillingsSyncStore() {
+  try {
+    fs.writeFileSync(
+      BILLINGS_SYNC_FILE,
+      JSON.stringify(Array.from(reconciledBillingRecords.values()), null, 2),
+      "utf8"
+    );
+  } catch {
+    // Ignore read-only fs environments
+  }
+}
+
+loadBillingsSyncStore();
+
+function mergeBillingRecordServer(prev: any, incoming: any): any {
+  if (!prev) return { ...incoming };
+  const isPaid = prev.paymentStatus === "paid" || incoming.paymentStatus === "paid";
+  const isPartial = !isPaid && (prev.paymentStatus === "partial" || incoming.paymentStatus === "partial");
+  const prevBilled = Boolean(
+    prev.isBillingIssued || prev.billingIssuedAt || prev.invoiceNumber || prev.paymentStatus === "paid" || prev.paymentStatus === "partial"
+  );
+  const incBilled = Boolean(
+    incoming.isBillingIssued || incoming.billingIssuedAt || incoming.invoiceNumber || incoming.paymentStatus === "paid" || incoming.paymentStatus === "partial"
+  );
+  const mergedBilled = prevBilled || incBilled;
+  const billedSrc = incBilled ? incoming : prevBilled ? prev : incoming;
+  const altSrc = billedSrc === incoming ? prev : incoming;
+  const maxPaid = Math.max(Number(prev.paidAmount || 0), Number(incoming.paidAmount || 0));
+  const effBillAmt = Number(billedSrc.billAmount || altSrc.billAmount || 0) || prev.billAmount || incoming.billAmount;
+  const effTotalAmt = Number(billedSrc.totalAmount || altSrc.totalAmount || effBillAmt || 0) || prev.totalAmount || incoming.totalAmount;
+
+  return {
+    ...prev,
+    ...incoming,
+    isBillingIssued: mergedBilled ? true : Boolean(incoming.isBillingIssued ?? prev.isBillingIssued),
+    billingIssuedAt: incoming.billingIssuedAt || prev.billingIssuedAt,
+    billingIssuedBy: incoming.billingIssuedBy || prev.billingIssuedBy,
+    invoiceNumber: incoming.invoiceNumber || prev.invoiceNumber,
+    dueDate: billedSrc.dueDate || altSrc.dueDate,
+    billAmount: effBillAmt,
+    totalAmount: effTotalAmt,
+    franchiseTax: billedSrc.franchiseTax ?? altSrc.franchiseTax,
+    arrears: billedSrc.arrears ?? altSrc.arrears,
+    penaltyAmount: billedSrc.penaltyAmount ?? altSrc.penaltyAmount,
+    amountAfterDueDate: billedSrc.amountAfterDueDate ?? altSrc.amountAfterDueDate,
+    status:
+      prev.status === "cancelled" || incoming.status === "cancelled"
+        ? "cancelled"
+        : mergedBilled || prev.status === "verified" || incoming.status === "verified"
+          ? "verified"
+          : (incoming.status || prev.status),
+    paymentStatus: isPaid ? "paid" : isPartial ? "partial" : (incoming.paymentStatus || prev.paymentStatus),
+    paidAmount: maxPaid > 0 ? maxPaid : (prev.paidAmount ?? incoming.paidAmount),
+    remainingBalance: isPaid
+      ? 0
+      : isPartial
+        ? Math.max(0, Number(effTotalAmt || effBillAmt || 0) - maxPaid)
+        : (typeof billedSrc.remainingBalance === "number"
+            ? billedSrc.remainingBalance
+            : typeof altSrc.remainingBalance === "number"
+              ? altSrc.remainingBalance
+              : effTotalAmt),
+    orNumber: incoming.orNumber || prev.orNumber,
+    paymentDate: incoming.paymentDate || prev.paymentDate,
+    paymentMethod: incoming.paymentMethod || prev.paymentMethod,
+    cashierName: incoming.cashierName || prev.cashierName,
+    transactionId: incoming.transactionId || prev.transactionId,
+    paymentReceiptUrl: incoming.paymentReceiptUrl || prev.paymentReceiptUrl,
+  };
+}
 
 app.get("/api/billings", (req, res) => {
   const accQuery = String(req.query.accountNumber || "").trim().toUpperCase();
@@ -2868,36 +2956,35 @@ app.get("/api/billings", (req, res) => {
 app.post("/api/billings/reconcile", (req, res) => {
   const incoming = Array.isArray(req.body?.readings) ? req.body.readings : [];
   const newlyBilled: any[] = [];
+  const newlyPaid: any[] = [];
+  let storeChanged = false;
 
   for (const r of incoming) {
     if (!r || !r.id) continue;
     const prev = reconciledBillingRecords.get(r.id);
-    const merged = prev
-      ? {
-          ...prev,
-          ...r,
-          isBillingIssued: Boolean(prev.isBillingIssued || r.isBillingIssued),
-          billingIssuedAt: r.billingIssuedAt || prev.billingIssuedAt,
-          billingIssuedBy: r.billingIssuedBy || prev.billingIssuedBy,
-          invoiceNumber: r.invoiceNumber || prev.invoiceNumber,
-          status:
-            prev.status === "cancelled" || r.status === "cancelled"
-              ? "cancelled"
-              : prev.status === "verified" || r.status === "verified"
-                ? "verified"
-                : (r.status || prev.status),
-          paymentStatus:
-            prev.paymentStatus === "paid" || r.paymentStatus === "paid"
-              ? "paid"
-              : prev.paymentStatus === "partial" || r.paymentStatus === "partial"
-                ? "partial"
-                : (r.paymentStatus || prev.paymentStatus),
-        }
-      : { ...r };
-    reconciledBillingRecords.set(r.id, merged);
-    if ((!prev || !prev.isBillingIssued) && merged.isBillingIssued) {
+    const merged = mergeBillingRecordServer(prev, r);
+    if (!prev || JSON.stringify(prev) !== JSON.stringify(merged)) {
+      reconciledBillingRecords.set(r.id, merged);
+      storeChanged = true;
+    }
+    const wasBilled = Boolean(prev?.isBillingIssued || prev?.billingIssuedAt || prev?.invoiceNumber);
+    const nowBilled = Boolean(merged.isBillingIssued || merged.billingIssuedAt || merged.invoiceNumber);
+    if (!wasBilled && nowBilled) {
       newlyBilled.push(merged);
     }
+    const prevPaidAmt = Number(prev?.paidAmount || 0);
+    const nextPaidAmt = Number(merged.paidAmount || 0);
+    if (
+      (prev?.paymentStatus !== "paid" && merged.paymentStatus === "paid") ||
+      (prev?.paymentStatus !== "partial" && merged.paymentStatus === "partial") ||
+      nextPaidAmt > prevPaidAmt
+    ) {
+      newlyPaid.push(merged);
+    }
+  }
+
+  if (storeChanged) {
+    saveBillingsSyncStore();
   }
 
   for (const bill of newlyBilled) {
@@ -2914,6 +3001,29 @@ app.post("/api/billings/reconcile", (req, res) => {
       consumption: bill.consumption,
       reading: bill,
       message: `Official water billing statement for ${bill.billingPeriod} has been issued by Administration.`
+    });
+  }
+
+  for (const paidBill of newlyPaid) {
+    broadcast("PAYMENT_RECORDED", {
+      accountNumber: paidBill.accountNumber,
+      billingPeriod: paidBill.billingPeriod,
+      orNumber: paidBill.orNumber,
+      amountPaid: paidBill.paidAmount,
+      remainingBalance: paidBill.remainingBalance ?? 0,
+      reading: paidBill,
+      readings: [paidBill],
+      message: `Payment recorded for ${paidBill.billingPeriod} (OR #${paidBill.orNumber || "ISSUED"}).`
+    });
+    broadcast("payment:recorded", {
+      accountNumber: paidBill.accountNumber,
+      billingPeriod: paidBill.billingPeriod,
+      orNumber: paidBill.orNumber,
+      amountPaid: paidBill.paidAmount,
+      remainingBalance: paidBill.remainingBalance ?? 0,
+      reading: paidBill,
+      readings: [paidBill],
+      message: `Payment recorded for ${paidBill.billingPeriod} (OR #${paidBill.orNumber || "ISSUED"}).`
     });
   }
 

@@ -240,6 +240,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const syncTimeoutRef = useRef<any>(null);
   const debounceDbUpdateRef = useRef<any>(null);
   const alertedOverdueRef = useRef<Set<string>>(new Set());
+  const announcedIssuedBillIdsRef = useRef<Set<string>>(new Set());
+  const dismissedSpotlightIdsRef = useRef<Set<string>>(new Set());
+  const hasHydratedReadingsOnceRef = useRef<boolean>(false);
   const wasAccountPendingRef = useRef<boolean | null>(null);
   const lastAnnouncedAccountRef = useRef<string>('');
   const confirmedIssuedAccRef = useRef<string>('');
@@ -393,25 +396,32 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         });
     }
 
-    if (validAcc && (!silent || nowMs - lastBillingsSyncRef.current >= 6000)) {
+    if (validAcc && (!silent || nowMs - lastBillingsSyncRef.current >= 3500)) {
       lastBillingsSyncRef.current = nowMs;
+      const validAccUpper = validAcc.replace(/^#/, '').trim().toUpperCase();
+      const recMeterUpper = (activeRec?.meterNumber || '').trim().toUpperCase();
       apiClient
-        .getBillings({ accountNumber: validAcc }, { skipLogging: true })
+        .getBillings({ accountNumber: validAccUpper }, { skipLogging: true })
         .then(bRes => {
           if (bRes?.success && Array.isArray(bRes.readings) && bRes.readings.length > 0) {
             const mergedReadings = mockDb.mergeExternalReadings(bRes.readings);
             const customerVerified = mergedReadings
-              .filter(
-                r =>
-                  ((activeRec?.accountNumber && r.accountNumber === activeRec.accountNumber) ||
-                    (validAcc && r.accountNumber === validAcc) ||
-                    (activeRec?.meterNumber && r.meterNumber === activeRec.meterNumber)) &&
+              .filter(r => {
+                const rAccUpper = (r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+                const rMeterUpper = (r.meterNumber || '').trim().toUpperCase();
+                return (
+                  ((validAccUpper && rAccUpper === validAccUpper) ||
+                    (recMeterUpper && !recMeterUpper.startsWith('PENDING') && rMeterUpper === recMeterUpper)) &&
                   r.status === 'verified'
-              )
-              .sort((a, b) => new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime());
+                );
+              })
+              .sort(
+                (a, b) =>
+                  new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime() ||
+                  new Date(b.billingIssuedAt || 0).getTime() - new Date(a.billingIssuedAt || 0).getTime()
+              );
             if (JSON.stringify(readingsRef.current) !== JSON.stringify(customerVerified)) {
-              readingsRef.current = customerVerified;
-              setReadings(customerVerified);
+              loadConsumerInfo(true);
             }
           }
         })
@@ -881,28 +891,52 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           }
         }
         
-        // Filter readings belonging strictly to this customer's valid issued identifiers
-        const allCustomerReads = (record.accountNumber && record.accountNumber.trim() !== '' && !record.accountNumber.startsWith('PENDING')) || (record.meterNumber && record.meterNumber.trim() !== '' && !record.meterNumber.startsWith('PENDING'))
-          ? allReadings.filter(
-              r => (record.accountNumber && r.accountNumber === record.accountNumber) ||
-                   (record.meterNumber && r.meterNumber === record.meterNumber)
-            )
+        // Filter readings belonging strictly to this customer's valid issued identifiers (case-insensitive)
+        const recAccClean = (record.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+        const recMeterClean = (record.meterNumber || '').trim().toUpperCase();
+        const hasValidAccId = Boolean(recAccClean && !recAccClean.startsWith('PENDING'));
+        const hasValidMeterId = Boolean(recMeterClean && !recMeterClean.startsWith('PENDING'));
+
+        const allCustomerReads = hasValidAccId || hasValidMeterId
+          ? allReadings.filter(r => {
+              const rAcc = (r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+              const rMeter = (r.meterNumber || '').trim().toUpperCase();
+              return (hasValidAccId && rAcc === recAccClean) || (hasValidMeterId && rMeter === recMeterClean);
+            })
           : [];
-        // Sort newest first
-        allCustomerReads.sort((a, b) => new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime());
+        // Sort newest first (by readingDate desc, then billingIssuedAt desc)
+        allCustomerReads.sort(
+          (a, b) =>
+            new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime() ||
+            new Date(b.billingIssuedAt || 0).getTime() - new Date(a.billingIssuedAt || 0).getTime()
+        );
         
         // CRITICAL GHOST-PROCESS PREVENTION:
         // Only APPROVED / VERIFIED readings trigger billing operations, payable ledgers, and overdue calculations!
-        // Unapproved readings sitting in the Approvals queue ('pending' or 'flagged_abnormal') DO NOT trigger billing operations until officially approved.
         const verifiedReads = allCustomerReads.filter(r => r.status === 'verified');
         
-        // Check if any bill was recently marked as PAID or PARTIAL by an Admin / Cashier in background
-        if (prevReadingsRef.current.length > 0) {
+        // Detect newly issued bills AND newly recorded Admin/Cashier payments in real time
+        if (hasHydratedReadingsOnceRef.current) {
           verifiedReads.forEach(newR => {
             const oldR = prevReadingsRef.current.find(o => o.id === newR.id);
+            const wasIssuedBefore = oldR ? isOfficialBillIssued(oldR) : false;
+            const isIssuedNow = isOfficialBillIssued(newR);
+
+            if (!wasIssuedBefore && isIssuedNow && !announcedIssuedBillIdsRef.current.has(newR.id)) {
+              announcedIssuedBillIdsRef.current.add(newR.id);
+              dismissedSpotlightIdsRef.current.delete(newR.id);
+              setSpotlightReading(newR);
+              if (newR.paymentStatus !== 'paid') {
+                toast.info(
+                  `Water Bill Issued — ${newR.billingPeriod}`,
+                  `Meter reading: ${newR.consumption} m³ (Index: ${newR.currentReading}). Total Due: ₱${calculateCostOf(newR, record.consumerType).toFixed(2)}. Official Billing Notice & Receipt unlocked.`,
+                  6500
+                );
+              }
+            }
+
             if (oldR) {
               if (oldR.paymentStatus !== 'paid' && newR.paymentStatus === 'paid') {
-                // Bill just settled in full!
                 setPaymentConfirmationToast({
                   period: newR.billingPeriod,
                   amount: newR.paidAmount || calculateCostOf(newR, record.consumerType),
@@ -912,7 +946,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   date: newR.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
                 });
               } else if (oldR.paymentStatus === 'unpaid' && newR.paymentStatus === 'partial') {
-                // Partial payment logged by admin / cashier!
                 const gross = calculateCostOf(newR, record.consumerType);
                 const rem = newR.remainingBalance ?? Math.max(0, gross - (newR.paidAmount || 0));
                 setPaymentConfirmationToast({
@@ -924,13 +957,43 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   date: newR.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
                 });
               }
+            } else if (isIssuedNow && newR.paymentStatus === 'paid') {
+              setPaymentConfirmationToast({
+                period: newR.billingPeriod,
+                amount: newR.paidAmount || calculateCostOf(newR, record.consumerType),
+                remaining: 0,
+                isPartial: false,
+                reference: newR.orNumber || newR.paymentReference || `OR-${Math.floor(100000 + Math.random() * 900000)}`,
+                date: newR.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+              });
             }
           });
+        } else {
+          verifiedReads.forEach(r => {
+            if (isOfficialBillIssued(r)) {
+              announcedIssuedBillIdsRef.current.add(r.id);
+            }
+          });
+          hasHydratedReadingsOnceRef.current = true;
         }
         
         // Check and generate automated overdue alert notifications & 3-month disconnection notices ONLY for Admin-issued bills!
         const issuedBills = verifiedReads.filter(r => isOfficialBillIssued(r));
         const unpaidList = issuedBills.filter(r => r.paymentStatus !== 'paid');
+
+        // Keep spotlightReading synchronized with live updates (e.g. when Admin clears payment) or auto-spotlight active unpaid bill
+        setSpotlightReading(prevSpot => {
+          if (prevSpot) {
+            const refreshedSpot = verifiedReads.find(v => v.id === prevSpot.id);
+            if (refreshedSpot) {
+              return JSON.stringify(refreshedSpot) !== JSON.stringify(prevSpot) ? refreshedSpot : prevSpot;
+            }
+          }
+          if (unpaidList.length > 0 && !dismissedSpotlightIdsRef.current.has(unpaidList[0].id)) {
+            return unpaidList[0];
+          }
+          return prevSpot;
+        });
         
         // 1. Per-bill overdue alert (only for past Admin-issued unpaid bills)
         issuedBills.forEach(r => {
@@ -1126,14 +1189,19 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       }
     );
 
-    // 1. Instantaneous reactive sync with minimal 40ms debounce
-    const handleDbUpdate = () => {
-      setReports(getConsumerReportsFromLocal());
+    // 1. Instantaneous reactive sync with minimal 40ms debounce (ignores notification-only writes to prevent feedback loops)
+    const handleDbUpdate = (e: Event) => {
+      const changedKey = (e as CustomEvent)?.detail?.key as string | undefined;
+      if (changedKey === 'twd_live_v4_audit') return;
       const freshNotifs = getConsumerNotificationsFromLocal();
       if (JSON.stringify(notifsRef.current) !== JSON.stringify(freshNotifs)) {
         notifsRef.current = freshNotifs;
         setNotifications(freshNotifs);
       }
+      if (changedKey === 'twd_live_v4_notifications') {
+        return;
+      }
+      setReports(getConsumerReportsFromLocal());
       if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
       debounceDbUpdateRef.current = setTimeout(() => {
         loadConsumerInfo(true);
@@ -1143,6 +1211,23 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
     // 2. Cross-tab synchronization when Admin modifies data in another browser tab
     const handleStorage = (e: StorageEvent) => {
+      if (
+        e.key === 'twd_live_v4_audit' ||
+        (e.key === 'twd_sync_ping' && (e.newValue || '').endsWith('_twd_live_v4_audit'))
+      ) {
+        return;
+      }
+      if (
+        e.key === 'twd_live_v4_notifications' ||
+        (e.key === 'twd_sync_ping' && (e.newValue || '').endsWith('_twd_live_v4_notifications'))
+      ) {
+        const freshNotifs = getConsumerNotificationsFromLocal();
+        if (JSON.stringify(notifsRef.current) !== JSON.stringify(freshNotifs)) {
+          notifsRef.current = freshNotifs;
+          setNotifications(freshNotifs);
+        }
+        return;
+      }
       if (e.key?.startsWith('twd_') || e.key === 'twd_sync_ping') {
         setReports(getConsumerReportsFromLocal());
         const freshNotifs = getConsumerNotificationsFromLocal();
@@ -1165,7 +1250,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     };
     window.addEventListener('twd_tariff_updated', handleTariffUpdated);
 
-    // 4. Dedicated Live WebSocket + BroadcastChannel Stream for 0ms ID confirmation, notifications & report replies
+    // 4. Dedicated Live WebSocket + BroadcastChannel Stream for 0ms ID confirmation, bill issuance, payment clearance & report replies
     const cleanupWs = initRealtimeSocket((data) => {
       if (
         data.type === 'CONSUMER_IDS_ISSUED' ||
@@ -1191,9 +1276,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         if (notif && doesPayloadBelongToCurrentUser(notif)) {
           mockDb.mergeExternalNotifications([notif]);
           const refreshedNotifs = getConsumerNotificationsFromLocal();
-          notifsRef.current = refreshedNotifs;
-          setNotifications(refreshedNotifs);
-          syncConsumerReportsAndNotifications(true);
+          if (JSON.stringify(notifsRef.current) !== JSON.stringify(refreshedNotifs)) {
+            notifsRef.current = refreshedNotifs;
+            setNotifications(refreshedNotifs);
+          }
         }
       } else if (
         data.type === 'CONSUMER_REPORT_REPLY' ||
@@ -1258,25 +1344,93 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         syncConsumerReportsAndNotifications(true);
       } else if (
         data.type === 'READING_APPROVED_BILL_ISSUED' ||
-        data.type === 'bill:issued'
+        data.type === 'bill:issued' ||
+        data.type === 'BILLING_ISSUED'
       ) {
+        const payload = data.payload;
+        const incomingBills = Array.isArray(payload?.readings)
+          ? payload.readings
+          : payload?.reading
+            ? [payload.reading]
+            : [];
+        if (incomingBills.length > 0) {
+          mockDb.mergeExternalReadings(incomingBills);
+        }
+        const belongsToMe =
+          doesPayloadBelongToCurrentUser(payload) ||
+          incomingBills.some((b: any) => doesPayloadBelongToCurrentUser(b));
+        if (payload?.notification && belongsToMe) {
+          mockDb.mergeExternalNotifications([payload.notification]);
+          const refreshedNotifs = getConsumerNotificationsFromLocal();
+          notifsRef.current = refreshedNotifs;
+          setNotifications(refreshedNotifs);
+        }
+        if (belongsToMe && incomingBills[0]) {
+          const bill = incomingBills[0] as MeterReading;
+          announcedIssuedBillIdsRef.current.add(bill.id);
+          dismissedSpotlightIdsRef.current.delete(bill.id);
+          setSpotlightReading(bill);
+          toast.info(
+            `Water Bill Issued — ${bill.billingPeriod}`,
+            `Meter reading: ${bill.consumption} m³ (Index: ${bill.currentReading}). Total Due: ₱${calculateCostOf(bill, consumerRecordRef.current?.consumerType).toFixed(2)}.`,
+            6500
+          );
+        }
+        loadConsumerInfo(true);
+      } else if (
+        data.type === 'PAYMENT_RECORDED' ||
+        data.type === 'payment:recorded'
+      ) {
+        const payload = data.payload;
+        const incomingPaid = Array.isArray(payload?.readings)
+          ? payload.readings
+          : payload?.reading
+            ? [payload.reading]
+            : [];
+        if (incomingPaid.length > 0) {
+          mockDb.mergeExternalReadings(incomingPaid);
+        }
+        const belongsToMe =
+          doesPayloadBelongToCurrentUser(payload) ||
+          incomingPaid.some((b: any) => doesPayloadBelongToCurrentUser(b));
+        if (payload?.notification && belongsToMe) {
+          mockDb.mergeExternalNotifications([payload.notification]);
+          const refreshedNotifs = getConsumerNotificationsFromLocal();
+          notifsRef.current = refreshedNotifs;
+          setNotifications(refreshedNotifs);
+        }
+        if (belongsToMe) {
+          const primaryBill = incomingPaid[0] as MeterReading | undefined;
+          if (primaryBill) {
+            announcedIssuedBillIdsRef.current.add(primaryBill.id);
+          }
+          const isPartial = primaryBill ? primaryBill.paymentStatus === 'partial' : (payload?.remainingBalance || 0) > 0;
+          setPaymentConfirmationToast({
+            period: primaryBill?.billingPeriod || payload?.billingPeriod || 'Water Bill',
+            amount: payload?.amountPaid || primaryBill?.paidAmount || 0,
+            remaining: payload?.remainingBalance ?? primaryBill?.remainingBalance ?? 0,
+            isPartial,
+            reference: payload?.orNumber || primaryBill?.orNumber || 'OR-ISSUED',
+            date: payload?.paymentDate || primaryBill?.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          });
+        }
         loadConsumerInfo(true);
       }
     });
 
-    // 5a. Fast 2-second lightweight live sync for Reports, Replies & Notifications
+    // 5a. Fast 2-second lightweight live sync for Reports, Replies, Billings & Notifications
     const reportSyncInterval = setInterval(() => {
       if (typeof document !== 'undefined' && !document.hidden) {
         syncConsumerReportsAndNotifications(true);
       }
     }, 2000);
 
-    // 5b. Full consumer account & billing sync every 8 seconds
+    // 5b. Full consumer account & billing sync every 5 seconds
     const interval = setInterval(() => {
       if (typeof document !== 'undefined' && !document.hidden) {
         loadConsumerInfo(true);
       }
-    }, 8000);
+    }, 5000);
 
     const handleVisibility = () => {
       if (typeof document !== 'undefined' && !document.hidden) {
@@ -2858,7 +3012,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                   <div className="flex items-center space-x-2 shrink-0 self-end lg:self-center">
                     <button
-                      onClick={() => setSpotlightReading(null)}
+                      onClick={() => {
+                        if (spotlightReading?.id) {
+                          dismissedSpotlightIdsRef.current.add(spotlightReading.id);
+                        }
+                        setSpotlightReading(null);
+                      }}
                       className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
                       title="Dismiss Spotlight"
                     >
@@ -3064,9 +3223,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     </span>
                     <span className="text-xs font-semibold text-slate-400">m³ Index</span>
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-1 font-medium">
-                    {latestRead ? `Recorded: ${latestRead.readingDate}` : 'Awaiting reading cycle'}
-                  </p>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1 font-medium">
+                    <span>
+                      {latestRead ? `Recorded: ${latestRead.readingDate}` : 'Awaiting reading cycle'}
+                    </span>
+                    {latestRead && isOfficialBillIssued(latestRead) && (
+                      <span className="text-[10px] font-bold text-sky-400">
+                        Billed
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -3074,8 +3240,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               <div 
                 onClick={() => {
                   if (latestBill && !isAccountPending) {
-                    setBillDetailsReading(latestBill);
-                    setIsBillDetailsOpen(true);
+                    if (latestBill.paymentStatus === 'paid') {
+                      setReceiptDetailModal(latestBill);
+                    } else {
+                      setBillDetailsReading(latestBill);
+                      setIsBillDetailsOpen(true);
+                    }
                   }
                 }}
                 className={`bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-md space-y-3 relative overflow-hidden ${
@@ -3084,7 +3254,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     : ''
                 }`}
                 id="card-current-bill-amount"
-                title={latestBill && !isAccountPending ? 'Click to view full itemized bill breakdown' : 'Billing statement will be available once issued by Administration'}
+                title={latestBill && !isAccountPending ? 'Click to view full itemized bill or official receipt' : 'Billing statement will be available once issued by Administration'}
               >
                 <div className="flex justify-between items-start">
                   <div>
@@ -3092,18 +3262,29 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       Current Bill Amount
                     </span>
                     {latestBill && !isAccountPending ? (
-                      <span className="text-[11px] font-semibold text-indigo-400 group-hover:text-indigo-300 flex items-center mt-0.5">
-                        <span>View 3-Pillar Breakdown</span>
-                        <ArrowRight className="h-3 w-3 ml-1 group-hover:translate-x-0.5 transition-transform" />
-                      </span>
+                      latestBill.paymentStatus === 'paid' ? (
+                        <span className="text-[11px] font-semibold text-emerald-400 group-hover:text-emerald-300 flex items-center mt-0.5">
+                          <span>Settled {latestBill.orNumber ? `· ${latestBill.orNumber}` : '· Official OR'}</span>
+                          <ArrowRight className="h-3 w-3 ml-1 group-hover:translate-x-0.5 transition-transform" />
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-semibold text-indigo-400 group-hover:text-indigo-300 flex items-center mt-0.5">
+                          <span>View 3-Pillar Breakdown</span>
+                          <ArrowRight className="h-3 w-3 ml-1 group-hover:translate-x-0.5 transition-transform" />
+                        </span>
+                      )
                     ) : (
                       <span className="text-[11px] font-medium text-slate-500 block mt-0.5">
                         Awaiting Admin Billing
                       </span>
                     )}
                   </div>
-                  <div className={`p-2 bg-indigo-500/15 text-indigo-400 border border-indigo-500/20 rounded-xl ${
-                    latestBill && !isAccountPending ? 'group-hover:bg-indigo-600 group-hover:text-white transition-colors' : 'opacity-70'
+                  <div className={`p-2 rounded-xl border ${
+                    latestBill && !isAccountPending && latestBill.paymentStatus === 'paid'
+                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20 group-hover:bg-emerald-600 group-hover:text-white transition-colors'
+                      : latestBill && !isAccountPending
+                        ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/20 group-hover:bg-indigo-600 group-hover:text-white transition-colors'
+                        : 'bg-indigo-500/15 text-indigo-400 border-indigo-500/20 opacity-70'
                   }`}>
                     <Calculator className="h-5 w-5" />
                   </div>
@@ -3111,7 +3292,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 <div>
                   <div className="flex items-baseline space-x-1">
                     <span className={`text-3xl font-black font-mono tabular-nums ${
-                      latestBill && !isAccountPending ? 'text-indigo-300' : 'text-slate-400'
+                      latestBill && !isAccountPending
+                        ? latestBill.paymentStatus === 'paid'
+                          ? 'text-emerald-400'
+                          : 'text-indigo-300'
+                        : 'text-slate-400'
                     }`}>
                       ₱{currentBillAmount.toFixed(2)}
                     </span>
@@ -3120,8 +3305,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     <span>
                       Cycle: {latestBill ? latestBill.billingPeriod : 'No Billing Issued Yet'}
                     </span>
-                    <span className="text-[10px] font-semibold text-slate-500">
-                      {latestBill ? 'Fixed + Vol + Tax' : 'No Receipt Yet'}
+                    <span className={`text-[10px] font-semibold ${
+                      latestBill?.paymentStatus === 'paid' ? 'text-emerald-400' : 'text-slate-500'
+                    }`}>
+                      {latestBill
+                        ? latestBill.paymentStatus === 'paid'
+                          ? 'Paid · View Receipt'
+                          : 'Fixed + Vol + Tax'
+                        : 'No Receipt Yet'}
                     </span>
                   </div>
                 </div>
@@ -3340,7 +3531,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       </div>
                     </div>
 
-                    <div className="flex items-center space-x-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {latestBill.paymentStatus === 'paid' && (
+                        <button
+                          onClick={() => setReceiptDetailModal(latestBill)}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition flex items-center space-x-1.5 shadow-sm cursor-pointer"
+                          title="Open Official Cashier Receipt (OR)"
+                        >
+                          <ReceiptText className="h-3.5 w-3.5" />
+                          <span>View Official Receipt {latestBill.orNumber ? `(${latestBill.orNumber})` : ''}</span>
+                        </button>
+                      )}
                       <button
                         onClick={() => {
                           setBillDetailsReading(latestBill);

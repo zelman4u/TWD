@@ -1918,27 +1918,55 @@ export const mockDb = {
         changed = true;
         return;
       }
+      const isPaid = prev.paymentStatus === 'paid' || ir.paymentStatus === 'paid';
+      const isPartial = !isPaid && (prev.paymentStatus === 'partial' || ir.paymentStatus === 'partial');
+      const prevBilled = Boolean(prev.isBillingIssued || prev.billingIssuedAt || prev.invoiceNumber || prev.paymentStatus === 'paid' || prev.paymentStatus === 'partial');
+      const irBilled = Boolean(ir.isBillingIssued || ir.billingIssuedAt || ir.invoiceNumber || ir.paymentStatus === 'paid' || ir.paymentStatus === 'partial');
+      const mergedBillingIssued = prevBilled || irBilled;
+      const billedSource = irBilled ? ir : prevBilled ? prev : ir;
+      const fallbackBilled = irBilled ? prev : ir;
+      const maxPaid = Math.max(Number(prev.paidAmount || 0), Number(ir.paidAmount || 0));
+      const mergedBillAmount = Number(billedSource.billAmount || fallbackBilled.billAmount || 0) || prev.billAmount || ir.billAmount;
+      const mergedTotalAmount = Number(billedSource.totalAmount || fallbackBilled.totalAmount || mergedBillAmount || 0) || prev.totalAmount || ir.totalAmount;
+      const computedRemaining = isPaid
+        ? 0
+        : isPartial
+          ? Math.max(0, Number(mergedTotalAmount || mergedBillAmount || 0) - maxPaid)
+          : (typeof billedSource.remainingBalance === 'number'
+              ? billedSource.remainingBalance
+              : typeof fallbackBilled.remainingBalance === 'number'
+                ? fallbackBilled.remainingBalance
+                : mergedTotalAmount);
+
       const next: MeterReading = {
         ...prev,
         ...ir,
-        isBillingIssued: Boolean(prev.isBillingIssued || ir.isBillingIssued),
+        isBillingIssued: mergedBillingIssued ? true : Boolean(ir.isBillingIssued ?? prev.isBillingIssued),
         billingIssuedAt: ir.billingIssuedAt || prev.billingIssuedAt,
         billingIssuedBy: ir.billingIssuedBy || prev.billingIssuedBy,
         invoiceNumber: ir.invoiceNumber || prev.invoiceNumber,
+        dueDate: billedSource.dueDate || fallbackBilled.dueDate,
+        billAmount: mergedBillAmount,
+        totalAmount: mergedTotalAmount,
+        franchiseTax: billedSource.franchiseTax ?? fallbackBilled.franchiseTax,
+        arrears: billedSource.arrears ?? fallbackBilled.arrears,
+        penaltyAmount: billedSource.penaltyAmount ?? fallbackBilled.penaltyAmount,
+        amountAfterDueDate: billedSource.amountAfterDueDate ?? fallbackBilled.amountAfterDueDate,
         status:
           prev.status === 'cancelled' || ir.status === 'cancelled'
             ? 'cancelled'
-            : prev.status === 'verified' || ir.status === 'verified'
+            : mergedBillingIssued || prev.status === 'verified' || ir.status === 'verified'
               ? 'verified'
               : (ir.status || prev.status),
-        paymentStatus:
-          prev.paymentStatus === 'paid' || ir.paymentStatus === 'paid'
-            ? 'paid'
-            : prev.paymentStatus === 'partial' || ir.paymentStatus === 'partial'
-              ? 'partial'
-              : (ir.paymentStatus || prev.paymentStatus),
-        paidAmount: Math.max(Number(prev.paidAmount || 0), Number(ir.paidAmount || 0)) || prev.paidAmount || ir.paidAmount,
+        paymentStatus: isPaid ? 'paid' : isPartial ? 'partial' : (ir.paymentStatus || prev.paymentStatus),
+        paidAmount: maxPaid > 0 ? maxPaid : (prev.paidAmount ?? ir.paidAmount),
+        remainingBalance: computedRemaining,
         orNumber: ir.orNumber || prev.orNumber,
+        paymentDate: ir.paymentDate || prev.paymentDate,
+        paymentMethod: ir.paymentMethod || prev.paymentMethod,
+        cashierName: ir.cashierName || prev.cashierName,
+        transactionId: ir.transactionId || prev.transactionId,
+        paymentReceiptUrl: ir.paymentReceiptUrl || prev.paymentReceiptUrl,
       };
       if (JSON.stringify(prev) !== JSON.stringify(next)) {
         map.set(ir.id, next);
