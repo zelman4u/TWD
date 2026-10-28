@@ -25,6 +25,12 @@ import {
   COLLECTIONS 
 } from './services/firebaseDb';
 import { safeBackendFetch } from './services/apiClient';
+import {
+  dedupeNotifications,
+  getNotificationSemanticKey,
+  isIssuedNotifAccount,
+  normalizeNotifAccount,
+} from './utils/notificationDeduper';
 
 
 // Purge all legacy storage keys containing old mock data
@@ -2075,14 +2081,20 @@ export const mockDb = {
         const nEmail = (n.consumerEmail || '').trim().toLowerCase();
         const nConsumerId = (n.consumerId || '').trim().toLowerCase();
 
-        // 1. Email is the authoritative personal identity: match if equal, exclude if explicitly a different email
-        if (cleanEmail && nEmail) {
-          return cleanEmail === nEmail;
+        // 1. Direct match on real issued Account Number OR authoritative personal Email
+        if (hasRealAccount && nHasRealAcc && cleanAccount === nCleanAcc) {
+          return true;
+        }
+        if (cleanEmail && nEmail && cleanEmail === nEmail) {
+          return true;
         }
 
-        // 2. Real issued Account Number match: match if equal, exclude if explicitly a different issued account
-        if (hasRealAccount && nHasRealAcc) {
-          return cleanAccount === nCleanAcc;
+        // 2. Conflict guards: exclude notifications explicitly bound to a different real account or different email
+        if (hasRealAccount && nHasRealAcc && cleanAccount !== nCleanAcc) {
+          return false;
+        }
+        if (cleanEmail && nEmail && cleanEmail !== nEmail) {
+          return false;
         }
 
         // 3. Exact User ID or Consumer ID Match (when email/account do not conflict)
@@ -2108,26 +2120,45 @@ export const mockDb = {
         return n;
       });
 
-    return filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return dedupeNotifications(filtered);
   },
 
   getAllNotifications: (): ConsumerNotification[] => {
-    return getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
+    return dedupeNotifications(getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []));
   },
 
   updateConsumerNotifications: (
     filter: { userId?: string; email?: string; consumerId?: string; oldAccountNumber?: string },
     updates: Partial<ConsumerNotification>
   ): void => {
-    const list = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
-    let modified = false;
+    const rawList = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
+    const list = dedupeNotifications(rawList);
+    let modified = list.length !== rawList.length;
     const cleanOldAcc = (filter.oldAccountNumber || '').replace(/^#/, '').trim().toLowerCase();
     const cleanUserId = (filter.userId || '').trim().toLowerCase();
     const cleanEmail = (filter.email || '').trim().toLowerCase();
     const cleanConsumerId = (filter.consumerId || '').trim().toLowerCase();
 
+    const sanitizedUpdates: Partial<ConsumerNotification> = {};
+    (Object.keys(updates) as Array<keyof ConsumerNotification>).forEach((k) => {
+      const val = updates[k];
+      if (val !== undefined) {
+        if (k === 'accountNumber' && typeof val === 'string') {
+          (sanitizedUpdates as any)[k] = normalizeNotifAccount(val) || val;
+        } else if (k === 'consumerEmail' && typeof val === 'string') {
+          (sanitizedUpdates as any)[k] = val.trim().toLowerCase();
+        } else {
+          (sanitizedUpdates as any)[k] = val;
+        }
+      }
+    });
+
+    const syncedDocs: ConsumerNotification[] = [];
     const updated = list.map(n => {
       const nCleanAcc = (n.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
+      if (nCleanAcc === 'all' || nCleanAcc === 'broadcast' || nCleanAcc === 'district') {
+        return n;
+      }
       const nUserId = (n.userId || '').trim().toLowerCase();
       const nEmail = (n.consumerEmail || '').trim().toLowerCase();
       const nConsumerId = (n.consumerId || '').trim().toLowerCase();
@@ -2138,83 +2169,105 @@ export const mockDb = {
                       (cleanOldAcc && nCleanAcc && nCleanAcc === cleanOldAcc);
 
       if (isMatch) {
-        modified = true;
-        const next = { ...n, ...updates };
-        syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, next.id, next as unknown as Record<string, unknown>);
-        return next;
+        const next: ConsumerNotification = { ...n };
+        let itemChanged = false;
+
+        if (sanitizedUpdates.accountNumber) {
+          const curAcc = normalizeNotifAccount(n.accountNumber);
+          const nextAcc = normalizeNotifAccount(sanitizedUpdates.accountNumber);
+          // Upgrade pending/missing account numbers or explicitly targeted oldAccountNumber
+          if (!isIssuedNotifAccount(curAcc) || (cleanOldAcc && nCleanAcc === cleanOldAcc)) {
+            if (curAcc !== nextAcc) {
+              next.accountNumber = nextAcc;
+              itemChanged = true;
+            }
+          }
+        }
+        if (sanitizedUpdates.consumerEmail && !n.consumerEmail) {
+          next.consumerEmail = sanitizedUpdates.consumerEmail;
+          itemChanged = true;
+        }
+        if (sanitizedUpdates.userId && !n.userId) {
+          next.userId = sanitizedUpdates.userId;
+          itemChanged = true;
+        }
+        if (sanitizedUpdates.consumerId && !n.consumerId) {
+          next.consumerId = sanitizedUpdates.consumerId;
+          itemChanged = true;
+        }
+        if (sanitizedUpdates.read !== undefined && Boolean(n.read) !== Boolean(sanitizedUpdates.read)) {
+          next.read = Boolean(sanitizedUpdates.read);
+          itemChanged = true;
+        }
+
+        if (itemChanged) {
+          modified = true;
+          syncedDocs.push(next);
+          return next;
+        }
       }
       return n;
     });
 
     if (modified) {
-      setStored(KEYS.NOTIFICATIONS, updated);
+      const finalDeduped = dedupeNotifications(updated);
+      setStored(KEYS.NOTIFICATIONS, finalDeduped);
+      syncedDocs.slice(0, 15).forEach((docItem) => {
+        syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, docItem.id, docItem as unknown as Record<string, unknown>);
+      });
     }
   },
 
   addNotification: (notif: Omit<ConsumerNotification, 'id' | 'timestamp' | 'read'>): ConsumerNotification => {
-    const list = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
-    const newNotif: ConsumerNotification = {
+    const rawList = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
+    const list = dedupeNotifications(rawList);
+    const cleanAcc = normalizeNotifAccount(notif.accountNumber) || notif.accountNumber || 'PENDING';
+    const cleanEmail = notif.consumerEmail ? notif.consumerEmail.trim().toLowerCase() : undefined;
+
+    const candidate: ConsumerNotification = {
       ...notif,
+      accountNumber: cleanAcc,
+      ...(cleanEmail ? { consumerEmail: cleanEmail } : {}),
       id: `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       timestamp: new Date().toISOString(),
-      read: false
+      read: false,
     };
-    list.push(newNotif);
-    setStored(KEYS.NOTIFICATIONS, list);
-    syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, newNotif.id, newNotif as unknown as Record<string, unknown>);
+
+    const candidateSemKey = getNotificationSemanticKey(candidate);
+    const existing = list.find((item) => getNotificationSemanticKey(item) === candidateSemKey);
+    if (existing) {
+      if (list.length !== rawList.length) {
+        setStored(KEYS.NOTIFICATIONS, list);
+      }
+      return existing;
+    }
+
+    const nextList = dedupeNotifications([candidate, ...list]);
+    setStored(KEYS.NOTIFICATIONS, nextList);
+    syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, candidate.id, candidate as unknown as Record<string, unknown>);
     safeBackendFetch('/api/notifications', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newNotif)
+      body: JSON.stringify(candidate)
     }).catch(() => {});
-    return newNotif;
+    return candidate;
   },
 
   mergeExternalNotifications: (incoming: ConsumerNotification[]): boolean => {
     if (!Array.isArray(incoming) || incoming.length === 0) return false;
-    const list = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
-    let changed = false;
-
-    incoming.forEach(inc => {
-      if (!inc || !inc.title) return;
-      const incAcc = (inc.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
-      const incEmail = (inc.consumerEmail || '').trim().toLowerCase();
-      const incTitle = (inc.title || '').trim().toLowerCase();
-      const incTime = inc.timestamp ? new Date(inc.timestamp).getTime() : Date.now();
-
-      const duplicate = list.find(existing => {
-        if (inc.id && existing.id === inc.id) return true;
-        const exAcc = (existing.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
-        const exEmail = (existing.consumerEmail || '').trim().toLowerCase();
-        const exTitle = (existing.title || '').trim().toLowerCase();
-        const sameTarget = (incAcc && !incAcc.startsWith('pending') && exAcc === incAcc) || (incEmail && exEmail === incEmail);
-        if (inc.type === 'account_issue' && existing.type === 'account_issue' && exTitle === incTitle && sameTarget) {
-          return true;
-        }
-        const exTime = existing.timestamp ? new Date(existing.timestamp).getTime() : 0;
-        if (Math.abs(incTime - exTime) > 15000) return false;
-        return existing.type === inc.type && exTitle === incTitle && sameTarget;
-      });
-
-      if (!duplicate) {
-        list.push({
-          ...inc,
-          id: inc.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-          timestamp: inc.timestamp || new Date().toISOString(),
-          read: Boolean(inc.read)
-        });
-        changed = true;
-      }
-    });
-
-    if (changed) {
-      setStored(KEYS.NOTIFICATIONS, list);
+    const prevRaw = localStorage.getItem(KEYS.NOTIFICATIONS) || '[]';
+    const currentList = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
+    const merged = dedupeNotifications([...currentList, ...incoming]);
+    const nextRaw = JSON.stringify(merged);
+    if (prevRaw === nextRaw) {
+      return false;
     }
-    return changed;
+    setStored(KEYS.NOTIFICATIONS, merged);
+    return true;
   },
 
   markNotificationRead: (id: string): void => {
-    const list = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
+    const list = dedupeNotifications(getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []));
     const target = list.find(n => n.id === id);
     const targetAcc = (target?.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
     if (target && (targetAcc === 'all' || targetAcc === 'broadcast' || targetAcc === 'district')) {
@@ -2226,10 +2279,57 @@ export const mockDb = {
       }
       return;
     }
+    if (target && target.read) return;
     const updated = list.map(n => n.id === id ? { ...n, read: true } : n);
     setStored(KEYS.NOTIFICATIONS, updated);
     syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, id, { read: true });
     safeBackendFetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'PATCH' }).catch(() => {});
+  },
+
+  markAllNotificationsRead: (ids?: string[]): void => {
+    const list = dedupeNotifications(getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []));
+    const idSet = ids && ids.length > 0 ? new Set(ids) : null;
+    const cur = mockDb.getCurrentUser();
+    const viewerKey = (cur?.email || cur?.linkedAccountNumber || cur?.id || 'viewer').trim().toLowerCase();
+
+    let broadcastUpdated = false;
+    const changedItems: ConsumerNotification[] = [];
+    const updated = list.map((n) => {
+      if (idSet && !idSet.has(n.id)) return n;
+      const nAcc = (n.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
+      if (nAcc === 'all' || nAcc === 'broadcast' || nAcc === 'district') {
+        markBroadcastNotifReadForIdentity(n.id, viewerKey);
+        broadcastUpdated = true;
+        return n;
+      }
+      if (!n.read) {
+        const next = { ...n, read: true };
+        changedItems.push(next);
+        return next;
+      }
+      return n;
+    });
+
+    if (changedItems.length > 0) {
+      setStored(KEYS.NOTIFICATIONS, updated);
+      changedItems.slice(0, 20).forEach((item) => {
+        syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, item.id, { read: true });
+      });
+      safeBackendFetch('/api/notifications/mark-all-read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ids: changedItems.map((i) => i.id),
+          accountNumber: cur?.linkedAccountNumber,
+          email: cur?.email,
+          userId: cur?.id,
+        }),
+      }).catch(() => {});
+    } else if (broadcastUpdated && typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('twd_database_updated', { detail: { key: KEYS.NOTIFICATIONS, timestamp: Date.now() } })
+      );
+    }
   },
 
   // Consumer Service Reports & Admin Reply Methods
@@ -2703,8 +2803,9 @@ export const mockDb = {
         const effectiveUid = (c.linkedUserId || matchedUser?.id || '').trim();
 
         notifications.forEach(n => {
-          const nEmail = (n.consumerEmail || '').trim().toLowerCase();
           const nAcc = (n.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+          if (nAcc === 'ALL' || nAcc === 'BROADCAST' || nAcc === 'DISTRICT') return;
+          const nEmail = (n.consumerEmail || '').trim().toLowerCase();
           const samePerson =
             (effectiveEmail && nEmail && effectiveEmail === nEmail) ||
             (nAcc === acc) ||
@@ -2719,7 +2820,7 @@ export const mockDb = {
               n.consumerEmail = effectiveEmail;
               notifsChanged = true;
             }
-            if (effectiveUid && n.userId !== effectiveUid) {
+            if (effectiveUid && !n.userId) {
               n.userId = effectiveUid;
               notifsChanged = true;
             }
@@ -2744,6 +2845,9 @@ export const mockDb = {
           });
 
           if (!issuedConfirmationNotif) {
+            const stableTs = c.registrationDate
+              ? `${c.registrationDate}T08:00:00.000Z`
+              : '2026-01-01T08:00:00.000Z';
             issuedConfirmationNotif = {
               id: `notif-issued-${acc.replace(/[^a-zA-Z0-9]/g, '')}`,
               accountNumber: acc,
@@ -2752,7 +2856,7 @@ export const mockDb = {
               consumerEmail: effectiveEmail || undefined,
               title: `Official Account Number & Meter Issued!`,
               message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${acc} and Meter Serial is #${c.meterNumber}. Smart RFID Tag: ${c.rfidTag}. Your full dashboard and telemetry are now active.`,
-              timestamp: new Date().toISOString(),
+              timestamp: stableTs,
               type: 'account_issue',
               read: false
             };
@@ -2767,6 +2871,11 @@ export const mockDb = {
           }
         }
       });
+
+      const dedupedNotifs = dedupeNotifications(notifications);
+      if (dedupedNotifs.length !== notifications.length) {
+        notifsChanged = true;
+      }
 
       // Remove any remaining unissued pending twins for consumers who already have an issued record
       const cleanedConsumers = consumers.filter((item, _idx, arr) => {
@@ -2787,7 +2896,7 @@ export const mockDb = {
 
       if (consumersChanged) setStored(KEYS.CONSUMERS, cleanedConsumers);
       if (usersChanged) setStored(KEYS.USERS, users);
-      if (notifsChanged) setStored(KEYS.NOTIFICATIONS, notifications);
+      if (notifsChanged) setStored(KEYS.NOTIFICATIONS, dedupedNotifs);
     } catch (err) {
       console.warn('[mockDb] reconcileIssuedAccounts warning:', err);
     }

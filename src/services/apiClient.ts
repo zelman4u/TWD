@@ -140,10 +140,12 @@ export async function safeBackendFetch(url: string, options?: RequestInit): Prom
   }
 }
 
+const inFlightGetRequests = new Map<string, Promise<any>>();
+
 /**
  * Executes an HTTP fetch request with timeout, retries, and exponential backoff
  */
-async function requestWithRetry<T = any>(url: string, options: RequestOptions = {}): Promise<T> {
+async function executeRequestWithRetry<T = any>(url: string, options: RequestOptions = {}): Promise<T> {
   const {
     retries = 2,
     retryDelayMs = 800,
@@ -284,11 +286,29 @@ async function requestWithRetry<T = any>(url: string, options: RequestOptions = 
 
     attempt++;
     const backoff = retryDelayMs * Math.pow(1.5, attempt - 1) + Math.random() * 200;
-    console.warn(`[API Client Retry] ${method} ${url} failed. Retrying in ${Math.round(backoff)}ms (attempt ${attempt}/${retries})...`);
+    if (!skipLogging) {
+      console.warn(`[API Client Retry] ${method} ${url} failed. Retrying in ${Math.round(backoff)}ms (attempt ${attempt}/${retries})...`);
+    }
     await new Promise(res => setTimeout(res, backoff));
   }
 
   throw lastError;
+}
+
+async function requestWithRetry<T = any>(url: string, options: RequestOptions = {}): Promise<T> {
+  const method = (options.method || 'GET').toUpperCase();
+  if (method === 'GET' && !options.signal) {
+    const existing = inFlightGetRequests.get(url);
+    if (existing) {
+      return existing as Promise<T>;
+    }
+    const promise = executeRequestWithRetry<T>(url, options).finally(() => {
+      inFlightGetRequests.delete(url);
+    });
+    inFlightGetRequests.set(url, promise);
+    return promise;
+  }
+  return executeRequestWithRetry<T>(url, options);
 }
 
 /**
@@ -398,6 +418,8 @@ export const apiClient = {
   getBillings: async (filters?: { accountNumber?: string }, options?: RequestOptions) => {
     const qs = filters?.accountNumber ? `?accountNumber=${encodeURIComponent(filters.accountNumber)}` : '';
     return apiClient.get<{ success: boolean; readings: any[] }>(`/api/billings${qs}`, {
+      retries: 0,
+      timeoutMs: 4500,
       skipLogging: true,
       ...options,
     });
@@ -405,6 +427,8 @@ export const apiClient = {
 
   reconcileBillings: async (payload: { readings?: any[]; accountNumber?: string }, options?: RequestOptions) => {
     return apiClient.post<{ success: boolean; readings: any[] }>('/api/billings/reconcile', payload, {
+      retries: 0,
+      timeoutMs: 4500,
       skipLogging: true,
       ...options,
     });
@@ -429,7 +453,7 @@ export const apiClient = {
     const queryString = params.toString() ? `?${params.toString()}` : '';
     return apiClient.get<{ success: boolean; count?: number; reports: any[]; data: any[] }>(
       `/api/reports${queryString}`,
-      { skipLogging: true, ...options }
+      { retries: 0, timeoutMs: 5000, skipLogging: true, ...options }
     );
   },
 
@@ -440,7 +464,7 @@ export const apiClient = {
     return apiClient.post<{ success: boolean; count?: number; reports: any[]; data: any[] }>(
       '/api/reports/reconcile',
       payload,
-      { skipLogging: true, ...options }
+      { retries: 0, timeoutMs: 5000, skipLogging: true, ...options }
     );
   },
 
@@ -498,7 +522,7 @@ export const apiClient = {
   getAnnouncements: async (options?: RequestOptions) => {
     return apiClient.get<{ success: boolean; announcements: any[]; data?: any[] }>(
       '/api/announcements',
-      { skipLogging: true, ...options }
+      { retries: 0, timeoutMs: 5000, skipLogging: true, ...options }
     );
   },
 
@@ -521,7 +545,7 @@ export const apiClient = {
   getTariffConfig: async (options?: RequestOptions) => {
     return apiClient.get<{ success: boolean; config: any }>(
       '/api/tariff-config',
-      { skipLogging: true, ...options }
+      { retries: 0, timeoutMs: 5000, skipLogging: true, ...options }
     );
   },
 

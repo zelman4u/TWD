@@ -457,6 +457,7 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
                 </span>
                 <input 
                   type="email"
+                  autoComplete="username"
                   required
                   placeholder="name@domain.com"
                   value={email}
@@ -477,6 +478,7 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
                 </span>
                 <input 
                   type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
                   required
                   placeholder="••••••••"
                   value={password}

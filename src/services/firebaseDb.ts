@@ -34,6 +34,7 @@ import {
   Barangay,
   ConsumerReport,
 } from '../types';
+import { dedupeNotifications } from '../utils/notificationDeduper';
 
 export enum OperationType {
   CREATE = 'create',
@@ -1146,8 +1147,12 @@ export function startRealtimeFirestoreListeners() {
         if (!snapshot.empty) {
           const cloudBrgs: Barangay[] = [];
           snapshot.forEach((d) => cloudBrgs.push(d.data() as Barangay));
-          localStorage.setItem(KEYS.BARANGAYS, JSON.stringify(cloudBrgs));
-          triggerLocalUpdateEvent(KEYS.BARANGAYS);
+          const prevRaw = localStorage.getItem(KEYS.BARANGAYS);
+          const nextJson = JSON.stringify(cloudBrgs);
+          if (prevRaw !== nextJson) {
+            localStorage.setItem(KEYS.BARANGAYS, nextJson);
+            triggerLocalUpdateEvent(KEYS.BARANGAYS);
+          }
         }
       },
       (err) => {
@@ -1156,7 +1161,7 @@ export function startRealtimeFirestoreListeners() {
     );
     realtimeUnsubscribes.push(unsubBarangays);
 
-    // 8. Live NOTIFICATIONS Listener (merges cloud + local without wiping)
+    // 8. Live NOTIFICATIONS Listener (merges & deduplicates cloud + local without loop triggers)
     const unsubNotifs = onSnapshot(
       collection(db, COLLECTIONS.NOTIFICATIONS),
       (snapshot) => {
@@ -1166,45 +1171,12 @@ export function startRealtimeFirestoreListeners() {
 
           const localRaw = localStorage.getItem(KEYS.NOTIFICATIONS);
           const localNotifs: ConsumerNotification[] = localRaw ? JSON.parse(localRaw) : [];
-          const mergedMap = new Map<string, ConsumerNotification>();
-
-          const makeKey = (n: ConsumerNotification) => {
-            if (n.id) return n.id;
-            return `${n.type}_${(n.accountNumber || '').toUpperCase()}_${(n.consumerEmail || '').toLowerCase()}_${n.title}`;
-          };
-
-          localNotifs.forEach((ln) => {
-            mergedMap.set(makeKey(ln), ln);
-          });
-
-          cloudNotifs.forEach((cn) => {
-            const k = makeKey(cn);
-            const prev = mergedMap.get(k);
-            if (!prev) {
-              // Also check semantic duplicate for account_issue
-              const dupEntry = Array.from(mergedMap.entries()).find(([, ex]) => {
-                if (cn.type === 'account_issue' && ex.type === 'account_issue') {
-                  const sameAcc =
-                    isRealIssuedAccountNumber(cn.accountNumber) &&
-                    (ex.accountNumber || '').toUpperCase() === cn.accountNumber.toUpperCase();
-                  const sameTitle = (ex.title || '').toLowerCase() === (cn.title || '').toLowerCase();
-                  return sameAcc && sameTitle;
-                }
-                return false;
-              });
-              if (dupEntry) {
-                mergedMap.set(dupEntry[0], { ...dupEntry[1], ...cn, read: Boolean(dupEntry[1].read || cn.read) });
-              } else {
-                mergedMap.set(k, cn);
-              }
-            } else {
-              mergedMap.set(k, { ...prev, ...cn, read: Boolean(prev.read || cn.read) });
-            }
-          });
-
-          const finalNotifs = Array.from(mergedMap.values());
-          localStorage.setItem(KEYS.NOTIFICATIONS, JSON.stringify(finalNotifs));
-          triggerLocalUpdateEvent(KEYS.NOTIFICATIONS);
+          const finalNotifs = dedupeNotifications([...localNotifs, ...cloudNotifs]);
+          const nextJson = JSON.stringify(finalNotifs);
+          if (localRaw !== nextJson) {
+            localStorage.setItem(KEYS.NOTIFICATIONS, nextJson);
+            triggerLocalUpdateEvent(KEYS.NOTIFICATIONS);
+          }
         }
       },
       (err) => {

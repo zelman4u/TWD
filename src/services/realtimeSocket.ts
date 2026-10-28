@@ -189,14 +189,12 @@ function connect() {
   }
 
   updateState(reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
-  console.info(`[WebSocket Client] Connecting to ${url}... (attempt #${reconnectAttempts + 1})`);
 
   try {
     const ws = new WebSocket(url);
     activeSocket = ws;
 
     ws.onopen = () => {
-      console.info('%c[WebSocket Client] Connection established successfully with Tagoloan District Broker.', 'color: #059669; font-weight: bold;');
       reconnectAttempts = 0;
       lastHeartbeatPongTime = Date.now();
       updateState('connected');
@@ -216,8 +214,8 @@ function connect() {
 
         // Notify subscribers
         messageListeners.forEach(cb => {
-          try { cb(data); } catch (err) {
-            console.warn('[WebSocket Client] Subscriber threw error:', err);
+          try { cb(data); } catch {
+            // Ignore subscriber errors
           }
         });
       } catch {
@@ -229,14 +227,9 @@ function connect() {
       // Quiet handler during reconnection / sleep cycles to avoid log noise
     };
 
-    ws.onclose = (event: CloseEvent) => {
+    ws.onclose = () => {
       stopHeartbeat();
       activeSocket = null;
-
-      const readableReason = getCloseReason(event.code);
-      console.info(
-        `[WebSocket Client] Closed (Code ${event.code}: ${readableReason}${event.reason ? ` - ${event.reason}` : ''}).`
-      );
 
       if (!isManuallyClosed) {
         updateState('reconnecting');
@@ -245,23 +238,21 @@ function connect() {
         updateState('disconnected');
       }
     };
-  } catch (err: any) {
-    console.warn('[WebSocket Client] Construction error:', err?.message || err);
+  } catch {
     scheduleReconnect();
   }
 }
 
 /**
- * Schedules a reconnection attempt with exponential backoff and jitter
+ * Schedules a reconnection attempt with exponential backoff and jitter (capped at 60s on proxied/serverless hosts)
  */
 function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (isManuallyClosed) return;
 
   reconnectAttempts++;
-  // Exponential backoff capped at 15s with 500ms random jitter
-  const backoff = Math.min(1000 * Math.pow(1.5, Math.min(reconnectAttempts, 8)) + Math.random() * 500, 15000);
-  console.info(`[WebSocket Client] Scheduling reconnect in ${(backoff / 1000).toFixed(1)}s (attempt #${reconnectAttempts})...`);
+  const maxDelay = reconnectAttempts > 4 ? 60000 : 15000;
+  const backoff = Math.min(1500 * Math.pow(1.8, Math.min(reconnectAttempts, 8)) + Math.random() * 500, maxDelay);
 
   reconnectTimer = setTimeout(() => {
     connect();
@@ -291,7 +282,6 @@ function startHeartbeat(ws: WebSocket) {
   heartbeatWatchdogTimer = setInterval(() => {
     const elapsed = Date.now() - lastHeartbeatPongTime;
     if (elapsed > 45000) {
-      console.warn(`[WebSocket Client] No heartbeat received for ${(elapsed / 1000).toFixed(0)}s (half-open socket detected). Reconnecting...`);
       try {
         ws.close(4000, 'Heartbeat timeout');
       } catch {}
@@ -304,24 +294,6 @@ function stopHeartbeat() {
   if (heartbeatWatchdogTimer) clearInterval(heartbeatWatchdogTimer);
   heartbeatIntervalTimer = null;
   heartbeatWatchdogTimer = null;
-}
-
-function getCloseReason(code: number): string {
-  switch (code) {
-    case 1000: return 'Normal Closure';
-    case 1001: return 'Going Away';
-    case 1002: return 'Protocol Error';
-    case 1003: return 'Unsupported Data';
-    case 1005: return 'No Status Received';
-    case 1006: return 'Abnormal Closure (Network Drop / Proxy Timeout)';
-    case 1007: return 'Invalid Payload Data';
-    case 1008: return 'Policy Violation';
-    case 1009: return 'Message Too Big';
-    case 1011: return 'Internal Server Error';
-    case 1012: return 'Service Restart';
-    case 1013: return 'Try Again Later';
-    default: return 'Connection Closed';
-  }
 }
 
 // Online/Offline & Visibility Handlers for instant recovery (only when WebSocket endpoint is enabled)

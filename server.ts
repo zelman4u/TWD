@@ -2502,17 +2502,21 @@ app.post("/api/consumers/resolve-account", (req, res) => {
     const effectiveEmail = (resolvedConsumer?.email || matchedUser?.email || cleanEmail).trim().toLowerCase();
     const effectiveUid = (resolvedConsumer?.linkedUserId || matchedUser?.id || cleanUid).trim().toLowerCase();
 
-    const consumerNotifs = inMemoryNotifications.filter(n => {
-      const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
-      const nHasAcc = isIssuedAccountNumberServer(nAcc);
-      const nEmail = (n.consumerEmail || "").trim().toLowerCase();
-      const nUid = (n.userId || "").trim().toLowerCase();
+    const consumerNotifs = dedupeServerNotifications(
+      inMemoryNotifications.filter(n => {
+        const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
+        const nHasAcc = isIssuedAccountNumberServer(nAcc);
+        const nEmail = (n.consumerEmail || "").trim().toLowerCase();
+        const nUid = (n.userId || "").trim().toLowerCase();
 
-      if (effectiveEmail && nEmail) return effectiveEmail === nEmail;
-      if (effectiveHasAcc && nHasAcc) return effectiveAcc === nAcc;
-      if (effectiveUid && nUid && effectiveUid === nUid) return true;
-      return false;
-    });
+        if (effectiveHasAcc && nHasAcc && effectiveAcc === nAcc) return true;
+        if (effectiveEmail && nEmail && effectiveEmail === nEmail) return true;
+        if (effectiveHasAcc && nHasAcc && effectiveAcc !== nAcc) return false;
+        if (effectiveEmail && nEmail && effectiveEmail !== nEmail) return false;
+        if (effectiveUid && nUid && effectiveUid === nUid) return true;
+        return false;
+      })
+    );
 
     const refreshedCandidates = syncedPortalUsers.filter(u =>
       (effectiveEmail && u.email && u.email.toLowerCase() === effectiveEmail) ||
@@ -3686,7 +3690,7 @@ function loadPortalSyncStore(): void {
     }
 
     if (Array.isArray(parsed?.notifications)) {
-      inMemoryNotifications = parsed.notifications;
+      inMemoryNotifications = dedupeServerNotifications(parsed.notifications);
     }
 
     if (Array.isArray(parsed?.reports) && parsed.reports.length > 0) {
@@ -3742,51 +3746,140 @@ function loadPortalSyncStore(): void {
   }
 }
 
+function getServerNotifSemanticKey(n: Partial<ServerConsumerNotification> & Record<string, any>): string {
+  const accRaw = String(n.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+  const email = String(n.consumerEmail || "").trim().toLowerCase();
+  const uid = String(n.userId || n.consumerId || "").trim().toLowerCase();
+
+  let target = "ANON";
+  if (accRaw === "ALL" || accRaw === "BROADCAST" || accRaw === "DISTRICT") {
+    target = "BROADCAST";
+  } else if (isIssuedAccountNumberServer(accRaw)) {
+    target = `ACC:${accRaw}`;
+  } else if (email) {
+    target = `EMAIL:${email}`;
+  } else if (uid) {
+    target = `UID:${uid}`;
+  }
+
+  const type = String(n.type || "announcement").trim().toLowerCase();
+  const normTitle = String(n.title || "").trim().replace(/\s+/g, " ").toLowerCase();
+  const normMsg = String(n.message || "").trim().replace(/\s+/g, " ").toLowerCase();
+
+  if (type === "account_issue") {
+    if (normTitle.includes("registration application submitted")) {
+      return `account_issue_reg::${email ? `EMAIL:${email}` : target}`;
+    }
+    if (normTitle.includes("updated to")) {
+      return `account_issue_update::${target}::${normTitle}`;
+    }
+    return `account_issue_confirmed::${target}`;
+  }
+  if (type === "disconnection") {
+    return `disconnection::${target}::${String(n.billingPeriod || n.readingId || normTitle).trim().toLowerCase()}`;
+  }
+  if (type === "billing" || type === "balance") {
+    const isOverdue = normTitle.includes("overdue") || normTitle.includes("urgent");
+    return `${type}::${isOverdue ? "overdue" : "statement"}::${target}::${String(n.readingId || n.billingPeriod || normTitle).trim().toLowerCase()}`;
+  }
+  if (type === "payment" || type === "receipt_upload") {
+    return `${type}::${target}::${String(n.readingId || n.billingPeriod || "").trim().toLowerCase()}::${normTitle}::${normMsg.slice(0, 80)}`;
+  }
+  if (type === "report") {
+    return `report::${target}::${String(n.reportId || n.ticketNumber || "").trim().toLowerCase()}::${normTitle}::${normMsg.slice(0, 140)}`;
+  }
+  return `${type}::${target}::${normTitle}::${normMsg.slice(0, 140)}`;
+}
+
+function dedupeServerNotifications(list: ServerConsumerNotification[], maxTotal = 250): ServerConsumerNotification[] {
+  if (!Array.isArray(list) || list.length === 0) return [];
+  const byId = new Map<string, ServerConsumerNotification>();
+  const bySem = new Map<string, string>();
+
+  for (const raw of list) {
+    if (!raw || !raw.title) continue;
+    const cleanAcc = String(raw.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const item: ServerConsumerNotification = {
+      ...raw,
+      id: String(raw.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`),
+      accountNumber: cleanAcc || raw.accountNumber || "PENDING",
+      ...(raw.consumerEmail ? { consumerEmail: String(raw.consumerEmail).trim().toLowerCase() } : {}),
+      timestamp: raw.timestamp || "2026-01-01T08:00:00.000Z",
+      read: Boolean(raw.read),
+    };
+    const semKey = getServerNotifSemanticKey(item);
+    const existingId = byId.has(item.id) ? item.id : bySem.get(semKey);
+    if (existingId && byId.has(existingId)) {
+      const prev = byId.get(existingId)!;
+      const merged: ServerConsumerNotification = {
+        ...prev,
+        ...item,
+        id: prev.id,
+        accountNumber: isIssuedAccountNumberServer(item.accountNumber)
+          ? item.accountNumber
+          : isIssuedAccountNumberServer(prev.accountNumber)
+            ? prev.accountNumber
+            : item.accountNumber || prev.accountNumber,
+        consumerEmail: item.consumerEmail || prev.consumerEmail,
+        userId: item.userId || prev.userId,
+        timestamp: item.type === "account_issue" && prev.timestamp ? prev.timestamp : item.timestamp || prev.timestamp,
+        read: Boolean(prev.read || item.read),
+      };
+      byId.set(prev.id, merged);
+      bySem.set(semKey, prev.id);
+    } else {
+      byId.set(item.id, item);
+      bySem.set(semKey, item.id);
+    }
+  }
+
+  return Array.from(byId.values())
+    .sort((a, b) => (new Date(b.timestamp || 0).getTime() || 0) - (new Date(a.timestamp || 0).getTime() || 0))
+    .slice(0, maxTotal);
+}
+
 function pushServerNotification(
   input: Omit<ServerConsumerNotification, "id" | "timestamp" | "read"> & { id?: string; timestamp?: string; read?: boolean },
   shouldBroadcastAndPersist = true
 ): ServerConsumerNotification {
   const nowMs = Date.now();
-  const cleanAcc = (input.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
+  const cleanAcc = (input.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
   const cleanEmail = (input.consumerEmail || "").trim().toLowerCase();
-  const cleanTitle = (input.title || "").trim().toLowerCase();
+  const targetSemKey = getServerNotifSemanticKey({
+    ...input,
+    accountNumber: cleanAcc || input.accountNumber,
+    consumerEmail: cleanEmail || undefined,
+  });
 
-  // Deduplicate identical notifications (strictly permanent dedupe for same account_issue confirmation, 8s window for others)
+  // Deduplicate semantically identical notifications permanently
   const existing = inMemoryNotifications.find(n => {
     if (input.id && n.id === input.id) return true;
-    const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
-    const nEmail = (n.consumerEmail || "").trim().toLowerCase();
-    const nTitle = (n.title || "").trim().toLowerCase();
-    const sameTarget = (isIssuedAccountNumberServer(cleanAcc) && nAcc === cleanAcc) || (cleanEmail && nEmail === cleanEmail);
-    if (input.type === "account_issue" && n.type === "account_issue" && nTitle === cleanTitle && sameTarget) {
-      return true;
-    }
-    const ageMs = Math.abs(nowMs - new Date(n.timestamp).getTime());
-    if (ageMs > 8000) return false;
-    return n.type === input.type && nTitle === cleanTitle && sameTarget;
+    return getServerNotifSemanticKey(n) === targetSemKey;
   });
 
   if (existing) {
     if (isIssuedAccountNumberServer(cleanAcc) && !isIssuedAccountNumberServer(existing.accountNumber)) {
-      existing.accountNumber = input.accountNumber;
+      existing.accountNumber = cleanAcc;
     }
     if (cleanEmail && !existing.consumerEmail) {
       existing.consumerEmail = cleanEmail;
+    }
+    if (input.read) {
+      existing.read = true;
     }
     return existing;
   }
 
   const created: ServerConsumerNotification = {
     ...input,
+    accountNumber: cleanAcc || input.accountNumber || "PENDING",
+    ...(cleanEmail ? { consumerEmail: cleanEmail } : {}),
     id: input.id || `notif-${nowMs}-${Math.floor(Math.random() * 1000)}`,
     timestamp: input.timestamp || new Date().toISOString(),
     read: input.read ?? false
   };
 
-  inMemoryNotifications.unshift(created);
-  if (inMemoryNotifications.length > 500) {
-    inMemoryNotifications.pop();
-  }
+  inMemoryNotifications = dedupeServerNotifications([created, ...inMemoryNotifications]);
 
   if (shouldBroadcastAndPersist) {
     savePortalSyncStore();
@@ -3808,6 +3901,8 @@ app.get("/api/notifications", (req, res) => {
   try {
     const { accountNumber, userId, email, consumerId, isAdmin } = req.query;
 
+    inMemoryNotifications = dedupeServerNotifications(inMemoryNotifications);
+
     if (isAdmin === "true" && !accountNumber && !userId && !email && !consumerId) {
       return res.json({
         success: true,
@@ -3828,28 +3923,26 @@ app.get("/api/notifications", (req, res) => {
       return res.json({ success: true, count: 0, notifications: [] });
     }
 
-    const filtered = inMemoryNotifications.filter(n => {
-      const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
-      if (nAcc === "all" || nAcc === "broadcast" || nAcc === "district") {
-        return true;
-      }
-      const nHasRealAcc = !isPlaceholder(n.accountNumber);
-      const nUid = (n.userId || "").trim().toLowerCase();
-      const nEmail = (n.consumerEmail || "").trim().toLowerCase();
-      const nCid = (n.consumerId || "").trim().toLowerCase();
+    const filtered = dedupeServerNotifications(
+      inMemoryNotifications.filter(n => {
+        const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
+        if (nAcc === "all" || nAcc === "broadcast" || nAcc === "district") {
+          return true;
+        }
+        const nHasRealAcc = !isPlaceholder(n.accountNumber);
+        const nUid = (n.userId || "").trim().toLowerCase();
+        const nEmail = (n.consumerEmail || "").trim().toLowerCase();
+        const nCid = (n.consumerId || "").trim().toLowerCase();
 
-      // Email is the strongest personal identifier: match if equal, exclude if explicitly different
-      if (cleanEmail && nEmail) {
-        return cleanEmail === nEmail;
-      }
-      // Real issued Account Number match: match if equal, exclude if explicitly different real account
-      if (hasRealAcc && nHasRealAcc) {
-        return cleanAcc === nAcc;
-      }
-      if (cleanUid && nUid && cleanUid === nUid) return true;
-      if (cleanCid && nCid && cleanCid === nCid) return true;
-      return false;
-    });
+        if (hasRealAcc && nHasRealAcc && cleanAcc === nAcc) return true;
+        if (cleanEmail && nEmail && cleanEmail === nEmail) return true;
+        if (hasRealAcc && nHasRealAcc && cleanAcc !== nAcc) return false;
+        if (cleanEmail && nEmail && cleanEmail !== nEmail) return false;
+        if (cleanUid && nUid && cleanUid === nUid) return true;
+        if (cleanCid && nCid && cleanCid === nCid) return true;
+        return false;
+      })
+    );
 
     res.json({
       success: true,
@@ -3871,6 +3964,38 @@ app.post("/api/notifications", (req, res) => {
     res.status(201).json({ success: true, notification: saved });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to create notification." });
+  }
+});
+
+app.post("/api/notifications/mark-all-read", (req, res) => {
+  try {
+    const { ids, accountNumber, email, userId } = req.body || {};
+    const idSet = Array.isArray(ids) && ids.length > 0 ? new Set(ids.map(String)) : null;
+    const cleanAcc = String(accountNumber || "").replace(/^#/, "").trim().toLowerCase();
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    const cleanUid = String(userId || "").trim().toLowerCase();
+
+    let updatedCount = 0;
+    inMemoryNotifications.forEach(n => {
+      const nAcc = String(n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
+      if (nAcc === "all" || nAcc === "broadcast" || nAcc === "district") return;
+      const matchesId = idSet ? idSet.has(n.id) : false;
+      const matchesIdentity =
+        !idSet &&
+        ((cleanAcc && isIssuedAccountNumberServer(cleanAcc) && nAcc === cleanAcc) ||
+          (cleanEmail && String(n.consumerEmail || "").trim().toLowerCase() === cleanEmail) ||
+          (cleanUid && String(n.userId || "").trim().toLowerCase() === cleanUid));
+      if ((matchesId || matchesIdentity) && !n.read) {
+        n.read = true;
+        updatedCount++;
+      }
+    });
+    if (updatedCount > 0) {
+      savePortalSyncStore();
+    }
+    res.json({ success: true, updatedCount });
+  } catch {
+    res.json({ success: true, updatedCount: 0 });
   }
 });
 

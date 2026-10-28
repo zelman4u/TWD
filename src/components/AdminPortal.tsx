@@ -8035,6 +8035,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Email Address</label>
                       <input
                         type="email"
+                        autoComplete="username"
                         value={adminProfile.email}
                         onChange={(e) => setAdminProfile({ ...adminProfile, email: e.target.value })}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-medium"
@@ -8047,6 +8048,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     <div className="grid grid-cols-3 gap-3">
                       <input
                         type="password"
+                        autoComplete="current-password"
                         placeholder="Current Password"
                         value={adminProfile.currentPassword}
                         onChange={(e) => setAdminProfile({ ...adminProfile, currentPassword: e.target.value })}
@@ -8054,6 +8056,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       />
                       <input
                         type="password"
+                        autoComplete="new-password"
                         placeholder="New Password"
                         value={adminProfile.newPassword}
                         onChange={(e) => setAdminProfile({ ...adminProfile, newPassword: e.target.value })}
@@ -8061,6 +8064,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       />
                       <input
                         type="password"
+                        autoComplete="new-password"
                         placeholder="Confirm Password"
                         value={adminProfile.confirmPassword}
                         onChange={(e) => setAdminProfile({ ...adminProfile, confirmPassword: e.target.value })}

@@ -416,6 +416,27 @@ function recordFsErr(err: unknown, mode: "read" | "write"): void {
   }
 }
 
+function withFsTimeout<T>(promise: Promise<T>, timeoutMs = 2200): Promise<T> {
+  return new Promise<T>((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => {
+      const timeoutErr = Object.assign(new Error("Firestore serverless quota/network timeout"), {
+        code: "resource-exhausted",
+      });
+      rejectPromise(timeoutErr);
+    }, timeoutMs);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolvePromise(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        rejectPromise(err);
+      }
+    );
+  });
+}
+
 function dedupeServerReplies(replies: ServerReportReply[]): ServerReportReply[] {
   if (!Array.isArray(replies)) return [];
   const sorted = [...replies]
@@ -1605,6 +1626,19 @@ app.post("/api/consumers", async (req, res) => {
       isRegistered: isRegistered !== undefined ? isRegistered : true,
     };
 
+    const existingConsumer = syncedConsumers.find(
+      (c) =>
+        (cleanAcc && c.accountNumber && c.accountNumber.toUpperCase() === cleanAcc) ||
+        (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) ||
+        (linkedUserId && c.linkedUserId === linkedUserId)
+    );
+    const wasAlreadyIssuedSameAcc = Boolean(
+      existingConsumer &&
+        isRealAccountNumber(existingConsumer.accountNumber) &&
+        existingConsumer.status !== "pending_approval" &&
+        existingConsumer.accountNumber.toUpperCase() === cleanAcc
+    );
+
     syncedConsumers = mergeConsumersList([record, ...syncedConsumers]);
 
     let userPatch: Partial<PortalSyncUser> | undefined;
@@ -1619,18 +1653,20 @@ app.post("/api/consumers", async (req, res) => {
         status: "active",
         linkedAccountNumber: cleanAcc,
       };
-      issuedNotif = {
-        id: `notif-issued-${cleanAcc.replace(/[^a-zA-Z0-9]/g, "")}`,
-        accountNumber: cleanAcc,
-        consumerId: record.id,
-        userId: linkedUserId,
-        consumerEmail: cleanEmail || undefined,
-        title: "Official Account Number & Meter Issued!",
-        message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${cleanAcc} and Meter Serial is #${resolvedMeter}. Smart RFID Tag: ${resolvedRfid}. Your full dashboard and telemetry are now active.`,
-        timestamp: new Date().toISOString(),
-        type: "account_issue",
-        read: false,
-      };
+      if (!wasAlreadyIssuedSameAcc) {
+        issuedNotif = {
+          id: `notif-issued-${cleanAcc.replace(/[^a-zA-Z0-9]/g, "")}`,
+          accountNumber: cleanAcc,
+          consumerId: record.id,
+          userId: linkedUserId,
+          consumerEmail: cleanEmail || undefined,
+          title: "Official Account Number & Meter Issued!",
+          message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${cleanAcc} and Meter Serial is #${resolvedMeter}. Smart RFID Tag: ${resolvedRfid}. Your full dashboard and telemetry are now active.`,
+          timestamp: new Date().toISOString(),
+          type: "account_issue",
+          read: false,
+        };
+      }
     }
 
     await saveConsumerToFirestore(record, userPatch, issuedNotif);
@@ -1693,6 +1729,13 @@ app.all(["/api/consumers/:identifier/issue-id", "/api/consumers/:identifier"], a
       }
     }
 
+    const wasAlreadyIssuedSameAcc = Boolean(
+      existing &&
+        isRealAccountNumber(existing.accountNumber) &&
+        existing.status !== "pending_approval" &&
+        existing.accountNumber.toUpperCase() === cleanAcc
+    );
+
     let userPatch: Partial<PortalSyncUser> | undefined;
     let issuedNotif: PortalNotification | undefined;
     if (cleanAcc && updated.status !== "pending_approval") {
@@ -1704,18 +1747,20 @@ app.all(["/api/consumers/:identifier/issue-id", "/api/consumers/:identifier"], a
         status: "active",
         linkedAccountNumber: cleanAcc,
       };
-      issuedNotif = {
-        id: `notif-issued-${cleanAcc.replace(/[^a-zA-Z0-9]/g, "")}`,
-        accountNumber: cleanAcc,
-        consumerId: updated.id,
-        userId: updated.linkedUserId,
-        consumerEmail: updated.email?.trim().toLowerCase(),
-        title: "Official Account Number & Meter Issued!",
-        message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${cleanAcc} and Meter Serial is #${updated.meterNumber}. Smart RFID Tag: ${updated.rfidTag}. Your full dashboard and telemetry are now active.`,
-        timestamp: new Date().toISOString(),
-        type: "account_issue",
-        read: false,
-      };
+      if (!wasAlreadyIssuedSameAcc) {
+        issuedNotif = {
+          id: `notif-issued-${cleanAcc.replace(/[^a-zA-Z0-9]/g, "")}`,
+          accountNumber: cleanAcc,
+          consumerId: updated.id,
+          userId: updated.linkedUserId,
+          consumerEmail: updated.email?.trim().toLowerCase(),
+          title: "Official Account Number & Meter Issued!",
+          message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${cleanAcc} and Meter Serial is #${updated.meterNumber}. Smart RFID Tag: ${updated.rfidTag}. Your full dashboard and telemetry are now active.`,
+          timestamp: new Date().toISOString(),
+          type: "account_issue",
+          read: false,
+        };
+      }
     }
 
     syncedConsumers = mergeConsumersList([updated, ...syncedConsumers]);
@@ -1756,6 +1801,98 @@ app.delete("/api/consumers/:identifier", async (req, res) => {
   }
 });
 
+function getPortalNotifSemanticKey(n: Partial<PortalNotification> & Record<string, any>): string {
+  const accRaw = String(n.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+  const email = String(n.consumerEmail || "").trim().toLowerCase();
+  const uid = String(n.userId || n.consumerId || "").trim().toLowerCase();
+
+  let target = "ANON";
+  if (accRaw === "ALL" || accRaw === "BROADCAST" || accRaw === "DISTRICT") {
+    target = "BROADCAST";
+  } else if (isRealAccountNumber(accRaw)) {
+    target = `ACC:${accRaw}`;
+  } else if (email) {
+    target = `EMAIL:${email}`;
+  } else if (uid) {
+    target = `UID:${uid}`;
+  }
+
+  const type = String(n.type || "announcement").trim().toLowerCase();
+  const normTitle = String(n.title || "").trim().replace(/\s+/g, " ").toLowerCase();
+  const normMsg = String(n.message || "").trim().replace(/\s+/g, " ").toLowerCase();
+
+  if (type === "account_issue") {
+    if (normTitle.includes("registration application submitted")) {
+      return `account_issue_reg::${email ? `EMAIL:${email}` : target}`;
+    }
+    if (normTitle.includes("updated to")) {
+      return `account_issue_update::${target}::${normTitle}`;
+    }
+    return `account_issue_confirmed::${target}`;
+  }
+  if (type === "disconnection") {
+    return `disconnection::${target}::${String(n.billingPeriod || n.readingId || normTitle).trim().toLowerCase()}`;
+  }
+  if (type === "billing" || type === "balance") {
+    const isOverdue = normTitle.includes("overdue") || normTitle.includes("urgent");
+    return `${type}::${isOverdue ? "overdue" : "statement"}::${target}::${String(n.readingId || n.billingPeriod || normTitle).trim().toLowerCase()}`;
+  }
+  if (type === "payment" || type === "receipt_upload") {
+    return `${type}::${target}::${String(n.readingId || n.billingPeriod || "").trim().toLowerCase()}::${normTitle}::${normMsg.slice(0, 80)}`;
+  }
+  if (type === "report") {
+    return `report::${target}::${String(n.reportId || n.ticketNumber || "").trim().toLowerCase()}::${normTitle}::${normMsg.slice(0, 140)}`;
+  }
+  return `${type}::${target}::${normTitle}::${normMsg.slice(0, 140)}`;
+}
+
+function dedupePortalNotifications(list: PortalNotification[], maxTotal = 120): PortalNotification[] {
+  if (!Array.isArray(list) || list.length === 0) return [];
+  const byId = new Map<string, PortalNotification>();
+  const bySem = new Map<string, string>();
+
+  for (const raw of list) {
+    if (!raw || !raw.title) continue;
+    const cleanAcc = String(raw.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const item: PortalNotification = {
+      ...raw,
+      id: String(raw.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`),
+      accountNumber: cleanAcc || raw.accountNumber || "PENDING",
+      ...(raw.consumerEmail ? { consumerEmail: String(raw.consumerEmail).trim().toLowerCase() } : {}),
+      timestamp: raw.timestamp || "2026-01-01T08:00:00.000Z",
+      read: Boolean(raw.read),
+    };
+    const semKey = getPortalNotifSemanticKey(item);
+    const existingId = byId.has(item.id) ? item.id : bySem.get(semKey);
+    if (existingId && byId.has(existingId)) {
+      const prev = byId.get(existingId)!;
+      const merged: PortalNotification = {
+        ...prev,
+        ...item,
+        id: prev.id,
+        accountNumber: isRealAccountNumber(item.accountNumber)
+          ? item.accountNumber
+          : isRealAccountNumber(prev.accountNumber)
+            ? prev.accountNumber
+            : item.accountNumber || prev.accountNumber,
+        consumerEmail: item.consumerEmail || prev.consumerEmail,
+        userId: item.userId || prev.userId,
+        timestamp: item.type === "account_issue" && prev.timestamp ? prev.timestamp : item.timestamp || prev.timestamp,
+        read: Boolean(prev.read || item.read),
+      };
+      byId.set(prev.id, merged);
+      bySem.set(semKey, prev.id);
+    } else {
+      byId.set(item.id, item);
+      bySem.set(semKey, item.id);
+    }
+  }
+
+  return Array.from(byId.values())
+    .sort((a, b) => (new Date(b.timestamp || 0).getTime() || 0) - (new Date(a.timestamp || 0).getTime() || 0))
+    .slice(0, maxTotal);
+}
+
 // ==========================================
 // 2. NOTIFICATIONS ENDPOINTS (CROSS-DEVICE)
 // ==========================================
@@ -1766,7 +1903,8 @@ app.get("/api/notifications", async (req, res) => {
     const rawEmail = String(req.query.email || "").trim();
     const email = rawEmail.toLowerCase();
 
-    const notifMap = new Map<string, PortalNotification>();
+    syncedNotifications = dedupePortalNotifications(syncedNotifications, 250);
+    const collected: PortalNotification[] = [];
 
     // Include warm-instance notifications first so notifications remain instant even when Firestore daily write quota is exhausted
     for (const n of syncedNotifications) {
@@ -1779,14 +1917,15 @@ app.get("/api/notifications", async (req, res) => {
       const matchEmail = email && nEmail === email;
       const matchUid = userId && nUid === userId;
       if (isBroadcast || matchAcc || matchEmail || matchUid) {
-        notifMap.set(n.id, n);
+        collected.push(n);
       }
     }
 
     const collect = async (field: string, val: string) => {
       if (!canReadFs() || !val || val.toUpperCase().startsWith("PENDING")) return;
-      const snap = await getDocs(
-        query(collection(fsDb, FS_COLLECTIONS.NOTIFICATIONS), where(field, "==", val), limit(40))
+      const snap = await withFsTimeout(
+        getDocs(query(collection(fsDb, FS_COLLECTIONS.NOTIFICATIONS), where(field, "==", val), limit(40))),
+        3500
       ).catch((err) => {
         recordFsErr(err, "read");
         return null;
@@ -1795,9 +1934,7 @@ app.get("/api/notifications", async (req, res) => {
         snap.forEach((d) => {
           const n = d.data() as PortalNotification;
           if (n && n.title) {
-            const key = n.id || d.id;
-            const prev = notifMap.get(key);
-            notifMap.set(key, prev ? { ...n, ...prev, read: Boolean(prev.read || n.read) } : { ...n, id: key });
+            collected.push({ ...n, id: n.id || d.id });
           }
         });
       }
@@ -1813,9 +1950,7 @@ app.get("/api/notifications", async (req, res) => {
       ]);
     }
 
-    const list = Array.from(notifMap.values()).sort(
-      (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
-    );
+    const list = dedupePortalNotifications(collected, 80);
 
     res.json({
       success: true,
@@ -1839,12 +1974,19 @@ app.post("/api/notifications", async (req, res) => {
       timestamp: body.timestamp || new Date().toISOString(),
       read: Boolean(body.read),
     };
-    const existingIdx = syncedNotifications.findIndex((n) => n.id === notif.id);
-    if (existingIdx >= 0) {
-      syncedNotifications[existingIdx] = { ...syncedNotifications[existingIdx], ...notif };
-    } else {
-      syncedNotifications.unshift(notif);
+    const targetSemKey = getPortalNotifSemanticKey(notif);
+    const existing = syncedNotifications.find(
+      (n) => n.id === notif.id || getPortalNotifSemanticKey(n) === targetSemKey
+    );
+    if (existing) {
+      if (notif.read) existing.read = true;
+      if (isRealAccountNumber(notif.accountNumber) && !isRealAccountNumber(existing.accountNumber)) {
+        existing.accountNumber = notif.accountNumber;
+      }
+      return res.status(200).json({ success: true, notification: existing });
     }
+
+    syncedNotifications = dedupePortalNotifications([notif, ...syncedNotifications], 250);
     if (canWriteFs()) {
       await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(notif.id)), sanitizePayload(notif), {
         merge: true,
@@ -1853,6 +1995,47 @@ app.post("/api/notifications", async (req, res) => {
     res.status(201).json({ success: true, notification: notif });
   } catch {
     res.status(200).json({ success: false, message: "Failed to save notification." });
+  }
+});
+
+app.post("/api/notifications/mark-all-read", async (req, res) => {
+  try {
+    const { ids, accountNumber, email, userId } = req.body || {};
+    const idSet = Array.isArray(ids) && ids.length > 0 ? new Set(ids.map(String)) : null;
+    const cleanAcc = String(accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    const cleanUid = String(userId || "").trim();
+
+    const updatedIds: string[] = [];
+    syncedNotifications.forEach((n) => {
+      const nAcc = String(n.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+      if (nAcc === "ALL" || nAcc === "BROADCAST" || nAcc === "DISTRICT") return;
+      const matchesId = idSet ? idSet.has(n.id) : false;
+      const matchesIdentity =
+        !idSet &&
+        ((cleanAcc && isRealAccountNumber(cleanAcc) && nAcc === cleanAcc) ||
+          (cleanEmail && String(n.consumerEmail || "").trim().toLowerCase() === cleanEmail) ||
+          (cleanUid && String(n.userId || "").trim() === cleanUid));
+      if ((matchesId || matchesIdentity) && !n.read) {
+        n.read = true;
+        updatedIds.push(n.id);
+      }
+    });
+
+    if (canWriteFs()) {
+      const targetDocs = (idSet ? Array.from(idSet) : updatedIds).slice(0, 20);
+      await Promise.all(
+        targetDocs.map((docId) =>
+          setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(docId)), { read: true }, { merge: true }).catch(
+            (err) => recordFsErr(err, "write")
+          )
+        )
+      );
+    }
+
+    res.json({ success: true, updatedCount: updatedIds.length });
+  } catch {
+    res.json({ success: true, updatedCount: 0 });
   }
 });
 
@@ -2689,7 +2872,10 @@ app.get("/api/billings", async (req, res) => {
     const accQuery = String(req.query.accountNumber || "").trim().toUpperCase();
     if (canReadFs()) {
       try {
-        const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.READINGS), limit(250)));
+        const fsQuery = accQuery
+          ? query(collection(fsDb, FS_COLLECTIONS.READINGS), where("accountNumber", "==", accQuery), limit(30))
+          : query(collection(fsDb, FS_COLLECTIONS.READINGS), limit(120));
+        const snap = await withFsTimeout(getDocs(fsQuery), 2200);
         snap.forEach((d) => {
           const r = d.data() as MobileReadingSubmission;
           const id = (r && r.id) || d.id;
@@ -2754,9 +2940,10 @@ app.post("/api/billings/reconcile", async (req, res) => {
       }
       if (canWriteFs()) {
         const target = syncedReadings.find((x) => x.id === r.id) || r;
-        await setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(r.id)), target, { merge: true }).catch((err) =>
-          recordFsErr(err, "write")
-        );
+        await withFsTimeout(
+          setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(r.id)), sanitizePayload(target), { merge: true }),
+          2200
+        ).catch((err) => recordFsErr(err, "write"));
       }
     }
     const accQuery = String(req.body?.accountNumber || "").trim().toUpperCase();

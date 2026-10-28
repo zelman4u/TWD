@@ -234,11 +234,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const notifsRef = useRef<any[]>([]);
   const announcementsRef = useRef<any[]>([]);
   const lastMetaSyncRef = useRef<number>(0);
+  const lastBillingsSyncRef = useRef<number>(0);
+  const lastReportsSyncRef = useRef<number>(0);
+  const lastAccountResolveRef = useRef<number>(0);
   const syncTimeoutRef = useRef<any>(null);
   const debounceDbUpdateRef = useRef<any>(null);
   const alertedOverdueRef = useRef<Set<string>>(new Set());
   const wasAccountPendingRef = useRef<boolean | null>(null);
   const lastAnnouncedAccountRef = useRef<string>('');
+  const confirmedIssuedAccRef = useRef<string>('');
   const reconciledIssuedAccRef = useRef<string>('');
   const notifDropdownRef = useRef<HTMLDivElement | null>(null);
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
@@ -350,11 +354,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       setNotifications(localNotifs);
     }
 
+    const nowMs = Date.now();
+    const shouldPollReportsAndNotifs = !silent || nowMs - lastReportsSyncRef.current >= 4000;
+
     const acc = (activeRec?.accountNumber || currentUser.linkedAccountNumber || '').trim();
     const validAcc = acc && !acc.toUpperCase().startsWith('PENDING') ? acc : undefined;
     const myEmail = (activeRec?.email || currentUser.email || '').trim().toLowerCase() || undefined;
 
-    if (validAcc || myEmail) {
+    if (shouldPollReportsAndNotifs && (validAcc || myEmail)) {
+      lastReportsSyncRef.current = nowMs;
       apiClient
         .reconcileReports(
           {
@@ -362,7 +370,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             accountNumber: validAcc,
             email: myEmail
           },
-          { skipLogging: silent }
+          { skipLogging: true }
         )
         .then(res => {
           if (res?.success && Array.isArray(res.reports)) {
@@ -374,7 +382,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         })
         .catch(() => {
           apiClient
-            .getReports({ accountNumber: validAcc, email: myEmail }, { skipLogging: silent })
+            .getReports({ accountNumber: validAcc, email: myEmail }, { skipLogging: true })
             .then(res => {
               if (res?.success && Array.isArray(res.reports) && res.reports.length > 0) {
                 mockDb.mergeExternalReports(res.reports);
@@ -385,7 +393,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         });
     }
 
-    if (validAcc) {
+    if (validAcc && (!silent || nowMs - lastBillingsSyncRef.current >= 6000)) {
+      lastBillingsSyncRef.current = nowMs;
       apiClient
         .getBillings({ accountNumber: validAcc }, { skipLogging: true })
         .then(bRes => {
@@ -409,24 +418,26 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         .catch(() => {});
     }
 
-    const notifParams = new URLSearchParams();
-    if (validAcc) notifParams.set('accountNumber', validAcc);
-    if (activeRec?.linkedUserId || currentUser.id) notifParams.set('userId', activeRec?.linkedUserId || currentUser.id);
-    if (myEmail) notifParams.set('email', myEmail);
-    if (activeRec?.id) notifParams.set('consumerId', activeRec.id);
-    if ([...notifParams.keys()].length > 0) {
-      safeBackendFetch(`/api/notifications?${notifParams.toString()}`)
-        .then(res => (res ? res.json() : null))
-        .then(nData => {
-          if (nData?.success && Array.isArray(nData.notifications) && nData.notifications.length > 0) {
-            if (mockDb.mergeExternalNotifications(nData.notifications)) {
-              const refreshed = getConsumerNotificationsFromLocal();
-              notifsRef.current = refreshed;
-              setNotifications(refreshed);
+    if (shouldPollReportsAndNotifs) {
+      const notifParams = new URLSearchParams();
+      if (validAcc) notifParams.set('accountNumber', validAcc);
+      if (activeRec?.linkedUserId || currentUser.id) notifParams.set('userId', activeRec?.linkedUserId || currentUser.id);
+      if (myEmail) notifParams.set('email', myEmail);
+      if (activeRec?.id) notifParams.set('consumerId', activeRec.id);
+      if ([...notifParams.keys()].length > 0) {
+        safeBackendFetch(`/api/notifications?${notifParams.toString()}`)
+          .then(res => (res ? res.json() : null))
+          .then(nData => {
+            if (nData?.success && Array.isArray(nData.notifications) && nData.notifications.length > 0) {
+              if (mockDb.mergeExternalNotifications(nData.notifications)) {
+                const refreshed = getConsumerNotificationsFromLocal();
+                notifsRef.current = refreshed;
+                setNotifications(refreshed);
+              }
             }
-          }
-        })
-        .catch(() => {});
+          })
+          .catch(() => {});
+      }
     }
   };
 
@@ -476,7 +487,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       isRegistered: true
     };
 
-    // 1. Update local consumers store & remove any stale pending duplicate
+    // 1. Update local consumers store & remove any stale pending duplicate ONLY if changed
     const localConsumers = mockDb.getConsumers();
     let matched = false;
     const updatedConsumers = localConsumers.map(lc => {
@@ -493,9 +504,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     if (!matched) {
       updatedConsumers.unshift(normalizedConsumer);
     }
-    mockDb.saveConsumers(updatedConsumers);
+    if (JSON.stringify(localConsumers) !== JSON.stringify(updatedConsumers)) {
+      mockDb.saveConsumers(updatedConsumers);
+    }
 
-    // 2. Update local users store & active currentUser session so linkedAccountNumber is permanently bound
+    // 2. Update local users store & active currentUser session so linkedAccountNumber is permanently bound ONLY if changed
     const localUsers = mockDb.getUsers();
     const updatedUsers = localUsers.map(u => {
       const isMe =
@@ -507,7 +520,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       }
       return u;
     });
-    mockDb.saveUsers(updatedUsers);
+    if (JSON.stringify(localUsers) !== JSON.stringify(updatedUsers)) {
+      mockDb.saveUsers(updatedUsers);
+    }
 
     const sessionUser = mockDb.getCurrentUser();
     if (sessionUser && (sessionUser.id === currentUser.id || (sessionUser.email && currentUser.email && sessionUser.email.toLowerCase() === currentUser.email.toLowerCase()))) {
@@ -548,7 +563,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         consumerId: normalizedConsumer.id
       });
       const hasIssuanceNotif = existingNotifs.some(
-        n => n.type === 'account_issue' && (n.accountNumber || '').toUpperCase() === accNum
+        n =>
+          n.type === 'account_issue' &&
+          !(n.title || '').toLowerCase().includes('registration application submitted') &&
+          (n.accountNumber || '').replace(/^#/, '').trim().toUpperCase() === accNum
       );
       if (!hasIssuanceNotif) {
         mockDb.addNotification({
@@ -563,9 +581,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       }
     }
 
+    confirmedIssuedAccRef.current = accNum;
+
     // 4. Refresh React state immediately so portal unlocks without reload
-    consumerRecordRef.current = normalizedConsumer;
-    setConsumerRecord(normalizedConsumer);
+    if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(normalizedConsumer)) {
+      consumerRecordRef.current = normalizedConsumer;
+      setConsumerRecord(normalizedConsumer);
+    }
     wasAccountPendingRef.current = false;
 
     const refreshedNotifs = mockDb.getNotifications(accNum, {
@@ -573,8 +595,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       email: normalizedConsumer.email || currentUser.email,
       consumerId: normalizedConsumer.id
     });
-    notifsRef.current = refreshedNotifs;
-    setNotifications(refreshedNotifs);
+    if (JSON.stringify(notifsRef.current) !== JSON.stringify(refreshedNotifs)) {
+      notifsRef.current = refreshedNotifs;
+      setNotifications(refreshedNotifs);
+    }
 
     // 5. Announce confirmation banner & toast once per newly confirmed account number
     if (triggerBanner && lastAnnouncedAccountRef.current !== accNum) {
@@ -615,15 +639,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
 
     syncTimeoutRef.current = setTimeout(() => {
-      // Detect whether the active consumer session was still unlinked before reconciliation
-      const sessionBefore = mockDb.getCurrentUser();
+      // Detect whether the active persisted consumer session was still unlinked before reconciliation
+      const sessionBefore = mockDb.getCurrentUser() || currentUser;
       const sessionWasUnlinked = Boolean(
         !sessionBefore?.linkedAccountNumber ||
         sessionBefore.linkedAccountNumber.toUpperCase().startsWith('PENDING') ||
-        sessionBefore.status === 'pending_approval' ||
-        !currentUser.linkedAccountNumber ||
-        currentUser.linkedAccountNumber.toUpperCase().startsWith('PENDING') ||
-        currentUser.status === 'pending_approval'
+        sessionBefore.status === 'pending_approval'
       );
 
       // Heal any locally stored issued accounts & notifications first
@@ -632,7 +653,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       const resolvePayload = {
         email: currentUser.email || consumerRecordRef.current?.email,
         userId: currentUser.id || consumerRecordRef.current?.linkedUserId,
-        accountNumber: currentUser.linkedAccountNumber || consumerRecordRef.current?.accountNumber,
+        accountNumber: consumerRecordRef.current?.accountNumber || sessionBefore?.linkedAccountNumber || currentUser.linkedAccountNumber,
         name: currentUser.name || consumerRecordRef.current?.name,
         contactNumber: consumerRecordRef.current?.contactNumber
       };
@@ -650,16 +671,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 consumerId: resolvedData.consumer?.id
               }
             );
-            notifsRef.current = refreshedNotifs;
-            setNotifications(refreshedNotifs);
+            if (JSON.stringify(notifsRef.current) !== JSON.stringify(refreshedNotifs)) {
+              notifsRef.current = refreshedNotifs;
+              setNotifications(refreshedNotifs);
+            }
           }
         }
 
         const matchedRemote = resolvedData.consumer;
         if (matchedRemote) {
           if (isConsumerRecordIssued(matchedRemote)) {
-            const shouldShowBanner = wasAccountPendingRef.current === true || sessionWasUnlinked;
-            applyAutomaticIdConfirmation(matchedRemote, undefined, false, shouldShowBanner);
+            const remoteAccUpper = matchedRemote.accountNumber.trim().toUpperCase();
+            if (confirmedIssuedAccRef.current !== remoteAccUpper) {
+              const shouldShowBanner = wasAccountPendingRef.current === true || sessionWasUnlinked;
+              applyAutomaticIdConfirmation(matchedRemote, undefined, false, shouldShowBanner);
+            }
           } else {
             const currentLocal = mockDb.getConsumers();
             const idx = currentLocal.findIndex(lc =>
@@ -679,24 +705,33 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         }
       };
 
-      // 1a. Direct Cloud Firestore resolution (works across all devices, browsers, and Vercel deployments)
-      resolveConsumerAccountInFirestore(resolvePayload)
-        .then(fsResolved => {
-          if (fsResolved) applyRemoteResolution(fsResolved);
-        })
-        .catch(() => {});
+      const alreadyIssuedLocally = isConsumerRecordIssued(consumerRecordRef.current);
+      const shouldRunRemoteResolve =
+        !alreadyIssuedLocally ||
+        !silent ||
+        Date.now() - lastAccountResolveRef.current >= 30000;
 
-      // 1b. Authoritative account & notification resolution against backend API
-      safeBackendFetch('/api/consumers/resolve-account', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-portal': 'consumer' },
-        body: JSON.stringify(resolvePayload)
-      })
-        .then(res => (res ? res.json() : null))
-        .then(resolvedData => {
-          if (resolvedData?.success) applyRemoteResolution(resolvedData);
+      if (shouldRunRemoteResolve) {
+        lastAccountResolveRef.current = Date.now();
+        // 1a. Direct Cloud Firestore resolution (works across all devices, browsers, and Vercel deployments)
+        resolveConsumerAccountInFirestore(resolvePayload)
+          .then(fsResolved => {
+            if (fsResolved) applyRemoteResolution(fsResolved);
+          })
+          .catch(() => {});
+
+        // 1b. Authoritative account & notification resolution against backend API
+        safeBackendFetch('/api/consumers/resolve-account', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-portal': 'consumer' },
+          body: JSON.stringify(resolvePayload)
         })
-        .catch(() => {});
+          .then(res => (res ? res.json() : null))
+          .then(resolvedData => {
+            if (resolvedData?.success) applyRemoteResolution(resolvedData);
+          })
+          .catch(() => {});
+      }
 
       const consumers = mockDb.getConsumers();
       const allReadings = mockDb.getReadings();
@@ -791,7 +826,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               : record;
           record = normalizedRecord;
 
-          // Check if consumer's issuance notification is already present; if session was unlinked or notification missing, apply full confirmation
+          const normalizedAccUpper = record.accountNumber.trim().toUpperCase();
+
+          // Check if consumer's issuance notification is already present; if session was unlinked or notification missing, apply full confirmation once
           const existingLocalNotifs = mockDb.getNotifications(record.accountNumber, {
             userId: record.linkedUserId || currentUser.id,
             email: record.email || currentUser.email,
@@ -801,12 +838,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             n => n.type === 'account_issue' && !(n.title || '').toLowerCase().includes('registration application submitted')
           );
 
-          if (wasPendingBefore === true || sessionWasUnlinked || !hasIssuanceNotif) {
+          if (
+            confirmedIssuedAccRef.current !== normalizedAccUpper &&
+            (wasPendingBefore === true || sessionWasUnlinked || !hasIssuanceNotif)
+          ) {
             applyAutomaticIdConfirmation(record, undefined, false, wasPendingBefore === true || sessionWasUnlinked);
           } else {
+            confirmedIssuedAccRef.current = normalizedAccUpper;
             wasAccountPendingRef.current = false;
             if (!lastAnnouncedAccountRef.current) {
-              lastAnnouncedAccountRef.current = record.accountNumber.trim().toUpperCase();
+              lastAnnouncedAccountRef.current = normalizedAccUpper;
             }
             if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(record)) {
               consumerRecordRef.current = record;
@@ -815,7 +856,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           }
 
           // Reconcile confirmed local record once per issued account with backend REST store (never write to Firestore in polling loop)
-          const normalizedAccUpper = record.accountNumber.trim().toUpperCase();
           if (reconciledIssuedAccRef.current !== normalizedAccUpper) {
             reconciledIssuedAccRef.current = normalizedAccUpper;
             const accountIssueNotifs = mockDb.getNotifications(record.accountNumber, {
@@ -1048,6 +1088,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     readingsRef.current = [];
     prevReadingsRef.current = [];
     alertedOverdueRef.current.clear();
+    confirmedIssuedAccRef.current = '';
+    lastAccountResolveRef.current = 0;
+    lastReportsSyncRef.current = 0;
 
     ensureRealtimeFirestoreListeners();
     loadConsumerInfo();
@@ -1405,24 +1448,25 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       return;
     }
 
-    // Resolve matching reading for Dashboard or Bills navigation
+    // Resolve matching Admin-billed reading for Dashboard or Bills navigation
+    const candidateBills = readings.filter(r => isOfficialBillIssued(r));
     let matchedReading: MeterReading | undefined;
     if (notif.readingId) {
-      matchedReading = readings.find(r => r.id === notif.readingId);
+      matchedReading = candidateBills.find(r => r.id === notif.readingId);
     }
     if (!matchedReading && notif.billingPeriod) {
-      matchedReading = readings.find(r => (r.billingPeriod || '').toLowerCase() === (notif.billingPeriod || '').toLowerCase());
+      matchedReading = candidateBills.find(r => (r.billingPeriod || '').toLowerCase() === (notif.billingPeriod || '').toLowerCase());
     }
     if (!matchedReading) {
       const nTitle = (notif.title || '').toLowerCase();
       const nMsg = (notif.message || '').toLowerCase();
-      matchedReading = readings.find(r => {
+      matchedReading = candidateBills.find(r => {
         const bp = (r.billingPeriod || '').toLowerCase();
         return bp ? (nTitle.includes(bp) || nMsg.includes(bp)) : false;
       });
     }
-    if (!matchedReading && readings.length > 0 && notif.type !== 'account_issue') {
-      matchedReading = readings[0];
+    if (!matchedReading && candidateBills.length > 0 && notif.type !== 'account_issue') {
+      matchedReading = candidateBills[0];
     }
 
     if (matchedReading) {
@@ -1455,10 +1499,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   };
 
   const handleMarkAllNotifsRead = () => {
-    notifications.forEach(n => {
-      if (!n.read) mockDb.markNotificationRead(n.id);
-    });
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    const unreadIds = notifications.filter(n => !n.read).map(n => n.id);
+    mockDb.markAllNotificationsRead(unreadIds);
+    const updatedNotifs = notifications.map(n => ({ ...n, read: true }));
+    notifsRef.current = updatedNotifs;
+    setNotifications(updatedNotifs);
     toast.success('Notifications Updated', 'All notifications have been marked as read.');
   };
 
@@ -4996,6 +5041,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   )}
 
                   <div className="space-y-3">
+                    <input
+                      type="email"
+                      name="username"
+                      autoComplete="username"
+                      value={currentUser.email || consumerRecord.email || ''}
+                      readOnly
+                      tabIndex={-1}
+                      aria-hidden="true"
+                      className="sr-only"
+                    />
                     <div>
                       <label className="block text-xs font-semibold text-slate-300 mb-1">
                         Current Password
@@ -5003,6 +5058,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <div className="relative">
                         <input
                           type={showPasswordOld ? 'text' : 'password'}
+                          autoComplete="current-password"
                           required
                           value={passwordOld}
                           onChange={(e) => {
@@ -5030,6 +5086,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <div className="relative">
                         <input
                           type={showPasswordNew ? 'text' : 'password'}
+                          autoComplete="new-password"
                           required
                           minLength={6}
                           value={passwordNew}
@@ -5067,6 +5124,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <div className="relative">
                         <input
                           type={showPasswordConfirm ? 'text' : 'password'}
+                          autoComplete="new-password"
                           required
                           value={passwordConfirm}
                           onChange={(e) => {

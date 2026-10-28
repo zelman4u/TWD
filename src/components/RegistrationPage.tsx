@@ -431,6 +431,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                     <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">Email Address <span className="text-red-400">*</span></label>
                     <input 
                       type="email" 
+                      autoComplete="email"
                       required 
                       placeholder="e.g. juan@example.com"
                       value={email}
@@ -479,6 +480,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                       </span>
                       <input 
                         type={showPassword ? "text" : "password"} 
+                        autoComplete="new-password"
                         required 
                         placeholder="Choose a strong password"
                         value={password}
@@ -516,6 +518,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                       </span>
                       <input 
                         type={showConfirmPassword ? "text" : "password"} 
+                        autoComplete="new-password"
                         required 
                         placeholder="Re-enter password to match"
                         value={confirmPassword}
