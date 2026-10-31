@@ -84,6 +84,7 @@ const CORE_BACKEND_ROUTES = new Set([
   '/api/consumers/reconcile',
   '/api/consumers/resolve-account',
   '/api/consumers/change-password',
+  '/api/installations',
   '/api/health',
 ]);
 
@@ -551,5 +552,35 @@ export const apiClient = {
 
   saveTariffConfig: async (config: any) => {
     return apiClient.post<{ success: boolean; config: any }>('/api/tariff-config', config);
+  },
+
+  // Water Meter Installation Scheduling & Validation
+  getInstallations: async (filters?: { email?: string; userId?: string; applicationNumber?: string }, options?: RequestOptions) => {
+    const params = new URLSearchParams();
+    if (filters?.email) params.append('email', filters.email);
+    if (filters?.userId) params.append('userId', filters.userId);
+    if (filters?.applicationNumber) params.append('applicationNumber', filters.applicationNumber);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return apiClient.get<{ success: boolean; installations: any[] }>(`/api/installations${qs}`, {
+      retries: 0,
+      timeoutMs: 5000,
+      skipLogging: true,
+      ...options,
+    });
+  },
+
+  createInstallation: async (payload: any) => {
+    return apiClient.post<{ success: boolean; request: any }>('/api/installations', payload);
+  },
+
+  updateInstallation: async (id: string, payload: any) => {
+    return apiClient.patch<{ success: boolean; request: any }>(`/api/installations/${encodeURIComponent(id)}`, payload);
+  },
+
+  validateInstallation: async (id: string, payload: any) => {
+    return apiClient.post<{ success: boolean; request: any; consumer?: any }>(
+      `/api/installations/${encodeURIComponent(id)}/validate`,
+      payload
+    );
   },
 };

@@ -13,7 +13,7 @@ export interface User {
   employeeId?: string; // For staff / meter readers
   assignedBarangay?: string;
   readerId?: string;
-  status: 'active' | 'inactive' | 'pending_approval';
+  status: 'active' | 'inactive' | 'pending_approval' | 'pending_installation' | 'installation_not_scheduled';
   contactNumber?: string;
   password?: string;
   passwordUpdatedAt?: number;
@@ -43,7 +43,12 @@ export interface Consumer {
   email: string;
   meterNumber: string;
   meterBrand?: string;
-  status: 'active' | 'inactive' | 'archived' | 'blocked' | 'pending_approval' | 'Disconnection Notice' | 'disconnection_notice';
+  status: 'active' | 'inactive' | 'archived' | 'blocked' | 'pending_approval' | 'pending_installation' | 'installation_not_scheduled' | 'Disconnection Notice' | 'disconnection_notice';
+  applicationNumber?: string;
+  hasExistingMeter?: boolean;
+  installationRequestId?: string;
+  installationStatus?: InstallationStatus;
+  accountValidationStatus?: 'pending_installation' | 'awaiting_validation' | 'validated';
   disconnectionNoticeDate?: string;
   gracePeriodOverdueDays?: number;
   unpaidCyclesCount?: number;
@@ -61,6 +66,11 @@ export interface Consumer {
   outstandingBalance?: number;
   rfidTag?: string;
   sequenceNo?: number | string;
+  previousReading?: number;
+  presentReading?: number;
+  currentReading?: number;
+  lastConsumption?: number;
+  lastReadingDate?: string;
 }
 
 export interface MeterReader {
@@ -85,17 +95,86 @@ export interface MeterReader {
   linkedUserId?: string;
 }
 
+export type InstallationStatus =
+  | 'Pending Review'
+  | 'Approved'
+  | 'Scheduled'
+  | 'Rescheduled'
+  | 'Installation in Progress'
+  | 'Installed'
+  | 'Cancelled';
+
+export interface InstallationHistoryEntry {
+  id: string;
+  timestamp: string;
+  status: InstallationStatus | 'Validated & Activated';
+  actorName: string;
+  actorRole: 'consumer' | 'admin' | 'system';
+  action: string;
+  scheduledDate?: string;
+  remarks?: string;
+}
+
+export interface WaterMeterInstallationRequest {
+  id: string;
+  applicationNumber: string;
+  consumerId?: string;
+  linkedUserId?: string;
+  consumerName: string;
+  consumerEmail: string;
+  contactNumber: string;
+  address: string;
+  barangay: string;
+  barangayId?: string;
+  sitioZone?: string;
+  consumerType?: 'Residential' | 'Commercial';
+  preferredInstallationDate: string;
+  confirmedInstallationDate?: string;
+  consumerRemarks?: string;
+  adminRemarks?: string;
+  submissionDate: string;
+  updatedAt: string;
+  status: InstallationStatus;
+  completionDate?: string;
+  responsiblePersonnel?: string;
+  /** Physical Water Meter Serial Number — strictly visible ONLY in the Admin Water Meters module */
+  meterSerialNumber?: string;
+  meterBrand?: string;
+  meterSize?: string;
+  /** Official Meter Tag Number issued to the consumer upon account validation */
+  assignedMeterTagNumber?: string;
+  assignedRfidTag?: string;
+  /** Official Account Number issued to the consumer upon account validation */
+  assignedAccountNumber?: string;
+  accountValidationStatus: 'pending_installation' | 'awaiting_validation' | 'validated';
+  validatedAt?: string;
+  validatedBy?: string;
+  hasUnreadAdminAlert?: boolean;
+  history: InstallationHistoryEntry[];
+}
+
 export interface WaterMeter {
+  /** Official Meter Tag Number linked to consumer account */
   meterNumber: string;
+  /** Physical Manufacturer Serial Number — strictly visible ONLY in the Admin Water Meters module */
+  serialNumber?: string;
   brand: string;
   rfidTag?: string;
   type?: string;
   size?: string;
   installationDate: string;
+  completionDate?: string;
+  installedBy?: string;
+  installationRequestId?: string;
+  applicationNumber?: string;
   lastReadingDate?: string;
   lastReadingValue?: number;
-  status: 'active' | 'damaged' | 'maintenance' | 'unassigned';
+  status: 'active' | 'inactive' | 'damaged' | 'maintenance' | 'unassigned';
   linkedAccountNumber: string;
+  remarks?: string;
+  previousStatus?: 'active' | 'inactive' | 'damaged' | 'maintenance' | 'unassigned';
+  statusUpdatedAt?: string;
+  statusUpdatedBy?: string;
 }
 
 export interface MeterReading {
@@ -108,11 +187,13 @@ export interface MeterReading {
   address?: string;
   addressZone?: string;
   route: string;
-  previousReading: number; // m3 (Prev. Rdg.)
-  currentReading: number; // m3 (Pres. Rdg.)
+  previousReading: number; // m3 (Prev. Rdg. - Baseline)
+  presentReading?: number; // m3 (Pres. Rdg. - Recorded at inspection)
+  currentReading: number; // m3 (Curr. Rdg. - Latest dial index)
   consumption: number; // m3 (Usage = Pres - Prev)
   readingDate: string;
   meterReaderDate?: string;
+  submittedAt?: string;
   status: 'pending' | 'verified' | 'flagged_abnormal' | 'cancelled';
   meterReaderName: string;
   imageUrl: string;
@@ -161,6 +242,27 @@ export interface ConsumerReportReply {
   statusUpdate?: 'pending' | 'in_progress' | 'resolved' | 'closed';
 }
 
+export interface ReferencedNoticeContext {
+  notificationId: string;
+  notificationType: ConsumerNotification['type'];
+  subject: string;
+  sentByAdmin: string;
+  sentAt: string;
+  summaryExcerpt: string;
+  accountNumber?: string;
+  consumerName?: string;
+  meterNumber?: string;
+  meterStatus?: 'active' | 'inactive' | 'damaged' | 'maintenance';
+  previousMeterStatus?: string;
+  statusUpdateDate?: string;
+  remarks?: string;
+  billingPeriod?: string;
+  readingId?: string;
+  applicationNumber?: string;
+  installationRequestId?: string;
+  installationStatus?: InstallationStatus;
+}
+
 export interface ConsumerReport {
   id: string;
   ticketNumber: string;
@@ -184,6 +286,8 @@ export interface ConsumerReport {
   replies: ConsumerReportReply[];
   hasUnreadAdminReply?: boolean;
   hasUnreadConsumerUpdate?: boolean;
+  sourceNotificationId?: string;
+  referencedNotice?: ReferencedNoticeContext;
 }
 
 export interface ConsumerNotification {
@@ -195,7 +299,7 @@ export interface ConsumerNotification {
   title: string;
   message: string;
   timestamp: string;
-  type: 'payment' | 'billing' | 'balance' | 'announcement' | 'disconnection' | 'receipt_upload' | 'report' | 'account_issue';
+  type: 'payment' | 'billing' | 'balance' | 'announcement' | 'disconnection' | 'receipt_upload' | 'report' | 'account_issue' | 'meter_status' | 'installation';
   read: boolean;
   orNumber?: string;
   amountPaid?: number;
@@ -205,6 +309,23 @@ export interface ConsumerNotification {
   receiptUrl?: string;
   reportId?: string;
   ticketNumber?: string;
+  replyId?: string;
+  subject?: string;
+  consumerName?: string;
+  meterNumber?: string;
+  meterStatus?: 'active' | 'inactive' | 'damaged' | 'maintenance';
+  previousMeterStatus?: string;
+  statusUpdateDate?: string;
+  remarks?: string;
+  updatedByAdmin?: string;
+  sentByAdmin?: string;
+  isFromAdmin?: boolean;
+  applicationNumber?: string;
+  installationRequestId?: string;
+  installationStatus?: InstallationStatus;
+  preferredDate?: string;
+  confirmedDate?: string;
+  referencedNotice?: ReferencedNoticeContext;
 }
 
 export interface RouteAssignment {

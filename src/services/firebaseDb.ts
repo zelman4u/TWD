@@ -33,8 +33,17 @@ import {
   ConsumerNotification,
   Barangay,
   ConsumerReport,
+  WaterMeterInstallationRequest,
 } from '../types';
 import { dedupeNotifications } from '../utils/notificationDeduper';
+import {
+  inferNotificationType,
+  isPersonalNotificationType,
+  isTransactionalPaymentOrReceiptItem,
+  sanitizeAnnouncements,
+} from '../utils/announcementSanitizer';
+import { isPendingConsumerStatus } from '../utils/installationWorkflow';
+import { STANDARD_BARANGAYS } from '../constants';
 
 export enum OperationType {
   CREATE = 'create',
@@ -105,6 +114,7 @@ export const COLLECTIONS = {
   BARANGAYS: 'barangays',
   SETTINGS: 'settings',
   REPORTS: 'consumer_reports',
+  INSTALLATIONS: 'installation_requests',
 };
 
 // Storage prefix used by mockDb
@@ -122,6 +132,7 @@ export const KEYS = {
   AUDIT_LOGS: `${STORAGE_PREFIX}audit_logs`,
   NOTIFICATIONS: `${STORAGE_PREFIX}notifications`,
   REPORTS: `${STORAGE_PREFIX}consumer_reports`,
+  INSTALLATIONS: `${STORAGE_PREFIX}installations`,
   BARANGAYS: `${STORAGE_PREFIX}barangays`,
   TARIFF_CONFIG: `${STORAGE_PREFIX}tariff_config`,
   CURRENT_USER: `${STORAGE_PREFIX}current_user`,
@@ -154,21 +165,17 @@ export function normalizeConsumerRecord(c: Consumer): Consumer {
       c.meterNumber && !String(c.meterNumber).toUpperCase().startsWith('PENDING')
         ? String(c.meterNumber).trim()
         : `MT-${accNum}`;
-    const rfidTag =
-      c.rfidTag && !String(c.rfidTag).toUpperCase().startsWith('PENDING')
-        ? String(c.rfidTag).trim()
-        : `RFID-${meterNum}`;
     const rawStatus = String(c.status || '');
     const normalizedStatus: Consumer['status'] =
-      !rawStatus || rawStatus === 'pending_approval' || rawStatus === 'pending'
+      !rawStatus || isPendingConsumerStatus(rawStatus)
         ? 'active'
         : c.status;
     return {
       ...c,
       accountNumber: accNum,
       meterNumber: meterNum,
-      rfidTag,
       status: normalizedStatus,
+      accountValidationStatus: c.accountValidationStatus || 'validated',
       isRegistered: c.isRegistered ?? true,
     };
   }
@@ -219,6 +226,21 @@ const STRING_SCHEMA_KEYS: Record<string, number> = {
   title: 300,
   message: 2900,
   type: 64,
+  applicationNumber: 64,
+  consumerName: 200,
+  preferredInstallationDate: 64,
+  confirmedInstallationDate: 64,
+  submissionDate: 64,
+  adminRemarks: 1200,
+  consumerRemarks: 1200,
+  completionDate: 64,
+  responsiblePersonnel: 200,
+  accountValidationStatus: 64,
+  assignedAccountNumber: 64,
+  assignedMeterTagNumber: 64,
+  meterSerialNumber: 64,
+  serialNumber: 64,
+  installedBy: 200,
 };
 
 function sanitizeForFirestore<T>(input: T, keyName?: string): T {
@@ -561,29 +583,26 @@ function mergeConsumerPair(existing: Consumer, incoming: Consumer): Consumer {
           ? `MT-${mergedAcc}`
           : '';
 
-  const mergedRfid =
-    primary.rfidTag && !primary.rfidTag.toUpperCase().startsWith('PENDING')
-      ? primary.rfidTag
-      : secondary.rfidTag && !secondary.rfidTag.toUpperCase().startsWith('PENDING')
-        ? secondary.rfidTag
-        : mergedMeter
-          ? `RFID-${mergedMeter}`
-          : '';
-
   return {
     ...secondary,
     ...primary,
     accountNumber: mergedAcc,
     meterNumber: mergedMeter,
-    rfidTag: mergedRfid,
     status: isRealIssuedAccountNumber(mergedAcc)
-      ? primary.status === 'pending_approval'
+      ? isPendingConsumerStatus(primary.status)
         ? 'active'
         : primary.status || 'active'
       : primary.status || secondary.status || 'pending_approval',
     email: primary.email || secondary.email || '',
     linkedUserId: primary.linkedUserId || secondary.linkedUserId,
     contactNumber: primary.contactNumber || secondary.contactNumber || '',
+    applicationNumber: primary.applicationNumber || secondary.applicationNumber,
+    hasExistingMeter: primary.hasExistingMeter ?? secondary.hasExistingMeter,
+    installationRequestId: primary.installationRequestId || secondary.installationRequestId,
+    installationStatus: primary.installationStatus || secondary.installationStatus,
+    accountValidationStatus: isRealIssuedAccountNumber(mergedAcc)
+      ? 'validated'
+      : primary.accountValidationStatus || secondary.accountValidationStatus,
     isRegistered: primary.isRegistered ?? secondary.isRegistered ?? true,
   };
 }
@@ -615,7 +634,7 @@ export function startRealtimeFirestoreListeners() {
           snapshot.forEach((d) => {
             const u = d.data() as User;
             if (!u.id) u.id = d.id;
-            if (isRealIssuedAccountNumber(u.linkedAccountNumber) && u.status === 'pending_approval') {
+            if (isRealIssuedAccountNumber(u.linkedAccountNumber) && isPendingConsumerStatus(u.status)) {
               u.status = 'active';
             }
             markPayloadSynced(COLLECTIONS.USERS, d.id, sanitizeForFirestore(u));
@@ -630,7 +649,7 @@ export function startRealtimeFirestoreListeners() {
           const activeLocalUsers = localUsers.filter((u) => {
             if (isAccountTerminated(u)) return false;
             if (u.role === 'admin') return true;
-            if (!isRealIssuedAccountNumber(u.linkedAccountNumber) && u.status === 'pending_approval') {
+            if (!isRealIssuedAccountNumber(u.linkedAccountNumber) && isPendingConsumerStatus(u.status)) {
               const existsInCloud = cloudUsers.some(
                 (cu) =>
                   (u.email && cu.email && u.email.toLowerCase() === cu.email.toLowerCase()) ||
@@ -910,11 +929,11 @@ export function startRealtimeFirestoreListeners() {
               (cc) =>
                 isIssuedActiveConsumer(cc) &&
                 cc.accountNumber.trim().toUpperCase() === lcAcc &&
-                cc.status !== 'pending_approval'
+                !isPendingConsumerStatus(cc.status)
             );
             const cloudHasStalePendingTwin = snapshot.docs.some((d) => {
               const raw = d.data() as Consumer;
-              const isRawPending = !isRealIssuedAccountNumber(raw.accountNumber) || raw.status === 'pending_approval';
+              const isRawPending = !isRealIssuedAccountNumber(raw.accountNumber) || isPendingConsumerStatus(raw.status);
               if (!isRawPending) return false;
               const rEmail = (raw.email || '').trim().toLowerCase();
               const rUid = (raw.linkedUserId || '').trim();
@@ -1136,13 +1155,19 @@ export function startRealtimeFirestoreListeners() {
           snapshot.forEach((d) => {
             const a = d.data() as Announcement;
             const id = a.id || d.id;
+            if (isTransactionalPaymentOrReceiptItem(a as unknown as Record<string, unknown>)) {
+              if (!isFirestoreWriteQuotaExceeded()) {
+                deleteDoc(d.ref).catch(() => {});
+              }
+              return;
+            }
             if (id && !deletedIds.has(id)) {
               cloudAnns.push({ ...a, id });
             }
           });
 
           const localRaw = localStorage.getItem(KEYS.ANNOUNCEMENTS);
-          const localAnns: Announcement[] = localRaw ? JSON.parse(localRaw) : [];
+          const localAnns: Announcement[] = sanitizeAnnouncements(localRaw ? JSON.parse(localRaw) : []);
           const mergedMap = new Map<string, Announcement>();
 
           localAnns.forEach((la) => {
@@ -1155,8 +1180,10 @@ export function startRealtimeFirestoreListeners() {
             }
           });
 
-          const finalAnns = Array.from(mergedMap.values()).sort(
-            (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+          const finalAnns = sanitizeAnnouncements(
+            Array.from(mergedMap.values()).sort(
+              (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+            )
           );
           const nextJson = JSON.stringify(finalAnns);
           if (localRaw !== nextJson) {
@@ -1171,13 +1198,58 @@ export function startRealtimeFirestoreListeners() {
     );
     realtimeUnsubscribes.push(unsubAnnouncements);
 
-    // 7. Live BARANGAYS Listener
+    // 7. Live BARANGAYS Listener (auto-heals newly added standard barangays like Rosario into cloud & local)
     const unsubBarangays = onSnapshot(
       collection(db, COLLECTIONS.BARANGAYS),
       (snapshot) => {
         if (!snapshot.empty) {
           const cloudBrgs: Barangay[] = [];
           snapshot.forEach((d) => cloudBrgs.push(d.data() as Barangay));
+
+          let deletedBrgIds = new Set<string>();
+          try {
+            const rawDel = localStorage.getItem('twd_live_v4_deleted_barangays');
+            if (rawDel) deletedBrgIds = new Set(JSON.parse(rawDel));
+          } catch {}
+
+          const defaultSchedules: Record<string, string> = {
+            'BRG-01': '1st - 5th of Month',
+            'BRG-02': '6th - 10th of Month',
+            'BRG-03': '11th - 15th of Month',
+            'BRG-04': '16th - 20th of Month',
+            'BRG-05': '21st - 25th of Month',
+            'BRG-06': '26th - End of Month',
+            'BRG-07': '1st - 5th of Month',
+            'BRG-08': '6th - 10th of Month',
+            'BRG-09': '11th - 15th of Month',
+            'BRG-10': '16th - 20th of Month',
+          };
+
+          STANDARD_BARANGAYS.forEach((sb) => {
+            if (deletedBrgIds.has(sb.id)) return;
+            const exists = cloudBrgs.some(
+              (b) =>
+                (b.id && b.id.toLowerCase() === sb.id.toLowerCase()) ||
+                (b.name && b.name.trim().toLowerCase() === sb.name.trim().toLowerCase())
+            );
+            if (!exists) {
+              const missingBrg: Barangay = {
+                id: sb.id,
+                name: sb.name,
+                code: sb.code,
+                consumers: 0,
+                activeMeters: 0,
+                schedule: defaultSchedules[sb.id] || '16th - 20th of Month',
+                supervisor: 'District Operations Supervisor',
+                ratePerM3: sb.ratePerM3,
+              };
+              cloudBrgs.push(missingBrg);
+              syncDocToFirestore(COLLECTIONS.BARANGAYS, sb.id, missingBrg).catch(() => {});
+            }
+          });
+
+          cloudBrgs.sort((a, b) => String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true }));
+
           const prevRaw = localStorage.getItem(KEYS.BARANGAYS);
           const nextJson = JSON.stringify(cloudBrgs);
           if (prevRaw !== nextJson) {
@@ -1340,6 +1412,77 @@ export function startRealtimeFirestoreListeners() {
       }
     );
     realtimeUnsubscribes.push(unsubTariff);
+
+    // 11. Live INSTALLATION REQUESTS Listener (propagates new installation scheduling & Admin validations live)
+    const unsubInstallations = onSnapshot(
+      collection(db, COLLECTIONS.INSTALLATIONS),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const cloudReqs: WaterMeterInstallationRequest[] = [];
+          snapshot.forEach((d) => {
+            const item = d.data() as WaterMeterInstallationRequest;
+            if (item && (item.id || d.id)) {
+              cloudReqs.push({ ...item, id: item.id || d.id });
+            }
+          });
+
+          const localRaw = localStorage.getItem(KEYS.INSTALLATIONS);
+          const localReqs: WaterMeterInstallationRequest[] = localRaw ? JSON.parse(localRaw) : [];
+          const mergedMap = new Map<string, WaterMeterInstallationRequest>();
+
+          localReqs.forEach((lr) => {
+            if (lr && lr.id) mergedMap.set(lr.id, lr);
+          });
+
+          cloudReqs.forEach((cr) => {
+            if (!cr || (!cr.id && !cr.applicationNumber)) return;
+            let key = cr.id && mergedMap.has(cr.id) ? cr.id : undefined;
+            if (!key && cr.applicationNumber) {
+              const found = Array.from(mergedMap.entries()).find(([, v]) => v.applicationNumber === cr.applicationNumber);
+              if (found) key = found[0];
+            }
+            if (!key) {
+              const newKey = cr.id || cr.applicationNumber;
+              mergedMap.set(newKey, { ...cr, id: newKey, history: Array.isArray(cr.history) ? cr.history : [] });
+            } else {
+              const prev = mergedMap.get(key)!;
+              const crNewer = new Date(cr.updatedAt || 0).getTime() >= new Date(prev.updatedAt || 0).getTime();
+              const primary = crNewer ? cr : prev;
+              const secondary = crNewer ? prev : cr;
+              const histMap = new Map<string, any>();
+              [...(prev.history || []), ...(cr.history || [])].forEach((h) => {
+                if (h && h.id) histMap.set(h.id, h);
+              });
+              const mergedHistory = Array.from(histMap.values()).sort(
+                (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
+              );
+              mergedMap.set(key, {
+                ...secondary,
+                ...primary,
+                id: key,
+                meterSerialNumber: primary.meterSerialNumber || secondary.meterSerialNumber,
+                assignedAccountNumber: primary.assignedAccountNumber || secondary.assignedAccountNumber,
+                assignedMeterTagNumber: primary.assignedMeterTagNumber || secondary.assignedMeterTagNumber,
+                history: mergedHistory,
+              });
+            }
+          });
+
+          const sorted = Array.from(mergedMap.values()).sort(
+            (a, b) => new Date(b.submissionDate || 0).getTime() - new Date(a.submissionDate || 0).getTime()
+          );
+          const nextJson = JSON.stringify(sorted);
+          if (localRaw !== nextJson) {
+            localStorage.setItem(KEYS.INSTALLATIONS, nextJson);
+            triggerLocalUpdateEvent(KEYS.INSTALLATIONS);
+          }
+        }
+      },
+      (err) => {
+        if (isQuotaError(err)) markFirestoreQuotaExceeded(err, 'read');
+      }
+    );
+    realtimeUnsubscribes.push(unsubInstallations);
   } catch (err) {
     console.warn('[Firestore Live Sync] Listener init notice:', err);
   }
@@ -1456,9 +1599,10 @@ export async function pushIssuedConsumerToFirestore(
     meterNumber: meterNum,
     rfidTag,
     status:
-      !consumer.status || consumer.status === 'pending_approval' || (consumer.status as string) === 'pending'
+      !consumer.status || isPendingConsumerStatus(consumer.status)
         ? 'active'
         : consumer.status,
+    accountValidationStatus: 'validated',
     email: cleanEmail || consumer.email || '',
     linkedUserId: linkedUid || consumer.linkedUserId,
     isRegistered: true,
@@ -1509,7 +1653,7 @@ export async function pushIssuedConsumerToFirestore(
           const dAcc = (dData.accountNumber || '').trim().toUpperCase();
           const isStaleOrPending =
             !isRealIssuedAccountNumber(dAcc) ||
-            dData.status === 'pending_approval' ||
+            isPendingConsumerStatus(dData.status) ||
             (cleanPrevAcc && dAcc === cleanPrevAcc) ||
             d.id.startsWith('user-') ||
             d.id.startsWith('email_');
@@ -1529,7 +1673,7 @@ export async function pushIssuedConsumerToFirestore(
           if (consumerDocIds.has(d.id)) continue;
           const dData = d.data() as Consumer;
           const dAcc = (dData.accountNumber || '').trim().toUpperCase();
-          const dIsPending = !isRealIssuedAccountNumber(dAcc) || dData.status === 'pending_approval';
+          const dIsPending = !isRealIssuedAccountNumber(dAcc) || isPendingConsumerStatus(dData.status);
           if (!dIsPending) continue;
 
           const dEmail = (dData.email || '').trim().toLowerCase();
@@ -1625,7 +1769,7 @@ export async function pushIssuedConsumerToFirestore(
             userId: linkedUid || undefined,
             consumerEmail: cleanEmail || undefined,
             title: 'Official Account Number & Meter Issued!',
-            message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${accNum} and Meter Serial is #${meterNum}. Smart RFID Tag: ${rfidTag}. Your full dashboard and telemetry are now active.`,
+            message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${accNum} and Meter Tag Number is #${meterNum}. Smart RFID Tag: ${rfidTag}. Your full dashboard and telemetry are now active.`,
             timestamp: stableIssuedTimestamp,
             type: 'account_issue',
             read: false,
@@ -1785,12 +1929,16 @@ export async function resolveConsumerAccountInFirestore(params: {
 
     // Synthesize User profile if Consumer exists in Firestore `consumers` while `users` doc was missing
     if (!resolvedUser && resolvedConsumer && (effectiveEmail || resolvedConsumer.email || resolvedConsumer.linkedUserId)) {
+      const pendingStatus: User['status'] =
+        resolvedConsumer.status === 'pending_installation' || resolvedConsumer.status === 'installation_not_scheduled'
+          ? resolvedConsumer.status
+          : 'pending_approval';
       resolvedUser = {
         id: resolvedConsumer.linkedUserId || effectiveUid || `user-${Date.now()}`,
         email: (resolvedConsumer.email || effectiveEmail || '').trim().toLowerCase(),
         name: resolvedConsumer.name,
         role: 'consumer',
-        status: isIssued ? 'active' : 'pending_approval',
+        status: isIssued ? 'active' : pendingStatus,
         linkedAccountNumber: isIssued ? finalAcc : undefined,
         registrationDate: resolvedConsumer.registrationDate,
       };
@@ -1832,12 +1980,24 @@ export async function resolveConsumerAccountInFirestore(params: {
         await getDocs(query(collection(db, COLLECTIONS.NOTIFICATIONS), where('userId', '==', targetNotifUid), limit(30)))
       );
     }
-    // Also include district-wide broadcast notifications (announcements & tariff advisories)
-    addNotifSnap(
-      await getDocs(query(collection(db, COLLECTIONS.NOTIFICATIONS), where('accountNumber', '==', 'ALL'), limit(20)))
+    // Also include district-wide broadcast notifications (ONLY official announcements & tariff advisories)
+    const broadcastSnap = await getDocs(
+      query(collection(db, COLLECTIONS.NOTIFICATIONS), where('accountNumber', '==', 'ALL'), limit(20))
     );
+    broadcastSnap.forEach((d) => {
+      const n = d.data() as ConsumerNotification;
+      if (!n || !n.title) return;
+      const inferred = inferNotificationType(n);
+      if (
+        isPersonalNotificationType(inferred) ||
+        isTransactionalPaymentOrReceiptItem(n as unknown as Record<string, unknown>)
+      ) {
+        return;
+      }
+      notifMap.set(n.id || d.id, { ...n, id: n.id || d.id, type: inferred });
+    });
 
-    const notifications = Array.from(notifMap.values());
+    const notifications = dedupeNotifications(Array.from(notifMap.values()));
 
     // 4. Synthesize issuance notification in-memory if missing (NEVER perform Firestore writes inside a read resolver!)
     if (isIssued && resolvedConsumer) {
@@ -1854,7 +2014,7 @@ export async function resolveConsumerAccountInFirestore(params: {
           userId: targetNotifUid || undefined,
           consumerEmail: (effectiveEmail || resolvedConsumer.email || '').trim().toLowerCase() || undefined,
           title: 'Official Account Number & Meter Issued!',
-          message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${finalAcc} and Meter Serial is #${resolvedConsumer.meterNumber}. Smart RFID Tag: ${resolvedConsumer.rfidTag}. Your full dashboard and telemetry are now active.`,
+          message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${finalAcc} and Meter Tag Number is #${resolvedConsumer.meterNumber}. Smart RFID Tag: ${resolvedConsumer.rfidTag}. Your full dashboard and telemetry are now active.`,
           timestamp: resolvedConsumer.registrationDate
             ? `${resolvedConsumer.registrationDate.split('T')[0]}T00:00:00.000Z`
             : '2026-01-01T00:00:00.000Z',
@@ -1994,6 +2154,38 @@ export function subscribeToConsumerIdentityInFirestore(
           query(collection(db, COLLECTIONS.NOTIFICATIONS), where('consumerEmail', '==', cleanEmail), limit(15)),
           (snap) => {
             if (!snap.empty) triggerResolve();
+          },
+          () => {}
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          query(collection(db, COLLECTIONS.INSTALLATIONS), where('consumerEmail', '==', cleanEmail), limit(10)),
+          (snap) => {
+            if (!snap.empty) {
+              try {
+                const localRaw = localStorage.getItem(KEYS.INSTALLATIONS);
+                const localList: WaterMeterInstallationRequest[] = localRaw ? JSON.parse(localRaw) : [];
+                const map = new Map<string, WaterMeterInstallationRequest>();
+                localList.forEach((r) => {
+                  if (r && r.id) map.set(r.id, r);
+                });
+                snap.forEach((d) => {
+                  const cr = d.data() as WaterMeterInstallationRequest;
+                  if (cr && (cr.id || d.id)) {
+                    const k = cr.id || d.id;
+                    const prev = map.get(k);
+                    map.set(k, prev ? { ...prev, ...cr, id: k } : { ...cr, id: k });
+                  }
+                });
+                const nextJson = JSON.stringify(Array.from(map.values()));
+                if (localRaw !== nextJson) {
+                  localStorage.setItem(KEYS.INSTALLATIONS, nextJson);
+                  triggerLocalUpdateEvent(KEYS.INSTALLATIONS);
+                }
+              } catch {}
+              triggerResolve();
+            }
           },
           () => {}
         )

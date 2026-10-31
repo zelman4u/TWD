@@ -228,7 +228,7 @@ interface MobileConsumerSync {
   lastReadingDate: string;
   meterSize?: string;
   consumerType: string;
-  status: "active" | "disconnected" | "maintenance" | "pending_approval" | "pending" | "inactive" | "Disconnection Notice";
+  status: "active" | "disconnected" | "maintenance" | "pending_approval" | "pending_installation" | "installation_not_scheduled" | "pending" | "inactive" | "Disconnection Notice";
   contactNumber?: string;
   email?: string;
   rfidTag?: string;
@@ -237,6 +237,11 @@ interface MobileConsumerSync {
   householdInfo?: string;
   businessName?: string;
   businessType?: string;
+  applicationNumber?: string;
+  hasExistingMeter?: boolean;
+  installationRequestId?: string;
+  installationStatus?: string;
+  accountValidationStatus?: string;
   isRegistered?: boolean;
 }
 
@@ -247,7 +252,7 @@ interface PortalSyncUser {
   password?: string;
   passwordUpdatedAt?: number;
   role: "admin" | "consumer" | "staff" | "cashier" | "meter_reader";
-  status: "active" | "inactive" | "pending_approval";
+  status: "active" | "inactive" | "pending_approval" | "pending_installation" | "installation_not_scheduled";
   linkedAccountNumber?: string;
   contactNumber?: string;
   registrationDate?: string;
@@ -630,9 +635,14 @@ function isValidatedConsumerForReader(c: MobileConsumerSync): boolean {
     return false;
   }
 
-  // 3. Status must not be pending_approval or pending
+  // 3. Status must not be pending_approval, pending_installation, installation_not_scheduled, or pending
   const status = (c.status || "").trim().toLowerCase();
-  if (status === "pending_approval" || status === "pending") {
+  if (
+    status === "pending_approval" ||
+    status === "pending_installation" ||
+    status === "installation_not_scheduled" ||
+    status === "pending"
+  ) {
     return false;
   }
 
@@ -748,6 +758,7 @@ interface MobileReadingSubmission {
   billingPeriod: string;
   readingDate: string;
   previousReading: number;
+  presentReading?: number;
   currentReading: number;
   consumption: number;
   readerId: string;
@@ -776,6 +787,24 @@ interface ServerReportReply {
   statusUpdate?: "pending" | "in_progress" | "resolved" | "closed";
 }
 
+interface ServerReferencedNoticeContext {
+  notificationId: string;
+  notificationType: string;
+  subject: string;
+  sentByAdmin: string;
+  sentAt: string;
+  summaryExcerpt: string;
+  accountNumber?: string;
+  consumerName?: string;
+  meterNumber?: string;
+  meterStatus?: string;
+  previousMeterStatus?: string;
+  statusUpdateDate?: string;
+  remarks?: string;
+  billingPeriod?: string;
+  readingId?: string;
+}
+
 interface ServerConsumerReport {
   id: string;
   ticketNumber: string;
@@ -799,6 +828,8 @@ interface ServerConsumerReport {
   replies: ServerReportReply[];
   hasUnreadAdminReply?: boolean;
   hasUnreadConsumerUpdate?: boolean;
+  sourceNotificationId?: string;
+  referencedNotice?: ServerReferencedNoticeContext;
 }
 
 let inMemoryReports: ServerConsumerReport[] = [
@@ -1488,7 +1519,13 @@ app.post("/api/consumers/register", (req, res) => {
       businessName,
       businessType,
       linkedUserId,
-      password
+      password,
+      applicationNumber,
+      hasExistingMeter,
+      status: requestedStatus,
+      installationRequestId,
+      installationStatus,
+      accountValidationStatus,
     } = req.body;
 
     const consumerName = (name || fullName || "").trim();
@@ -1545,6 +1582,11 @@ app.post("/api/consumers/register", (req, res) => {
            (c.linkedUserId && c.linkedUserId === userId)
     );
 
+    const initialPendingStatus: "pending_approval" | "pending_installation" | "installation_not_scheduled" =
+      requestedStatus === "pending_installation" || requestedStatus === "installation_not_scheduled"
+        ? requestedStatus
+        : "pending_approval";
+
     const record: MobileConsumerSync = {
       accountNumber: "", // Empty until issued by Administrator
       name: consumerName,
@@ -1556,7 +1598,7 @@ app.post("/api/consumers/register", (req, res) => {
       previousReading: 0,
       lastReadingDate: new Date().toISOString().split("T")[0],
       consumerType: consumerType === "Commercial" ? "Commercial" : "Residential",
-      status: "pending_approval",
+      status: initialPendingStatus,
       contactNumber: cleanPhone,
       email: cleanEmail,
       rfidTag: "",
@@ -1565,6 +1607,11 @@ app.post("/api/consumers/register", (req, res) => {
       householdInfo: householdInfo || undefined,
       businessName: businessName || undefined,
       businessType: businessType || undefined,
+      applicationNumber: applicationNumber || undefined,
+      hasExistingMeter: typeof hasExistingMeter === "boolean" ? hasExistingMeter : undefined,
+      installationRequestId: installationRequestId || undefined,
+      installationStatus: installationStatus || undefined,
+      accountValidationStatus: accountValidationStatus || undefined,
       isRegistered: true
     };
 
@@ -1597,7 +1644,7 @@ app.post("/api/consumers/register", (req, res) => {
       name: consumerName,
       password: password ? String(password) : (uIdx >= 0 ? syncedPortalUsers[uIdx].password : undefined),
       role: "consumer",
-      status: hasIssuedAcc ? "active" : "pending_approval",
+      status: hasIssuedAcc ? "active" : initialPendingStatus,
       linkedAccountNumber: hasIssuedAcc ? activeConsumerRecord.accountNumber : undefined,
       contactNumber: cleanPhone,
       registrationDate: activeConsumerRecord.registrationDate
@@ -1702,21 +1749,6 @@ app.post("/api/consumers", (req, res) => {
       }
     }
 
-    // 2. Strict Duplicate RFID Tag Number Check
-    if (cleanRfid && !cleanRfid.startsWith("PENDING")) {
-      const duplicateTag = syncedConsumers.find(c =>
-        !isCurrentTarget(c) &&
-        c.rfidTag &&
-        c.rfidTag.toUpperCase() === cleanRfid
-      );
-      if (duplicateTag) {
-        return res.status(409).json({
-          success: false,
-          message: `RFID Tag "${cleanRfid}" is already assigned to "${duplicateTag.name}". Duplicate tag numbers are strictly prohibited.`
-        });
-      }
-    }
-
     // 3. Strict Duplicate Meter Tag Number Check
     if (cleanMeter && !cleanMeter.startsWith("PENDING")) {
       const duplicateMeter = syncedConsumers.find(c =>
@@ -1807,7 +1839,13 @@ app.post("/api/consumers", (req, res) => {
     if (savedConsumer.status === "active" && savedConsumer.accountNumber && !savedConsumer.accountNumber.toUpperCase().startsWith("PENDING")) {
       syncedConsumers = syncedConsumers.filter(c => {
         if (c === savedConsumer) return true;
-        const isStalePending = (!c.accountNumber || c.accountNumber.toUpperCase().startsWith("PENDING") || c.status === "pending_approval");
+        const isStalePending = (
+          !c.accountNumber ||
+          c.accountNumber.toUpperCase().startsWith("PENDING") ||
+          c.status === "pending_approval" ||
+          c.status === "pending_installation" ||
+          c.status === "installation_not_scheduled"
+        );
         if (isStalePending) {
           if (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) return false;
           if (linkedUserId && c.linkedUserId && c.linkedUserId === linkedUserId) return false;
@@ -1828,8 +1866,8 @@ app.post("/api/consumers", (req, res) => {
           ? `Account Number Updated to #${savedConsumer.accountNumber}`
           : `Official Account Number & Meter Issued!`,
         message: didAccountNumberChange
-          ? `Your water service account identifier has been officially updated to #${savedConsumer.accountNumber} by Tagoloan Water District Administration. Your physical Meter Tag (${savedConsumer.rfidTag || savedConsumer.meterNumber}) and Meter Serial (#${savedConsumer.meterNumber}) remain permanently assigned.`
-          : `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${savedConsumer.accountNumber} and Meter Serial is #${savedConsumer.meterNumber}. Smart RFID Tag: ${savedConsumer.rfidTag || `RFID-${savedConsumer.meterNumber}`}. Your full dashboard and telemetry are now active.`,
+          ? `Your water service account identifier has been officially updated to #${savedConsumer.accountNumber} by Tagoloan Water District Administration. Your Meter Tag Number (#${savedConsumer.meterNumber}) remains permanently assigned.`
+          : `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${savedConsumer.accountNumber} and Meter Tag Number is #${savedConsumer.meterNumber}. Your full dashboard and billing history are now active.`,
         type: "account_issue"
       });
 
@@ -2108,14 +2146,19 @@ app.post(["/api/consumers/:identifier/issue-id", "/api/consumers/:identifier/app
 
     const issuedAcc = (accountNumber || `011-${Math.floor(100 + Math.random() * 900)}-${Math.floor(100 + Math.random() * 900)}`).toString().trim().toUpperCase();
     const issuedMeter = (meterNumber || meterSerialNumber || `MTR-${Math.floor(10000 + Math.random() * 90000)}`).toString().trim().toUpperCase();
-    const issuedRfid = (rfidTag || `RFID-${issuedMeter}`).toString().trim().toUpperCase();
 
     syncedConsumers[idx] = {
       ...syncedConsumers[idx],
       accountNumber: issuedAcc,
       meterNumber: issuedMeter,
-      rfidTag: issuedRfid,
-      status: (status && status !== "pending_approval" && status !== "pending") ? status : "active",
+      status:
+        status &&
+        status !== "pending_approval" &&
+        status !== "pending_installation" &&
+        status !== "installation_not_scheduled" &&
+        status !== "pending"
+          ? status
+          : "active",
       sitioZone: sitioZone || syncedConsumers[idx].sitioZone || "Zone 1",
       barangay: barangay || syncedConsumers[idx].barangay || "Poblacion"
     };
@@ -2128,7 +2171,7 @@ app.post(["/api/consumers/:identifier/issue-id", "/api/consumers/:identifier/app
       userId: validatedConsumer.linkedUserId,
       consumerEmail: validatedConsumer.email,
       title: `Official Account Number & Meter Issued!`,
-      message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${validatedConsumer.accountNumber} and Meter Serial is #${validatedConsumer.meterNumber}. Smart RFID Tag: ${validatedConsumer.rfidTag}. Your full dashboard and telemetry are now active.`,
+      message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${validatedConsumer.accountNumber} and Meter Tag Number is #${validatedConsumer.meterNumber}. Your full dashboard and billing history are now active.`,
       type: "account_issue"
     });
     savePortalSyncStore();
@@ -2280,7 +2323,12 @@ app.post("/api/consumers/reconcile", (req, res) => {
     incomingConsumers.forEach(ic => {
       if (!ic || !ic.name) return;
       const icAcc = (ic.accountNumber || "").trim().toUpperCase();
-      const icIssued = isIssuedAccountNumberServer(icAcc) && ic.status !== "pending_approval" && ic.status !== "pending";
+      const icIssued =
+        isIssuedAccountNumberServer(icAcc) &&
+        ic.status !== "pending_approval" &&
+        ic.status !== "pending_installation" &&
+        ic.status !== "installation_not_scheduled" &&
+        ic.status !== "pending";
       const icEmail = (ic.email || "").trim().toLowerCase();
       const icPhone = normalizePhone11Server(ic.contactNumber);
       const icUid = (ic.linkedUserId || "").trim();
@@ -2307,13 +2355,17 @@ app.post("/api/consumers/reconcile", (req, res) => {
 
         if (icIssued) {
           const meterNum = (ic.meterNumber || existing.meterNumber || `MT-${icAcc}`).toString().trim().toUpperCase();
-          const rfid = (ic.rfidTag || existing.rfidTag || `RFID-${meterNum}`).toString().trim().toUpperCase();
+          const mergedPrevReading = Math.max(
+            Number(existing.previousReading || 0),
+            Number(ic.currentReading ?? ic.presentReading ?? ic.previousReading ?? 0)
+          );
           const merged: MobileConsumerSync = {
             ...existing,
             ...ic,
             accountNumber: icAcc,
             meterNumber: meterNum,
-            rfidTag: rfid,
+            previousReading: mergedPrevReading,
+            lastReadingDate: ic.lastReadingDate || existing.lastReadingDate || new Date().toISOString().split("T")[0],
             email: icEmail || existing.email || "",
             contactNumber: ic.contactNumber || existing.contactNumber || "",
             linkedUserId: existing.linkedUserId || icUid,
@@ -2339,9 +2391,6 @@ app.post("/api/consumers/reconcile", (req, res) => {
         const meterNum = icIssued
           ? (ic.meterNumber || `MT-${icAcc}`).toString().trim().toUpperCase()
           : "";
-        const rfid = icIssued
-          ? (ic.rfidTag || `RFID-${meterNum}`).toString().trim().toUpperCase()
-          : "";
         const added: MobileConsumerSync = {
           accountNumber: icIssued ? icAcc : "",
           name: String(ic.name).trim(),
@@ -2354,10 +2403,19 @@ app.post("/api/consumers/reconcile", (req, res) => {
           lastReadingDate: ic.lastReadingDate || new Date().toISOString().split("T")[0],
           meterSize: ic.meterSize,
           consumerType: ic.consumerType === "Commercial" ? "Commercial" : "Residential",
-          status: icIssued ? (ic.status && ic.status !== "pending_approval" ? ic.status : "active") : "pending_approval",
+          status: icIssued
+            ? ic.status &&
+              ic.status !== "pending_approval" &&
+              ic.status !== "pending_installation" &&
+              ic.status !== "installation_not_scheduled"
+              ? ic.status
+              : "active"
+            : ic.status === "pending_installation" || ic.status === "installation_not_scheduled"
+              ? ic.status
+              : "pending_approval",
           contactNumber: ic.contactNumber || "",
           email: icEmail,
-          rfidTag: rfid,
+          rfidTag: "",
           registrationDate: ic.registrationDate || new Date().toISOString().split("T")[0],
           linkedUserId: icUid || undefined,
           householdInfo: ic.householdInfo,
@@ -2680,46 +2738,124 @@ Context for verification: Expected Account: ${expectedAccountNumber || "N/A"}, E
   }
 });
 
+// Helper: Resolve the authoritative cumulative meter baseline for a consumer across billed records, approved field readings, and consumer master
+function resolveConsumerBaselineServer(accountNumber?: string, meterNumber?: string, excludeReadingId?: string): number {
+  const cleanAcc = String(accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+  const cleanMeter = String(meterNumber || "").trim().toUpperCase();
+  let maxBaseline = 0;
+
+  if (cleanAcc || cleanMeter) {
+    const matchedConsumer = syncedConsumers.find(
+      c =>
+        (cleanAcc && String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc) ||
+        (cleanMeter && String(c.meterNumber || "").trim().toUpperCase() === cleanMeter)
+    );
+    if (matchedConsumer && Number(matchedConsumer.previousReading || 0) > maxBaseline) {
+      maxBaseline = Number(matchedConsumer.previousReading || 0);
+    }
+
+    for (const r of pendingMobileReadings) {
+      if (!r || (excludeReadingId && r.id === excludeReadingId)) continue;
+      if (r.status !== "approved") continue;
+      const rAcc = String(r.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+      const rMeter = String(r.meterNumber || "").trim().toUpperCase();
+      if ((cleanAcc && rAcc === cleanAcc) || (cleanMeter && rMeter === cleanMeter)) {
+        const val = Number(r.currentReading ?? r.presentReading ?? 0);
+        if (val > maxBaseline) maxBaseline = val;
+      }
+    }
+
+    for (const r of reconciledBillingRecords.values()) {
+      if (!r || (excludeReadingId && r.id === excludeReadingId)) continue;
+      if (r.status === "cancelled") continue;
+      const isApprovedOrBilled =
+        r.status === "verified" ||
+        r.status === "approved" ||
+        Boolean(r.isBillingIssued || r.billingIssuedAt || r.invoiceNumber);
+      if (!isApprovedOrBilled) continue;
+      const rAcc = String(r.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+      const rMeter = String(r.meterNumber || "").trim().toUpperCase();
+      if ((cleanAcc && rAcc === cleanAcc) || (cleanMeter && rMeter === cleanMeter)) {
+        const val = Number(r.currentReading ?? r.presentReading ?? 0);
+        if (val > maxBaseline) maxBaseline = val;
+      }
+    }
+  }
+
+  return maxBaseline;
+}
+
 // 5. Mobile Reading Push: Submit Scanned Meter Reading to Approval Queue (POST /api/readings, POST /api/sync/push or POST /api/readings/submit)
 app.post(["/api/readings", "/api/sync/push", "/api/readings/submit", "/api/readings/upload"], (req, res) => {
   const {
+    id,
     accountNumber,
     meterNumber,
     currentReading,
+    presentReading,
     previousReading,
     readerId,
     readerName,
     route,
     billingPeriod,
+    readingDate,
     photoUrl,
     coordinates,
     notes
-  } = req.body;
+  } = req.body || {};
 
-  if (!accountNumber || currentReading === undefined) {
+  const rawCurr = currentReading !== undefined ? currentReading : presentReading;
+  if (!accountNumber || rawCurr === undefined) {
     return res.status(400).json({
       success: false,
-      message: "Account number and current reading are mandatory."
+      message: "Account number and present/current reading are mandatory."
     });
   }
 
   // Find matching consumer
+  const cleanAcc = String(accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+  const cleanMeter = String(meterNumber || "").trim().toUpperCase();
   const matchedConsumer = syncedConsumers.find(
-    c => c.accountNumber === accountNumber || c.meterNumber === meterNumber
+    c =>
+      (cleanAcc && String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc) ||
+      (cleanMeter && String(c.meterNumber || "").trim().toUpperCase() === cleanMeter)
   );
 
-  const prev = previousReading !== undefined ? Number(previousReading) : (matchedConsumer ? matchedConsumer.previousReading : 0);
-  const curr = Number(currentReading);
+  const curr = Math.max(0, Number(rawCurr) || 0);
+  const resolvedAcc = matchedConsumer ? matchedConsumer.accountNumber : accountNumber;
+  const resolvedMeter = meterNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG");
+  const baseline = resolveConsumerBaselineServer(resolvedAcc, resolvedMeter, id);
+
+  let prev = previousReading !== undefined ? Math.max(0, Number(previousReading) || 0) : baseline;
+  // Never lose baseline when a new reading arrives with previousReading omitted or reset to 0
+  if (prev === 0 && baseline > 0 && curr >= baseline) {
+    prev = baseline;
+  }
+  if (prev > curr) {
+    prev = baseline <= curr ? baseline : 0;
+  }
   const consumption = Math.max(0, curr - prev);
 
+  // Mint unique cycle ID so prior readings are NEVER overwritten when a new reading arrives
+  let finalId = id ? String(id).trim() : "";
+  const existingApproved =
+    finalId &&
+    (pendingMobileReadings.some(r => r.id === finalId && r.status === "approved") ||
+      reconciledBillingRecords.has(finalId));
+  if (!finalId || existingApproved) {
+    finalId = `READ-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  }
+
+  const defaultPeriod = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" });
   const submission: MobileReadingSubmission = {
-    id: `READ-${Math.floor(10000 + Math.random() * 90000)}`,
-    accountNumber: matchedConsumer ? matchedConsumer.accountNumber : accountNumber,
+    id: finalId,
+    accountNumber: resolvedAcc,
     consumerName: matchedConsumer ? matchedConsumer.name : (req.body.consumerName || "Consumer Account"),
-    meterNumber: meterNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG"),
-    billingPeriod: billingPeriod || "August 2026",
-    readingDate: new Date().toISOString().split("T")[0],
+    meterNumber: resolvedMeter,
+    billingPeriod: billingPeriod || defaultPeriod,
+    readingDate: readingDate || new Date().toISOString().split("T")[0],
     previousReading: prev,
+    presentReading: curr,
     currentReading: curr,
     consumption,
     readerId: readerId || "WDT-FIELD",
@@ -2732,24 +2868,33 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit", "/api/readi
     submittedAt: new Date().toISOString()
   };
 
-  pendingMobileReadings.unshift(submission);
+  const pendingDupIdx = pendingMobileReadings.findIndex(r => r.id === submission.id);
+  if (pendingDupIdx >= 0) {
+    pendingMobileReadings[pendingDupIdx] = submission;
+  } else {
+    pendingMobileReadings.unshift(submission);
+  }
 
   // Broadcast new reading to Admin Approval Queue on Web via WebSocket
   broadcast("READING_SUBMITTED_FOR_APPROVAL", {
     reading: submission,
-    message: `New reading submitted for Account #${submission.accountNumber} (${submission.consumption} m³). Awaiting supervisor review.`
+    message: `New reading submitted for Account #${submission.accountNumber} (Prev: ${submission.previousReading} → Pres: ${submission.currentReading} = ${submission.consumption} m³). Awaiting Admin approval.`
   });
   broadcast("reading:submitted", {
     reading: submission,
     message: `New reading submitted for Account #${submission.accountNumber} (${submission.consumption} m³). Awaiting Admin verification.`
   });
 
-  console.log(`[Mobile API] Reading Submitted for ${submission.accountNumber} - ${submission.consumption} m³ by ${submission.readerName}`);
+  console.log(`[Mobile API] Reading Submitted for ${submission.accountNumber} - Prev ${submission.previousReading} -> Pres ${submission.currentReading} (${submission.consumption} m³) by ${submission.readerName}`);
 
   res.status(201).json({
     success: true,
     message: "Reading submitted successfully and routed to Admin Verification Queue.",
     submissionId: submission.id,
+    reading: submission,
+    previousReading: submission.previousReading,
+    presentReading: submission.presentReading,
+    currentReading: submission.currentReading,
     consumption: submission.consumption,
     status: "pending_approval"
   });
@@ -2757,7 +2902,7 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit", "/api/readi
 
 // 5.1 Batch Sync Readings: Upload Queued Offline Readings (POST /api/readings/batch, /api/sync/batch)
 app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req, res) => {
-  const readingsList = Array.isArray(req.body) ? req.body : (req.body.readings || []);
+  const readingsList = Array.isArray(req.body) ? req.body : (req.body?.readings || []);
 
   if (!readingsList || readingsList.length === 0) {
     return res.status(400).json({
@@ -2767,24 +2912,56 @@ app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req,
   }
 
   const processed: MobileReadingSubmission[] = [];
+  const runningBaselineByAccount = new Map<string, number>();
 
   for (const item of readingsList) {
-    const prev = item.previousReading !== undefined ? Number(item.previousReading) : 0;
-    const curr = Number(item.currentReading || 0);
+    const cleanAcc = String(item.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const cleanMeter = String(item.meterNumber || item.meterSerialNumber || "").trim().toUpperCase();
+    const matchedConsumer = syncedConsumers.find(
+      c =>
+        (cleanAcc && String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc) ||
+        (cleanMeter && String(c.meterNumber || "").trim().toUpperCase() === cleanMeter)
+    );
+
+    const resolvedAcc = item.accountNumber || (matchedConsumer ? matchedConsumer.accountNumber : "UNKNOWN");
+    const resolvedMeter = item.meterNumber || item.meterSerialNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG");
+    const curr = Math.max(0, Number(item.currentReading ?? item.presentReading ?? 0));
+
+    const accKey = String(resolvedAcc).replace(/^#/, "").trim().toUpperCase();
+    const storedBaseline = resolveConsumerBaselineServer(resolvedAcc, resolvedMeter, item.id);
+    const baseline = Math.max(storedBaseline, runningBaselineByAccount.get(accKey) || 0);
+
+    let prev = item.previousReading !== undefined ? Math.max(0, Number(item.previousReading) || 0) : baseline;
+    if (prev === 0 && baseline > 0 && curr >= baseline) {
+      prev = baseline;
+    }
+    if (prev > curr) {
+      prev = baseline <= curr ? baseline : 0;
+    }
     const consumption = Math.max(0, curr - prev);
+    if (accKey && curr > baseline) {
+      runningBaselineByAccount.set(accKey, curr);
+    }
 
-    const matchedConsumer = item.accountNumber 
-      ? syncedConsumers.find(c => c.accountNumber === item.accountNumber) 
-      : null;
+    let finalId = item.id ? String(item.id).trim() : "";
+    const existingApproved =
+      finalId &&
+      (pendingMobileReadings.some(r => r.id === finalId && r.status === "approved") ||
+        reconciledBillingRecords.has(finalId));
+    if (!finalId || existingApproved) {
+      finalId = `READ-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    }
 
+    const defaultPeriod = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" });
     const submission: MobileReadingSubmission = {
-      id: item.id || `READ-${Math.floor(10000 + Math.random() * 90000)}`,
-      accountNumber: item.accountNumber || (matchedConsumer ? matchedConsumer.accountNumber : "UNKNOWN"),
+      id: finalId,
+      accountNumber: resolvedAcc,
       consumerName: item.consumerName || (matchedConsumer ? matchedConsumer.name : "Consumer"),
-      meterNumber: item.meterNumber || item.meterSerialNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG"),
-      billingPeriod: item.billingPeriod || "October 2026",
+      meterNumber: resolvedMeter,
+      billingPeriod: item.billingPeriod || defaultPeriod,
       readingDate: item.readingDate || new Date().toISOString().split("T")[0],
       previousReading: prev,
+      presentReading: curr,
       currentReading: curr,
       consumption,
       readerId: item.readerId || (req.headers["x-reader-id"] as string) || "WDT-FIELD",
@@ -2797,13 +2974,19 @@ app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req,
       submittedAt: new Date().toISOString()
     };
 
-    pendingMobileReadings.unshift(submission);
+    const dupIdx = pendingMobileReadings.findIndex(r => r.id === submission.id);
+    if (dupIdx >= 0) {
+      pendingMobileReadings[dupIdx] = submission;
+    } else {
+      pendingMobileReadings.unshift(submission);
+    }
     processed.push(submission);
   }
 
   // Broadcast batch submission event to Admin
   broadcast("READINGS_BATCH_SYNCED", {
     count: processed.length,
+    readings: processed,
     message: `${processed.length} offline field readings batch synced by field staff.`
   });
 
@@ -2811,6 +2994,7 @@ app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req,
     success: true,
     message: `Successfully processed and synced ${processed.length} field readings.`,
     count: processed.length,
+    readings: processed,
     syncedIds: processed.map(p => p.id)
   });
 });
@@ -2825,23 +3009,29 @@ app.get(["/api/readings", "/api/readings/pending", "/api/sync/readings"], (req, 
   });
 });
 
-// 7. Admin Approves Reading -> Verifies Meter Reading Telemetry (POST /api/readings/:id/approve)
+// 7. Admin Approves Reading -> Verifies Meter Reading Telemetry & Rolls Forward Consumer Baseline (POST /api/readings/:id/approve)
 app.post("/api/readings/:id/approve", (req, res) => {
   const { id } = req.params;
   const item = pendingMobileReadings.find(r => r.id === id);
 
   if (item) {
     item.status = "approved";
-    const targetConsumer = syncedConsumers.find(c => c.accountNumber === item.accountNumber);
+    const cleanAcc = String(item.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const targetConsumer = syncedConsumers.find(
+      c => String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc
+    );
     if (targetConsumer) {
-      targetConsumer.previousReading = item.currentReading;
+      targetConsumer.previousReading = Math.max(Number(targetConsumer.previousReading || 0), Number(item.currentReading || 0));
       targetConsumer.lastReadingDate = item.readingDate;
     }
     broadcast("READING_VERIFIED", {
       accountNumber: item.accountNumber,
       billingPeriod: item.billingPeriod,
+      previousReading: item.previousReading,
+      presentReading: item.presentReading ?? item.currentReading,
+      currentReading: item.currentReading,
       consumption: item.consumption,
-      message: `Meter reading for ${item.billingPeriod} has been verified and is ready for billing issuance.`
+      message: `Meter reading for ${item.billingPeriod} has been verified and billed.`
     });
   }
 
@@ -2886,8 +3076,27 @@ function saveBillingsSyncStore() {
 
 loadBillingsSyncStore();
 
+function compareReadingsServerDesc(a: any, b: any): number {
+  return (
+    new Date(b?.readingDate || 0).getTime() - new Date(a?.readingDate || 0).getTime() ||
+    Number(b?.currentReading ?? b?.presentReading ?? 0) - Number(a?.currentReading ?? a?.presentReading ?? 0) ||
+    new Date(b?.billingIssuedAt || b?.submittedAt || 0).getTime() - new Date(a?.billingIssuedAt || a?.submittedAt || 0).getTime()
+  );
+}
+
 function mergeBillingRecordServer(prev: any, incoming: any): any {
-  if (!prev) return { ...incoming };
+  if (!prev) {
+    const currVal = Number(incoming.currentReading ?? incoming.presentReading ?? 0);
+    const prevVal = Math.max(0, Number(incoming.previousReading ?? 0));
+    const safePrev = prevVal <= currVal ? prevVal : 0;
+    return {
+      ...incoming,
+      previousReading: safePrev,
+      presentReading: currVal,
+      currentReading: currVal,
+      consumption: Math.max(0, currVal - safePrev),
+    };
+  }
   const isPaid = prev.paymentStatus === "paid" || incoming.paymentStatus === "paid";
   const isPartial = !isPaid && (prev.paymentStatus === "partial" || incoming.paymentStatus === "partial");
   const prevBilled = Boolean(
@@ -2903,9 +3112,24 @@ function mergeBillingRecordServer(prev: any, incoming: any): any {
   const effBillAmt = Number(billedSrc.billAmount || altSrc.billAmount || 0) || prev.billAmount || incoming.billAmount;
   const effTotalAmt = Number(billedSrc.totalAmount || altSrc.totalAmount || effBillAmt || 0) || prev.totalAmount || incoming.totalAmount;
 
+  const mergedCurr = Number(billedSrc.currentReading ?? billedSrc.presentReading ?? altSrc.currentReading ?? altSrc.presentReading ?? 0);
+  const candPrev = Number(billedSrc.previousReading ?? 0);
+  const altPrev = Number(altSrc.previousReading ?? 0);
+  const mergedPrev =
+    candPrev > 0 && candPrev <= mergedCurr
+      ? candPrev
+      : altPrev > 0 && altPrev <= mergedCurr
+        ? altPrev
+        : Math.max(0, Math.min(candPrev, mergedCurr));
+  const mergedConsumption = Math.max(0, mergedCurr - mergedPrev);
+
   return {
     ...prev,
     ...incoming,
+    previousReading: mergedPrev,
+    presentReading: mergedCurr,
+    currentReading: mergedCurr,
+    consumption: mergedConsumption,
     isBillingIssued: mergedBilled ? true : Boolean(incoming.isBillingIssued ?? prev.isBillingIssued),
     billingIssuedAt: incoming.billingIssuedAt || prev.billingIssuedAt,
     billingIssuedBy: incoming.billingIssuedBy || prev.billingIssuedBy,
@@ -2949,7 +3173,7 @@ app.get("/api/billings", (req, res) => {
   if (accQuery) {
     list = list.filter(r => String(r.accountNumber || "").trim().toUpperCase() === accQuery);
   }
-  list.sort((a, b) => new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime());
+  list.sort(compareReadingsServerDesc);
   res.json({ success: true, count: list.length, readings: list });
 });
 
@@ -2967,6 +3191,25 @@ app.post("/api/billings/reconcile", (req, res) => {
       reconciledBillingRecords.set(r.id, merged);
       storeChanged = true;
     }
+
+    // Roll forward mobile queue status & consumer baseline whenever a reading is verified or billed
+    if (merged.status === "verified" || merged.isBillingIssued) {
+      const mobItem = pendingMobileReadings.find(m => m.id === merged.id);
+      if (mobItem && mobItem.status !== "approved") {
+        mobItem.status = "approved";
+      }
+      const cleanAcc = String(merged.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+      if (cleanAcc) {
+        const targetConsumer = syncedConsumers.find(
+          c => String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc
+        );
+        if (targetConsumer && Number(merged.currentReading || 0) >= Number(targetConsumer.previousReading || 0)) {
+          targetConsumer.previousReading = Number(merged.currentReading || 0);
+          targetConsumer.lastReadingDate = merged.readingDate || targetConsumer.lastReadingDate;
+        }
+      }
+    }
+
     const wasBilled = Boolean(prev?.isBillingIssued || prev?.billingIssuedAt || prev?.invoiceNumber);
     const nowBilled = Boolean(merged.isBillingIssued || merged.billingIssuedAt || merged.invoiceNumber);
     if (!wasBilled && nowBilled) {
@@ -2991,6 +3234,9 @@ app.post("/api/billings/reconcile", (req, res) => {
     broadcast("READING_APPROVED_BILL_ISSUED", {
       accountNumber: bill.accountNumber,
       billingPeriod: bill.billingPeriod,
+      previousReading: bill.previousReading,
+      presentReading: bill.presentReading ?? bill.currentReading,
+      currentReading: bill.currentReading,
       consumption: bill.consumption,
       reading: bill,
       message: `Official water billing statement for ${bill.billingPeriod} has been issued by Administration.`
@@ -2998,6 +3244,9 @@ app.post("/api/billings/reconcile", (req, res) => {
     broadcast("bill:issued", {
       accountNumber: bill.accountNumber,
       billingPeriod: bill.billingPeriod,
+      previousReading: bill.previousReading,
+      presentReading: bill.presentReading ?? bill.currentReading,
+      currentReading: bill.currentReading,
       consumption: bill.consumption,
       reading: bill,
       message: `Official water billing statement for ${bill.billingPeriod} has been issued by Administration.`
@@ -3032,7 +3281,7 @@ app.post("/api/billings/reconcile", (req, res) => {
   if (accQuery) {
     list = list.filter(r => String(r.accountNumber || "").trim().toUpperCase() === accQuery);
   }
-  list.sort((a, b) => new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime());
+  list.sort(compareReadingsServerDesc);
   res.json({ success: true, count: list.length, readings: list });
 });
 
@@ -3103,6 +3352,8 @@ function mergeInMemoryReportPair(existing: ServerConsumerReport, incoming: Serve
     ...primary,
     id: existing.id || incoming.id,
     ticketNumber: primary.ticketNumber || secondary.ticketNumber,
+    sourceNotificationId: primary.sourceNotificationId || secondary.sourceNotificationId,
+    referencedNotice: primary.referencedNotice || secondary.referencedNotice,
     replies: mergedReplies
   };
 }
@@ -3272,14 +3523,26 @@ app.post("/api/reports", (req, res) => {
           r.senderId === "system-admin-ack" ||
           (r.senderRole === "admin" && String(r.message || "").includes("officially received by Tagoloan Water District")))
     );
+    const refNotice: ServerReferencedNoticeContext | undefined =
+      req.body.referencedNotice && typeof req.body.referencedNotice === "object"
+        ? req.body.referencedNotice
+        : undefined;
+    const sourceNotificationId =
+      typeof req.body.sourceNotificationId === "string" && req.body.sourceNotificationId.trim()
+        ? req.body.sourceNotificationId.trim()
+        : undefined;
+
     if (!hasAckAlready) {
+      const ackMsg = refNotice
+        ? `Good day, ${consumerName || "Valued Consumer"}! Your reply (${ticketNumber}) regarding Official Notice "${refNotice.subject}"${refNotice.meterNumber ? ` (Meter #${refNotice.meterNumber}${refNotice.meterStatus ? ` · Status: ${String(refNotice.meterStatus).toUpperCase()}` : ""})` : ""} has been linked and delivered directly to Tagoloan Water District Administration with all notice details attached.`
+        : `Thank you for reaching out! Your inquiry/report (${ticketNumber}) has been officially received by Tagoloan Water District Administration. Our Customer Service team has been notified—please wait momentarily while our staff reviews your concern and prepares an official response.`;
       rawReplies.push({
         id: ackId,
         reportId: id,
         senderId: "system-admin-ack",
         senderName: "TWD Customer Service Desk",
         senderRole: "admin",
-        message: `Thank you for reaching out! Your inquiry/report (${ticketNumber}) has been officially received by Tagoloan Water District Administration. Our Customer Service team has been notified—please wait momentarily while our staff reviews your concern and prepares an official response.`,
+        message: ackMsg,
         timestamp: ackTimestamp
       });
     }
@@ -3305,7 +3568,9 @@ app.post("/api/reports", (req, res) => {
       photoUrl: photoUrl || "",
       replies,
       hasUnreadAdminReply: false,
-      hasUnreadConsumerUpdate: true
+      hasUnreadConsumerUpdate: true,
+      ...(sourceNotificationId ? { sourceNotificationId } : {}),
+      ...(refNotice ? { referencedNotice: refNotice } : {})
     };
 
     const existingIdx = inMemoryReports.findIndex(r => r.id === id || r.ticketNumber === ticketNumber);
@@ -3433,6 +3698,12 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
 
     const updated: ServerConsumerReport = {
       ...report,
+      ...(clientReport?.referencedNotice && !report.referencedNotice
+        ? { referencedNotice: clientReport.referencedNotice }
+        : {}),
+      ...(clientReport?.sourceNotificationId && !report.sourceNotificationId
+        ? { sourceNotificationId: clientReport.sourceNotificationId }
+        : {}),
       status: nextStatus,
       updatedAt: now,
       resolvedAt: isResolved ? (report.resolvedAt || now) : report.resolvedAt,
@@ -3449,15 +3720,35 @@ app.post(["/api/reports/:id/reply", "/api/reports/:id/replies"], (req, res) => {
     if (!isDuplicateSubmission) {
       if (replyItem.senderRole === "admin") {
         if ((updated.accountNumber && updated.accountNumber !== "UNASSIGNED") || updated.consumerEmail) {
+          const refNotice = updated.referencedNotice;
+          const statusCap = refNotice?.meterStatus
+            ? refNotice.meterStatus === "maintenance"
+              ? "Under Maintenance"
+              : refNotice.meterStatus.charAt(0).toUpperCase() + refNotice.meterStatus.slice(1)
+            : "";
+          const contextualTitle = refNotice
+            ? refNotice.meterStatus
+              ? `Admin Reply Re: Water Meter Status (${statusCap})${refNotice.meterNumber ? ` — Meter #${refNotice.meterNumber}` : ""}`
+              : `Admin Reply Re: ${refNotice.subject}`
+            : `Official Admin Reply — ${updated.title || `Concern #${updated.ticketNumber}`}`;
+          const safeTitle = contextualTitle.slice(0, 220);
+          const fullReplyMsg = String(replyItem.message || "").trim().slice(0, 2400);
+
           createdNotif = pushServerNotification({
             id: `notif-rep-${deterministicReplyId.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
             accountNumber: (updated.accountNumber || "PENDING").toUpperCase(),
             consumerEmail: updated.consumerEmail ? updated.consumerEmail.toLowerCase() : undefined,
-            title: `Official Reply on Concern #${updated.ticketNumber}`,
-            message: `Admin ${replyItem.senderName} replied: "${replyItem.message.slice(0, 90)}" (Status: ${nextStatus.toUpperCase()})`,
+            subject: safeTitle,
+            title: safeTitle,
+            message: fullReplyMsg,
             type: "report",
             reportId: updated.id,
-            ticketNumber: updated.ticketNumber
+            ticketNumber: updated.ticketNumber,
+            replyId: deterministicReplyId,
+            sentByAdmin: replyItem.senderName,
+            updatedByAdmin: replyItem.senderName,
+            isFromAdmin: true,
+            referencedNotice: refNotice
           });
         }
         broadcast("ADMIN_REPLIED_TO_REPORT", {
@@ -3588,7 +3879,7 @@ interface ServerConsumerNotification {
   title: string;
   message: string;
   timestamp: string;
-  type: "payment" | "billing" | "announcement" | "disconnection" | "receipt_upload" | "report" | "account_issue";
+  type: "payment" | "billing" | "balance" | "announcement" | "disconnection" | "receipt_upload" | "report" | "account_issue" | "meter_status" | "installation";
   read: boolean;
   orNumber?: string;
   amountPaid?: number;
@@ -3598,12 +3889,30 @@ interface ServerConsumerNotification {
   receiptUrl?: string;
   reportId?: string;
   ticketNumber?: string;
+  replyId?: string;
+  subject?: string;
+  consumerName?: string;
+  meterNumber?: string;
+  meterStatus?: string;
+  previousMeterStatus?: string;
+  statusUpdateDate?: string;
+  remarks?: string;
+  updatedByAdmin?: string;
+  sentByAdmin?: string;
+  isFromAdmin?: boolean;
+  applicationNumber?: string;
+  installationRequestId?: string;
+  installationStatus?: string;
+  preferredDate?: string;
+  confirmedDate?: string;
+  referencedNotice?: ServerReferencedNoticeContext;
 }
 
 let inMemoryNotifications: ServerConsumerNotification[] = [];
 let inMemoryAnnouncements: any[] = [];
 let deletedServerAnnouncementIds: string[] = [];
 let inMemoryTariffConfig: any = null;
+let inMemoryInstallations: any[] = [];
 
 // ==========================================
 // PERSISTENT PORTAL SYNC STORE (.data/portal_sync_store.json)
@@ -3625,7 +3934,8 @@ function savePortalSyncStore(): void {
       reports: inMemoryReports,
       announcements: inMemoryAnnouncements,
       deletedAnnouncementIds: deletedServerAnnouncementIds,
-      tariffConfig: inMemoryTariffConfig
+      tariffConfig: inMemoryTariffConfig,
+      installations: inMemoryInstallations
     };
     fs.writeFileSync(PORTAL_SYNC_FILE, JSON.stringify(payload, null, 2), "utf8");
   } catch (err) {
@@ -3684,7 +3994,6 @@ function ensureIssuedConsumerNotificationServer(consumer: MobileConsumerSync): S
   if (!consumer || !isIssuedAccountNumberServer(consumer.accountNumber)) return undefined;
   const acc = consumer.accountNumber.trim().toUpperCase();
   const meter = (consumer.meterNumber || `MT-${acc}`).trim().toUpperCase();
-  const rfid = (consumer.rfidTag || `RFID-${meter}`).trim().toUpperCase();
   const cEmail = (consumer.email || "").trim().toLowerCase();
 
   // Re-associate any old PENDING notifications for this consumer's email/userId to their issued accountNumber
@@ -3724,7 +4033,7 @@ function ensureIssuedConsumerNotificationServer(consumer: MobileConsumerSync): S
       userId: consumer.linkedUserId,
       consumerEmail: cEmail || undefined,
       title: `Official Account Number & Meter Issued!`,
-      message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${acc} and Meter Serial is #${meter}. Smart RFID Tag: ${rfid}. Your full dashboard and telemetry are now active.`,
+      message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${acc} and Meter Tag Number is #${meter}. Your full dashboard and billing history are now active.`,
       type: "account_issue"
     },
     false
@@ -3779,11 +4088,160 @@ function reconcileAllServerConsumersAndUsers(): void {
   });
 }
 
+function isTransactionalServerAnnouncementItem(item: Record<string, any> | null | undefined): boolean {
+  if (!item || typeof item !== "object") return false;
+  const rawType = String(item.type || "").trim().toLowerCase();
+  const rawCat = String(item.category || "").trim().toLowerCase();
+  if (rawType === "payment" || rawType === "receipt_upload" || rawType === "meter_status" || rawType === "installation") return true;
+  if (rawCat === "payment" || rawCat === "receipt" || rawCat === "receipt_upload" || rawCat === "meter_status" || rawCat === "installation") return true;
+  if (typeof item.orNumber === "string" && item.orNumber.trim() !== "") return true;
+  if (typeof item.amountPaid === "number" && item.amountPaid > 0) return true;
+  if (typeof item.receiptUrl === "string" && item.receiptUrl.trim() !== "") return true;
+
+  const title = String(item.title || "").trim();
+  const body = String(item.content || item.message || "").trim();
+  const combined = `${title} ${body}`;
+
+  if (/\bpayment\s*(successful|success|confirmed|received|settled|cleared|processed|recorded|complete|completed)\b/i.test(title)) {
+    return true;
+  }
+  if (/\bpayment\s+settle\s+confirmed\b/i.test(combined)) return true;
+  if (/\bofficial\s+receipt\s*(issued|verified|#|:)/i.test(combined)) return true;
+  if (/\breceipt\s*(uploaded|verified|approved|validated|rejected|under\s+verification)\b/i.test(title)) return true;
+  if (/^water\s+bill\s+issued\b/i.test(title)) return true;
+  if (/\bin-office\s+cash\s+payment\s+of\b/i.test(combined)) return true;
+  if (/\bonline\s+payment\s+of\s*₱/i.test(combined)) return true;
+
+  return false;
+}
+
+function isPersonalServerNotifType(type?: string | null): boolean {
+  const t = String(type || "").trim().toLowerCase();
+  return (
+    t === "payment" ||
+    t === "receipt_upload" ||
+    t === "account_issue" ||
+    t === "disconnection" ||
+    t === "report" ||
+    t === "balance" ||
+    t === "meter_status" ||
+    t === "installation"
+  );
+}
+
+function inferServerNotificationType(n: Record<string, any> | null | undefined): string {
+  if (!n || typeof n !== "object") return "announcement";
+  const rawType = String(n.type || "").trim().toLowerCase();
+  const title = String(n.title || "").trim();
+  const msg = String(n.message || "").trim();
+  const titleLower = title.toLowerCase();
+  const msgLower = msg.toLowerCase();
+  const accUpper = String(n.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+  const isBroadcast = accUpper === "ALL" || accUpper === "BROADCAST" || accUpper === "DISTRICT";
+
+  if (
+    rawType === "report" ||
+    Boolean(n.reportId) ||
+    Boolean(n.ticketNumber) ||
+    titleLower.includes("concern ticket") ||
+    titleLower.includes("report reply") ||
+    msgLower.includes("replied to your concern") ||
+    msgLower.includes("ticket #")
+  ) {
+    return "report";
+  }
+  if (
+    rawType === "receipt_upload" ||
+    /\breceipt\s*(uploaded|verified|approved|validated|rejected|under\s+verification)\b/i.test(title)
+  ) {
+    return "receipt_upload";
+  }
+  if (
+    rawType === "payment" ||
+    (typeof n.orNumber === "string" && n.orNumber.trim() !== "") ||
+    (typeof n.amountPaid === "number" && n.amountPaid > 0) ||
+    /\bpayment\s*(successful|success|confirmed|received|settled|cleared|processed|recorded|complete|completed)\b/i.test(title) ||
+    /\bpayment\s+settle\s+confirmed\b/i.test(`${title} ${msg}`) ||
+    /\bofficial\s+receipt\s*(issued|#|:)/i.test(`${title} ${msg}`) ||
+    /\bin-office\s+cash\s+payment\s+of\b/i.test(`${title} ${msg}`)
+  ) {
+    return "payment";
+  }
+  if (
+    rawType === "disconnection" ||
+    titleLower.includes("disconnection") ||
+    titleLower.includes("cutting order") ||
+    titleLower.includes("curb-stop")
+  ) {
+    return "disconnection";
+  }
+  if (
+    rawType === "installation" ||
+    Boolean(n.installationRequestId) ||
+    Boolean(n.installationStatus) ||
+    titleLower.includes("water meter installation") ||
+    titleLower.includes("installation schedule")
+  ) {
+    return "installation";
+  }
+  if (
+    rawType === "meter_status" ||
+    Boolean(n.meterStatus) ||
+    titleLower.includes("regarding your water meter") ||
+    titleLower.includes("water meter status")
+  ) {
+    return "meter_status";
+  }
+  if (
+    rawType === "account_issue" ||
+    titleLower.includes("account number") ||
+    titleLower.includes("meter issued") ||
+    titleLower.includes("service account has been activated") ||
+    titleLower.includes("registration application")
+  ) {
+    return "account_issue";
+  }
+  if (
+    /^(official\s+(district\s+)?advisory|district\s+advisory|public\s+advisory)\b/i.test(title) ||
+    (isBroadcast && rawType === "announcement")
+  ) {
+    return "announcement";
+  }
+  if (rawType === "balance" || titleLower.includes("remaining balance")) {
+    return "balance";
+  }
+  if (
+    rawType === "billing" ||
+    /^water\s+bill\s+issued\b/i.test(title) ||
+    titleLower.includes("tariff overdue") ||
+    titleLower.includes("water bill") ||
+    Boolean(n.readingId) ||
+    Boolean(n.billingPeriod)
+  ) {
+    return "billing";
+  }
+  const validTypes = new Set([
+    "payment",
+    "billing",
+    "balance",
+    "announcement",
+    "disconnection",
+    "receipt_upload",
+    "report",
+    "account_issue",
+    "meter_status",
+    "installation",
+  ]);
+  if (validTypes.has(rawType)) return rawType;
+  return isBroadcast ? "announcement" : "account_issue";
+}
+
 function loadPortalSyncStore(): void {
   try {
     if (!fs.existsSync(PORTAL_SYNC_FILE)) return;
     const raw = fs.readFileSync(PORTAL_SYNC_FILE, "utf8");
     const parsed = JSON.parse(raw);
+    let cleanedStore = false;
 
     if (Array.isArray(parsed?.users)) {
       parsed.users.forEach((pu: PortalSyncUser) => {
@@ -3800,7 +4258,9 @@ function loadPortalSyncStore(): void {
     }
 
     if (Array.isArray(parsed?.notifications)) {
-      inMemoryNotifications = dedupeServerNotifications(parsed.notifications);
+      const deduped = dedupeServerNotifications(parsed.notifications);
+      if (deduped.length !== parsed.notifications.length) cleanedStore = true;
+      inMemoryNotifications = deduped;
     }
 
     if (Array.isArray(parsed?.reports) && parsed.reports.length > 0) {
@@ -3820,13 +4280,23 @@ function loadPortalSyncStore(): void {
     }
 
     if (Array.isArray(parsed?.announcements)) {
-      inMemoryAnnouncements = parsed.announcements.filter(
-        (a: any) => a && a.id && !deletedServerAnnouncementIds.includes(a.id)
+      const filteredAnns = parsed.announcements.filter(
+        (a: any) =>
+          a &&
+          a.id &&
+          !deletedServerAnnouncementIds.includes(a.id) &&
+          !isTransactionalServerAnnouncementItem(a)
       );
+      if (filteredAnns.length !== parsed.announcements.length) cleanedStore = true;
+      inMemoryAnnouncements = filteredAnns;
     }
 
     if (parsed?.tariffConfig && typeof parsed.tariffConfig === "object") {
       inMemoryTariffConfig = parsed.tariffConfig;
+    }
+
+    if (Array.isArray(parsed?.installations)) {
+      inMemoryInstallations = parsed.installations.filter((r: any) => r && r.id);
     }
 
     if (Array.isArray(parsed?.consumers) && parsed.consumers.length > 0) {
@@ -3851,6 +4321,9 @@ function loadPortalSyncStore(): void {
     }
 
     reconcileAllServerConsumersAndUsers();
+    if (cleanedStore) {
+      savePortalSyncStore();
+    }
   } catch (err) {
     console.warn("[PortalSyncStore] Could not load persisted store:", err);
   }
@@ -3872,7 +4345,7 @@ function getServerNotifSemanticKey(n: Partial<ServerConsumerNotification> & Reco
     target = `UID:${uid}`;
   }
 
-  const type = String(n.type || "announcement").trim().toLowerCase();
+  const type = inferServerNotificationType(n);
   const normTitle = String(n.title || "").trim().replace(/\s+/g, " ").toLowerCase();
   const normMsg = String(n.message || "").trim().replace(/\s+/g, " ").toLowerCase();
 
@@ -3895,8 +4368,25 @@ function getServerNotifSemanticKey(n: Partial<ServerConsumerNotification> & Reco
   if (type === "payment" || type === "receipt_upload") {
     return `${type}::${target}::${String(n.readingId || n.billingPeriod || "").trim().toLowerCase()}::${normTitle}::${normMsg.slice(0, 80)}`;
   }
+  if (type === "meter_status") {
+    const meterKey = String(n.meterNumber || "").trim().toLowerCase();
+    const statusKey = String(n.meterStatus || "").trim().toLowerCase();
+    const eventStamp = String(n.statusUpdateDate || n.id || n.timestamp || "").trim();
+    return `meter_status::${target}::${meterKey}::${statusKey}::${eventStamp}`;
+  }
+  if (type === "installation") {
+    const reqKey = String(n.installationRequestId || n.applicationNumber || "").trim().toLowerCase();
+    const instStatus = String(n.installationStatus || "").trim().toLowerCase();
+    const eventId = String(n.id || n.confirmedDate || n.timestamp || "").trim();
+    return `installation::${target}::${reqKey}::${instStatus}::${eventId}`;
+  }
   if (type === "report") {
-    return `report::${target}::${String(n.reportId || n.ticketNumber || "").trim().toLowerCase()}::${normTitle}::${normMsg.slice(0, 140)}`;
+    const repKey = String(n.reportId || n.ticketNumber || "").trim().toLowerCase();
+    const replyKey = String(n.replyId || "").trim().toLowerCase();
+    if (repKey && replyKey) {
+      return `report::${target}::${repKey}::reply::${replyKey}`;
+    }
+    return `report::${target}::${repKey}::${normTitle}::${normMsg.slice(0, 140)}`;
   }
   return `${type}::${target}::${normTitle}::${normMsg.slice(0, 140)}`;
 }
@@ -3909,8 +4399,22 @@ function dedupeServerNotifications(list: ServerConsumerNotification[], maxTotal 
   for (const raw of list) {
     if (!raw || !raw.title) continue;
     const cleanAcc = String(raw.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const inferredType = inferServerNotificationType(raw);
+    const isBroadcast = cleanAcc === "ALL" || cleanAcc === "BROADCAST" || cleanAcc === "DISTRICT";
+
+    if (
+      isBroadcast &&
+      !raw.consumerEmail &&
+      !raw.userId &&
+      !(raw as any).consumerId &&
+      (isPersonalServerNotifType(inferredType) || isTransactionalServerAnnouncementItem(raw as any))
+    ) {
+      continue;
+    }
+
     const item: ServerConsumerNotification = {
       ...raw,
+      type: inferredType as ServerConsumerNotification["type"],
       id: String(raw.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`),
       accountNumber: cleanAcc || raw.accountNumber || "PENDING",
       ...(raw.consumerEmail ? { consumerEmail: String(raw.consumerEmail).trim().toLowerCase() } : {}),
@@ -3955,8 +4459,10 @@ function pushServerNotification(
   const nowMs = Date.now();
   const cleanAcc = (input.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
   const cleanEmail = (input.consumerEmail || "").trim().toLowerCase();
+  const inferredType = inferServerNotificationType(input) as ServerConsumerNotification["type"];
   const targetSemKey = getServerNotifSemanticKey({
     ...input,
+    type: inferredType,
     accountNumber: cleanAcc || input.accountNumber,
     consumerEmail: cleanEmail || undefined,
   });
@@ -3968,6 +4474,7 @@ function pushServerNotification(
   });
 
   if (existing) {
+    existing.type = inferredType;
     if (isIssuedAccountNumberServer(cleanAcc) && !isIssuedAccountNumberServer(existing.accountNumber)) {
       existing.accountNumber = cleanAcc;
     }
@@ -3982,6 +4489,7 @@ function pushServerNotification(
 
   const created: ServerConsumerNotification = {
     ...input,
+    type: inferredType,
     accountNumber: cleanAcc || input.accountNumber || "PENDING",
     ...(cleanEmail ? { consumerEmail: cleanEmail } : {}),
     id: input.id || `notif-${nowMs}-${Math.floor(Math.random() * 1000)}`,
@@ -4036,7 +4544,11 @@ app.get("/api/notifications", (req, res) => {
     const filtered = dedupeServerNotifications(
       inMemoryNotifications.filter(n => {
         const nAcc = (n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
+        const inferred = inferServerNotificationType(n);
         if (nAcc === "all" || nAcc === "broadcast" || nAcc === "district") {
+          if (isPersonalServerNotifType(inferred) || isTransactionalServerAnnouncementItem(n as any)) {
+            return false;
+          }
           return true;
         }
         const nHasRealAcc = !isPlaceholder(n.accountNumber);
@@ -4125,7 +4637,11 @@ app.patch("/api/notifications/:id/read", (req, res) => {
 // ==========================================
 app.get("/api/announcements", (_req, res) => {
   const activeList = inMemoryAnnouncements.filter(
-    (a) => a && a.id && !deletedServerAnnouncementIds.includes(a.id)
+    (a) =>
+      a &&
+      a.id &&
+      !deletedServerAnnouncementIds.includes(a.id) &&
+      !isTransactionalServerAnnouncementItem(a)
   );
   res.json({
     success: true,
@@ -4138,14 +4654,25 @@ app.get("/api/announcements", (_req, res) => {
 app.post("/api/announcements", (req, res) => {
   try {
     const body = req.body || {};
+    if (isTransactionalServerAnnouncementItem(body)) {
+      return res.status(400).json({
+        success: false,
+        message: "Personal payment or receipt notifications cannot be published to public District Announcements."
+      });
+    }
     const id = body.id || `ann-${Date.now()}`;
+    const rawCat = String(body.category || body.type || "info").trim().toLowerCase();
+    const category = ["maintenance", "disruption", "event", "info"].includes(rawCat) ? rawCat : "info";
+    const postedBy = String(body.postedBy || body.author || "TWD Operations").trim();
     const ann = {
       id,
       title: String(body.title || "Official Advisory").trim(),
       content: String(body.content || "").trim(),
-      type: body.type || "info",
+      category,
+      type: category,
       date: body.date || new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-      author: body.author || "TWD Operations",
+      postedBy,
+      author: postedBy,
       createdAt: body.createdAt || new Date().toISOString()
     };
     deletedServerAnnouncementIds = deletedServerAnnouncementIds.filter((delId) => delId !== id);
@@ -4219,6 +4746,180 @@ app.post("/api/tariff-config", (req, res) => {
     res.json({ success: true, config: cfg });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to save tariff configuration." });
+  }
+});
+
+// ==========================================
+// 9. WATER METER INSTALLATION REQUESTS & ACCOUNT VALIDATION APIS (/api/installations)
+// ==========================================
+app.get("/api/installations", (req, res) => {
+  try {
+    const { email, userId, applicationNumber } = req.query;
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    const cleanUid = String(userId || "").trim();
+    const cleanApp = String(applicationNumber || "").trim().toUpperCase();
+
+    let list = [...inMemoryInstallations];
+    if (cleanEmail || cleanUid || cleanApp) {
+      list = list.filter((r) => {
+        if (!r) return false;
+        const rEmail = String(r.consumerEmail || "").trim().toLowerCase();
+        const rUid = String(r.userId || "").trim();
+        const rApp = String(r.applicationNumber || "").trim().toUpperCase();
+        if (cleanEmail && rEmail && cleanEmail === rEmail) return true;
+        if (cleanUid && rUid && cleanUid === rUid) return true;
+        if (cleanApp && rApp && cleanApp === rApp) return true;
+        return false;
+      });
+    }
+    list.sort((a, b) => new Date(b.submissionDate || 0).getTime() - new Date(a.submissionDate || 0).getTime());
+    res.json({ success: true, count: list.length, installations: list });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to fetch installation requests." });
+  }
+});
+
+app.post("/api/installations", (req, res) => {
+  try {
+    const incomingReq = req.body?.request || req.body;
+    const incomingNotif = req.body?.notification;
+    if (!incomingReq || !incomingReq.consumerName) {
+      return res.status(400).json({ success: false, message: "Valid installation request payload is required." });
+    }
+    const id = String(incomingReq.id || `INST-${Date.now()}`);
+    const saved = { ...incomingReq, id, updatedAt: incomingReq.updatedAt || new Date().toISOString() };
+    const idx = inMemoryInstallations.findIndex(
+      (r) => r.id === id || (saved.applicationNumber && r.applicationNumber === saved.applicationNumber)
+    );
+    if (idx >= 0) {
+      inMemoryInstallations[idx] = { ...inMemoryInstallations[idx], ...saved };
+    } else {
+      inMemoryInstallations.unshift(saved);
+    }
+
+    if (incomingNotif && incomingNotif.title && incomingNotif.message) {
+      pushServerNotification(incomingNotif, false);
+    }
+    savePortalSyncStore();
+
+    broadcast("INSTALLATION_REQUEST_SUBMITTED", {
+      request: saved,
+      notification: incomingNotif,
+      message: `New Water Meter Installation Request (#${saved.applicationNumber}) submitted by ${saved.consumerName}.`,
+    });
+
+    res.status(201).json({ success: true, request: saved });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to submit installation request." });
+  }
+});
+
+app.patch("/api/installations/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    const incomingReq = req.body?.request;
+    const incomingNotif = req.body?.notification;
+    const idx = inMemoryInstallations.findIndex((r) => r.id === id || r.applicationNumber === id);
+
+    let updated: any;
+    if (incomingReq && typeof incomingReq === "object") {
+      updated = { ...(idx >= 0 ? inMemoryInstallations[idx] : {}), ...incomingReq, id: incomingReq.id || id };
+    } else if (idx >= 0) {
+      updated = { ...inMemoryInstallations[idx], ...(req.body || {}) };
+    } else {
+      return res.status(404).json({ success: false, message: "Installation request not found." });
+    }
+
+    if (idx >= 0) {
+      inMemoryInstallations[idx] = updated;
+    } else {
+      inMemoryInstallations.unshift(updated);
+    }
+
+    let savedNotif: ServerConsumerNotification | undefined;
+    if (incomingNotif && incomingNotif.title && incomingNotif.message) {
+      savedNotif = pushServerNotification(incomingNotif, false);
+    }
+    savePortalSyncStore();
+
+    broadcast("INSTALLATION_REQUEST_UPDATED", {
+      request: updated,
+      notification: savedNotif,
+      message: `Installation Request #${updated.applicationNumber} updated to "${updated.status}".`,
+    });
+    if (savedNotif) {
+      broadcast("CONSUMER_NOTIFICATION_CREATED", {
+        notification: savedNotif,
+        accountNumber: savedNotif.accountNumber,
+        consumerEmail: savedNotif.consumerEmail,
+        userId: savedNotif.userId,
+      });
+    }
+
+    res.json({ success: true, request: updated, notification: savedNotif });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to update installation request." });
+  }
+});
+
+app.post("/api/installations/:id/validate", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { request: validatedReq, consumer: activatedConsumer, notification: activationNotif } = req.body || {};
+    if (!validatedReq || !activatedConsumer) {
+      return res.status(400).json({ success: false, message: "Validated request and consumer records are required." });
+    }
+
+    const idx = inMemoryInstallations.findIndex((r) => r.id === id || r.applicationNumber === id);
+    if (idx >= 0) {
+      inMemoryInstallations[idx] = { ...inMemoryInstallations[idx], ...validatedReq };
+    } else {
+      inMemoryInstallations.unshift(validatedReq);
+    }
+
+    const cleanAcc = String(activatedConsumer.accountNumber || "").trim().toUpperCase();
+    const cleanEmail = String(activatedConsumer.email || "").trim().toLowerCase();
+    const cleanUid = String(activatedConsumer.linkedUserId || "").trim();
+
+    const cIdx = syncedConsumers.findIndex(
+      (c) =>
+        (cleanAcc && c.accountNumber && c.accountNumber.toUpperCase() === cleanAcc) ||
+        (cleanEmail && c.email && c.email.toLowerCase() === cleanEmail) ||
+        (cleanUid && c.linkedUserId === cleanUid)
+    );
+    if (cIdx >= 0) {
+      syncedConsumers[cIdx] = { ...syncedConsumers[cIdx], ...activatedConsumer, status: "active" };
+    } else {
+      syncedConsumers.unshift({ ...activatedConsumer, status: "active" });
+    }
+    syncConsumerToServerPortalUser(activatedConsumer);
+
+    let savedNotif: ServerConsumerNotification | undefined;
+    if (activationNotif && activationNotif.title && activationNotif.message) {
+      savedNotif = pushServerNotification(activationNotif, false);
+    }
+    savePortalSyncStore();
+
+    broadcast("INSTALLATION_REQUEST_UPDATED", {
+      request: validatedReq,
+      notification: savedNotif,
+      message: `Installation #${validatedReq.applicationNumber} validated & Account #${cleanAcc} activated.`,
+    });
+    broadcast("CONSUMER_IDS_ISSUED", {
+      consumer: activatedConsumer,
+      notification: savedNotif,
+      accountNumber: cleanAcc,
+      meterNumber: activatedConsumer.meterNumber,
+      rfidTag: activatedConsumer.rfidTag,
+      email: activatedConsumer.email,
+      linkedUserId: activatedConsumer.linkedUserId,
+      isUpdate: false,
+      message: `Account #${cleanAcc} & Meter Tag #${activatedConsumer.meterNumber} activated for ${activatedConsumer.name}.`,
+    });
+
+    res.json({ success: true, request: validatedReq, consumer: activatedConsumer, notification: savedNotif });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to validate installation and activate account." });
   }
 });
 
@@ -4396,7 +5097,14 @@ function runServerGracePeriodScan(): ServerGracePeriodScanResult {
 
   syncedConsumers.forEach((consumer) => {
     // Only evaluate accounts with issued account numbers that aren't pending or inactive
-    if (!consumer.accountNumber || consumer.accountNumber.toUpperCase().startsWith("PENDING") || consumer.status === "pending_approval" || consumer.status === "inactive") {
+    if (
+      !consumer.accountNumber ||
+      consumer.accountNumber.toUpperCase().startsWith("PENDING") ||
+      consumer.status === "pending_approval" ||
+      consumer.status === "pending_installation" ||
+      consumer.status === "installation_not_scheduled" ||
+      consumer.status === "inactive"
+    ) {
       return;
     }
 
@@ -4530,7 +5238,8 @@ app.get(["/api/barangays", "/api/routes", "/api/areas"], (req, res) => {
     { id: "BRG-06", name: "Mohon", code: "MH-06", ratePerM3: 24.50, zone: "Zone 11-12: Mohon Industrial Corridor" },
     { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 24.50, zone: "Zone 7: Gracia Uplands" },
     { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 24.50, zone: "Zone 8: Casinglot Residential" },
-    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 24.50, zone: "Zone 9: Sugbongcogon Valley" }
+    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 24.50, zone: "Zone 9: Sugbongcogon Valley" },
+    { id: "BRG-10", name: "Rosario", code: "RS-10", ratePerM3: 24.50, zone: "Zone 10: Rosario Uplands" }
   ];
   res.json({ success: true, count: barangays.length, barangays, routes: barangays, areas: barangays, data: barangays });
 });

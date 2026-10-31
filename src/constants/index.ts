@@ -78,4 +78,5 @@ export const STANDARD_BARANGAYS = [
   { id: 'BRG-07', name: 'Gracia', code: 'GR-07', ratePerM3: 24.50, zone: 'Zone 7: Gracia Uplands' },
   { id: 'BRG-08', name: 'Casinglot', code: 'CS-08', ratePerM3: 24.50, zone: 'Zone 8: Casinglot Residential' },
   { id: 'BRG-09', name: 'Sugbongcogon', code: 'SG-09', ratePerM3: 24.50, zone: 'Zone 9: Sugbongcogon Valley' },
+  { id: 'BRG-10', name: 'Rosario', code: 'RS-10', ratePerM3: 24.50, zone: 'Zone 10: Rosario Uplands' },
 ] as const;

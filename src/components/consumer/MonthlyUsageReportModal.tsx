@@ -108,18 +108,34 @@ function computeReportData(
     : activeTariff.residential.baseMinCharge;
   const franchiseRate = activeTariff.franchiseTaxRate ?? 0.02;
 
+  const validHistory = allHistoryReadings.filter((r) => r.status !== 'cancelled');
+
+  const formatReadingOptionKey = (r: MeterReading, list: MeterReading[]) => {
+    const basePeriod = r.billingPeriod || r.readingDate || 'Current Cycle';
+    const duplicates = list.filter((item) => (item.billingPeriod || item.readingDate || 'Current Cycle') === basePeriod);
+    if (duplicates.length <= 1) return basePeriod;
+    return `${basePeriod} (${r.readingDate} · Index ${r.currentReading} m³)`;
+  };
+
   const currentReading =
-    allHistoryReadings.find((r) => r.billingPeriod === selectedPeriod) ||
-    allHistoryReadings[0] ||
+    validHistory.find(
+      (r) =>
+        r.id === selectedPeriod ||
+        formatReadingOptionKey(r, validHistory) === selectedPeriod ||
+        r.billingPeriod === selectedPeriod
+    ) ||
+    validHistory[0] ||
     null;
 
+  const targetBillingPeriod = currentReading?.billingPeriod || selectedPeriod;
+
   // Dynamic District Household Average Usage Calculation
-  const allDbReadings = mockDb.getReadings();
+  const allDbReadings = mockDb.getReadings().filter((r) => r.status !== 'cancelled');
   const allConsumers = mockDb.getConsumers();
   const consumerMap = new Map(allConsumers.map((c) => [c.accountNumber, c]));
 
   const periodDbReadings = allDbReadings.filter(
-    (r) => r.billingPeriod === selectedPeriod || (!selectedPeriod && r.consumption > 0)
+    (r) => r.billingPeriod === targetBillingPeriod || (!targetBillingPeriod && r.consumption > 0)
   );
 
   const residentialReadings = periodDbReadings.filter(
@@ -188,19 +204,24 @@ function computeReportData(
     efficiencyAdvice = `Your usage is ${percentDiff}% higher than average. We advise inspecting underground pipe lines, float valves, and overhead storage tanks for concealed leaks.`;
   }
 
-  const historyTimeline = allHistoryReadings.slice(0, 6).map((r) => {
+  const historyTimeline = validHistory.slice(0, 8).map((r) => {
     const m3 = r.consumption || 0;
     const bAmt = getReadingEffectiveBillAmount(r, classification);
     const varVsAvg = Number((m3 - districtAvgM3).toFixed(1));
+    const prev = r.previousReading || 0;
+    const pres = r.presentReading ?? r.currentReading ?? prev;
     return {
       period: r.billingPeriod || 'N/A',
       date: r.readingDate || 'N/A',
-      prev: r.previousReading || 0,
-      curr: r.currentReading || 0,
+      prev,
+      pres,
+      curr: r.currentReading ?? pres,
       m3,
       varVsAvg,
       amount: bAmt,
-      status: r.paymentStatus || r.status || 'verified'
+      status: r.status === 'pending' || r.status === 'flagged_abnormal'
+        ? 'pending approval'
+        : r.paymentStatus || r.status || 'verified'
     };
   });
 
@@ -480,8 +501,8 @@ export async function downloadConsumerUsageReportPdf(params: {
             h.period,
             h.date,
             `${h.prev} m3`,
-            `${h.curr} m3`,
-            `${h.m3} m3`,
+            `${h.pres} m3`,
+            `${h.m3} m3 (Idx ${h.curr})`,
             h.varVsAvg <= 0
               ? `-${Math.abs(h.varVsAvg)} m3 (Efficient)`
               : `+${h.varVsAvg} m3 (Higher)`,
@@ -497,9 +518,9 @@ export async function downloadConsumerUsageReportPdf(params: {
         [
           'BILLING PERIOD',
           'INSPECTION DATE',
-          'PREV INDEX',
-          'CURR INDEX',
-          'CONSUMED',
+          'PREV READING',
+          'PRES READING',
+          'CURRENT / USED',
           'VS. DISTRICT AVG',
           'BILLED AMOUNT',
           'STATUS'
@@ -583,9 +604,15 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
 
   // Available billing periods from readings (ALL hooks unconditionally declared before early return!)
   const availablePeriods = useMemo(() => {
-    const periods = Array.from(
-      new Set(allHistoryReadings.map((r) => r.billingPeriod).filter(Boolean))
-    );
+    const valid = allHistoryReadings.filter((r) => r.status !== 'cancelled');
+    const labels = valid.map((r) => {
+      const basePeriod = r.billingPeriod || r.readingDate || 'Current Cycle';
+      const duplicates = valid.filter((item) => (item.billingPeriod || item.readingDate || 'Current Cycle') === basePeriod);
+      return duplicates.length <= 1
+        ? basePeriod
+        : `${basePeriod} (${r.readingDate} · Index ${r.currentReading} m³)`;
+    });
+    const periods = Array.from(new Set(labels.filter(Boolean)));
     if (periods.length === 0) {
       const fallbackCurrent = new Date().toLocaleDateString('en-US', {
         month: 'long',
@@ -800,10 +827,10 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
                   </span>
                   <span className="text-sm font-bold text-slate-400">m³</span>
                 </div>
-                <span className="text-[10px] text-blue-300 font-semibold block mt-1 font-mono">
+                <span className="text-[10px] text-blue-300 font-semibold block mt-1 font-mono tabular-nums">
                   {usageStats.currentReading
-                    ? `Index: ${usageStats.currentReading.previousReading} → ${usageStats.currentReading.currentReading} m³`
-                    : 'No verified reading for cycle'}
+                    ? `Prev ${usageStats.currentReading.previousReading} → Pres ${usageStats.currentReading.presentReading ?? usageStats.currentReading.currentReading} m³ (Curr ${usageStats.currentReading.currentReading})`
+                    : `Baseline: ${consumer.previousReading ?? 0} m³`}
                 </span>
               </div>
 
@@ -972,8 +999,8 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
                   <thead className="bg-slate-950 text-slate-300 font-bold uppercase border-b border-slate-800 text-[10px]">
                     <tr>
                       <th className="px-4 py-3">Billing Cycle</th>
-                      <th className="px-4 py-3">Index (Prev → Curr)</th>
-                      <th className="px-4 py-3">Consumed</th>
+                      <th className="px-4 py-3">Previous → Present</th>
+                      <th className="px-4 py-3">Current & Usage</th>
                       <th className="px-4 py-3">vs. District Avg</th>
                       <th className="px-4 py-3">Billed (PHP)</th>
                       <th className="px-4 py-3">Status</th>
@@ -989,11 +1016,16 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
                     ) : (
                       usageStats.historyTimeline.map((h, i) => (
                         <tr key={i} className="hover:bg-slate-800/60 transition">
-                          <td className="px-4 py-3 font-bold text-white">{h.period}</td>
-                          <td className="px-4 py-3 font-mono text-slate-300">
-                            {h.prev} m³ → <strong className="text-white">{h.curr} m³</strong>
+                          <td className="px-4 py-3 font-bold text-white">
+                            {h.period}
+                            <span className="text-[10px] text-slate-400 font-mono block">{h.date}</span>
                           </td>
-                          <td className="px-4 py-3 font-mono font-black text-sky-400">{h.m3} m³</td>
+                          <td className="px-4 py-3 font-mono tabular-nums text-slate-300">
+                            {h.prev} m³ → <strong className="text-white">{h.pres} m³</strong>
+                          </td>
+                          <td className="px-4 py-3 font-mono tabular-nums font-black text-sky-400">
+                            {h.m3} m³ <span className="text-[10px] text-slate-400 font-normal">(Idx {h.curr})</span>
+                          </td>
                           <td className="px-4 py-3">
                             <span
                               className={`font-mono text-[11px] font-bold ${

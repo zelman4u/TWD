@@ -285,6 +285,14 @@ interface PortalNotification {
   remainingBalance?: number;
   reportId?: string;
   ticketNumber?: string;
+  subject?: string;
+  consumerName?: string;
+  meterNumber?: string;
+  meterStatus?: string;
+  previousMeterStatus?: string;
+  statusUpdateDate?: string;
+  remarks?: string;
+  updatedByAdmin?: string;
 }
 
 interface MobileReadingSubmission {
@@ -815,7 +823,7 @@ app.post("/api/consumers/reconcile", async (req, res) => {
           c.linkedUserId ||
             c.email ||
             acc.startsWith("BRG-") ||
-            /^(PB|NT|BL|SA|SC|MH|GR|CS|SG)-\d+/i.test(acc)
+            /^(PB|NT|BL|SA|SC|MH|GR|CS|SG|RS)-\d+/i.test(acc)
         );
         if (isPortalLinked) {
           const matchedU = incomingUsers.find(
@@ -1801,6 +1809,142 @@ app.delete("/api/consumers/:identifier", async (req, res) => {
   }
 });
 
+function isTransactionalPortalAnnouncementItem(item: Record<string, any> | null | undefined): boolean {
+  if (!item || typeof item !== "object") return false;
+  const rawType = String(item.type || "").trim().toLowerCase();
+  const rawCat = String(item.category || "").trim().toLowerCase();
+  if (rawType === "payment" || rawType === "receipt_upload" || rawType === "meter_status") return true;
+  if (rawCat === "payment" || rawCat === "receipt" || rawCat === "receipt_upload" || rawCat === "meter_status") return true;
+  if (typeof item.orNumber === "string" && item.orNumber.trim() !== "") return true;
+  if (typeof item.amountPaid === "number" && item.amountPaid > 0) return true;
+  if (typeof item.receiptUrl === "string" && item.receiptUrl.trim() !== "") return true;
+
+  const title = String(item.title || "").trim();
+  const body = String(item.content || item.message || "").trim();
+  const combined = `${title} ${body}`;
+
+  if (/\bpayment\s*(successful|success|confirmed|received|settled|cleared|processed|recorded|complete|completed)\b/i.test(title)) {
+    return true;
+  }
+  if (/\bpayment\s+settle\s+confirmed\b/i.test(combined)) return true;
+  if (/\bofficial\s+receipt\s*(issued|verified|#|:)/i.test(combined)) return true;
+  if (/\breceipt\s*(uploaded|verified|approved|validated|rejected|under\s+verification)\b/i.test(title)) return true;
+  if (/^water\s+bill\s+issued\b/i.test(title)) return true;
+  if (/\bin-office\s+cash\s+payment\s+of\b/i.test(combined)) return true;
+  if (/\bonline\s+payment\s+of\s*₱/i.test(combined)) return true;
+
+  return false;
+}
+
+function isPersonalPortalNotifType(type?: string | null): boolean {
+  const t = String(type || "").trim().toLowerCase();
+  return (
+    t === "payment" ||
+    t === "receipt_upload" ||
+    t === "account_issue" ||
+    t === "disconnection" ||
+    t === "report" ||
+    t === "balance" ||
+    t === "meter_status"
+  );
+}
+
+function inferPortalNotifType(n: Record<string, any> | null | undefined): string {
+  if (!n || typeof n !== "object") return "announcement";
+  const rawType = String(n.type || "").trim().toLowerCase();
+  const title = String(n.title || "").trim();
+  const msg = String(n.message || "").trim();
+  const titleLower = title.toLowerCase();
+  const msgLower = msg.toLowerCase();
+  const accUpper = String(n.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+  const isBroadcast = accUpper === "ALL" || accUpper === "BROADCAST" || accUpper === "DISTRICT";
+
+  if (
+    rawType === "report" ||
+    Boolean(n.reportId) ||
+    Boolean(n.ticketNumber) ||
+    titleLower.includes("concern ticket") ||
+    titleLower.includes("report reply") ||
+    msgLower.includes("replied to your concern") ||
+    msgLower.includes("ticket #")
+  ) {
+    return "report";
+  }
+  if (
+    rawType === "receipt_upload" ||
+    /\breceipt\s*(uploaded|verified|approved|validated|rejected|under\s+verification)\b/i.test(title)
+  ) {
+    return "receipt_upload";
+  }
+  if (
+    rawType === "payment" ||
+    (typeof n.orNumber === "string" && n.orNumber.trim() !== "") ||
+    (typeof n.amountPaid === "number" && n.amountPaid > 0) ||
+    /\bpayment\s*(successful|success|confirmed|received|settled|cleared|processed|recorded|complete|completed)\b/i.test(title) ||
+    /\bpayment\s+settle\s+confirmed\b/i.test(`${title} ${msg}`) ||
+    /\bofficial\s+receipt\s*(issued|#|:)/i.test(`${title} ${msg}`) ||
+    /\bin-office\s+cash\s+payment\s+of\b/i.test(`${title} ${msg}`)
+  ) {
+    return "payment";
+  }
+  if (
+    rawType === "disconnection" ||
+    titleLower.includes("disconnection") ||
+    titleLower.includes("cutting order") ||
+    titleLower.includes("curb-stop")
+  ) {
+    return "disconnection";
+  }
+  if (
+    rawType === "meter_status" ||
+    Boolean(n.meterStatus) ||
+    titleLower.includes("regarding your water meter") ||
+    titleLower.includes("water meter status")
+  ) {
+    return "meter_status";
+  }
+  if (
+    rawType === "account_issue" ||
+    titleLower.includes("account number") ||
+    titleLower.includes("meter issued") ||
+    titleLower.includes("registration application")
+  ) {
+    return "account_issue";
+  }
+  if (
+    /^(official\s+(district\s+)?advisory|district\s+advisory|public\s+advisory)\b/i.test(title) ||
+    (isBroadcast && rawType === "announcement")
+  ) {
+    return "announcement";
+  }
+  if (rawType === "balance" || titleLower.includes("remaining balance")) {
+    return "balance";
+  }
+  if (
+    rawType === "billing" ||
+    /^water\s+bill\s+issued\b/i.test(title) ||
+    titleLower.includes("tariff overdue") ||
+    titleLower.includes("water bill") ||
+    Boolean(n.readingId) ||
+    Boolean(n.billingPeriod)
+  ) {
+    return "billing";
+  }
+  const validTypes = new Set([
+    "payment",
+    "billing",
+    "balance",
+    "announcement",
+    "disconnection",
+    "receipt_upload",
+    "report",
+    "account_issue",
+    "meter_status",
+  ]);
+  if (validTypes.has(rawType)) return rawType;
+  return isBroadcast ? "announcement" : "account_issue";
+}
+
 function getPortalNotifSemanticKey(n: Partial<PortalNotification> & Record<string, any>): string {
   const accRaw = String(n.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
   const email = String(n.consumerEmail || "").trim().toLowerCase();
@@ -1817,7 +1961,7 @@ function getPortalNotifSemanticKey(n: Partial<PortalNotification> & Record<strin
     target = `UID:${uid}`;
   }
 
-  const type = String(n.type || "announcement").trim().toLowerCase();
+  const type = inferPortalNotifType(n);
   const normTitle = String(n.title || "").trim().replace(/\s+/g, " ").toLowerCase();
   const normMsg = String(n.message || "").trim().replace(/\s+/g, " ").toLowerCase();
 
@@ -1840,6 +1984,12 @@ function getPortalNotifSemanticKey(n: Partial<PortalNotification> & Record<strin
   if (type === "payment" || type === "receipt_upload") {
     return `${type}::${target}::${String(n.readingId || n.billingPeriod || "").trim().toLowerCase()}::${normTitle}::${normMsg.slice(0, 80)}`;
   }
+  if (type === "meter_status") {
+    const meterKey = String(n.meterNumber || "").trim().toLowerCase();
+    const statusKey = String(n.meterStatus || "").trim().toLowerCase();
+    const eventStamp = String(n.statusUpdateDate || n.id || n.timestamp || "").trim();
+    return `meter_status::${target}::${meterKey}::${statusKey}::${eventStamp}`;
+  }
   if (type === "report") {
     return `report::${target}::${String(n.reportId || n.ticketNumber || "").trim().toLowerCase()}::${normTitle}::${normMsg.slice(0, 140)}`;
   }
@@ -1854,8 +2004,22 @@ function dedupePortalNotifications(list: PortalNotification[], maxTotal = 120): 
   for (const raw of list) {
     if (!raw || !raw.title) continue;
     const cleanAcc = String(raw.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const inferredType = inferPortalNotifType(raw as any);
+    const isBroadcast = cleanAcc === "ALL" || cleanAcc === "BROADCAST" || cleanAcc === "DISTRICT";
+
+    if (
+      isBroadcast &&
+      !raw.consumerEmail &&
+      !raw.userId &&
+      !raw.consumerId &&
+      (isPersonalPortalNotifType(inferredType) || isTransactionalPortalAnnouncementItem(raw as any))
+    ) {
+      continue;
+    }
+
     const item: PortalNotification = {
       ...raw,
+      type: inferredType,
       id: String(raw.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`),
       accountNumber: cleanAcc || raw.accountNumber || "PENDING",
       ...(raw.consumerEmail ? { consumerEmail: String(raw.consumerEmail).trim().toLowerCase() } : {}),
@@ -1912,12 +2076,16 @@ app.get("/api/notifications", async (req, res) => {
       const nAcc = String(n.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
       const nEmail = String(n.consumerEmail || "").trim().toLowerCase();
       const nUid = String(n.userId || "").trim();
-      const isBroadcast = nAcc === "ALL" || nAcc === "BROADCAST" || nAcc === "DISTRICT";
+      const inferred = inferPortalNotifType(n as any);
+      const isBroadcast =
+        (nAcc === "ALL" || nAcc === "BROADCAST" || nAcc === "DISTRICT") &&
+        !isPersonalPortalNotifType(inferred) &&
+        !isTransactionalPortalAnnouncementItem(n as any);
       const matchAcc = accountNumber && !accountNumber.startsWith("PENDING") && nAcc === accountNumber;
       const matchEmail = email && nEmail === email;
       const matchUid = userId && nUid === userId;
       if (isBroadcast || matchAcc || matchEmail || matchUid) {
-        collected.push(n);
+        collected.push({ ...n, type: inferred });
       }
     }
 
@@ -1933,9 +2101,15 @@ app.get("/api/notifications", async (req, res) => {
       if (snap) {
         snap.forEach((d) => {
           const n = d.data() as PortalNotification;
-          if (n && n.title) {
-            collected.push({ ...n, id: n.id || d.id });
+          if (!n || !n.title) return;
+          const inferred = inferPortalNotifType(n as any);
+          if (
+            val === "ALL" &&
+            (isPersonalPortalNotifType(inferred) || isTransactionalPortalAnnouncementItem(n as any))
+          ) {
+            return;
           }
+          collected.push({ ...n, id: n.id || d.id, type: inferred });
         });
       }
     };
@@ -1966,8 +2140,10 @@ app.get("/api/notifications", async (req, res) => {
 app.post("/api/notifications", async (req, res) => {
   try {
     const body = req.body || {};
+    const inferredType = inferPortalNotifType(body);
     const notif: PortalNotification = {
       ...body,
+      type: inferredType,
       id: body.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       accountNumber: body.accountNumber ? String(body.accountNumber).replace(/^#/, "").trim().toUpperCase() : "PENDING",
       consumerEmail: body.consumerEmail ? String(body.consumerEmail).trim().toLowerCase() : undefined,
@@ -1979,6 +2155,7 @@ app.post("/api/notifications", async (req, res) => {
       (n) => n.id === notif.id || getPortalNotifSemanticKey(n) === targetSemKey
     );
     if (existing) {
+      existing.type = inferredType;
       if (notif.read) existing.read = true;
       if (isRealAccountNumber(notif.accountNumber) && !isRealAccountNumber(existing.accountNumber)) {
         existing.accountNumber = notif.accountNumber;
@@ -2721,6 +2898,36 @@ app.get("/api/readings/pending", async (_req, res) => {
   }
 });
 
+function compareReadingsVercelDesc(a: any, b: any): number {
+  return (
+    new Date(b?.readingDate || 0).getTime() - new Date(a?.readingDate || 0).getTime() ||
+    Number(b?.currentReading ?? b?.presentReading ?? 0) - Number(a?.currentReading ?? a?.presentReading ?? 0) ||
+    new Date(b?.billingIssuedAt || b?.submittedAt || 0).getTime() - new Date(a?.billingIssuedAt || a?.submittedAt || 0).getTime()
+  );
+}
+
+function resolveBaselineFromMemoryVercel(accountNumber?: string, meterNumber?: string, matchedConsumer?: any, excludeId?: string): number {
+  const cleanAcc = String(accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+  const cleanMeter = String(meterNumber || "").trim().toUpperCase();
+  let baseline = Number(matchedConsumer?.previousReading || 0);
+
+  for (const r of syncedReadings) {
+    if (!r || (excludeId && r.id === excludeId) || r.status === "cancelled") continue;
+    const isApproved =
+      r.status === "verified" ||
+      r.status === "approved" ||
+      Boolean(r.isBillingIssued || r.billingIssuedAt || r.invoiceNumber);
+    if (!isApproved) continue;
+    const rAcc = String(r.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const rMeter = String(r.meterNumber || "").trim().toUpperCase();
+    if ((cleanAcc && rAcc === cleanAcc) || (cleanMeter && rMeter === cleanMeter)) {
+      const val = Number(r.currentReading ?? r.presentReading ?? 0);
+      if (val > baseline) baseline = val;
+    }
+  }
+  return baseline;
+}
+
 app.post(["/api/readings", "/api/sync/push", "/api/readings/submit"], async (req, res) => {
   try {
     const {
@@ -2728,6 +2935,7 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit"], async (req
       accountNumber,
       meterNumber,
       currentReading,
+      presentReading,
       previousReading,
       readerId,
       readerName,
@@ -2739,30 +2947,59 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit"], async (req
       status,
     } = req.body || {};
 
-    if (!accountNumber || currentReading === undefined) {
+    const rawCurr = currentReading !== undefined ? currentReading : presentReading;
+    if (!accountNumber || rawCurr === undefined) {
       return res.status(400).json({
         success: false,
-        message: "Account number and current reading are mandatory.",
+        message: "Account number and present/current reading are mandatory.",
       });
     }
 
     const allConsumers = await fetchAllConsumersFromFirestore();
+    const cleanAcc = String(accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const cleanMeter = String(meterNumber || "").trim().toUpperCase();
     const matchedConsumer = allConsumers.find(
-      (c) => c.accountNumber === accountNumber || (meterNumber && c.meterNumber === meterNumber)
+      (c) =>
+        (cleanAcc && String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc) ||
+        (cleanMeter && String(c.meterNumber || "").trim().toUpperCase() === cleanMeter)
     );
 
-    const prev = previousReading !== undefined ? Number(previousReading) : matchedConsumer ? matchedConsumer.previousReading : 0;
-    const curr = Number(currentReading);
+    const curr = Math.max(0, Number(rawCurr) || 0);
+    const resolvedAcc = matchedConsumer ? matchedConsumer.accountNumber : accountNumber;
+    const resolvedMeter = meterNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG");
+    const baseline = resolveBaselineFromMemoryVercel(resolvedAcc, resolvedMeter, matchedConsumer, id);
+
+    let prev = previousReading !== undefined ? Math.max(0, Number(previousReading) || 0) : baseline;
+    if (prev === 0 && baseline > 0 && curr >= baseline) {
+      prev = baseline;
+    }
+    if (prev > curr) {
+      prev = baseline <= curr ? baseline : 0;
+    }
     const consumption = Math.max(0, curr - prev);
 
+    let finalId = id ? String(id).trim() : "";
+    const existingApproved =
+      finalId &&
+      syncedReadings.some(
+        (r) =>
+          r.id === finalId &&
+          (r.status === "verified" || r.status === "approved" || Boolean(r.isBillingIssued))
+      );
+    if (!finalId || existingApproved) {
+      finalId = `READ-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    }
+
+    const defaultPeriod = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" });
     const submission: MobileReadingSubmission = {
-      id: id || `READ-${Math.floor(10000 + Math.random() * 90000)}`,
-      accountNumber: matchedConsumer ? matchedConsumer.accountNumber : accountNumber,
+      id: finalId,
+      accountNumber: resolvedAcc,
       consumerName: matchedConsumer ? matchedConsumer.name : req.body.consumerName || "Consumer Account",
-      meterNumber: meterNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG"),
-      billingPeriod: billingPeriod || "October 2026",
+      meterNumber: resolvedMeter,
+      billingPeriod: billingPeriod || defaultPeriod,
       readingDate: req.body.readingDate || new Date().toISOString().split("T")[0],
       previousReading: prev,
+      presentReading: curr,
       currentReading: curr,
       consumption,
       readerId: readerId || "WDT-FIELD",
@@ -2776,7 +3013,12 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit"], async (req
       submittedAt: new Date().toISOString(),
     };
 
-    syncedReadings.unshift(submission);
+    const existingIdx = syncedReadings.findIndex((r) => r.id === submission.id);
+    if (existingIdx >= 0) {
+      syncedReadings[existingIdx] = submission;
+    } else {
+      syncedReadings.unshift(submission);
+    }
     await setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(submission.id)), sanitizePayload(submission), {
       merge: true,
     }).catch(() => {});
@@ -2786,6 +3028,9 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit"], async (req
       message: "Reading submitted successfully.",
       submissionId: submission.id,
       reading: submission,
+      previousReading: submission.previousReading,
+      presentReading: submission.presentReading,
+      currentReading: submission.currentReading,
       consumption: submission.consumption,
       status: submission.status,
     });
@@ -2804,25 +3049,64 @@ app.post("/api/readings/batch", async (req, res) => {
       });
     }
 
+    const allConsumers = await fetchAllConsumersFromFirestore().catch(() => []);
+    const runningBaselineByAcc = new Map<string, number>();
     const processed: MobileReadingSubmission[] = [];
-    for (const item of readingsList) {
-      const prev = item.previousReading !== undefined ? Number(item.previousReading) : 0;
-      const curr = Number(item.currentReading || 0);
-      const consumption = Math.max(0, curr - prev);
 
+    for (const item of readingsList) {
+      const cleanAcc = String(item.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+      const cleanMeter = String(item.meterNumber || "").trim().toUpperCase();
+      const matchedConsumer = allConsumers.find(
+        (c) =>
+          (cleanAcc && String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc) ||
+          (cleanMeter && String(c.meterNumber || "").trim().toUpperCase() === cleanMeter)
+      );
+      const resolvedAcc = item.accountNumber || matchedConsumer?.accountNumber || "UNKNOWN";
+      const resolvedMeter = item.meterNumber || matchedConsumer?.meterNumber || "MT-TAG";
+      const curr = Math.max(0, Number(item.currentReading ?? item.presentReading ?? 0));
+      const accKey = String(resolvedAcc).replace(/^#/, "").trim().toUpperCase();
+      const memBaseline = resolveBaselineFromMemoryVercel(resolvedAcc, resolvedMeter, matchedConsumer, item.id);
+      const baseline = Math.max(memBaseline, runningBaselineByAcc.get(accKey) || 0);
+
+      let prev = item.previousReading !== undefined ? Math.max(0, Number(item.previousReading) || 0) : baseline;
+      if (prev === 0 && baseline > 0 && curr >= baseline) {
+        prev = baseline;
+      }
+      if (prev > curr) {
+        prev = baseline <= curr ? baseline : 0;
+      }
+      const consumption = Math.max(0, curr - prev);
+      if (accKey && curr > baseline) {
+        runningBaselineByAcc.set(accKey, curr);
+      }
+
+      let finalId = item.id ? String(item.id).trim() : "";
+      const existingApproved =
+        finalId &&
+        syncedReadings.some(
+          (r) =>
+            r.id === finalId &&
+            (r.status === "verified" || r.status === "approved" || Boolean(r.isBillingIssued))
+        );
+      if (!finalId || existingApproved) {
+        finalId = `READ-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      }
+
+      const defaultPeriod = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" });
       const submission: MobileReadingSubmission = {
-        id: item.id || `READ-${Math.floor(10000 + Math.random() * 90000)}`,
-        accountNumber: item.accountNumber || "UNKNOWN",
-        consumerName: item.consumerName || "Consumer",
-        meterNumber: item.meterNumber || "MT-TAG",
-        billingPeriod: item.billingPeriod || "October 2026",
+        id: finalId,
+        accountNumber: resolvedAcc,
+        consumerName: item.consumerName || matchedConsumer?.name || "Consumer",
+        meterNumber: resolvedMeter,
+        billingPeriod: item.billingPeriod || defaultPeriod,
         readingDate: item.readingDate || new Date().toISOString().split("T")[0],
         previousReading: prev,
+        presentReading: curr,
         currentReading: curr,
         consumption,
         readerId: item.readerId || "WDT-FIELD",
         readerName: item.readerName || "Field Meter Officer",
-        route: item.route || item.barangay || "Poblacion",
+        route: item.route || item.barangay || matchedConsumer?.barangay || "Poblacion",
         status: item.status || "pending_approval",
         paymentStatus: item.paymentStatus || "unpaid",
         photoUrl: item.photoUrl || item.dialPhotoUrl || "",
@@ -2831,7 +3115,12 @@ app.post("/api/readings/batch", async (req, res) => {
         submittedAt: new Date().toISOString(),
       };
 
-      syncedReadings.unshift(submission);
+      const dupIdx = syncedReadings.findIndex((r) => r.id === submission.id);
+      if (dupIdx >= 0) {
+        syncedReadings[dupIdx] = submission;
+      } else {
+        syncedReadings.unshift(submission);
+      }
       processed.push(submission);
       await setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(submission.id)), sanitizePayload(submission), {
         merge: true,
@@ -2854,13 +3143,24 @@ app.post("/api/readings/batch", async (req, res) => {
 app.post("/api/readings/:id/approve", async (req, res) => {
   try {
     const { id } = req.params;
+    const idx = syncedReadings.findIndex((r) => r.id === id);
+    if (idx >= 0) syncedReadings[idx].status = "verified";
+    const approvedItem = idx >= 0 ? syncedReadings[idx] : null;
     if (canWriteFs()) {
       await setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(id)), { status: "verified" }, { merge: true }).catch(
         (err) => recordFsErr(err, "write")
       );
+      if (approvedItem?.accountNumber) {
+        await setDoc(
+          doc(fsDb, FS_COLLECTIONS.CONSUMERS, sanitizeDocId(approvedItem.accountNumber)),
+          sanitizePayload({
+            previousReading: approvedItem.currentReading,
+            lastReadingDate: approvedItem.readingDate,
+          }),
+          { merge: true }
+        ).catch(() => {});
+      }
     }
-    const idx = syncedReadings.findIndex((r) => r.id === id);
-    if (idx >= 0) syncedReadings[idx].status = "verified";
     res.json({ success: true, message: `Reading ${id} verified.` });
   } catch {
     res.json({ success: true });
@@ -2868,7 +3168,18 @@ app.post("/api/readings/:id/approve", async (req, res) => {
 });
 
 function mergeBillingRecordVercel(prev: any, incoming: any): any {
-  if (!prev) return { ...incoming };
+  if (!prev) {
+    const currVal = Number(incoming.currentReading ?? incoming.presentReading ?? 0);
+    const prevVal = Math.max(0, Number(incoming.previousReading ?? 0));
+    const safePrev = prevVal <= currVal ? prevVal : 0;
+    return {
+      ...incoming,
+      previousReading: safePrev,
+      presentReading: currVal,
+      currentReading: currVal,
+      consumption: Math.max(0, currVal - safePrev),
+    };
+  }
   const isPaid = prev.paymentStatus === "paid" || incoming.paymentStatus === "paid";
   const isPartial = !isPaid && (prev.paymentStatus === "partial" || incoming.paymentStatus === "partial");
   const prevBilled = Boolean(
@@ -2884,9 +3195,24 @@ function mergeBillingRecordVercel(prev: any, incoming: any): any {
   const effBillAmt = Number(billedSrc.billAmount || altSrc.billAmount || 0) || prev.billAmount || incoming.billAmount;
   const effTotalAmt = Number(billedSrc.totalAmount || altSrc.totalAmount || effBillAmt || 0) || prev.totalAmount || incoming.totalAmount;
 
+  const mergedCurr = Number(billedSrc.currentReading ?? billedSrc.presentReading ?? altSrc.currentReading ?? altSrc.presentReading ?? 0);
+  const candPrev = Number(billedSrc.previousReading ?? 0);
+  const altPrev = Number(altSrc.previousReading ?? 0);
+  const mergedPrev =
+    candPrev > 0 && candPrev <= mergedCurr
+      ? candPrev
+      : altPrev > 0 && altPrev <= mergedCurr
+        ? altPrev
+        : Math.max(0, Math.min(candPrev, mergedCurr));
+  const mergedConsumption = Math.max(0, mergedCurr - mergedPrev);
+
   return {
     ...prev,
     ...incoming,
+    previousReading: mergedPrev,
+    presentReading: mergedCurr,
+    currentReading: mergedCurr,
+    consumption: mergedConsumption,
     isBillingIssued: mergedBilled ? true : Boolean(incoming.isBillingIssued ?? prev.isBillingIssued),
     billingIssuedAt: incoming.billingIssuedAt || prev.billingIssuedAt,
     billingIssuedBy: incoming.billingIssuedBy || prev.billingIssuedBy,
@@ -2952,7 +3278,7 @@ app.get("/api/billings", async (req, res) => {
     if (accQuery) {
       list = list.filter((r) => String(r.accountNumber || "").trim().toUpperCase() === accQuery);
     }
-    list.sort((a, b) => new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime());
+    list.sort(compareReadingsVercelDesc);
     res.json({ success: true, count: list.length, readings: list });
   } catch {
     res.json({ success: true, count: 0, readings: [] });
@@ -2968,7 +3294,7 @@ app.post("/api/billings/reconcile", async (req, res) => {
       if (idx >= 0) {
         syncedReadings[idx] = mergeBillingRecordVercel(syncedReadings[idx], r);
       } else {
-        syncedReadings.unshift({ ...r });
+        syncedReadings.unshift(mergeBillingRecordVercel(null, r));
       }
       if (canWriteFs()) {
         const target = syncedReadings.find((x) => x.id === r.id) || r;
@@ -2983,7 +3309,7 @@ app.post("/api/billings/reconcile", async (req, res) => {
     if (accQuery) {
       list = list.filter((r) => String(r.accountNumber || "").trim().toUpperCase() === accQuery);
     }
-    list.sort((a, b) => new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime());
+    list.sort(compareReadingsVercelDesc);
     res.json({ success: true, count: list.length, readings: list });
   } catch {
     res.json({ success: true, count: 0, readings: [] });
@@ -2995,17 +3321,27 @@ app.post("/api/billings/reconcile", async (req, res) => {
 // ==========================================
 async function loadAnnouncementsFromFirestore(): Promise<any[]> {
   if (!canReadFs()) {
-    return syncedAnnouncements.filter((a) => a && a.id && !deletedAnnouncementIds.has(a.id));
+    return syncedAnnouncements.filter(
+      (a) => a && a.id && !deletedAnnouncementIds.has(a.id) && !isTransactionalPortalAnnouncementItem(a)
+    );
   }
   try {
     const snap = await getDocs(query(collection(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS), limit(100)));
     const map = new Map<string, any>();
     syncedAnnouncements.forEach((a) => {
-      if (a && a.id && !deletedAnnouncementIds.has(a.id)) map.set(a.id, a);
+      if (a && a.id && !deletedAnnouncementIds.has(a.id) && !isTransactionalPortalAnnouncementItem(a)) {
+        map.set(a.id, a);
+      }
     });
     snap.forEach((d) => {
       const a = d.data();
       const id = (a && a.id) || d.id;
+      if (isTransactionalPortalAnnouncementItem(a as any)) {
+        if (canWriteFs()) {
+          deleteDoc(doc(fsDb, FS_COLLECTIONS.ANNOUNCEMENTS, d.id)).catch((err) => recordFsErr(err, "write"));
+        }
+        return;
+      }
       if (a && id && !deletedAnnouncementIds.has(id)) {
         const existing = map.get(id);
         map.set(id, existing ? { ...a, ...existing, id } : { ...a, id });
@@ -3017,7 +3353,9 @@ async function loadAnnouncementsFromFirestore(): Promise<any[]> {
   } catch (err) {
     recordFsErr(err, "read");
   }
-  return syncedAnnouncements.filter((a) => a && a.id && !deletedAnnouncementIds.has(a.id));
+  return syncedAnnouncements.filter(
+    (a) => a && a.id && !deletedAnnouncementIds.has(a.id) && !isTransactionalPortalAnnouncementItem(a)
+  );
 }
 
 app.get("/api/announcements", async (_req, res) => {
@@ -3025,21 +3363,33 @@ app.get("/api/announcements", async (_req, res) => {
     const list = await loadAnnouncementsFromFirestore();
     res.json({ success: true, count: list.length, announcements: list, data: list });
   } catch {
-    res.json({ success: true, count: syncedAnnouncements.length, announcements: syncedAnnouncements, data: syncedAnnouncements });
+    const clean = syncedAnnouncements.filter((a) => !isTransactionalPortalAnnouncementItem(a));
+    res.json({ success: true, count: clean.length, announcements: clean, data: clean });
   }
 });
 
 app.post("/api/announcements", async (req, res) => {
   try {
     const body = req.body || {};
+    if (isTransactionalPortalAnnouncementItem(body)) {
+      return res.status(400).json({
+        success: false,
+        message: "Personal payment or receipt notifications cannot be published to public District Announcements.",
+      });
+    }
     const id = body.id || `ann-${Date.now()}`;
+    const rawCat = String(body.category || body.type || "info").trim().toLowerCase();
+    const category = ["maintenance", "disruption", "event", "info"].includes(rawCat) ? rawCat : "info";
+    const postedBy = String(body.postedBy || body.author || "TWD Operations").trim();
     const ann = {
       id,
       title: String(body.title || "Official Advisory").trim(),
       content: String(body.content || "").trim(),
-      type: body.type || "info",
+      category,
+      type: category,
       date: body.date || new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-      author: body.author || "TWD Operations",
+      postedBy,
+      author: postedBy,
       createdAt: body.createdAt || new Date().toISOString(),
     };
     deletedAnnouncementIds.delete(id);
@@ -3147,6 +3497,7 @@ app.get("/api/barangays", (_req, res) => {
     { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 24.5 },
     { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 24.5 },
     { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 24.5 },
+    { id: "BRG-10", name: "Rosario", code: "RS-10", ratePerM3: 24.5 },
   ];
   res.json({ success: true, count: barangays.length, barangays, data: barangays });
 });

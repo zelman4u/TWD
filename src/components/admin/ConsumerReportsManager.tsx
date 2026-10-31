@@ -31,7 +31,8 @@ import {
   Zap,
   Maximize2,
   ShieldCheck,
-  ImageIcon
+  ImageIcon,
+  Bell
 } from 'lucide-react';
 import { ConsumerReport, ConsumerReportReply, User as UserType, Barangay } from '../../types';
 import { mockDb } from '../../mockDb';
@@ -41,12 +42,16 @@ import { useToast } from '../../context/ToastContext';
 import { TablePagination } from '../common/TablePagination';
 import { SmartSearchBar } from '../common/SmartSearchBar';
 import { smartMatch } from '../../utils/smartSearch';
+import { formatMeterStatusLabel, formatMeterStatusUpdateDate, normalizeMeterStatus } from '../../utils/meterStatusNotification';
+import { AdminInquiryReplyModal } from './AdminInquiryReplyModal';
 
 interface ConsumerReportsManagerProps {
   currentUser: UserType;
   reports: ConsumerReport[];
   onRefreshReports: () => void;
   barangays?: Barangay[];
+  selectedReportId?: string | null;
+  onClearSelectedReport?: () => void;
 }
 
 const CATEGORY_MAP: Record<string, { label: string; icon: any; color: string }> = {
@@ -96,7 +101,9 @@ export function ConsumerReportsManager({
   currentUser,
   reports,
   onRefreshReports,
-  barangays = []
+  barangays = [],
+  selectedReportId,
+  onClearSelectedReport
 }: ConsumerReportsManagerProps) {
   const toast = useToast();
 
@@ -155,6 +162,24 @@ export function ConsumerReportsManager({
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [activeReport?.replies?.length]);
+
+  // Open report automatically when triggered from Admin Header Notification Bell
+  React.useEffect(() => {
+    if (!selectedReportId) return;
+    const found = reports.find(
+      r => r.id === selectedReportId || r.ticketNumber === selectedReportId
+    );
+    if (found) {
+      setActiveReport(found);
+      setReplyStatus(found.status === 'pending' ? 'in_progress' : found.status);
+      setAssignedCrew(found.assignedStaff || '');
+      setReplyText('');
+      mockDb.markReportReadByAdmin(found.id);
+      if (onClearSelectedReport) {
+        onClearSelectedReport();
+      }
+    }
+  }, [selectedReportId, reports]);
 
   // Keep activeReport live-synced when reports prop receives new consumer follow-up messages
   React.useEffect(() => {
@@ -272,11 +297,15 @@ export function ConsumerReportsManager({
       // 1. Save immediately in local store (0ms — also generates consumer report notification)
       const updated = mockDb.replyToReport(targetReportSnapshot.id, replyData, replyStatus, cleanCrew);
 
-      // Find the newly generated report notification so BroadcastChannel / WebSocket delivers it in 0ms
+      // Find the newly generated report notification (matching replyId first) so BroadcastChannel / WebSocket delivers the exact reply
       const createdReportNotif = updated
         ? mockDb
             .getNotifications(updated.accountNumber, { email: updated.consumerEmail })
-            .find(n => n.type === 'report' && (n.reportId === updated.id || n.ticketNumber === updated.ticketNumber))
+            .find(
+              n =>
+                n.replyId === replyId ||
+                (n.type === 'report' && (n.reportId === updated.id || n.ticketNumber === updated.ticketNumber))
+            )
         : undefined;
 
       // 2. Broadcast immediately via BroadcastChannel + WebSocket (0ms across tabs & connected clients)
@@ -592,10 +621,20 @@ export function ConsumerReportsManager({
 
                           {/* Summary */}
                           <td className="py-4 px-4 max-w-xs">
-                            <div className="space-y-0.5">
+                            <div className="space-y-1">
+                              {report.referencedNotice && (
+                                <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-950/90 text-sky-300 border border-sky-800/80 text-[10px] font-bold max-w-full truncate">
+                                  <Bell className="h-2.5 w-2.5 shrink-0 text-sky-400" />
+                                  <span className="truncate">
+                                    {report.referencedNotice.meterStatus
+                                      ? `Reply to Meter Notice (${formatMeterStatusLabel(report.referencedNotice.meterStatus)})${report.referencedNotice.meterNumber ? ` · #${report.referencedNotice.meterNumber}` : ''}`
+                                      : `Reply to Admin Notice: ${report.referencedNotice.subject}`}
+                                  </span>
+                                </div>
+                              )}
                               <p className="font-bold text-white truncate">{report.title}</p>
                               <p className="text-[11px] text-slate-400 line-clamp-1">{report.description}</p>
-                              <span className="text-[10px] text-slate-500">
+                              <span className="text-[10px] text-slate-500 font-mono tabular-nums">
                                 {new Date(report.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                               </span>
                             </div>
@@ -667,396 +706,17 @@ export function ConsumerReportsManager({
         })()}
       </div>
 
-      {/* MODAL: ADMIN REVIEW & REPLY DRAWER */}
-      {activeReport && (
-        <div 
-          className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-5 bg-slate-950/90 backdrop-blur-md animate-fade-in select-none"
-          onClick={() => setActiveReport(null)}
-        >
-          <div 
-            className="bg-slate-900 border border-slate-800 rounded-3xl max-w-4xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[92vh] animate-scale-up select-text text-slate-100"
-            onClick={(e) => e.stopPropagation()}
-          >
-            
-            {/* Modal Header */}
-            <div className="bg-slate-950 text-white p-4 sm:p-5 flex items-center justify-between border-b border-slate-800 shrink-0 gap-4">
-              <div className="space-y-1.5 min-w-0 pr-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-mono text-xs font-black text-blue-400 bg-blue-950/90 px-2.5 py-0.5 rounded-lg border border-blue-800/80 shadow-inner">
-                    {activeReport.ticketNumber}
-                  </span>
-                  
-                  {/* Category Pill */}
-                  <span className="text-[11px] uppercase font-extrabold px-2.5 py-0.5 rounded-lg bg-slate-800/90 text-slate-200 border border-slate-700/80 flex items-center gap-1.5">
-                    {(() => {
-                      const meta = CATEGORY_MAP[activeReport.category] || CATEGORY_MAP.other;
-                      const Icon = meta.icon;
-                      return (
-                        <>
-                          <Icon className="h-3 w-3 text-blue-400" />
-                          <span>{meta.label}</span>
-                        </>
-                      );
-                    })()}
-                  </span>
-
-                  {/* Urgency Pill */}
-                  {activeReport.urgency === 'emergency' && (
-                    <span className="bg-rose-950/90 text-rose-300 border border-rose-700/80 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-lg animate-pulse flex items-center gap-1">
-                      <AlertOctagon className="h-3 w-3 text-rose-400" />
-                      <span>Emergency Priority</span>
-                    </span>
-                  )}
-                  {activeReport.urgency === 'urgent' && (
-                    <span className="bg-amber-950/90 text-amber-300 border border-amber-700/80 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-lg flex items-center gap-1">
-                      <Clock className="h-3 w-3 text-amber-400" />
-                      <span>Urgent Priority</span>
-                    </span>
-                  )}
-                  {activeReport.urgency === 'normal' && (
-                    <span className="bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-lg">
-                      Normal Priority
-                    </span>
-                  )}
-
-                  {/* Status Badge */}
-                  {activeReport.status === 'pending' && (
-                    <span className="bg-amber-950/80 text-amber-300 border border-amber-800/80 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-lg">
-                      Pending Review
-                    </span>
-                  )}
-                  {activeReport.status === 'in_progress' && (
-                    <span className="bg-blue-950/80 text-blue-300 border border-blue-800/80 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-lg">
-                      In Progress / Dispatched
-                    </span>
-                  )}
-                  {activeReport.status === 'resolved' && (
-                    <span className="bg-emerald-950/80 text-emerald-300 border border-emerald-800/80 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-lg">
-                      Resolved
-                    </span>
-                  )}
-                  {activeReport.status === 'closed' && (
-                    <span className="bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-lg">
-                      Closed
-                    </span>
-                  )}
-                </div>
-
-                <h3 className="text-base sm:text-lg font-black truncate text-white">{activeReport.title}</h3>
-                
-                <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-slate-400">
-                  <span>Consumer: <strong className="text-slate-200">{activeReport.consumerName}</strong></span>
-                  <span>•</span>
-                  <span>Account: <strong className="text-blue-400 font-mono">#{activeReport.accountNumber}</strong></span>
-                  <span>•</span>
-                  <span>Barangay: <strong className="text-slate-200">{activeReport.barangay}</strong></span>
-                  {activeReport.consumerPhone && (
-                    <>
-                      <span>•</span>
-                      <span>Phone: <strong className="text-slate-200">{activeReport.consumerPhone}</strong></span>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setActiveReport(null)}
-                className="p-2.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800/90 transition cursor-pointer border border-transparent hover:border-slate-700 shrink-0"
-                title="Close modal (Esc)"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Modal Body / Conversation History */}
-            <div className="p-5 sm:p-6 flex-1 overflow-y-auto space-y-5 bg-slate-950/40 text-slate-200">
-              
-              {/* Detailed Consumer Profile & Location Card */}
-              <div className="bg-slate-900/90 rounded-2xl p-4.5 border border-slate-800 shadow-sm space-y-3.5">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-black uppercase text-slate-300 tracking-wider flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-blue-400" />
-                    <span>Report & Consumer Dossier</span>
-                  </h4>
-                  <span className="text-[11px] text-slate-400 font-mono">
-                    Filed: {new Date(activeReport.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                  <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
-                    <span className="text-slate-400 block text-[10px] uppercase font-bold flex items-center gap-1 mb-1">
-                      <MapPin className="h-3 w-3 text-slate-400" />
-                      Physical Location / Landmark
-                    </span>
-                    <span className="font-bold text-slate-100">{activeReport.address || activeReport.barangay}</span>
-                  </div>
-                  <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
-                    <span className="text-slate-400 block text-[10px] uppercase font-bold flex items-center gap-1 mb-1">
-                      <Phone className="h-3 w-3 text-slate-400" />
-                      Contact Phone
-                    </span>
-                    <span className="font-bold text-slate-100">{activeReport.consumerPhone || 'N/A'}</span>
-                  </div>
-                  <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
-                    <span className="text-slate-400 block text-[10px] uppercase font-bold flex items-center gap-1 mb-1">
-                      <Gauge className="h-3 w-3 text-slate-400" />
-                      Meter Hardware Serial
-                    </span>
-                    <span className="font-mono font-bold text-slate-100">{activeReport.meterNumber || 'MT-N/A'}</span>
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-slate-800/80">
-                  <span className="text-slate-400 block text-[10px] uppercase font-bold mb-1.5 flex items-center gap-1">
-                    <FileText className="h-3 w-3 text-slate-400" />
-                    Original Concern Explanation
-                  </span>
-                  <div className="text-xs sm:text-sm text-slate-200 leading-relaxed bg-slate-950/80 p-3.5 rounded-xl border border-slate-800/90 font-sans">
-                    {activeReport.description}
-                  </div>
-                </div>
-
-                {activeReport.photoUrl && (
-                  <div className="pt-2 border-t border-slate-800/80">
-                    <span className="text-slate-400 block text-[10px] uppercase font-bold mb-1.5 flex items-center gap-1">
-                      <ImageIcon className="h-3 w-3 text-slate-400" />
-                      Attached Photographic Proof
-                    </span>
-                    <div 
-                      onClick={() => setSelectedPhotoPreview(activeReport.photoUrl!)}
-                      className="inline-flex items-center gap-3 p-2 bg-slate-950/80 hover:bg-slate-950 border border-slate-800 hover:border-blue-500/60 rounded-xl transition cursor-pointer group"
-                    >
-                      <img 
-                        src={activeReport.photoUrl} 
-                        alt="Photo proof" 
-                        className="h-16 w-16 object-cover rounded-lg border border-slate-700/80 group-hover:scale-105 transition" 
-                      />
-                      <div className="pr-3 text-left">
-                        <p className="text-xs font-bold text-slate-200 group-hover:text-blue-400 transition flex items-center gap-1.5">
-                          <span>Attached Photo Evidence</span>
-                          <Maximize2 className="h-3.5 w-3.5" />
-                        </p>
-                        <p className="text-[10px] text-slate-400">Click to view in full resolution</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Message Thread */}
-              <div className="space-y-3.5">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-black uppercase text-slate-300 tracking-wider flex items-center gap-2">
-                    <MessageSquare className="h-4 w-4 text-blue-400" />
-                    <span>Conversation & Dispatch Thread</span>
-                  </h4>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                    {mockDb.dedupeReplies(activeReport.replies).length}{' '}
-                    {mockDb.dedupeReplies(activeReport.replies).length === 1 ? 'Message' : 'Messages'}
-                  </span>
-                </div>
-                
-                {mockDb.dedupeReplies(activeReport.replies).length === 0 ? (
-                  <div className="p-6 bg-slate-900/60 border border-slate-800/80 rounded-2xl text-center text-slate-400 text-xs">
-                    No official administrative responses recorded yet. Use the composer below or select a quick template to reply.
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {mockDb.dedupeReplies(activeReport.replies).map((reply, idx) => {
-                      const isAdmin = reply.senderRole === 'admin' || reply.senderRole === 'staff';
-                      const isAutoAck =
-                        (reply.id || '').startsWith('ACK-') || reply.senderId === 'system-admin-ack';
-
-                      return (
-                        <div
-                          key={reply.id || idx}
-                          className={`flex flex-col ${isAdmin ? 'items-end' : 'items-start'}`}
-                        >
-                          <div className="max-w-[85%] space-y-1">
-                            <div className={`flex items-center gap-2 text-[10px] flex-wrap ${isAdmin ? 'justify-end' : 'justify-start'}`}>
-                              {isAdmin ? (
-                                <>
-                                  <span className="font-bold text-blue-400">
-                                    {isAutoAck ? `Automated Acknowledgement (${reply.senderName})` : `Official Admin Response (${reply.senderName})`}
-                                  </span>
-                                  <span className={`px-1.5 py-0.5 rounded font-bold uppercase text-[9px] border ${
-                                    isAutoAck
-                                      ? 'bg-indigo-950 text-indigo-300 border-indigo-700'
-                                      : 'bg-blue-950 text-blue-300 border-blue-800'
-                                  }`}>
-                                    {isAutoAck ? 'Auto-Ack' : 'Admin'}
-                                  </span>
-                                </>
-                              ) : (
-                                <>
-                                  <span className="font-bold text-slate-200">{reply.senderName}</span>
-                                  <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-bold uppercase text-[9px]">
-                                    Consumer
-                                  </span>
-                                </>
-                              )}
-                              <span className="text-slate-400">
-                                {new Date(reply.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </span>
-                            </div>
-
-                            <div
-                              className={`rounded-2xl p-4 text-xs sm:text-sm leading-relaxed shadow-sm ${
-                                isAutoAck
-                                  ? 'bg-slate-900/95 text-indigo-100 rounded-tr-xs border border-indigo-500/40'
-                                  : isAdmin
-                                    ? 'bg-gradient-to-r from-blue-900/90 via-blue-800/90 to-indigo-900/90 text-white rounded-tr-xs border border-blue-500/40 shadow-md'
-                                    : 'bg-slate-800/95 text-slate-100 rounded-tl-xs border border-slate-700/80'
-                              }`}
-                            >
-                              <p className="whitespace-pre-wrap">{reply.message}</p>
-                              {reply.statusUpdate && (
-                                <p className={`mt-2 pt-2 text-[10px] font-bold border-t flex items-center gap-1.5 ${
-                                  isAdmin ? 'border-blue-700/50 text-blue-200' : 'border-slate-700/80 text-slate-400'
-                                }`}>
-                                  <Check className="h-3 w-3 text-emerald-400" />
-                                  <span>Status updated to: <strong className="uppercase text-white">{reply.statusUpdate}</strong></span>
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <div ref={messagesEndRef} />
-                  </div>
-                )}
-              </div>
-
-              {/* Quick Snippets */}
-              <div className="space-y-2 pt-2 border-t border-slate-800/80">
-                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-300">
-                  <Zap className="h-3.5 w-3.5 text-amber-400" />
-                  <span>Insert Quick Response Template</span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {QUICK_REPLIES.map((snippet, sIdx) => (
-                    <button
-                      type="button"
-                      key={sIdx}
-                      onClick={() => handleApplyQuickReply(snippet)}
-                      className="px-3 py-1.5 bg-slate-900/90 hover:bg-blue-950/70 border border-slate-800 hover:border-blue-500/70 rounded-xl text-[11px] font-semibold text-slate-300 hover:text-white transition cursor-pointer flex items-center gap-1.5 shadow-xs"
-                    >
-                      <span>{snippet.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Modal Footer / Reply Composer */}
-            <form onSubmit={handleSubmitReply} className="p-4 sm:p-5 bg-slate-950 border-t border-slate-800 shrink-0 space-y-3.5 text-slate-200">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="block text-[11px] font-bold uppercase text-slate-300">
-                    Update Processing Status
-                  </label>
-                  <select
-                    value={replyStatus}
-                    onChange={(e) => setReplyStatus(e.target.value as any)}
-                    className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs font-bold text-slate-100 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
-                  >
-                    <option value="pending">Keep as Pending Review</option>
-                    <option value="in_progress">In Progress / Field Dispatched</option>
-                    <option value="resolved">Mark as Resolved & Verified</option>
-                    <option value="closed">Close Case (Archived)</option>
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block text-[11px] font-bold uppercase text-slate-300">
-                    Assign Response Crew / Unit
-                  </label>
-                  <input
-                    type="text"
-                    value={assignedCrew}
-                    onChange={(e) => setAssignedCrew(e.target.value)}
-                    placeholder="e.g. Field Maintenance Crew - Team Alpha"
-                    className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs font-semibold text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-[11px] font-bold uppercase text-slate-300">
-                  Official Response Message <span className="text-rose-400">*</span>
-                </label>
-                <textarea
-                  required
-                  rows={3}
-                  value={replyText}
-                  onChange={(e) => setReplyText(e.target.value)}
-                  placeholder="Type your official reply to the consumer. This will immediately notify them in their portal..."
-                  className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-hidden resize-none leading-relaxed"
-                />
-              </div>
-
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-                <span className="text-[11px] text-slate-400 flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-                  <span>Sending this reply instantly notifies Consumer #{activeReport.accountNumber} via Portal Alert.</span>
-                </span>
-                
-                <div className="flex items-center gap-2.5 self-end sm:self-auto">
-                  <button
-                    type="button"
-                    onClick={() => setActiveReport(null)}
-                    className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
-                  >
-                    Close
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSubmittingReply || !replyText.trim()}
-                    className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-black text-xs sm:text-sm rounded-xl shadow-lg shadow-blue-950/60 transition flex items-center gap-2 cursor-pointer active:scale-98"
-                  >
-                    <Send className="h-4 w-4" />
-                    <span>{isSubmittingReply ? 'Sending Reply...' : 'Send Official Reply & Dispatch'}</span>
-                  </button>
-                </div>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* FULLSCREEN PHOTO LIGHTBOX MODAL */}
-      {selectedPhotoPreview && (
-        <div 
-          className="fixed inset-0 z-[130] bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setSelectedPhotoPreview(null)}
-        >
-          <div className="max-w-4xl w-full flex flex-col items-center space-y-3" onClick={(e) => e.stopPropagation()}>
-            <div className="w-full flex items-center justify-between text-white pb-2 border-b border-slate-800">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                <ImageIcon className="h-4 w-4 text-blue-400" />
-                <span>Consumer Photo Proof Preview</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => setSelectedPhotoPreview(null)}
-                className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="max-h-[80vh] overflow-hidden rounded-2xl border border-slate-800 shadow-2xl bg-black">
-              <img 
-                src={selectedPhotoPreview} 
-                alt="Enlarged Proof" 
-                className="max-h-[75vh] w-auto max-w-full object-contain mx-auto" 
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      {/* UNIFIED COMPACT ADMIN INQUIRY & NOTICE REPLY MODAL */}
+      <AdminInquiryReplyModal
+        report={activeReport}
+        currentUser={currentUser}
+        onClose={() => setActiveReport(null)}
+        onReportUpdated={(updated) => {
+          setActiveReport(updated);
+          onRefreshReports();
+        }}
+      />
     </div>
   );
 }
+

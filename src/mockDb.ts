@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { User, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerNotification, Barangay, ConsumerReport, ConsumerReportReply } from './types';
+import { User, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerNotification, Barangay, ConsumerReport, ConsumerReportReply, WaterMeterInstallationRequest, InstallationStatus, InstallationHistoryEntry } from './types';
 import { 
   WaterTariffConfig, 
   getActiveTariffConfig, 
@@ -31,6 +31,19 @@ import {
   isIssuedNotifAccount,
   normalizeNotifAccount,
 } from './utils/notificationDeduper';
+import {
+  inferNotificationType,
+  isPersonalNotificationType,
+  isTransactionalPaymentOrReceiptItem,
+  sanitizeAnnouncements,
+} from './utils/announcementSanitizer';
+import {
+  isPendingConsumerStatus,
+  generateApplicationNumber,
+  buildInstallationReceivedNotification,
+  buildInstallationStatusUpdateNotification,
+  buildAccountActivatedAfterInstallationNotification,
+} from './utils/installationWorkflow';
 
 
 // Purge all legacy storage keys containing old mock data
@@ -64,6 +77,7 @@ const KEYS = {
   BARANGAYS: `${STORAGE_PREFIX}barangays`,
   TARIFF_CONFIG: `${STORAGE_PREFIX}tariff_config`,
   REPORTS: `${STORAGE_PREFIX}consumer_reports`,
+  INSTALLATIONS: `${STORAGE_PREFIX}installations`,
 };
 
 // Initial Sample Consumer Reports
@@ -166,6 +180,7 @@ const INITIAL_BARANGAYS: Barangay[] = [
   { id: 'BRG-07', name: 'Gracia', code: 'GR-07', consumers: 0, activeMeters: 0, schedule: '1st - 5th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
   { id: 'BRG-08', name: 'Casinglot', code: 'CS-08', consumers: 0, activeMeters: 0, schedule: '6th - 10th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
   { id: 'BRG-09', name: 'Sugbongcogon', code: 'SG-09', consumers: 0, activeMeters: 0, schedule: '11th - 15th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
+  { id: 'BRG-10', name: 'Rosario', code: 'RS-10', consumers: 0, activeMeters: 0, schedule: '16th - 20th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
 ];
 
 const INITIAL_USERS: User[] = [
@@ -607,6 +622,7 @@ const INITIAL_READERS: MeterReader[] = [
 const INITIAL_METERS: WaterMeter[] = [
   {
     meterNumber: '150307143',
+    serialNumber: 'SN-EVR-2024-7143',
     rfidTag: 'RFID-150307143',
     brand: 'EVER',
     type: 'mechanical',
@@ -619,6 +635,7 @@ const INITIAL_METERS: WaterMeter[] = [
   },
   {
     meterNumber: 'E180103545',
+    serialNumber: 'SN-EVR-2024-3545',
     rfidTag: 'RFID-E180103545',
     brand: 'EVER',
     type: 'mechanical',
@@ -631,6 +648,7 @@ const INITIAL_METERS: WaterMeter[] = [
   },
   {
     meterNumber: '121111102',
+    serialNumber: 'SN-EVJ-2024-1102',
     rfidTag: 'RFID-121111102',
     brand: 'EVJET',
     type: 'mechanical',
@@ -1233,11 +1251,29 @@ function getStored<T>(key: string, initial: T): T {
       }
     }
     if (key === KEYS.BARANGAYS) {
-      const brgs = parsed as Barangay[];
+      const brgs = Array.isArray(parsed) ? [...(parsed as Barangay[])] : [];
       const hasLegacyPoblacionEast = brgs.some(b => b.name === 'Poblacion East' || b.name === 'Poblacion West');
       if (hasLegacyPoblacionEast) {
         localStorage.setItem(key, JSON.stringify(INITIAL_BARANGAYS));
         return INITIAL_BARANGAYS as unknown as T;
+      }
+      const deletedBarangayIds = getDeletedBarangayIds();
+      let brgChanged = false;
+      INITIAL_BARANGAYS.forEach((ib) => {
+        if (deletedBarangayIds.has(ib.id)) return;
+        const exists = brgs.some(
+          (b) =>
+            (b.id && b.id.toLowerCase() === ib.id.toLowerCase()) ||
+            (b.name && b.name.trim().toLowerCase() === ib.name.trim().toLowerCase())
+        );
+        if (!exists) {
+          brgs.push(ib);
+          brgChanged = true;
+        }
+      });
+      if (brgChanged) {
+        localStorage.setItem(key, JSON.stringify(brgs));
+        return brgs as unknown as T;
       }
     }
     if (key === KEYS.CONSUMERS) {
@@ -1348,6 +1384,18 @@ function getStored<T>(key: string, initial: T): T {
           changed = true;
         }
       });
+      meters = meters.map((m) => {
+        if (!m.serialNumber && m.meterNumber) {
+          const brandPrefix = (m.brand || 'TWD').slice(0, 3).toUpperCase();
+          const suffix = String(m.meterNumber).replace(/[^a-zA-Z0-9]/g, '').slice(-5).toUpperCase() || '00001';
+          changed = true;
+          return {
+            ...m,
+            serialNumber: `SN-${brandPrefix}-2024-${suffix}`,
+          };
+        }
+        return m;
+      });
       if (changed) {
         localStorage.setItem(key, JSON.stringify(meters));
         return meters as unknown as T;
@@ -1439,7 +1487,26 @@ function setStored<T>(key: string, value: T): void {
 }
 
 const DELETED_ANNOUNCEMENTS_KEY = 'twd_live_v4_deleted_announcements';
+const DELETED_BARANGAYS_KEY = 'twd_live_v4_deleted_barangays';
 const READ_BROADCAST_NOTIFS_KEY = 'twd_live_v4_read_broadcast_notifs';
+
+function getDeletedBarangayIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_BARANGAYS_KEY);
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw));
+  } catch {
+    return new Set();
+  }
+}
+
+function addDeletedBarangayId(id: string): void {
+  try {
+    const set = getDeletedBarangayIds();
+    set.add(id);
+    localStorage.setItem(DELETED_BARANGAYS_KEY, JSON.stringify(Array.from(set)));
+  } catch {}
+}
 
 function getDeletedAnnouncementIds(): Set<string> {
   try {
@@ -1513,9 +1580,10 @@ export const mockDb = {
   getRoutes: (): RouteAssignment[] => getStored<RouteAssignment[]>(KEYS.ROUTES, INITIAL_ROUTES),
   getAnnouncements: (): Announcement[] => {
     const deleted = getDeletedAnnouncementIds();
-    return getStored<Announcement[]>(KEYS.ANNOUNCEMENTS, INITIAL_ANNOUNCEMENTS).filter(
+    const raw = getStored<Announcement[]>(KEYS.ANNOUNCEMENTS, INITIAL_ANNOUNCEMENTS).filter(
       (a) => a && (!a.id || !deleted.has(a.id))
     );
+    return sanitizeAnnouncements(raw);
   },
   getAuditLogs: (): AuditLog[] => getStored<AuditLog[]>(KEYS.AUDIT_LOGS, INITIAL_AUDIT_LOGS).sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
@@ -1680,7 +1748,7 @@ export const mockDb = {
     const normalizedList = consumers.map(c => normalizeConsumerRecord(c));
     // Deduplicate consumers: if an issued record exists, drop stale pending placeholders for same user/email/phone/name
     const deduplicated = normalizedList.filter((c, _idx, arr) => {
-      const isPending = !isRealIssuedAccountNumber(c.accountNumber) || c.status === 'pending_approval';
+      const isPending = !isRealIssuedAccountNumber(c.accountNumber) || isPendingConsumerStatus(c.status);
       if (isPending) {
         const hasActiveTwin = arr.some(o => o !== c && isRealIssuedAccountNumber(o.accountNumber) && (
           (c.linkedUserId && o.linkedUserId && o.linkedUserId === c.linkedUserId) ||
@@ -1853,7 +1921,7 @@ export const mockDb = {
     const allConsumers = getStored<Consumer[]>(KEYS.CONSUMERS, INITIAL_CONSUMERS);
     const updatedConsumers = allConsumers.map(c => {
       if (c.meterNumber === meterNumber) {
-        return { ...c, meterNumber: 'UNASSIGNED', rfidTag: 'UNASSIGNED' };
+        return { ...c, meterNumber: 'UNASSIGNED' };
       }
       return c;
     });
@@ -1879,6 +1947,7 @@ export const mockDb = {
   },
 
   deleteBarangay: (id: string): void => {
+    addDeletedBarangayId(id);
     const allBarangays = getStored<Barangay[]>(KEYS.BARANGAYS, INITIAL_BARANGAYS);
     const updatedBarangays = allBarangays.filter(b => b.id !== id);
     setStored(KEYS.BARANGAYS, updatedBarangays);
@@ -1890,9 +1959,48 @@ export const mockDb = {
     setStored(KEYS.METERS, meters);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.METERS, changed, 'meterNumber');
   },
+  saveMeterAsync: async (updatedMeter: WaterMeter, previousMeterNumber?: string): Promise<WaterMeter[]> => {
+    const currentMeters = getStored<WaterMeter[]>(KEYS.METERS, INITIAL_METERS);
+    const targetPrevNum = (previousMeterNumber || updatedMeter.meterNumber || '').trim();
+    const existingIdx = currentMeters.findIndex(
+      (m) => m.meterNumber.trim().toLowerCase() === targetPrevNum.toLowerCase()
+    );
+    let nextMeters: WaterMeter[];
+    if (existingIdx >= 0) {
+      nextMeters = currentMeters.map((m, idx) => (idx === existingIdx ? updatedMeter : m));
+    } else {
+      nextMeters = [updatedMeter, ...currentMeters];
+    }
+    setStored(KEYS.METERS, nextMeters);
+    if (previousMeterNumber && previousMeterNumber.trim() !== updatedMeter.meterNumber.trim()) {
+      deleteDocFromFirestore(COLLECTIONS.METERS, previousMeterNumber.trim());
+    }
+    await syncDocToFirestore(
+      COLLECTIONS.METERS,
+      updatedMeter.meterNumber,
+      updatedMeter as unknown as Record<string, unknown>,
+      true
+    );
+    return nextMeters;
+  },
   saveReadings: (readings: MeterReading[]): void => {
-    const changed = diffChangedItems(KEYS.READINGS, readings, 'id');
-    setStored(KEYS.READINGS, readings);
+    const normalized = readings.map(r => {
+      const currVal = Number(r.currentReading ?? r.presentReading ?? 0);
+      const prevVal = Math.max(0, Number(r.previousReading ?? 0));
+      const safePrev = prevVal <= currVal ? prevVal : 0;
+      const usageVal = typeof r.consumption === 'number' && r.consumption >= 0 && safePrev + r.consumption === currVal
+        ? r.consumption
+        : Math.max(0, currVal - safePrev);
+      return {
+        ...r,
+        previousReading: safePrev,
+        presentReading: currVal,
+        currentReading: currVal,
+        consumption: usageVal,
+      };
+    });
+    const changed = diffChangedItems(KEYS.READINGS, normalized, 'id');
+    setStored(KEYS.READINGS, normalized);
     if (changed.length > 0) {
       syncBatchToFirestore(COLLECTIONS.READINGS, changed, 'id');
       safeBackendFetch('/api/billings/reconcile', {
@@ -1914,7 +2022,16 @@ export const mockDb = {
       if (!ir?.id) return;
       const prev = map.get(ir.id);
       if (!prev) {
-        map.set(ir.id, ir);
+        const irCurr = Number(ir.currentReading ?? ir.presentReading ?? 0);
+        const irPrev = Math.max(0, Number(ir.previousReading ?? 0));
+        const safePrev = irPrev <= irCurr ? irPrev : 0;
+        map.set(ir.id, {
+          ...ir,
+          previousReading: safePrev,
+          presentReading: irCurr,
+          currentReading: irCurr,
+          consumption: Math.max(0, irCurr - safePrev),
+        });
         changed = true;
         return;
       }
@@ -1938,9 +2055,25 @@ export const mockDb = {
                 ? fallbackBilled.remainingBalance
                 : mergedTotalAmount);
 
+      const mergedCurr = Number(billedSource.currentReading ?? billedSource.presentReading ?? fallbackBilled.currentReading ?? fallbackBilled.presentReading ?? 0);
+      const candPrev = Number(billedSource.previousReading ?? 0);
+      const altPrev = Number(fallbackBilled.previousReading ?? 0);
+      const mergedPrev =
+        candPrev > 0 && candPrev <= mergedCurr
+          ? candPrev
+          : altPrev > 0 && altPrev <= mergedCurr
+            ? altPrev
+            : Math.max(0, Math.min(candPrev, mergedCurr));
+      const mergedConsumption = Math.max(0, mergedCurr - mergedPrev);
+
       const next: MeterReading = {
         ...prev,
         ...ir,
+        previousReading: mergedPrev,
+        presentReading: mergedCurr,
+        currentReading: mergedCurr,
+        consumption: mergedConsumption,
+        submittedAt: ir.submittedAt || prev.submittedAt,
         isBillingIssued: mergedBillingIssued ? true : Boolean(ir.isBillingIssued ?? prev.isBillingIssued),
         billingIssuedAt: ir.billingIssuedAt || prev.billingIssuedAt,
         billingIssuedBy: ir.billingIssuedBy || prev.billingIssuedBy,
@@ -1974,7 +2107,10 @@ export const mockDb = {
       }
     });
     const merged = Array.from(map.values()).sort(
-      (a, b) => new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime()
+      (a, b) =>
+        new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
+        Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
+        new Date(b.billingIssuedAt || b.submittedAt || 0).getTime() - new Date(a.billingIssuedAt || a.submittedAt || 0).getTime()
     );
     if (changed) {
       setStored(KEYS.READINGS, merged);
@@ -1988,7 +2124,7 @@ export const mockDb = {
   },
   saveAnnouncements: (anns: Announcement[]): void => {
     const deleted = getDeletedAnnouncementIds();
-    const filtered = anns.filter(a => a && (!a.id || !deleted.has(a.id)));
+    const filtered = sanitizeAnnouncements(anns.filter(a => a && (!a.id || !deleted.has(a.id))));
     const changed = diffChangedItems(KEYS.ANNOUNCEMENTS, filtered, 'id');
     setStored(KEYS.ANNOUNCEMENTS, filtered);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.ANNOUNCEMENTS, changed, 'id');
@@ -1996,19 +2132,22 @@ export const mockDb = {
   mergeExternalAnnouncements: (incoming: Announcement[]): Announcement[] => {
     const deleted = getDeletedAnnouncementIds();
     const localList = mockDb.getAnnouncements();
-    if (!Array.isArray(incoming) || incoming.length === 0) return localList;
+    const cleanIncoming = sanitizeAnnouncements(incoming);
+    if (cleanIncoming.length === 0) return localList;
     const map = new Map<string, Announcement>();
     localList.forEach(la => {
       if (la?.id && !deleted.has(la.id)) map.set(la.id, la);
     });
-    incoming.forEach(ia => {
+    cleanIncoming.forEach(ia => {
       if (ia?.id && !deleted.has(ia.id)) {
         const prev = map.get(ia.id);
         map.set(ia.id, prev ? { ...prev, ...ia } : ia);
       }
     });
-    const merged = Array.from(map.values()).sort(
-      (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+    const merged = sanitizeAnnouncements(
+      Array.from(map.values()).sort(
+        (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+      )
     );
     setStored(KEYS.ANNOUNCEMENTS, merged);
     return merged;
@@ -2099,8 +2238,15 @@ export const mockDb = {
     const filtered = list
       .filter(n => {
         const nCleanAcc = (n.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
-        // District-wide broadcast notifications (public announcements & tariff advisories)
+        const inferredType = inferNotificationType(n);
+        // District-wide broadcast notifications (ONLY public announcements & tariff advisories — never personal payments/receipts)
         if (nCleanAcc === 'all' || nCleanAcc === 'broadcast' || nCleanAcc === 'district') {
+          if (
+            isPersonalNotificationType(inferredType) ||
+            isTransactionalPaymentOrReceiptItem(n as unknown as Record<string, unknown>)
+          ) {
+            return false;
+          }
           return true;
         }
 
@@ -2246,7 +2392,9 @@ export const mockDb = {
     }
   },
 
-  addNotification: (notif: Omit<ConsumerNotification, 'id' | 'timestamp' | 'read'>): ConsumerNotification => {
+  addNotification: (
+    notif: Omit<ConsumerNotification, 'id' | 'timestamp' | 'read'> & { id?: string; timestamp?: string }
+  ): ConsumerNotification => {
     const rawList = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
     const list = dedupeNotifications(rawList);
     const cleanAcc = normalizeNotifAccount(notif.accountNumber) || notif.accountNumber || 'PENDING';
@@ -2254,10 +2402,11 @@ export const mockDb = {
 
     const candidate: ConsumerNotification = {
       ...notif,
+      type: inferNotificationType(notif),
       accountNumber: cleanAcc,
       ...(cleanEmail ? { consumerEmail: cleanEmail } : {}),
-      id: `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      timestamp: new Date().toISOString(),
+      id: notif.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      timestamp: notif.timestamp || new Date().toISOString(),
       read: false,
     };
 
@@ -2483,6 +2632,8 @@ export const mockDb = {
           ...secondary,
           ...primary,
           id: existingKey,
+          sourceNotificationId: primary.sourceNotificationId || secondary.sourceNotificationId,
+          referencedNotice: primary.referencedNotice || secondary.referencedNotice,
           replies: mergedReplies,
         });
       }
@@ -2518,6 +2669,11 @@ export const mockDb = {
       });
     }
 
+    const refNotice = reportData.referencedNotice;
+    const ackMessage = refNotice
+      ? `Good day, ${reportData.consumerName || 'Valued Consumer'}! Your reply (#${ticketNumber}) regarding Official Notice "${refNotice.subject}"${refNotice.meterNumber ? ` (Meter #${refNotice.meterNumber}${refNotice.meterStatus ? ` · Status: ${refNotice.meterStatus.toUpperCase()}` : ''})` : ''} has been linked and delivered directly to Tagoloan Water District Administration with all notice details attached. Our Administration team will respond directly to this notice thread.`
+      : `Good day, ${reportData.consumerName || 'Valued Consumer'}! Your inquiry/report (#${ticketNumber}) has been successfully delivered to the Tagoloan Water District Administration. Our Customer Service team has been notified and will review your concern—please wait shortly for an official reply. Thank you for reaching out and for your patience!`;
+
     // Immediate automated Admin acknowledgement message confirming delivery
     replies.push({
       id: `ACK-${ticketNumber}`,
@@ -2525,7 +2681,7 @@ export const mockDb = {
       senderId: 'system-admin-ack',
       senderName: 'TWD Customer Service Desk',
       senderRole: 'admin',
-      message: `Good day, ${reportData.consumerName || 'Valued Consumer'}! Your inquiry/report (#${ticketNumber}) has been successfully delivered to the Tagoloan Water District Administration. Our Customer Service team has been notified and will review your concern—please wait shortly for an official reply. Thank you for reaching out and for your patience!`,
+      message: ackMessage,
       timestamp: ackTime
     });
 
@@ -2548,8 +2704,10 @@ export const mockDb = {
       reportData.accountNumber || 'consumer',
       reportData.consumerName,
       'consumer',
-      'Filed Service Report',
-      `Filed concern #${ticketNumber} (${reportData.category.toUpperCase()}): "${reportData.title}".`
+      refNotice ? 'Replied to Official Admin Notice' : 'Filed Service Report',
+      refNotice
+        ? `Replied via Ticket #${ticketNumber} regarding Official Notice "${refNotice.subject}"${refNotice.meterNumber ? ` (Meter #${refNotice.meterNumber})` : ''}.`
+        : `Filed concern #${ticketNumber} (${reportData.category.toUpperCase()}): "${reportData.title}".`
     );
 
     return newReport;
@@ -2604,16 +2762,34 @@ export const mockDb = {
           (report.accountNumber && c.accountNumber === report.accountNumber) ||
           (report.consumerEmail && c.email && c.email.toLowerCase() === report.consumerEmail.toLowerCase())
         );
+
+        const refNotice = updated.referencedNotice;
+        const contextualSubject = refNotice
+          ? refNotice.meterStatus
+            ? `Admin Reply Re: Water Meter Status (${refNotice.meterStatus === 'maintenance' ? 'Under Maintenance' : refNotice.meterStatus.charAt(0).toUpperCase() + refNotice.meterStatus.slice(1)})${refNotice.meterNumber ? ` — Meter #${refNotice.meterNumber}` : ''}`
+            : `Admin Reply Re: ${refNotice.subject}`
+          : `Official Admin Reply — ${updated.title || `Concern #${report.ticketNumber}`}`;
+
+        const safeTitle = contextualSubject.slice(0, 220);
+        const fullReplyBody = String(reply.message || '').trim().slice(0, 2400);
+
         mockDb.addNotification({
+          id: `notif-rep-${deterministicId.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
           accountNumber: report.accountNumber,
           consumerId: matchedConsumer?.id,
           userId: matchedConsumer?.linkedUserId,
           consumerEmail: report.consumerEmail || matchedConsumer?.email,
-          title: `Official Reply on Concern #${report.ticketNumber}`,
-          message: `Admin ${reply.senderName} replied: "${reply.message.length > 90 ? reply.message.slice(0, 87) + '...' : reply.message}" (Status: ${nextStatus.toUpperCase()})`,
+          subject: safeTitle,
+          title: safeTitle,
+          message: fullReplyBody,
           type: 'report',
           reportId: report.id,
-          ticketNumber: report.ticketNumber
+          ticketNumber: report.ticketNumber,
+          replyId: deterministicId,
+          sentByAdmin: reply.senderName,
+          updatedByAdmin: reply.senderName,
+          isFromAdmin: true,
+          referencedNotice: refNotice,
         });
 
         mockDb.addAuditLog(
@@ -2621,7 +2797,7 @@ export const mockDb = {
           reply.senderName,
           'admin',
           'Replied to Consumer Report',
-          `Responded to Ticket #${report.ticketNumber} for ${report.consumerName} (Status: ${nextStatus}).`
+          `Responded to Ticket #${report.ticketNumber} for ${report.consumerName}${refNotice ? ` (Re: ${refNotice.subject})` : ''} (Status: ${nextStatus}).`
         );
       } else {
         mockDb.addAuditLog(
@@ -2629,7 +2805,7 @@ export const mockDb = {
           reply.senderName,
           'consumer',
           'Updated Service Report',
-          `Added follow-up message to Ticket #${report.ticketNumber}.`
+          `Added follow-up message to Ticket #${report.ticketNumber}${updated.referencedNotice ? ` (Re: ${updated.referencedNotice.subject})` : ''}.`
         );
       }
     }
@@ -2663,16 +2839,25 @@ export const mockDb = {
       (report.accountNumber && c.accountNumber === report.accountNumber) ||
       (report.consumerEmail && c.email && c.email.toLowerCase() === report.consumerEmail.toLowerCase())
     );
+    const refNotice = updated.referencedNotice;
+    const statusTitle = refNotice
+      ? `Status Updated (${status.toUpperCase().replace('_', ' ')}) — Re: ${refNotice.subject}`.slice(0, 220)
+      : `Status Updated for Ticket #${report.ticketNumber}`;
+
     mockDb.addNotification({
       accountNumber: report.accountNumber,
       consumerId: matchedConsumer?.id,
       userId: matchedConsumer?.linkedUserId,
       consumerEmail: report.consumerEmail || matchedConsumer?.email,
-      title: `Status Updated for Ticket #${report.ticketNumber}`,
-      message: `Your report status was changed to ${status.toUpperCase().replace('_', ' ')}.${assignedStaff ? ` Assigned to: ${assignedStaff}` : ''}`,
+      subject: statusTitle,
+      title: statusTitle,
+      message: `Tagoloan Water District Administration updated your inquiry (#${report.ticketNumber}) status to ${status.toUpperCase().replace('_', ' ')}.${assignedStaff ? ` Assigned to: ${assignedStaff}.` : ''}`,
       type: 'report',
       reportId: report.id,
-      ticketNumber: report.ticketNumber
+      ticketNumber: report.ticketNumber,
+      sentByAdmin: assignedStaff || 'TWD Administration',
+      isFromAdmin: true,
+      referencedNotice: refNotice,
     });
 
     return updated;
@@ -2688,6 +2873,631 @@ export const mockDb = {
     const list = getStored<ConsumerReport[]>(KEYS.REPORTS, INITIAL_REPORTS);
     const updated = list.map(r => (r.id === reportId || r.ticketNumber === reportId) ? { ...r, hasUnreadConsumerUpdate: false } : r);
     setStored(KEYS.REPORTS, updated);
+  },
+
+  // =========================================================================
+  // NEW CONSUMER WATER METER INSTALLATION SCHEDULING & ACCOUNT VALIDATION
+  // =========================================================================
+
+  getInstallationRequests: (): WaterMeterInstallationRequest[] => {
+    const list = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
+    return [...list].sort(
+      (a, b) => new Date(b.submissionDate || 0).getTime() - new Date(a.submissionDate || 0).getTime()
+    );
+  },
+
+  saveInstallationRequests: (requests: WaterMeterInstallationRequest[]): void => {
+    const changed = diffChangedItems(KEYS.INSTALLATIONS, requests, 'id');
+    setStored(KEYS.INSTALLATIONS, requests);
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.INSTALLATIONS, changed, 'id');
+  },
+
+  mergeExternalInstallations: (incoming: WaterMeterInstallationRequest[]): WaterMeterInstallationRequest[] => {
+    const localList = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
+    if (!Array.isArray(incoming) || incoming.length === 0) {
+      return [...localList].sort(
+        (a, b) => new Date(b.submissionDate || 0).getTime() - new Date(a.submissionDate || 0).getTime()
+      );
+    }
+    const map = new Map<string, WaterMeterInstallationRequest>();
+    localList.forEach((lr) => {
+      if (lr && lr.id) map.set(lr.id, lr);
+    });
+    incoming.forEach((ir) => {
+      if (!ir || (!ir.id && !ir.applicationNumber)) return;
+      let existingKey = ir.id && map.has(ir.id) ? ir.id : undefined;
+      if (!existingKey && ir.applicationNumber) {
+        const found = Array.from(map.entries()).find(([, v]) => v.applicationNumber === ir.applicationNumber);
+        if (found) existingKey = found[0];
+      }
+      if (!existingKey) {
+        const k = ir.id || ir.applicationNumber;
+        map.set(k, { ...ir, id: k, history: Array.isArray(ir.history) ? ir.history : [] });
+      } else {
+        const prev = map.get(existingKey)!;
+        const irNewer = new Date(ir.updatedAt || 0).getTime() >= new Date(prev.updatedAt || 0).getTime();
+        const primary = irNewer ? ir : prev;
+        const secondary = irNewer ? prev : ir;
+        const histMap = new Map<string, InstallationHistoryEntry>();
+        [...(prev.history || []), ...(ir.history || [])].forEach((h) => {
+          if (h && h.id) histMap.set(h.id, h);
+        });
+        const mergedHist = Array.from(histMap.values()).sort(
+          (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
+        );
+        map.set(existingKey, {
+          ...secondary,
+          ...primary,
+          id: existingKey,
+          meterSerialNumber: primary.meterSerialNumber || secondary.meterSerialNumber,
+          assignedAccountNumber: primary.assignedAccountNumber || secondary.assignedAccountNumber,
+          assignedMeterTagNumber: primary.assignedMeterTagNumber || secondary.assignedMeterTagNumber,
+          history: mergedHist,
+        });
+      }
+    });
+    const merged = Array.from(map.values()).sort(
+      (a, b) => new Date(b.submissionDate || 0).getTime() - new Date(a.submissionDate || 0).getTime()
+    );
+    const changed = diffChangedItems(KEYS.INSTALLATIONS, merged, 'id');
+    setStored(KEYS.INSTALLATIONS, merged);
+    if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.INSTALLATIONS, changed, 'id');
+    return merged;
+  },
+
+  markInstallationReadByAdmin: (requestId: string): void => {
+    const list = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
+    const updated = list.map((r) =>
+      r.id === requestId || r.applicationNumber === requestId ? { ...r, hasUnreadAdminAlert: false } : r
+    );
+    setStored(KEYS.INSTALLATIONS, updated);
+    const target = updated.find((r) => r.id === requestId || r.applicationNumber === requestId);
+    if (target) {
+      syncDocToFirestore(COLLECTIONS.INSTALLATIONS, target.id, target as unknown as Record<string, unknown>);
+      safeBackendFetch(`/api/installations/${encodeURIComponent(target.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hasUnreadAdminAlert: false }),
+      }).catch(() => {});
+    }
+  },
+
+  createInstallationRequest: (payload: {
+    applicationNumber?: string;
+    consumerId?: string;
+    linkedUserId?: string;
+    userId?: string;
+    consumerName: string;
+    consumerEmail: string;
+    contactNumber: string;
+    address: string;
+    barangay: string;
+    barangayId?: string;
+    sitioZone?: string;
+    consumerType?: 'Residential' | 'Commercial';
+    preferredInstallationDate: string;
+    consumerRemarks?: string;
+  }): WaterMeterInstallationRequest => {
+    const list = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
+    const existingAppNums = [
+      ...list.map((r) => r.applicationNumber),
+      ...mockDb.getConsumers().map((c) => c.applicationNumber),
+    ];
+    const applicationNumber = payload.applicationNumber || generateApplicationNumber(existingAppNums);
+    const now = new Date().toISOString();
+    const id = `INST-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+    const resolvedLinkedUserId = payload.linkedUserId || payload.userId;
+
+    const historyEntry: InstallationHistoryEntry = {
+      id: `HIST-${Date.now()}-1`,
+      status: 'Pending Review',
+      timestamp: now,
+      actorName: payload.consumerName.trim(),
+      actorRole: 'consumer',
+      action: 'Submitted Water Meter Installation Request',
+      scheduledDate: payload.preferredInstallationDate,
+      remarks: payload.consumerRemarks?.trim() || 'Water meter installation request submitted by consumer.',
+    };
+
+    const newReq: WaterMeterInstallationRequest = {
+      id,
+      applicationNumber,
+      consumerId: payload.consumerId || resolvedLinkedUserId,
+      linkedUserId: resolvedLinkedUserId,
+      consumerName: payload.consumerName.trim(),
+      consumerEmail: payload.consumerEmail.trim().toLowerCase(),
+      contactNumber: payload.contactNumber.trim(),
+      address: payload.address.trim(),
+      barangay: payload.barangay.trim(),
+      barangayId: payload.barangayId,
+      sitioZone: payload.sitioZone,
+      consumerType: payload.consumerType || 'Residential',
+      preferredInstallationDate: payload.preferredInstallationDate,
+      submissionDate: now,
+      status: 'Pending Review',
+      consumerRemarks: payload.consumerRemarks?.trim() || '',
+      adminRemarks: '',
+      accountValidationStatus: 'pending_installation',
+      hasUnreadAdminAlert: true,
+      updatedAt: now,
+      history: [historyEntry],
+    };
+
+    const nextList = [newReq, ...list];
+    mockDb.saveInstallationRequests(nextList);
+
+    // Update linked Consumer & User status to 'pending_installation'
+    const cleanEmail = newReq.consumerEmail;
+    const consumers = mockDb.getConsumers();
+    let updatedConsumer: Consumer | undefined;
+    const nextConsumers = consumers.map((c) => {
+      const matches =
+        (cleanEmail && c.email && c.email.trim().toLowerCase() === cleanEmail) ||
+        (newReq.linkedUserId && c.linkedUserId === newReq.linkedUserId) ||
+        (c.applicationNumber && c.applicationNumber === applicationNumber);
+      if (!matches || isRealIssuedAccountNumber(c.accountNumber)) return c;
+      updatedConsumer = {
+        ...c,
+        applicationNumber,
+        hasExistingMeter: false,
+        installationRequestId: newReq.id,
+        installationStatus: 'Pending Review',
+        accountValidationStatus: 'pending_installation',
+        status: 'pending_installation',
+      };
+      return updatedConsumer;
+    });
+    if (updatedConsumer) {
+      mockDb.saveConsumers(nextConsumers);
+    }
+
+    const users = mockDb.getUsers();
+    let usersModified = false;
+    const nextUsers = users.map((u) => {
+      if (u.role === 'admin' || isRealIssuedAccountNumber(u.linkedAccountNumber)) return u;
+      const matches =
+        (cleanEmail && u.email && u.email.trim().toLowerCase() === cleanEmail) ||
+        (newReq.linkedUserId && u.id === newReq.linkedUserId);
+      if (!matches) return u;
+      usersModified = true;
+      return { ...u, status: 'pending_installation' as const };
+    });
+    if (usersModified) {
+      mockDb.saveUsers(nextUsers);
+      const cur = mockDb.getCurrentUser();
+      if (cur && ((cleanEmail && cur.email?.toLowerCase() === cleanEmail) || (newReq.linkedUserId && cur.id === newReq.linkedUserId))) {
+        mockDb.setCurrentUser({ ...cur, status: 'pending_installation' });
+      }
+    }
+
+    // Automatic Notification A: Notify Consumer that installation request has been received
+    const receivedNotif = buildInstallationReceivedNotification(newReq);
+    mockDb.addNotification(receivedNotif);
+
+    mockDb.addAuditLog(
+      newReq.linkedUserId || newReq.consumerEmail,
+      newReq.consumerName,
+      'consumer',
+      'Submitted Water Meter Installation Request',
+      `Application #${newReq.applicationNumber} submitted for ${newReq.address} (Preferred Date: ${newReq.preferredInstallationDate}).`
+    );
+
+    safeBackendFetch('/api/installations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request: newReq, notification: receivedNotif }),
+    }).catch(() => {});
+
+    return newReq;
+  },
+
+  updateInstallationRequestStatus: (
+    requestId: string,
+    updates: {
+      status: InstallationStatus;
+      confirmedInstallationDate?: string;
+      adminRemarks?: string;
+      completionDate?: string;
+      responsiblePersonnel?: string;
+      adminId: string;
+      adminName: string;
+    }
+  ): WaterMeterInstallationRequest | null => {
+    const list = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
+    const idx = list.findIndex((r) => r.id === requestId || r.applicationNumber === requestId);
+    if (idx === -1) return null;
+
+    const existing = list[idx];
+    const now = new Date().toISOString();
+    const prevStatus = existing.status;
+    const prevConfirmedDate = existing.confirmedInstallationDate || '';
+    const nextConfirmedDate =
+      updates.confirmedInstallationDate !== undefined
+        ? updates.confirmedInstallationDate
+        : existing.confirmedInstallationDate;
+    const nextRemarks = updates.adminRemarks !== undefined ? updates.adminRemarks.trim() : existing.adminRemarks || '';
+
+    const didStatusChange = prevStatus !== updates.status;
+    const didScheduleChange = Boolean(nextConfirmedDate && nextConfirmedDate !== prevConfirmedDate);
+    const didRemarksChange = nextRemarks !== (existing.adminRemarks || '');
+
+    if (!didStatusChange && !didScheduleChange && !didRemarksChange && !updates.completionDate && !updates.responsiblePersonnel) {
+      return existing;
+    }
+
+    const nextValidationStatus: WaterMeterInstallationRequest['accountValidationStatus'] =
+      existing.accountValidationStatus === 'validated'
+        ? 'validated'
+        : updates.status === 'Installed'
+          ? 'awaiting_validation'
+          : 'pending_installation';
+
+    const historyEntry: InstallationHistoryEntry = {
+      id: `HIST-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+      status: updates.status,
+      timestamp: now,
+      actorName: updates.adminName,
+      actorRole: 'admin',
+      action: didStatusChange
+        ? `Updated status from "${prevStatus}" to "${updates.status}"`
+        : 'Updated installation schedule / remarks',
+      scheduledDate: nextConfirmedDate || existing.preferredInstallationDate,
+      remarks:
+        nextRemarks ||
+        `Installation status updated from "${prevStatus}" to "${updates.status}".`,
+    };
+
+    const updatedReq: WaterMeterInstallationRequest = {
+      ...existing,
+      status: updates.status,
+      confirmedInstallationDate: nextConfirmedDate,
+      adminRemarks: nextRemarks,
+      completionDate:
+        updates.status === 'Installed'
+          ? updates.completionDate || existing.completionDate || now.split('T')[0]
+          : updates.completionDate || existing.completionDate,
+      responsiblePersonnel: updates.responsiblePersonnel || existing.responsiblePersonnel,
+      accountValidationStatus: nextValidationStatus,
+      hasUnreadAdminAlert: false,
+      updatedAt: now,
+      history: [...(existing.history || []), historyEntry],
+    };
+
+    const nextList = [...list];
+    nextList[idx] = updatedReq;
+    mockDb.saveInstallationRequests(nextList);
+
+    // Sync status onto Consumer record so Admin Consumers table & Consumer Portal stay aligned
+    const consumers = mockDb.getConsumers();
+    let consumerChanged = false;
+    const nextConsumers = consumers.map((c) => {
+      const matches =
+        c.installationRequestId === updatedReq.id ||
+        (updatedReq.applicationNumber && c.applicationNumber === updatedReq.applicationNumber) ||
+        (updatedReq.consumerEmail && c.email && c.email.trim().toLowerCase() === updatedReq.consumerEmail);
+      if (!matches) return c;
+      consumerChanged = true;
+      return {
+        ...c,
+        hasExistingMeter: false,
+        installationRequestId: updatedReq.id,
+        installationStatus: updatedReq.status,
+        accountValidationStatus: nextValidationStatus,
+        ...(isRealIssuedAccountNumber(c.accountNumber)
+          ? {}
+          : { status: (updatedReq.status === 'Cancelled' ? 'installation_not_scheduled' : 'pending_installation') as Consumer['status'] }),
+      };
+    });
+    if (consumerChanged) {
+      mockDb.saveConsumers(nextConsumers);
+    }
+
+    // Automatic Notifications B, C, D (only when status or confirmed schedule actually changed)
+    let autoNotif: Omit<ConsumerNotification, 'timestamp' | 'read'> | null = null;
+    if (didStatusChange || didScheduleChange) {
+      autoNotif = buildInstallationStatusUpdateNotification(
+        updatedReq,
+        updates.status,
+        updates.adminName,
+        nextRemarks
+      );
+      if (autoNotif) {
+        mockDb.addNotification(autoNotif);
+      }
+    }
+
+    mockDb.addAuditLog(
+      updates.adminId,
+      updates.adminName,
+      'admin',
+      `Installation Status Updated: ${updates.status}`,
+      `Application #${updatedReq.applicationNumber} (${updatedReq.consumerName}) updated from "${prevStatus}" to "${updates.status}"${nextConfirmedDate ? ` · Schedule: ${nextConfirmedDate}` : ''}${nextRemarks ? ` · Remarks: ${nextRemarks}` : ''}.`
+    );
+
+    safeBackendFetch(`/api/installations/${encodeURIComponent(updatedReq.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        request: updatedReq,
+        notification: autoNotif,
+      }),
+    }).catch(() => {});
+
+    return updatedReq;
+  },
+
+  checkDuplicateMeterSerial: (serialNumber: string, excludeMeterNumber?: string): WaterMeter | undefined => {
+    const cleanSerial = (serialNumber || '').trim().toUpperCase();
+    if (!cleanSerial) return undefined;
+    const meters = mockDb.getMeters();
+    return meters.find((m) => {
+      if (excludeMeterNumber && m.meterNumber.trim().toUpperCase() === excludeMeterNumber.trim().toUpperCase()) {
+        return false;
+      }
+      return (m.serialNumber || '').trim().toUpperCase() === cleanSerial;
+    });
+  },
+
+  validateInstallationAndActivateAccount: async (params: {
+    requestId: string;
+    meterSerialNumber: string;
+    meterTagNumber: string;
+    rfidTag?: string;
+    meterBrand: string;
+    meterSize: string;
+    accountNumber: string;
+    completionDate: string;
+    responsiblePersonnel: string;
+    adminId: string;
+    adminName: string;
+  }): Promise<{
+    success: boolean;
+    error?: string;
+    request?: WaterMeterInstallationRequest;
+    consumer?: Consumer;
+    meter?: WaterMeter;
+  }> => {
+    const list = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
+    const reqIdx = list.findIndex((r) => r.id === params.requestId || r.applicationNumber === params.requestId);
+    if (reqIdx === -1) {
+      return { success: false, error: 'Installation request record not found.' };
+    }
+
+    const reqRecord = list[reqIdx];
+    if (reqRecord.status !== 'Installed') {
+      return {
+        success: false,
+        error: `Account Number and Meter Tag Number cannot be issued yet because physical installation status is "${reqRecord.status}". Confirm status as "Installed" first.`,
+      };
+    }
+
+    const cleanSerial = params.meterSerialNumber.trim().toUpperCase();
+    const cleanTag = params.meterTagNumber.trim().toUpperCase();
+    const cleanAcc = params.accountNumber.replace(/^#/, '').trim().toUpperCase();
+    const cleanRfid = params.rfidTag?.trim() ? params.rfidTag.trim().toUpperCase() : undefined;
+    const cleanPersonnel = params.responsiblePersonnel.trim();
+    const cleanCompletionDate = params.completionDate.trim() || new Date().toISOString().split('T')[0];
+
+    if (!cleanSerial || !cleanTag || !cleanAcc || !cleanPersonnel) {
+      return {
+        success: false,
+        error: 'Meter Serial Number, Meter Tag Number, Account Number, and Responsible Personnel are all required.',
+      };
+    }
+
+    // Check duplicate Account Number, Meter Tag Number, and Meter Serial Number
+    const allConsumers = mockDb.getConsumers();
+    const targetEmail = (reqRecord.consumerEmail || '').trim().toLowerCase();
+    const isTargetConsumer = (c: Consumer) =>
+      (targetEmail && c.email && c.email.trim().toLowerCase() === targetEmail) ||
+      (reqRecord.linkedUserId && c.linkedUserId === reqRecord.linkedUserId) ||
+      (reqRecord.applicationNumber && c.applicationNumber === reqRecord.applicationNumber);
+
+    const dupAcc = allConsumers.find(
+      (c) => !isTargetConsumer(c) && isRealIssuedAccountNumber(c.accountNumber) && c.accountNumber.trim().toUpperCase() === cleanAcc
+    );
+    if (dupAcc) {
+      return {
+        success: false,
+        error: `Account Number #${cleanAcc} is already assigned to "${dupAcc.name}". Duplicate account numbers are prohibited.`,
+      };
+    }
+
+    const dupTagConsumer = allConsumers.find(
+      (c) => !isTargetConsumer(c) && c.meterNumber && c.meterNumber.trim().toUpperCase() === cleanTag
+    );
+    if (dupTagConsumer) {
+      return {
+        success: false,
+        error: `Meter Tag Number #${cleanTag} is already assigned to "${dupTagConsumer.name}".`,
+      };
+    }
+
+    const dupSerial = mockDb.checkDuplicateMeterSerial(cleanSerial, cleanTag);
+    if (dupSerial) {
+      return {
+        success: false,
+        error: `Water Meter Serial Number "${cleanSerial}" is already registered on Meter Tag #${dupSerial.meterNumber}.`,
+      };
+    }
+
+    const now = new Date().toISOString();
+
+    // 1. Register / link physical WaterMeter in Water Meters inventory (serialNumber stored exclusively here!)
+    const newMeter: WaterMeter = {
+      meterNumber: cleanTag,
+      serialNumber: cleanSerial,
+      ...(cleanRfid ? { rfidTag: cleanRfid } : {}),
+      brand: params.meterBrand || 'EVER',
+      type: 'standard',
+      size: params.meterSize || '1/2"',
+      installationDate: cleanCompletionDate,
+      completionDate: cleanCompletionDate,
+      installedBy: cleanPersonnel,
+      installationRequestId: reqRecord.id,
+      applicationNumber: reqRecord.applicationNumber,
+      lastReadingDate: cleanCompletionDate,
+      lastReadingValue: 0,
+      status: 'active',
+      linkedAccountNumber: cleanAcc,
+      statusUpdatedAt: now,
+      statusUpdatedBy: params.adminName,
+    };
+    await mockDb.saveMeterAsync(newMeter);
+
+    // 2. Activate Consumer record & assign official Account Number and Meter Tag Number
+    const cIdx = allConsumers.findIndex(isTargetConsumer);
+    const baseConsumer: Consumer =
+      cIdx >= 0
+        ? allConsumers[cIdx]
+        : {
+            accountNumber: cleanAcc,
+            name: reqRecord.consumerName,
+            address: reqRecord.address,
+            barangay: reqRecord.barangay,
+            barangayId: reqRecord.barangayId || 'BRG-01',
+            sitioZone: reqRecord.sitioZone || 'Zone 1',
+            contactNumber: reqRecord.contactNumber,
+            email: reqRecord.consumerEmail,
+            meterNumber: cleanTag,
+            status: 'active',
+            registrationDate: reqRecord.submissionDate.split('T')[0],
+            consumerType: reqRecord.consumerType || 'Residential',
+            linkedUserId: reqRecord.linkedUserId,
+            isRegistered: true,
+          };
+
+    const previousAcc = baseConsumer.accountNumber;
+    const activatedConsumer: Consumer = {
+      ...baseConsumer,
+      accountNumber: cleanAcc,
+      meterNumber: cleanTag,
+      meterBrand: params.meterBrand || baseConsumer.meterBrand || 'EVER',
+      meterSize: params.meterSize || baseConsumer.meterSize || '1/2"',
+      status: 'active',
+      isRegistered: true,
+      applicationNumber: reqRecord.applicationNumber,
+      hasExistingMeter: true,
+      installationRequestId: reqRecord.id,
+      installationStatus: 'Installed',
+      accountValidationStatus: 'validated',
+    };
+
+    const nextConsumers =
+      cIdx >= 0
+        ? allConsumers.map((c, idx) => (idx === cIdx ? activatedConsumer : c))
+        : [activatedConsumer, ...allConsumers];
+    mockDb.saveConsumers(nextConsumers);
+
+    // 3. Activate linked User account
+    const allUsers = mockDb.getUsers();
+    let matchedUser: User | undefined;
+    const nextUsers = allUsers.map((u) => {
+      if (u.role === 'admin') return u;
+      const matches =
+        (targetEmail && u.email && u.email.trim().toLowerCase() === targetEmail) ||
+        (reqRecord.linkedUserId && u.id === reqRecord.linkedUserId);
+      if (!matches) return u;
+      matchedUser = {
+        ...u,
+        linkedAccountNumber: cleanAcc,
+        status: 'active',
+      };
+      return matchedUser;
+    });
+    mockDb.saveUsers(nextUsers);
+
+    const cur = mockDb.getCurrentUser();
+    if (cur && ((targetEmail && cur.email?.toLowerCase() === targetEmail) || (reqRecord.linkedUserId && cur.id === reqRecord.linkedUserId))) {
+      mockDb.setCurrentUser({
+        ...cur,
+        linkedAccountNumber: cleanAcc,
+        status: 'active',
+      });
+    }
+
+    // 4. Finalize Installation Request record as Validated
+    const validationHistory: InstallationHistoryEntry = {
+      id: `HIST-VAL-${Date.now()}`,
+      status: 'Validated & Activated',
+      timestamp: now,
+      actorName: params.adminName,
+      actorRole: 'admin',
+      action: 'Validated Meter Installation & Activated Service Account',
+      scheduledDate: cleanCompletionDate,
+      remarks: `Installation verified & account activated. Issued Account #${cleanAcc} and Meter Tag #${cleanTag}. Installed by ${cleanPersonnel}.`,
+    };
+
+    const validatedReq: WaterMeterInstallationRequest = {
+      ...reqRecord,
+      status: 'Installed',
+      completionDate: cleanCompletionDate,
+      responsiblePersonnel: cleanPersonnel,
+      meterSerialNumber: cleanSerial,
+      meterBrand: params.meterBrand || 'EVER',
+      meterSize: params.meterSize || '1/2"',
+      assignedAccountNumber: cleanAcc,
+      assignedMeterTagNumber: cleanTag,
+      accountValidationStatus: 'validated',
+      validatedAt: now,
+      validatedBy: params.adminName,
+      hasUnreadAdminAlert: false,
+      updatedAt: now,
+      history: [...(reqRecord.history || []), validationHistory],
+    };
+
+    const nextReqs = [...list];
+    nextReqs[reqIdx] = validatedReq;
+    mockDb.saveInstallationRequests(nextReqs);
+
+    // 5. Send official Account Activated Notification to Consumer (strictly omitting Meter Serial Number!)
+    const activationNotifPayload = buildAccountActivatedAfterInstallationNotification({
+      consumerName: validatedReq.consumerName,
+      consumerEmail: validatedReq.consumerEmail,
+      consumerId: activatedConsumer.id || activatedConsumer.linkedUserId,
+      userId: activatedConsumer.linkedUserId || matchedUser?.id,
+      applicationNumber: validatedReq.applicationNumber,
+      installationRequestId: validatedReq.id,
+      accountNumber: cleanAcc,
+      meterTagNumber: cleanTag,
+      adminName: params.adminName,
+    });
+    const savedNotif = mockDb.addNotification(activationNotifPayload);
+
+    // 6. Push authoritative Consumer, User & Notification to Cloud Firestore and Backend API
+    await pushIssuedConsumerToFirestore(activatedConsumer, savedNotif, matchedUser, true, previousAcc);
+
+    safeBackendFetch(`/api/installations/${encodeURIComponent(validatedReq.id)}/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        request: validatedReq,
+        consumer: activatedConsumer,
+        meter: newMeter,
+        notification: savedNotif,
+      }),
+    }).catch(() => {});
+
+    safeBackendFetch('/api/consumers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(activatedConsumer),
+    }).catch(() => {});
+
+    mockDb.addAuditLog(
+      params.adminId,
+      params.adminName,
+      'admin',
+      'Validated Meter Installation & Activated Account',
+      `Verified installation for ${reqRecord.consumerName} (App #${reqRecord.applicationNumber}). Issued Account #${cleanAcc} and Meter Tag #${cleanTag} (Completed ${cleanCompletionDate} by ${cleanPersonnel}).`
+    );
+
+    return {
+      success: true,
+      request: validatedReq,
+      consumer: activatedConsumer,
+      meter: newMeter,
+    };
   },
 
   addAuditLog: (userId: string, userName: string, userRole: 'admin' | 'consumer' | 'system' | 'staff' | 'cashier' | 'meter_reader', action: string, details: string): void => {
@@ -2740,6 +3550,7 @@ export const mockDb = {
       const consumers = getStored<Consumer[]>(KEYS.CONSUMERS, INITIAL_CONSUMERS);
       const users = getStored<User[]>(KEYS.USERS, INITIAL_USERS);
       const notifications = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
+      const meters = getStored<WaterMeter[]>(KEYS.METERS, INITIAL_METERS);
 
       const isRealAcc = (acc?: string) => {
         if (!acc) return false;
@@ -2750,11 +3561,12 @@ export const mockDb = {
       let consumersChanged = false;
       let usersChanged = false;
       let notifsChanged = false;
+      let metersChanged = false;
 
       consumers.forEach(c => {
         if (!isRealAcc(c.accountNumber)) return;
 
-        if (c.status === 'pending_approval' || (c.status as string) === 'pending') {
+        if (isPendingConsumerStatus(c.status)) {
           c.status = 'active';
           consumersChanged = true;
         }
@@ -2766,10 +3578,6 @@ export const mockDb = {
         }
         if (!c.meterNumber || c.meterNumber.toUpperCase().startsWith('PENDING')) {
           c.meterNumber = `MT-${acc}`;
-          consumersChanged = true;
-        }
-        if (!c.rfidTag || c.rfidTag.toUpperCase().startsWith('PENDING')) {
-          c.rfidTag = `RFID-${c.meterNumber}`;
           consumersChanged = true;
         }
 
@@ -2883,7 +3691,7 @@ export const mockDb = {
               userId: effectiveUid || undefined,
               consumerEmail: effectiveEmail || undefined,
               title: `Official Account Number & Meter Issued!`,
-              message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${acc} and Meter Serial is #${c.meterNumber}. Smart RFID Tag: ${c.rfidTag}. Your full dashboard and telemetry are now active.`,
+              message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${acc} and Meter Tag Number is #${c.meterNumber}. Your full dashboard and billing history are now active.`,
               timestamp: stableTs,
               type: 'account_issue',
               read: false
@@ -2922,9 +3730,40 @@ export const mockDb = {
         consumersChanged = true;
       }
 
+      // Ensure every issued consumer with a valid assigned meter has a corresponding WaterMeter record in inventory
+      cleanedConsumers.forEach((c) => {
+        if (!isRealAcc(c.accountNumber)) return;
+        const cleanAcc = c.accountNumber.replace(/^#/, '').trim().toUpperCase();
+        const cleanMeter = (c.meterNumber || '').trim();
+        if (!cleanMeter || cleanMeter.toUpperCase() === 'UNASSIGNED' || cleanMeter.toUpperCase().startsWith('PENDING')) {
+          return;
+        }
+        const existingMeter = meters.find(
+          (m) =>
+            m.meterNumber.trim().toLowerCase() === cleanMeter.toLowerCase() ||
+            (m.linkedAccountNumber && m.linkedAccountNumber.replace(/^#/, '').trim().toUpperCase() === cleanAcc)
+        );
+        if (!existingMeter) {
+          meters.push({
+            meterNumber: cleanMeter,
+            brand: c.meterBrand || 'NBI WaterTech',
+            rfidTag: c.rfidTag || `RFID-${cleanMeter}`,
+            size: c.meterSize || '1/2 inch',
+            installationDate: c.registrationDate || '2026-01-15',
+            status: 'active',
+            linkedAccountNumber: cleanAcc,
+          });
+          metersChanged = true;
+        } else if (!existingMeter.linkedAccountNumber) {
+          existingMeter.linkedAccountNumber = cleanAcc;
+          metersChanged = true;
+        }
+      });
+
       if (consumersChanged) setStored(KEYS.CONSUMERS, cleanedConsumers);
       if (usersChanged) setStored(KEYS.USERS, users);
       if (notifsChanged) setStored(KEYS.NOTIFICATIONS, dedupedNotifs);
+      if (metersChanged) setStored(KEYS.METERS, meters);
     } catch (err) {
       console.warn('[mockDb] reconcileIssuedAccounts warning:', err);
     }
@@ -2943,6 +3782,7 @@ export const mockDb = {
     localStorage.removeItem(KEYS.BARANGAYS);
     localStorage.removeItem(KEYS.NOTIFICATIONS);
     localStorage.removeItem(KEYS.REPORTS);
+    localStorage.removeItem(KEYS.INSTALLATIONS);
     localStorage.removeItem(KEYS.TARIFF_CONFIG);
   }
 };

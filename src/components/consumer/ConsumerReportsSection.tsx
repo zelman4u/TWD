@@ -28,7 +28,8 @@ import {
   Building,
   Check,
   AlertOctagon,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Bell
 } from 'lucide-react';
 import { Consumer, ConsumerReport, ConsumerReportReply, User as UserType } from '../../types';
 import { mockDb } from '../../mockDb';
@@ -37,6 +38,7 @@ import { sendRealtimeMessage } from '../../services/realtimeSocket';
 import { useToast } from '../../context/ToastContext';
 import { SmartSearchBar } from '../common/SmartSearchBar';
 import { smartMatch } from '../../utils/smartSearch';
+import { formatMeterStatusLabel, formatMeterStatusUpdateDate, normalizeMeterStatus } from '../../utils/meterStatusNotification';
 
 interface ConsumerReportsSectionProps {
   consumer: Consumer;
@@ -591,6 +593,12 @@ export function ConsumerReportsSection({
                               {report.ticketNumber}
                             </span>
                             {getUrgencyBadge(report.urgency)}
+                            {report.referencedNotice && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-950/90 text-sky-300 border border-sky-800/80 text-[10px] font-bold">
+                                <Bell className="h-2.5 w-2.5 text-sky-400 shrink-0" />
+                                <span>Re: Admin Notice</span>
+                              </span>
+                            )}
                           </div>
                           <h4 className="text-sm font-extrabold text-white group-hover:text-blue-400 transition truncate">
                             {report.title}
@@ -687,11 +695,72 @@ export function ConsumerReportsSection({
 
             {/* Messages Scroll Area */}
             <div className="p-5 flex-grow overflow-y-auto space-y-4 bg-slate-950/60">
+
+              {/* Referenced Official Admin Notice Card if Thread Originated from Bell Notice */}
+              {activeThreadReport.referencedNotice && (() => {
+                const ref = activeThreadReport.referencedNotice;
+                const meterNorm = ref.meterStatus ? normalizeMeterStatus(ref.meterStatus) : null;
+                const meterLabel = meterNorm ? formatMeterStatusLabel(meterNorm) : null;
+                return (
+                  <div className="bg-slate-900 rounded-2xl p-4 border border-sky-700/60 shadow-xs space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <Bell className="h-4 w-4 text-sky-400 shrink-0" />
+                        <div>
+                          <span className="text-[10px] font-black uppercase tracking-wider text-sky-400 block">
+                            Referenced Official Notice from Admin ({ref.sentByAdmin || 'TWD Administration'})
+                          </span>
+                          <span className="text-xs font-bold text-white">{ref.subject}</span>
+                        </div>
+                      </div>
+                      {meterLabel && (
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border whitespace-nowrap shrink-0 ${
+                          meterNorm === 'damaged'
+                            ? 'bg-rose-950/90 text-rose-300 border-rose-800/80'
+                            : meterNorm === 'maintenance'
+                            ? 'bg-amber-950/90 text-amber-300 border-amber-800/80'
+                            : meterNorm === 'active'
+                            ? 'bg-emerald-950/90 text-emerald-300 border-emerald-800/80'
+                            : 'bg-slate-800 text-slate-200 border-slate-700'
+                        }`}>
+                          Status: {meterLabel}
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
+                      {ref.meterNumber && (
+                        <div>
+                          <span className="text-slate-400 text-[10px] uppercase font-bold block">Meter Serial</span>
+                          <span className="font-mono tabular-nums font-bold text-slate-200">#{ref.meterNumber}</span>
+                        </div>
+                      )}
+                      {ref.accountNumber && (
+                        <div>
+                          <span className="text-slate-400 text-[10px] uppercase font-bold block">Account #</span>
+                          <span className="font-mono tabular-nums font-bold text-sky-300">#{ref.accountNumber}</span>
+                        </div>
+                      )}
+                      <div>
+                        <span className="text-slate-400 text-[10px] uppercase font-bold block">Notice Date</span>
+                        <span className="font-mono tabular-nums text-slate-200">
+                          {formatMeterStatusUpdateDate(ref.statusUpdateDate || ref.sentAt)}
+                        </span>
+                      </div>
+                    </div>
+                    {ref.remarks && (
+                      <p className="text-xs text-slate-300 pt-1.5 border-t border-slate-800/80">
+                        <strong className="text-slate-400 text-[10px] uppercase mr-1.5">Admin Remarks:</strong>
+                        {ref.remarks}
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
               
               {/* Original Report Summary Card */}
               <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800 shadow-xs space-y-2">
                 <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span className="font-bold text-white">Original Concern Description</span>
+                  <span className="font-bold text-white">Your Initial Reply / Concern Message</span>
                   <span className="font-mono">{new Date(activeThreadReport.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
                 <p className="text-xs sm:text-sm text-slate-200 leading-relaxed font-normal">

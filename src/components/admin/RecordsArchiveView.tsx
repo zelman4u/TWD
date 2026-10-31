@@ -26,6 +26,7 @@ import { TablePagination } from '../common/TablePagination';
 import { SmartSearchBar } from '../common/SmartSearchBar';
 import { smartMatch } from '../../utils/smartSearch';
 import { isOfficialBillIssued } from '../../utils/tariffCalculator';
+import { isPendingConsumerStatus } from '../../utils/installationWorkflow';
 
 interface RecordsArchiveViewProps {
   recordsTab: 'consumers' | 'meters' | 'readings' | 'bills' | 'payments' | 'audit';
@@ -84,12 +85,11 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
 
   // Filtered Consumers
   const filteredConsumers = consumers.filter(c => {
-    const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.status === 'pending_approval';
+    const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || isPendingConsumerStatus(c.status);
     const matchesSearch = smartMatch(searchQuery, [
       c.name,
       c.accountNumber,
       c.meterNumber,
-      c.rfidTag,
       c.address,
       c.barangay,
       c.sitioZone,
@@ -116,6 +116,9 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
       linked?.address,
       m.installationDate,
       m.status,
+      m.status === 'maintenance' ? 'under maintenance' : m.status,
+      m.remarks,
+      m.statusUpdatedBy,
     ]);
   });
 
@@ -216,13 +219,14 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
       ]);
       exportToCsv(`TWD_Consumers_Archive_${timestamp}.csv`, headers, rows);
     } else if (recordsTab === 'meters') {
-      const headers = ['Meter Serial #', 'Brand/Model', 'Installation Date', 'Assigned Account', 'Status'];
+      const headers = ['Meter Tag #', 'Brand/Model', 'Installation Date', 'Assigned Account', 'Status', 'Last Remarks'];
       const rows = filteredMeters.map(m => [
         m.meterNumber,
         m.brand,
         m.installationDate,
         m.linkedAccountNumber || 'Unassigned',
-        m.status
+        m.status === 'maintenance' ? 'Under Maintenance' : m.status,
+        m.remarks || ''
       ]);
       exportToCsv(`TWD_Meters_Inventory_${timestamp}.csv`, headers, rows);
     } else if (recordsTab === 'readings') {
@@ -355,7 +359,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
               onChange={setSearchQuery}
               resultCount={activeFilteredCount}
               totalCount={activeTotalCount}
-              placeholder={`Smart search ${recordsTab} by name, account #, serial, barangay, phone, or date...`}
+              placeholder={`Smart search ${recordsTab} by name, account #, meter tag #, barangay, phone, or date...`}
               id="records-archive-smart-search"
             />
           </div>
@@ -413,7 +417,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
                     {paginatedConsumers.map((c, cIdx) => {
-                      const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || c.status === 'pending_approval';
+                      const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || isPendingConsumerStatus(c.status);
                       return (
                       <tr key={`rec-cons-${c.accountNumber || c.meterNumber || cIdx}-${cIdx}`} className={`transition ${isPending ? 'bg-amber-950/20 hover:bg-amber-950/40' : 'hover:bg-slate-800/60'}`}>
                         <td className="px-5 py-3 font-mono font-bold border-r border-slate-800/80">
@@ -515,7 +519,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                 <table className="min-w-full text-xs text-left border-collapse">
                   <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-800">
                     <tr>
-                      <th className="px-5 py-3.5 border-r border-slate-800/80">Meter Serial Number</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80">Meter Tag Number</th>
                       <th className="px-5 py-3.5 border-r border-slate-800/80">Manufacturer / Brand</th>
                       <th className="px-5 py-3.5 border-r border-slate-800/80">Commissioning Date</th>
                       <th className="px-5 py-3.5 border-r border-slate-800/80">Assigned Account</th>
@@ -543,9 +547,11 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                               ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
                               : m.status === 'maintenance'
                               ? 'bg-amber-950/80 text-amber-300 border-amber-800/80'
+                              : m.status === 'inactive'
+                              ? 'bg-slate-800 text-slate-300 border-slate-700'
                               : 'bg-rose-950/80 text-rose-300 border-rose-800/80'
                           }`}>
-                            {m.status}
+                            {m.status === 'maintenance' ? 'Under Maintenance' : m.status}
                           </span>
                         </td>
                       </tr>

@@ -145,11 +145,41 @@ service cloud.firestore {
       allow delete: if isValidId(settingId);
     }
 
+    function isValidInstallationRequest(data) {
+      return isBoundedPayload(data)
+        && optStr(data, 'id', 128)
+        && optStr(data, 'applicationNumber', 64)
+        && optStr(data, 'linkedUserId', 128)
+        && optStr(data, 'consumerName', 200)
+        && optStr(data, 'consumerEmail', 256)
+        && optStr(data, 'contactNumber', 64)
+        && optStr(data, 'address', 500)
+        && optStr(data, 'barangay', 128)
+        && optStr(data, 'preferredInstallationDate', 64)
+        && optStr(data, 'confirmedInstallationDate', 64)
+        && optStr(data, 'consumerRemarks', 1000)
+        && optStr(data, 'adminRemarks', 1000)
+        && optStr(data, 'status', 64)
+        && optStr(data, 'completionDate', 64)
+        && optStr(data, 'responsiblePersonnel', 200)
+        && optStr(data, 'meterSerialNumber', 64)
+        && optStr(data, 'assignedMeterTagNumber', 64)
+        && optStr(data, 'assignedAccountNumber', 64)
+        && optStr(data, 'accountValidationStatus', 64);
+    }
+
     match /consumer_reports/{reportId} {
       allow get: if isValidId(reportId);
       allow list: if true;
       allow create, update: if isValidId(reportId) && isBoundedPayload(incoming());
       allow delete: if isValidId(reportId);
+    }
+
+    match /installation_requests/{requestId} {
+      allow get: if isValidId(requestId);
+      allow list: if true;
+      allow create, update: if isValidId(requestId) && isValidInstallationRequest(incoming());
+      allow delete: if isValidId(requestId);
     }
   }
 }

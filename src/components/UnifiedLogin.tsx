@@ -7,7 +7,9 @@ import React, { useState, useEffect } from 'react';
 import { Mail, Lock, LogIn, AlertCircle, RefreshCw, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { User } from '../types';
 import { mockDb } from '../mockDb';
+import { apiClient } from '../services/apiClient';
 import { COLLECTIONS, directFindUserInFirestore, resolveConsumerAccountInFirestore, syncDocToFirestore } from '../services/firebaseDb';
+import { isPendingConsumerStatus } from '../utils/installationWorkflow';
 import { useLoading } from '../context/LoadingContext';
 import { useToast } from '../context/ToastContext';
 
@@ -290,7 +292,7 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
 
     if (incomingCandidates.length > 0) {
       const rc = incomingCandidates[0];
-      const rcIssued = Boolean(rc.accountNumber && !rc.accountNumber.toUpperCase().startsWith('PENDING') && rc.status !== 'pending_approval');
+      const rcIssued = Boolean(rc.accountNumber && !rc.accountNumber.toUpperCase().startsWith('PENDING') && !isPendingConsumerStatus(rc.status));
       const localCons = mockDb.getConsumers();
       const cIdx = localCons.findIndex(lc =>
         (rc.accountNumber && !rc.accountNumber.toUpperCase().startsWith('PENDING') && lc.accountNumber === rc.accountNumber) ||
@@ -307,6 +309,18 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
       mockDb.saveConsumers(localCons);
     }
 
+    // Also pull any installation requests associated with this consumer from backend
+    if (matchedUser.role === 'consumer' && (matchedUser.email || matchedUser.id)) {
+      apiClient
+        .getInstallations({ email: matchedUser.email, userId: matchedUser.id })
+        .then((res) => {
+          if (res?.installations && Array.isArray(res.installations)) {
+            mockDb.mergeExternalInstallations(res.installations);
+          }
+        })
+        .catch(() => {});
+    }
+
     mockDb.reconcileIssuedAccounts();
 
     // Access Granted: Consumer or Field Meter Reader
@@ -319,14 +333,14 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
              (c.name && c.name.toLowerCase() === matchedUser!.name.toLowerCase() && (!c.email || !matchedUser!.email || c.email.toLowerCase() === matchedUser!.email.toLowerCase()))
       )
       .sort((a, b) => {
-        const aIssued = a.accountNumber && !a.accountNumber.toUpperCase().startsWith('PENDING') && a.status !== 'pending_approval' ? 1 : 0;
-        const bIssued = b.accountNumber && !b.accountNumber.toUpperCase().startsWith('PENDING') && b.status !== 'pending_approval' ? 1 : 0;
+        const aIssued = a.accountNumber && !a.accountNumber.toUpperCase().startsWith('PENDING') && !isPendingConsumerStatus(a.status) ? 1 : 0;
+        const bIssued = b.accountNumber && !b.accountNumber.toUpperCase().startsWith('PENDING') && !isPendingConsumerStatus(b.status) ? 1 : 0;
         return bIssued - aIssued;
       });
     const matchedConsumer = matchedConsumers[0];
 
-    if (matchedConsumer && matchedConsumer.accountNumber && !matchedConsumer.accountNumber.toUpperCase().startsWith('PENDING') && matchedConsumer.status !== 'pending_approval') {
-      const userStatus: 'active' | 'inactive' | 'pending_approval' =
+    if (matchedConsumer && matchedConsumer.accountNumber && !matchedConsumer.accountNumber.toUpperCase().startsWith('PENDING') && !isPendingConsumerStatus(matchedConsumer.status)) {
+      const userStatus: User['status'] =
         matchedConsumer.status === 'inactive' ? 'inactive' : 'active';
 
       matchedUser = {
@@ -335,6 +349,23 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
         status: userStatus
       };
       // Update in stored users
+      const currentUsers = mockDb.getUsers();
+      const uIdx = currentUsers.findIndex(
+        u => u.id === matchedUser!.id || (u.email && matchedUser!.email && u.email.toLowerCase() === matchedUser!.email.toLowerCase())
+      );
+      if (uIdx >= 0) {
+        currentUsers[uIdx] = matchedUser;
+        mockDb.saveUsers(currentUsers);
+      }
+    } else if (
+      matchedConsumer &&
+      (matchedConsumer.status === 'pending_installation' || matchedConsumer.status === 'installation_not_scheduled') &&
+      matchedUser.status !== matchedConsumer.status
+    ) {
+      matchedUser = {
+        ...matchedUser,
+        status: matchedConsumer.status,
+      };
       const currentUsers = mockDb.getUsers();
       const uIdx = currentUsers.findIndex(
         u => u.id === matchedUser!.id || (u.email && matchedUser!.email && u.email.toLowerCase() === matchedUser!.email.toLowerCase())

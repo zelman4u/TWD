@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { Announcement } from '../types';
 import { calculateWaterTariff } from '../utils/tariffCalculator';
+import { sanitizeAnnouncements } from '../utils/announcementSanitizer';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
 import { useToast } from '../context/ToastContext';
 
@@ -574,7 +575,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {announcements.map((ann, aIdx) => {
+            {sanitizeAnnouncements(announcements).map((ann, aIdx) => {
               const categoryColors = {
                 disruption: 'bg-red-950/80 text-rose-300 border-rose-800/60 ring-red-500/10',
                 maintenance: 'bg-amber-950/80 text-amber-300 border-amber-800/60 ring-amber-500/10',
@@ -593,8 +594,8 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                 <div key={`landing-ann-${ann.id || ''}-${aIdx}`} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-md hover:shadow-lg transition flex flex-col justify-between">
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${categoryColors[ann.category]}`}>
-                        {categoryLabels[ann.category]}
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${categoryColors[ann.category] || categoryColors.info}`}>
+                        {categoryLabels[ann.category] || categoryLabels.info}
                       </span>
                       <span className="text-xs font-mono text-slate-400 flex items-center">
                         <Calendar className="h-3 w-3 mr-1 text-slate-500" />

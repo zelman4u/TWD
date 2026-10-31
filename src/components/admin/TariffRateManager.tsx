@@ -341,7 +341,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
           accountNumber: 'ALL',
           title: `Official Advisory: ${scopeLabel} Water Tariff Adjustment (${finalConfig.resolutionNumber})`,
           message: summaryMsg,
-          type: 'billing',
+          type: 'announcement',
         });
 
         sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
@@ -353,7 +353,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
           accountNumber: 'ALL',
           title: createdNotif.title,
           message: createdNotif.message,
-          type: 'billing',
+          type: 'announcement',
         });
       }
 

@@ -68,10 +68,12 @@ import {
   AlertOctagon,
   Zap,
   MessageSquare,
-  Smartphone
+  Smartphone,
+  Bell,
+  Wrench
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
-import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerReport } from '../types';
+import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerReport, WaterMeterInstallationRequest } from '../types';
 import { 
   scanAndUpdateAccounts, 
   getScannerStatus, 
@@ -83,7 +85,7 @@ import DataLoadingIndicator from './common/DataLoadingIndicator';
 import AdminAnalyticsSection from './charts/AdminAnalyticsSection';
 import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
-import { OfficialReportsGenerator, RecordsArchiveView, GracePeriodScannerCard, TariffRateManager, ConsumerReportsManager } from './admin';
+import { OfficialReportsGenerator, RecordsArchiveView, GracePeriodScannerCard, TariffRateManager, ConsumerReportsManager, AdminInquiryReplyModal, WaterMeterInstallationsManager } from './admin';
 import { TablePagination } from './common/TablePagination';
 import { SmartSearchBar } from './common/SmartSearchBar';
 import { smartMatch } from '../utils/smartSearch';
@@ -101,7 +103,6 @@ import { apiClient, safeBackendFetch } from '../services/apiClient';
 import { calculateWaterTariff, calculateFranchiseTax, calculateLatePenalty, computeDefaultDueDate, getActiveTariffConfig, getReadingEffectiveBillAmount, isOfficialBillIssued, saveActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
 import { 
   checkDuplicateAccountNumber, 
-  checkDuplicateRfidTag, 
   checkDuplicateMeterTag 
 } from '../utils/identifierValidation';
 import { 
@@ -109,6 +110,18 @@ import {
   isValid11DigitPhone, 
   detectExistingPhoneAccount 
 } from '../utils/phoneValidation';
+import {
+  buildMeterStatusNotificationPayload,
+  formatMeterStatusLabel,
+  formatMeterStatusUpdateDate,
+  normalizeMeterStatus
+} from '../utils/meterStatusNotification';
+import { normalizeSingleLinePreview } from '../utils/notificationContext';
+import {
+  canAdminIssueIdentifiersForConsumer,
+  formatInstallationDateDisplay,
+  isPendingConsumerStatus
+} from '../utils/installationWorkflow';
 
 interface AdminPortalProps {
   currentUser: User;
@@ -148,6 +161,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   // Announcements Module Sub-Tab Switcher: 'bulletin' (Public Advisories) vs 'customer_service' (Customer Inquiries)
   const [announcementsSubTab, setAnnouncementsSubTab] = useState<'bulletin' | 'customer_service'>('bulletin');
+  // Water Meters Module Sub-Tab Switcher: 'inventory' (Physical Meter Inventory) vs 'installations' (Installation Requests & Account Validation)
+  const [metersSubTab, setMetersSubTab] = useState<'inventory' | 'installations'>('inventory');
 
   // Loading and Sync states
   const [isInitialLoading, setIsInitialLoading] = useState(true);
@@ -221,6 +236,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [reports, setReports] = useState<ConsumerReport[]>([]);
+  const [installationRequests, setInstallationRequests] = useState<WaterMeterInstallationRequest[]>([]);
+  const [selectedInstallationRequestId, setSelectedInstallationRequestId] = useState<string | null>(null);
 
   // Filtering & Search states for Consumer Database
   const [consumerSearch, setConsumerSearch] = useState('');
@@ -241,6 +258,30 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   // Modals / Add Form States
   const [showAddMeter, setShowAddMeter] = useState(false);
   const [showAddAnnouncement, setShowAddAnnouncement] = useState(false);
+  const [showAdminBellDropdown, setShowAdminBellDropdown] = useState(false);
+  const [selectedAdminReportId, setSelectedAdminReportId] = useState<string | null>(null);
+  const [activeAdminBellReportId, setActiveAdminBellReportId] = useState<string | null>(null);
+  const adminBellRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!showAdminBellDropdown) return;
+    const handleOutside = (event: MouseEvent | TouchEvent) => {
+      if (adminBellRef.current && !adminBellRef.current.contains(event.target as Node)) {
+        setShowAdminBellDropdown(false);
+      }
+    };
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowAdminBellDropdown(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [showAdminBellDropdown]);
 
   // Field Data Inspection States
   const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | null>(null);
@@ -273,6 +314,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   const [newMeter, setNewMeter] = useState({
     meterNumber: 'MT-' + Math.floor(1000 + Math.random() * 9000),
+    serialNumber: '',
     brand: '',
     installationDate: new Date().toISOString().split('T')[0],
     status: 'active' as const,
@@ -404,13 +446,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   // Issue IDs Form State
   const [modalIssueAccountNumber, setModalIssueAccountNumber] = useState('');
   const [modalIssueMeterNumber, setModalIssueMeterNumber] = useState('');
-  const [modalIssueRfidTag, setModalIssueRfidTag] = useState('');
   const [issueSuccessMessage, setIssueSuccessMessage] = useState<{
     title: string;
     message: string;
     accNum: string;
     meterNum: string;
-    rfidTag: string;
     consumerName: string;
     isUpdate?: boolean;
   } | null>(null);
@@ -464,8 +504,40 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   // Additional Edit Modal States
   const [editingMeterModal, setEditingMeterModal] = useState<WaterMeter | null>(null);
+  const [editingMeterOriginalNumber, setEditingMeterOriginalNumber] = useState<string>('');
+  const [meterStatusRemarks, setMeterStatusRemarks] = useState<string>('');
+  const [isSavingMeterUpdate, setIsSavingMeterUpdate] = useState<boolean>(false);
   const [editingAnnouncementModal, setEditingAnnouncementModal] = useState<Announcement | null>(null);
   const [editingReaderModal, setEditingReaderModal] = useState<MeterReader | null>(null);
+
+  const resolveLinkedConsumerForMeter = (meter: Pick<WaterMeter, 'linkedAccountNumber' | 'meterNumber'>, consumerList: Consumer[]): Consumer | undefined => {
+    const cleanAcc = (meter.linkedAccountNumber || '').replace(/^#/, '').trim().toUpperCase();
+    const cleanSerial = (meter.meterNumber || '').replace(/^#/, '').trim().toUpperCase();
+    if (cleanAcc && isRealIssuedAccountNumber(cleanAcc)) {
+      const byAcc = consumerList.find(c => (c.accountNumber || '').replace(/^#/, '').trim().toUpperCase() === cleanAcc);
+      if (byAcc) return byAcc;
+    }
+    if (cleanSerial && cleanSerial !== 'UNASSIGNED' && cleanSerial !== 'N/A' && cleanSerial !== 'PENDING') {
+      const bySerial = consumerList.find(c => (c.meterNumber || '').replace(/^#/, '').trim().toUpperCase() === cleanSerial);
+      if (bySerial) return bySerial;
+    }
+    if (cleanAcc) {
+      return consumerList.find(c => (c.accountNumber || '').replace(/^#/, '').trim().toUpperCase() === cleanAcc);
+    }
+    return undefined;
+  };
+
+  const openMeterEditModal = (meter: WaterMeter) => {
+    const normalizedStatus = normalizeMeterStatus(meter.status);
+    const matchedConsumer = resolveLinkedConsumerForMeter(meter, consumers);
+    setEditingMeterOriginalNumber(meter.meterNumber);
+    setMeterStatusRemarks(meter.remarks || '');
+    setEditingMeterModal({
+      ...meter,
+      status: normalizedStatus === 'unassigned' ? 'active' : normalizedStatus,
+      linkedAccountNumber: meter.linkedAccountNumber || matchedConsumer?.accountNumber || ''
+    });
+  };
 
   // In-App Confirm Dialog State (Sandboxed iFrame Safe)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -585,6 +657,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     setAuditLogs(mockDb.getAuditLogs());
     setBarangayList(mockDb.getBarangays());
     setReports(mockDb.getReports());
+    setInstallationRequests(mockDb.getInstallationRequests());
     const syncD = new Date();
     setLastSyncTime(
       syncD.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' +
@@ -711,7 +784,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const localUsersToSync = mockDb.getUsers().filter(u => u.role !== 'admin');
     const localNotifsToSync = mockDb
       .getAllNotifications()
-      .filter(n => n.type === 'account_issue' || n.type === 'billing' || n.type === 'payment')
+      .filter(n => n.type === 'account_issue' || n.type === 'billing' || n.type === 'payment' || n.type === 'meter_status' || n.type === 'installation')
       .slice(0, 80);
 
     safeBackendFetch('/api/consumers/reconcile', {
@@ -779,7 +852,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 registrationDate: ac.registrationDate || new Date().toISOString().split('T')[0],
                 linkedUserId: matchedLocalUser?.id || ac.linkedUserId || undefined,
                 isRegistered: true,
-                rfidTag: ac.rfidTag || '',
+                hasExistingMeter: typeof ac.hasExistingMeter === 'boolean' ? ac.hasExistingMeter : undefined,
+                applicationNumber: ac.applicationNumber || undefined,
+                installationRequestId: ac.installationRequestId || undefined,
                 createdAt: (ac as any).createdAt || Date.now(),
                 outstandingBalance: 0
               };
@@ -791,17 +866,28 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               const isLocallyIssuedAndActive = Boolean(
                 existing.accountNumber &&
                 !existing.accountNumber.toUpperCase().startsWith('PENDING') &&
-                existing.status !== 'pending_approval'
+                !isPendingConsumerStatus(existing.status)
               );
 
-              if (acHasIssuedAcc && (!existing.accountNumber || existing.accountNumber.toUpperCase().startsWith('PENDING') || existing.status === 'pending_approval')) {
+              if (acHasIssuedAcc && (!existing.accountNumber || existing.accountNumber.toUpperCase().startsWith('PENDING') || isPendingConsumerStatus(existing.status))) {
                 existing.accountNumber = ac.accountNumber;
                 existing.meterNumber = ac.meterNumber || `MT-${ac.accountNumber}`;
-                existing.status = ac.status && ac.status !== 'pending_approval' ? ac.status : 'active';
-                existing.rfidTag = ac.rfidTag || `RFID-${existing.meterNumber}`;
+                existing.status = ac.status && !isPendingConsumerStatus(ac.status) ? ac.status : 'active';
                 hasChanges = true;
               } else if (!isLocallyIssuedAndActive && ac.status && ac.status !== existing.status) {
                 existing.status = ac.status;
+                hasChanges = true;
+              }
+              if (typeof ac.hasExistingMeter === 'boolean' && typeof existing.hasExistingMeter !== 'boolean') {
+                existing.hasExistingMeter = ac.hasExistingMeter;
+                hasChanges = true;
+              }
+              if (ac.applicationNumber && !existing.applicationNumber) {
+                existing.applicationNumber = ac.applicationNumber;
+                hasChanges = true;
+              }
+              if (ac.installationRequestId && !existing.installationRequestId) {
+                existing.installationRequestId = ac.installationRequestId;
                 hasChanges = true;
               }
               if (!existing.email && ac.email) {
@@ -866,6 +952,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       })
       .catch(() => {});
 
+    apiClient.getInstallations()
+      .then(res => {
+        if (res?.installations && Array.isArray(res.installations) && res.installations.length > 0) {
+          const mergedInst = mockDb.mergeExternalInstallations(res.installations);
+          setInstallationRequests(mergedInst);
+        }
+      })
+      .catch(() => {});
+
     // 5. Fetch Mobile App Submitted Readings from Backend API (/api/readings)
     safeBackendFetch('/api/readings')
       .then(res => (res ? res.json() : null))
@@ -878,11 +973,42 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
           apiReadings.forEach(ar => {
             if (!ar || !ar.id) return;
+            const cleanArAcc = String(ar.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+            const cleanArMeter = String(ar.meterNumber || '').trim().toUpperCase();
             const matchedConsumer = currentConsumers.find(c =>
-              (ar.accountNumber && c.accountNumber === ar.accountNumber) ||
-              (ar.meterNumber && c.meterNumber === ar.meterNumber)
+              (cleanArAcc && String(c.accountNumber || '').replace(/^#/, '').trim().toUpperCase() === cleanArAcc) ||
+              (cleanArMeter && String(c.meterNumber || '').trim().toUpperCase() === cleanArMeter)
             );
-            const consumptionVal = Math.max(0, Number(ar.consumption ?? (Number(ar.currentReading || 0) - Number(ar.previousReading || 0))));
+
+            // Resolve consumer's latest verified cumulative dial index so Previous Reading is NEVER lost
+            const priorVerifiedForConsumer = currentLocal
+              .filter(lr => {
+                if (!lr || lr.id === ar.id || lr.status === 'cancelled') return false;
+                if (lr.status !== 'verified' && !isOfficialBillIssued(lr)) return false;
+                const lrAcc = String(lr.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+                const lrMeter = String(lr.meterNumber || '').trim().toUpperCase();
+                return (cleanArAcc && lrAcc === cleanArAcc) || (cleanArMeter && lrMeter === cleanArMeter);
+              })
+              .sort(
+                (a, b) =>
+                  Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
+                  new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime()
+              );
+
+            const verifiedBaseline = priorVerifiedForConsumer.length > 0
+              ? Number(priorVerifiedForConsumer[0].currentReading ?? priorVerifiedForConsumer[0].presentReading ?? 0)
+              : Number(matchedConsumer?.currentReading ?? matchedConsumer?.presentReading ?? matchedConsumer?.previousReading ?? 0);
+
+            const currVal = Math.max(0, Number(ar.currentReading ?? ar.presentReading ?? 0));
+            let prevVal = ar.previousReading !== undefined ? Math.max(0, Number(ar.previousReading) || 0) : verifiedBaseline;
+            if (prevVal === 0 && verifiedBaseline > 0 && currVal >= verifiedBaseline) {
+              prevVal = verifiedBaseline;
+            }
+            if (prevVal > currVal) {
+              prevVal = verifiedBaseline <= currVal ? verifiedBaseline : 0;
+            }
+            const consumptionVal = Math.max(0, currVal - prevVal);
+
             const mappedStatus: MeterReading['status'] =
               ar.status === 'approved' || ar.status === 'verified'
                 ? 'verified'
@@ -907,13 +1033,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 meterNumber: ar.meterNumber || matchedConsumer?.meterNumber || '',
                 meterBrand: matchedConsumer?.meterBrand || 'EVER',
                 classification: cls,
-                previousReading: Number(ar.previousReading || 0),
-                currentReading: Number(ar.currentReading || 0),
+                previousReading: prevVal,
+                presentReading: currVal,
+                currentReading: currVal,
                 consumption: consumptionVal,
                 billAmount: computedBill,
                 totalAmount: computedBill,
                 appliedTariffVersion: ar.appliedTariffVersion || activeTariffCfg.version,
                 readingDate: ar.readingDate || new Date().toISOString().split('T')[0],
+                submittedAt: ar.submittedAt || new Date().toISOString(),
                 billingPeriod: ar.billingPeriod || new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
                 meterReaderName: ar.readerName || ar.meterReaderName || 'Field Meter Officer',
                 route: ar.route || matchedConsumer?.barangay || 'Poblacion',
@@ -1133,6 +1261,27 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           setReports(merged);
         }
         syncAdminReportsLive();
+      } else if (data.type === 'INSTALLATION_REQUEST_SUBMITTED') {
+        if (data.payload?.request) {
+          const mergedInst = mockDb.mergeExternalInstallations([data.payload.request]);
+          setInstallationRequests(mergedInst);
+        } else {
+          setInstallationRequests(mockDb.getInstallationRequests());
+        }
+        toast.info(
+          'New Meter Installation Request',
+          data.payload?.message ||
+            `${data.payload?.consumerName || 'A newly registered consumer'} submitted application ${data.payload?.applicationNumber || ''} for meter installation.`
+        );
+        loadAllDataFromStore(false);
+      } else if (data.type === 'INSTALLATION_REQUEST_UPDATED') {
+        if (data.payload?.request) {
+          const mergedInst = mockDb.mergeExternalInstallations([data.payload.request]);
+          setInstallationRequests(mergedInst);
+        } else {
+          setInstallationRequests(mockDb.getInstallationRequests());
+        }
+        loadAllDataFromStore(false);
       }
     });
 
@@ -1204,16 +1353,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     setModalEditBusinessType(c.businessType || '');
     setModalEditHouseholdInfo(c.householdInfo || '');
     setModalEditStatus(
-      !c.status || c.status === 'pending_approval' ? 'active' : c.status
+      !c.status || isPendingConsumerStatus(c.status) ? 'active' : c.status
     );
 
-    // Populate issue IDs fields (generate suggested account number, meter number, and tag if unissued)
+    // Populate issue IDs fields (generate suggested account number and meter tag number if unissued)
     const isAlreadyOfficiallyIssued = isRealIssuedAccountNumber(c.accountNumber);
 
     if (isAlreadyOfficiallyIssued) {
       setModalIssueAccountNumber(c.accountNumber);
       setModalIssueMeterNumber(c.meterNumber || '');
-      setModalIssueRfidTag(c.rfidTag || `RFID-${c.accountNumber}`);
     } else {
       // Suggest sequential/barangay-based account number with guaranteed uniqueness
       const brgCode = c.barangayId || 'TWD';
@@ -1243,20 +1391,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       }
       if (!suggestedMeter) suggestedMeter = `MT-${Date.now().toString().slice(-5)}`;
 
-      let suggestedTag = '';
-      for (let i = 0; i < 50; i++) {
-        const randT = Math.floor(10000 + Math.random() * 90000);
-        const candT = `RFID-${randT}`;
-        if (!allCons.some(item => item.rfidTag?.toUpperCase() === candT.toUpperCase())) {
-          suggestedTag = candT;
-          break;
-        }
-      }
-      if (!suggestedTag) suggestedTag = `RFID-${suggestedAcc}`;
-
       setModalIssueAccountNumber(suggestedAcc);
       setModalIssueMeterNumber(c.meterNumber && !c.meterNumber.toUpperCase().startsWith('PENDING') ? c.meterNumber : suggestedMeter);
-      setModalIssueRfidTag(c.rfidTag && !c.rfidTag.toUpperCase().startsWith('PENDING') ? c.rfidTag : suggestedTag);
     }
   };
 
@@ -1338,7 +1474,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       businessName: modalEditConsumerType === 'Commercial' ? modalEditBusinessName : undefined,
       businessType: modalEditConsumerType === 'Commercial' ? modalEditBusinessType : undefined,
       householdInfo: modalEditConsumerType === 'Residential' ? modalEditHouseholdInfo : undefined,
-      status: hasIssuedAccount ? (modalEditStatus || 'active') : 'pending_approval'
+      status: hasIssuedAccount
+        ? (modalEditStatus || 'active')
+        : (isPendingConsumerStatus(selectedConsumerModal.status) ? selectedConsumerModal.status : 'pending_approval')
     };
 
     const newConsumers = consumers.map(item => {
@@ -1384,7 +1522,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // Check if account already has an issued active record
     const isAlreadyOfficiallyIssued = Boolean(
       isRealIssuedAccountNumber(selectedConsumerModal.accountNumber) &&
-      selectedConsumerModal.status !== 'pending_approval'
+      !isPendingConsumerStatus(selectedConsumerModal.status)
     );
 
     const newAccNum = modalIssueAccountNumber.trim().toUpperCase();
@@ -1416,15 +1554,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         return;
       }
 
-      // Retain the permanent physical hardware entities (Meter Serial & Smart RFID Tag)
+      // Retain the permanent assigned Meter Tag Number
       const preservedMeterNum = selectedConsumerModal.meterNumber || `MT-${Math.floor(10000 + Math.random() * 90000)}`;
-      const preservedTag = selectedConsumerModal.rfidTag || `RFID-${preservedMeterNum}`;
 
       const updated: Consumer = {
         ...selectedConsumerModal,
         accountNumber: newAccNum,
         meterNumber: preservedMeterNum,
-        rfidTag: preservedTag,
         status: 'active',
         isRegistered: true
       };
@@ -1546,7 +1682,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         currentUser.name,
         'admin',
         'Update Account Number',
-        `Updated Account Number from #${previousAccountNumber} to #${newAccNum} for ${updated.name}. Preserved permanent Meter Tag "${preservedTag}" (Meter #${preservedMeterNum}).`
+        `Updated Account Number from #${previousAccountNumber} to #${newAccNum} for ${updated.name}. Preserved permanent Meter Tag #${preservedMeterNum}.`
       );
 
       const updatedIdNotif = mockDb.addNotification({
@@ -1555,7 +1691,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         userId: updated.linkedUserId,
         consumerEmail: updated.email,
         title: `Account Number Updated to #${newAccNum}`,
-        message: `Your water service account identifier has been officially updated to #${newAccNum} by Tagoloan Water District Administration. Your physical Meter Tag (${preservedTag}) and Meter Serial (#${preservedMeterNum}) remain permanently assigned.`,
+        message: `Your water service account identifier has been officially updated to #${newAccNum} by Tagoloan Water District Administration. Your Meter Tag Number (#${preservedMeterNum}) remains permanently assigned.`,
         type: 'account_issue'
       });
 
@@ -1598,7 +1734,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         notification: updatedIdNotif,
         accountNumber: newAccNum,
         meterNumber: preservedMeterNum,
-        rfidTag: preservedTag,
         email: updated.email,
         linkedUserId: updated.linkedUserId,
         previousAccountNumber,
@@ -1616,27 +1751,34 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       // 10. Display rich in-modal message banner and toast notification
       setIssueSuccessMessage({
         title: 'Account Number Updated Successfully!',
-        message: `Account Number has been officially updated from #${previousAccountNumber} to #${newAccNum} for ${updated.name}. Physical Meter Serial #${preservedMeterNum} and Smart RFID Tag "${preservedTag}" remain permanently assigned. All billing ledgers, historical telemetry, and consumer login credentials have been re-indexed.`,
+        message: `Account Number has been officially updated from #${previousAccountNumber} to #${newAccNum} for ${updated.name}. Meter Tag Number #${preservedMeterNum} remains permanently assigned. All billing ledgers, historical readings, and consumer login credentials have been re-indexed.`,
         accNum: newAccNum,
         meterNum: preservedMeterNum,
-        rfidTag: preservedTag,
         consumerName: updated.name,
         isUpdate: true
       });
 
       toast.success(
         'Account Number Updated',
-        `Successfully updated Account #${newAccNum} for ${updated.name}. Hardware tags preserved.`,
+        `Successfully updated Account #${newAccNum} for ${updated.name}. Meter Tag #${preservedMeterNum} preserved.`,
         6000
       );
       return;
     }
 
     // =========================================================================
-    // CASE 2: FIRST-TIME ISSUANCE FOR PENDING CONSUMER - STRICT UNIQUENESS CHECKS
+    // CASE 2: FIRST-TIME ISSUANCE FOR PENDING CONSUMER - STRICT GATING & UNIQUENESS CHECKS
     // =========================================================================
+    const issuanceGate = canAdminIssueIdentifiersForConsumer(selectedConsumerModal, mockDb.getInstallationRequests());
+    if (!issuanceGate.allowed) {
+      toast.error(
+        'Installation Confirmation Required',
+        issuanceGate.reason || 'Official Account Number and Meter Tag Number cannot be issued until the water meter installation is confirmed as Installed.'
+      );
+      return;
+    }
+
     const newMeterNum = (modalIssueMeterNumber.trim() || selectedConsumerModal.meterNumber || `MT-${Math.floor(10000 + Math.random() * 90000)}`).toUpperCase();
-    const newTag = (modalIssueRfidTag.trim() || `RFID-${newMeterNum}`).toUpperCase();
 
     // Helper to test if another consumer entry belongs to the same person/application
     const isSameTargetConsumer = (other: Consumer) => {
@@ -1655,16 +1797,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       return;
     }
 
-    // 2. Strict Duplicate RFID Tag Number Check
-    if (newTag) {
-      const rfidDupCheck = checkDuplicateRfidTag(newTag, selectedConsumerModal);
-      if (rfidDupCheck) {
-        toast.error('Duplicate RFID Tag Blocked', rfidDupCheck.message);
-        return;
-      }
-    }
-
-    // 3. Strict Duplicate Meter Tag Number Check
+    // 2. Strict Duplicate Meter Tag Number Check
     if (newMeterNum) {
       const meterDupCheck = checkDuplicateMeterTag(newMeterNum, selectedConsumerModal);
       if (meterDupCheck) {
@@ -1677,7 +1810,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       ...selectedConsumerModal,
       accountNumber: newAccNum,
       meterNumber: newMeterNum,
-      rfidTag: newTag,
       status: 'active',
       isRegistered: true
     };
@@ -1709,7 +1841,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     // Deduplicate any older pending twins for the SAME applicant
     const deduplicatedConsumers = newConsumers.filter((c, idx, arr) => {
-      if ((!c.accountNumber || c.accountNumber.toUpperCase().startsWith('PENDING') || c.status === 'pending_approval') && 
+      if ((!c.accountNumber || c.accountNumber.toUpperCase().startsWith('PENDING') || isPendingConsumerStatus(c.status)) && 
           arr.some(o => o !== c && (
             (c.email && o.email && o.email.toLowerCase() === c.email.toLowerCase() && o.status === 'active') ||
             (c.linkedUserId && o.linkedUserId && o.linkedUserId === c.linkedUserId && o.status === 'active') ||
@@ -1824,7 +1956,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       userId: updated.linkedUserId || selectedConsumerModal.linkedUserId,
       consumerEmail: updated.email || selectedConsumerModal.email,
       title: `Official Account Number & Meter Issued!`,
-      message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${newAccNum} and Meter Serial is #${newMeterNum}. Smart RFID Tag: ${updated.rfidTag}. Your full dashboard and telemetry are now active.`,
+      message: `Your water service account has been officially activated by Tagoloan Water District Administration. Your permanent Account Number is #${newAccNum} and Meter Tag Number is #${newMeterNum}. Your full dashboard and billing history are now active.`,
       type: 'account_issue'
     });
 
@@ -1873,7 +2005,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       notification: issuedNotif,
       accountNumber: newAccNum,
       meterNumber: newMeterNum,
-      rfidTag: updated.rfidTag,
       email: updated.email || selectedConsumerModal.email,
       linkedUserId: updated.linkedUserId || selectedConsumerModal.linkedUserId,
       previousAccountNumber: previousAccountNumber || '',
@@ -1885,7 +2016,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       currentUser.name,
       'admin',
       'Issue Identifiers & Activate',
-      `Issued Account Number #${newAccNum}, Meter #${newMeterNum}, and RFID Tag "${updated.rfidTag}" to ${updated.name}. Consumer portal account activated and synchronized.`
+      `Issued Account Number #${newAccNum} and Meter Tag #${newMeterNum} to ${updated.name}. Consumer portal account activated and synchronized.`
     );
 
     // Dispatch instant events
@@ -1898,17 +2029,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // 8. Show rich in-modal confirmation message card and floating toast
     setIssueSuccessMessage({
       title: 'Official IDs Successfully Issued & Account Activated!',
-      message: `Official Account Number #${newAccNum}, Meter Serial #${newMeterNum}, and Smart RFID Tag "${newTag}" have been successfully issued to ${updated.name}. Consumer account is now active and synchronized across all portals.`,
+      message: `Official Account Number #${newAccNum} and Meter Tag Number #${newMeterNum} have been successfully issued to ${updated.name}. Consumer account is now active and synchronized across all portals.`,
       accNum: newAccNum,
       meterNum: newMeterNum,
-      rfidTag: newTag,
       consumerName: updated.name,
       isUpdate: false
     });
 
     toast.success(
       'Official IDs Issued & Activated!',
-      `Account #${newAccNum} for ${updated.name} is now active. Meter: #${newMeterNum} • RFID: ${newTag}`,
+      `Account #${newAccNum} and Meter Tag #${newMeterNum} for ${updated.name} are now active.`,
       6000
     );
 
@@ -1953,25 +2083,40 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     if (!newMeter.meterNumber) return;
 
     const meterNumTrimmed = newMeter.meterNumber.trim().toUpperCase();
+    const serialNumTrimmed = (newMeter.serialNumber || '').trim().toUpperCase();
 
-    // Verify Meter Tag / Serial Uniqueness across meters and consumers
+    if (!serialNumTrimmed) {
+      toast.error('Water Meter Serial Required', 'Please record the physical Water Meter Serial Number.');
+      return;
+    }
+
+    // Verify Meter Tag Uniqueness across meters and consumers
     const duplicateMeter = meters.find(m => m.meterNumber.toUpperCase() === meterNumTrimmed);
     const duplicateConsumer = consumers.find(c =>
-      (c.meterNumber && c.meterNumber.toUpperCase() === meterNumTrimmed) ||
-      (c.rfidTag && c.rfidTag.toUpperCase() === meterNumTrimmed)
+      c.meterNumber && c.meterNumber.toUpperCase() === meterNumTrimmed
     );
     if (duplicateMeter || duplicateConsumer) {
       const owner = duplicateConsumer ? `assigned to consumer "${duplicateConsumer.name}"` : 'already in the water meters registry';
-      toast.error('Duplicate Meter Tag / Serial Detected', `Meter #${meterNumTrimmed} is ${owner}. Every water meter tag is a strictly unique physical entity.`);
+      toast.error('Duplicate Meter Tag Number Detected', `Meter Tag #${meterNumTrimmed} is ${owner}. Every water meter tag is a strictly unique entity.`);
+      return;
+    }
+
+    const dupSerialCheck = mockDb.checkDuplicateMeterSerial(serialNumTrimmed);
+    if (dupSerialCheck) {
+      toast.error(
+        'Duplicate Water Meter Serial Number',
+        `Serial Number "${serialNumTrimmed}" is already registered on Meter Tag #${dupSerialCheck.meterNumber}.`
+      );
       return;
     }
 
     const created: WaterMeter = {
       meterNumber: meterNumTrimmed,
+      serialNumber: serialNumTrimmed,
       brand: newMeter.brand || 'Aichi / Actaris Precision',
       installationDate: newMeter.installationDate,
       status: newMeter.status,
-      linkedAccountNumber: newMeter.linkedAccountNumber
+      linkedAccountNumber: newMeter.linkedAccountNumber ? newMeter.linkedAccountNumber.trim().toUpperCase() : undefined
     };
 
     const updated = [...meters, created];
@@ -1983,12 +2128,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       currentUser.name,
       'admin',
       'Register Mechanical Meter',
-      `Added water meter identifier MT-ID #${created.meterNumber} branded "${created.brand}".`
+      `Registered water meter tag #${created.meterNumber} (${created.brand}) in Water Meters inventory.`
     );
 
     // reset
     setNewMeter({
       meterNumber: 'MT-' + Math.floor(1000 + Math.random() * 9000),
+      serialNumber: '',
       brand: '',
       installationDate: new Date().toISOString().split('T')[0],
       status: 'active',
@@ -2135,27 +2281,205 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     });
   };
 
-  // Action: Update Water Meter
-  const handleUpdateMeter = (e: React.FormEvent) => {
+  // Action: Update Water Meter & Send Targeted Consumer Status Notification (Save-Before-Notify)
+  const handleUpdateMeter = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingMeterModal) return;
+    if (!editingMeterModal || isSavingMeterUpdate) return;
 
-    const allMeters = mockDb.getMeters();
-    const updated = allMeters.map(m => m.meterNumber === editingMeterModal.meterNumber ? editingMeterModal : m);
-    mockDb.saveMeters(updated);
-    setMeters(updated);
+    setIsSavingMeterUpdate(true);
+    try {
+      const allMeters = mockDb.getMeters();
+      const lookupSerial = (editingMeterOriginalNumber || editingMeterModal.meterNumber || '').trim();
+      const persistedMeter = allMeters.find(
+        m => (m.meterNumber || '').trim().toUpperCase() === lookupSerial.toUpperCase()
+      );
 
-    mockDb.addAuditLog(
-      currentUser.id,
-      currentUser.name,
-      'admin',
-      'Update Water Meter',
-      `Updated meter specifications for #${editingMeterModal.meterNumber} (Status: ${editingMeterModal.status}).`
-    );
-    setEditingMeterModal(null);
-    loadAllDataFromStore();
-    window.dispatchEvent(new Event('twd_database_updated'));
-    toast.success('Meter Updated', `Water meter #${editingMeterModal.meterNumber} updated successfully.`);
+      const previousStatus = persistedMeter ? normalizeMeterStatus(persistedMeter.status) : 'active';
+      const newStatus = normalizeMeterStatus(editingMeterModal.status);
+      const statusChanged = previousStatus !== newStatus;
+
+      const updateTimestampIso = new Date().toISOString();
+      const trimmedRemarks = meterStatusRemarks.trim();
+      const responsibleAdminName = (adminProfile.name || currentUser.name || 'Administrator').trim();
+
+      const allConsumers = mockDb.getConsumers();
+      const linkedConsumer = resolveLinkedConsumerForMeter(editingMeterModal, allConsumers);
+      const effectiveLinkedAcc = (
+        editingMeterModal.linkedAccountNumber ||
+        linkedConsumer?.accountNumber ||
+        ''
+      )
+        .replace(/^#/, '')
+        .trim();
+
+      const trimmedSerialNum = (editingMeterModal.serialNumber || '').trim().toUpperCase();
+      if (trimmedSerialNum) {
+        const dupSerial = mockDb.checkDuplicateMeterSerial(trimmedSerialNum, lookupSerial);
+        if (dupSerial) {
+          toast.error(
+            'Duplicate Water Meter Serial Number',
+            `Serial Number "${trimmedSerialNum}" is already registered on Meter Tag #${dupSerial.meterNumber}.`
+          );
+          setIsSavingMeterUpdate(false);
+          return;
+        }
+      }
+
+      const updatedMeterObj: WaterMeter = {
+        ...editingMeterModal,
+        meterNumber: editingMeterModal.meterNumber.trim().toUpperCase(),
+        serialNumber: trimmedSerialNum || persistedMeter?.serialNumber || undefined,
+        brand: editingMeterModal.brand.trim(),
+        linkedAccountNumber: effectiveLinkedAcc || undefined,
+        status: newStatus,
+        remarks: trimmedRemarks || undefined,
+        previousStatus: statusChanged ? previousStatus : persistedMeter?.previousStatus,
+        statusUpdatedAt: statusChanged ? updateTimestampIso : (persistedMeter?.statusUpdatedAt || updateTimestampIso),
+        statusUpdatedBy: statusChanged ? responsibleAdminName : (persistedMeter?.statusUpdatedBy || responsibleAdminName)
+      };
+
+      // 1. Persist the water meter status update FIRST before sending any consumer notification
+      const savedMeters = await mockDb.saveMeterAsync(updatedMeterObj, lookupSerial || updatedMeterObj.meterNumber);
+      setMeters(savedMeters);
+
+      // 2. Record Activity Log & Trigger Targeted Consumer Notification ONLY if status changed
+      const formattedUpdateDate = formatMeterStatusUpdateDate(updateTimestampIso);
+      const previousStatusLabel = formatMeterStatusLabel(previousStatus);
+      const newStatusLabel = formatMeterStatusLabel(newStatus);
+
+      if (statusChanged) {
+        const consumerAuditSummary = linkedConsumer
+          ? `${linkedConsumer.name} (Account #${linkedConsumer.accountNumber})`
+          : effectiveLinkedAcc
+          ? `Account #${effectiveLinkedAcc}`
+          : 'Unassigned Meter';
+
+        mockDb.addAuditLog(
+          currentUser.id,
+          responsibleAdminName,
+          'admin',
+          'Update Water Meter Status',
+          `Administrator ${responsibleAdminName} updated Water Meter Tag #${updatedMeterObj.meterNumber} associated with ${consumerAuditSummary} from ${previousStatusLabel} to ${newStatusLabel} on ${formattedUpdateDate}. Remarks: ${trimmedRemarks || 'None provided'}.`
+        );
+
+        // Notify strictly the registered consumer associated with the affected water meter and account number
+        if (linkedConsumer && newStatus !== 'unassigned') {
+          const allUsers = mockDb.getUsers();
+          const cleanConsumerAcc = (linkedConsumer.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+          const cleanConsumerEmail = (linkedConsumer.email || '').trim().toLowerCase();
+          const matchedUser = allUsers.find(u => {
+            if (u.role === 'admin' || u.role === 'meter_reader') return false;
+            if (linkedConsumer.linkedUserId && u.id === linkedConsumer.linkedUserId) return true;
+            if (cleanConsumerAcc && isRealIssuedAccountNumber(cleanConsumerAcc) && (u.linkedAccountNumber || '').replace(/^#/, '').trim().toUpperCase() === cleanConsumerAcc) {
+              return true;
+            }
+            if (cleanConsumerEmail && (u.email || '').trim().toLowerCase() === cleanConsumerEmail) {
+              return true;
+            }
+            return false;
+          });
+
+          const targetAccountNumber = (linkedConsumer.accountNumber || effectiveLinkedAcc || '').replace(/^#/, '').trim();
+          if (targetAccountNumber) {
+            const notifPayload = buildMeterStatusNotificationPayload({
+              accountNumber: targetAccountNumber,
+              consumerId: linkedConsumer.id,
+              userId: linkedConsumer.linkedUserId || matchedUser?.id,
+              consumerEmail: linkedConsumer.email || matchedUser?.email,
+              consumerName: linkedConsumer.name,
+              meterNumber: updatedMeterObj.meterNumber,
+              previousStatus,
+              newStatus,
+              remarks: trimmedRemarks || undefined,
+              adminName: responsibleAdminName,
+              updateDateIso: updateTimestampIso
+            });
+
+            const createdNotif = mockDb.addNotification(notifPayload);
+
+            // Sync targeted notification to backend & notify online consumer session in real time
+            safeBackendFetch('/api/consumers/reconcile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-portal': 'admin', 'x-role': 'admin' },
+              body: JSON.stringify({
+                consumers: [linkedConsumer],
+                users: matchedUser ? [matchedUser] : [],
+                notifications: [createdNotif]
+              })
+            }).catch(() => {});
+
+            sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
+              accountNumber: targetAccountNumber,
+              consumerId: linkedConsumer.id,
+              userId: linkedConsumer.linkedUserId || matchedUser?.id,
+              email: linkedConsumer.email || matchedUser?.email,
+              notification: createdNotif
+            });
+
+            sendRealtimeMessage('METER_STATUS_UPDATED', {
+              accountNumber: targetAccountNumber,
+              consumerId: linkedConsumer.id,
+              userId: linkedConsumer.linkedUserId || matchedUser?.id,
+              email: linkedConsumer.email || matchedUser?.email,
+              meter: updatedMeterObj,
+              previousStatus,
+              newStatus,
+              remarks: trimmedRemarks || undefined,
+              updatedByAdmin: responsibleAdminName,
+              timestamp: updateTimestampIso,
+              notification: createdNotif
+            });
+
+            setEditingMeterModal(null);
+            setEditingMeterOriginalNumber('');
+            setMeterStatusRemarks('');
+            loadAllDataFromStore();
+            window.dispatchEvent(new Event('twd_database_updated'));
+            toast.success(
+              'Meter Status Updated & Consumer Notified',
+              `Meter #${updatedMeterObj.meterNumber} changed from ${previousStatusLabel} to ${newStatusLabel}. Official notification sent to ${linkedConsumer.name} (#${targetAccountNumber}).`
+            );
+            return;
+          }
+        }
+
+        setEditingMeterModal(null);
+        setEditingMeterOriginalNumber('');
+        setMeterStatusRemarks('');
+        loadAllDataFromStore();
+        window.dispatchEvent(new Event('twd_database_updated'));
+        toast.success(
+          'Meter Status Updated',
+          `Water meter #${updatedMeterObj.meterNumber} status changed from ${previousStatusLabel} to ${newStatusLabel}.`
+        );
+      } else {
+        // Status did NOT change: prevent duplicate consumer notification while still saving hardware/remarks edits
+        mockDb.addAuditLog(
+          currentUser.id,
+          responsibleAdminName,
+          'admin',
+          'Update Water Meter Details',
+          `Administrator ${responsibleAdminName} updated details for Water Meter #${updatedMeterObj.meterNumber} (Status unchanged: ${newStatusLabel}) on ${formattedUpdateDate}. Remarks: ${trimmedRemarks || 'None provided'}.`
+        );
+
+        setEditingMeterModal(null);
+        setEditingMeterOriginalNumber('');
+        setMeterStatusRemarks('');
+        loadAllDataFromStore();
+        window.dispatchEvent(new Event('twd_database_updated'));
+        toast.info(
+          'Meter Saved (Status Unchanged)',
+          `Water meter #${updatedMeterObj.meterNumber} details saved. No duplicate notification was sent because the status remained ${newStatusLabel}.`
+        );
+      }
+    } catch (err) {
+      toast.error(
+        'Meter Update Failed',
+        'Could not save the water meter update. No consumer notification was sent.'
+      );
+    } finally {
+      setIsSavingMeterUpdate(false);
+    }
   };
 
   // Action: Delete / Terminate Staff Account
@@ -2304,6 +2628,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             matchedBg = barangayList.find(b => b.name === 'Casinglot');
           } else if (bLower.includes('sugbongcogon') || bLower.includes('subongcogon')) {
             matchedBg = barangayList.find(b => b.name === 'Sugbongcogon');
+          } else if (bLower.includes('rosario')) {
+            matchedBg = barangayList.find(b => b.name === 'Rosario');
           } else {
             matchedBg = barangayList.find(b => b.name === 'Poblacion') || barangayList[0];
           }
@@ -2328,6 +2654,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             else if (matchedBg.code === 'GR-07') sZone = 'Zone 25';
             else if (matchedBg.code === 'CS-08') sZone = 'Zone 21';
             else if (matchedBg.code === 'SG-09') sZone = 'Zone 33';
+            else if (matchedBg.code === 'RS-10') sZone = 'Zone 10';
             else sZone = 'Central Zone';
             changed = true;
           }
@@ -2679,8 +3006,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
   };
 
-  // Action: Verify Mobile Submitted Reading (verifies field reading telemetry; official billing is issued separately in Bills)
+  // Action: Verify Mobile Submitted Reading — approving immediately triggers billing & rolls forward consumer baseline
   const handleVerifyReading = (readingId: string, status: 'verified' | 'flagged_abnormal') => {
+    if (status === 'verified') {
+      const targetRead = readings.find(r => r.id === readingId);
+      if (targetRead) {
+        handleIssueBillings([targetRead]);
+      }
+      return;
+    }
+
     const activeCfg = getActiveTariffConfig();
     const updated = readings.map(r => {
       if (r.id === readingId) {
@@ -2699,102 +3034,99 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveReadings(updated);
     setReadings(updated);
 
-    if (status === 'verified') {
-      fetch(`/api/readings/${encodeURIComponent(readingId)}/approve`, { method: 'POST' }).catch(() => {});
-      const targetRead = updated.find(r => r.id === readingId);
-      toast.success(
-        'Meter Reading Verified',
-        `Reading for ${targetRead?.consumerName || 'Consumer'} (${targetRead?.consumption ?? 0} m³) verified. Open Bills to generate and issue the official billing statement.`,
-        4500
-      );
-    }
-
     mockDb.addAuditLog(
       currentUser.id,
       currentUser.name,
       'admin',
-      'Verify Meter Recording',
-      `Verification flag updated on reading #${readingId} to ${status.toUpperCase()} (awaiting Admin billing issuance).`
+      'Flagged Meter Recording',
+      `Verification flag updated on reading #${readingId} to ${status.toUpperCase()}.`
     );
     loadAllDataFromStore();
   };
 
-  // Action: Approve Single Reading or Entire Reader Submission Batch (verifies meter readings; billing issued in Bills)
+  // Action: Approve Single Reading or Entire Reader Submission Batch -> Immediately Triggers Official Billing & Consumer Sync
   const handleApproveReadingBatch = (readingsToApprove: MeterReading[], readerNameLabel?: string) => {
     if (!readingsToApprove || readingsToApprove.length === 0) return;
-
-    const targetIds = new Set(readingsToApprove.map(r => r.id));
-    const activeCfg = getActiveTariffConfig();
-
-    const updatedReadings = readings.map(r => {
-      if (targetIds.has(r.id)) {
-        const computedWaterAmt = calculateCostOf(r, r.classification);
-        return {
-          ...r,
-          status: 'verified' as const,
-          isBillingIssued: r.isBillingIssued === true ? true : false,
-          billAmount: computedWaterAmt,
-          appliedTariffVersion: r.appliedTariffVersion || activeCfg.version,
-        };
-      }
-      return r;
-    });
-
-    mockDb.saveReadings(updatedReadings);
-    setReadings(updatedReadings);
-
-    readingsToApprove.forEach(reading => {
-      fetch(`/api/readings/${encodeURIComponent(reading.id)}/approve`, { method: 'POST' }).catch(() => {});
-    });
-
-    const totalBatchConsumption = readingsToApprove.reduce((sum, r) => sum + (r.consumption || 0), 0);
-    if (readingsToApprove.length === 1) {
-      const reading = readingsToApprove[0];
-      mockDb.addAuditLog(
-        currentUser.id,
-        currentUser.name,
-        'admin',
-        'Approved Meter Reading',
-        `Verified reading #${reading.id} for ${reading.consumerName} (Account #${reading.accountNumber}, ${reading.previousReading} → ${reading.currentReading} m³ = ${reading.consumption} m³). Ready for billing issuance.`
-      );
-      toast.success(
-        'Reading Approved — Ready to Bill',
-        `Verified ${reading.consumption} m³ reading for ${reading.consumerName}. Issue the official billing statement in the Bills module to publish their receipt.`,
-        5000
-      );
-    } else {
-      mockDb.addAuditLog(
-        currentUser.id,
-        currentUser.name,
-        'admin',
-        'Batch Approved Meter Readings',
-        `Batch verified ${readingsToApprove.length} field readings (${totalBatchConsumption} m³) submitted by ${readerNameLabel || 'Meter Reader'}. Ready for billing issuance.`
-      );
-      toast.success(
-        'Batch Readings Verified',
-        `Verified ${readingsToApprove.length} readings (${totalBatchConsumption} m³). Open the Bills module to issue official consumer billing statements.`,
-        5000
-      );
-    }
+    handleIssueBillings(readingsToApprove, undefined, readerNameLabel);
   };
 
-  // Action: Issue Official Consumer Billing Statement(s) (Unlocks Receipt & Billing Notice on Consumer Portal)
-  const handleIssueBillings = (readingsToBill: MeterReading[], customDueDate?: string) => {
+  // Action: Approve Reading(s) & Issue Official Consumer Billing Statement(s) (Unlocks Receipt, Baseline Continuity & Billing Notice on Consumer Portal)
+  const handleIssueBillings = (readingsToBill: MeterReading[], customDueDate?: string, approvalSourceLabel?: string) => {
     if (!readingsToBill || readingsToBill.length === 0) return;
     const activeCfg = getActiveTariffConfig();
-    const targetIds = new Set(readingsToBill.map(r => r.id));
-    const issuedTimestamp = new Date().toISOString();
-    const issuedMap = new Map<string, MeterReading>();
 
-    const updatedReadings = readings.map(r => {
-      if (!targetIds.has(r.id)) return r;
-      const matchedConsumer = consumers.find(c => c.accountNumber === r.accountNumber);
+    // Process sequential readings in ascending cumulative dial order so multi-cycle approvals chain Previous -> Present -> Current cleanly
+    const orderedTargets = [...readingsToBill].sort(
+      (a, b) =>
+        new Date(a.readingDate || 0).getTime() - new Date(b.readingDate || 0).getTime() ||
+        Number(a.currentReading ?? a.presentReading ?? 0) - Number(b.currentReading ?? b.presentReading ?? 0)
+    );
+    const targetIds = new Set(orderedTargets.map(r => r.id));
+    const baseTimestampMs = Date.now();
+    const issuedMap = new Map<string, MeterReading>();
+    const workingReadings = [...readings];
+
+    orderedTargets.forEach((targetItem, seqIdx) => {
+      const idxInWorking = workingReadings.findIndex(w => w.id === targetItem.id);
+      const r = idxInWorking >= 0 ? workingReadings[idxInWorking] : targetItem;
+      const cleanAcc = String(r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+      const cleanMeter = String(r.meterNumber || '').trim().toUpperCase();
+      const matchedConsumer = consumers.find(
+        c =>
+          (cleanAcc && String(c.accountNumber || '').replace(/^#/, '').trim().toUpperCase() === cleanAcc) ||
+          (cleanMeter && String(c.meterNumber || '').trim().toUpperCase() === cleanMeter)
+      );
+      const matchedMeter = meters.find(
+        m =>
+          (cleanMeter && String(m.meterNumber || '').trim().toUpperCase() === cleanMeter) ||
+          (cleanAcc && String(m.linkedAccountNumber || '').replace(/^#/, '').trim().toUpperCase() === cleanAcc)
+      );
+
       const cls: 'Residential' | 'Commercial' =
         (r.classification || matchedConsumer?.consumerType) === 'Commercial' ? 'Commercial' : 'Residential';
-      const priorUnpaid = readings.filter(
+
+      const currVal = Math.max(0, Number(r.currentReading ?? r.presentReading ?? 0));
+
+      // Find highest verified baseline <= currVal so Previous Reading is NEVER lost when new readings arrive
+      const priorApprovedForConsumer = workingReadings
+        .filter(prev => {
+          if (!prev || prev.id === r.id || prev.status === 'cancelled') return false;
+          if (prev.status !== 'verified' && !isOfficialBillIssued(prev)) return false;
+          const pAcc = String(prev.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+          const pMeter = String(prev.meterNumber || '').trim().toUpperCase();
+          const sameOwner = (cleanAcc && pAcc === cleanAcc) || (cleanMeter && pMeter === cleanMeter);
+          if (!sameOwner) return false;
+          const pCurr = Number(prev.currentReading ?? prev.presentReading ?? 0);
+          return pCurr <= currVal;
+        })
+        .sort(
+          (a, b) =>
+            Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
+            new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime()
+        );
+
+      const fallbackBaseline = Number(
+        priorApprovedForConsumer[0]?.currentReading ??
+          priorApprovedForConsumer[0]?.presentReading ??
+          matchedConsumer?.currentReading ??
+          matchedConsumer?.previousReading ??
+          matchedMeter?.lastReadingValue ??
+          0
+      );
+
+      let prevVal = Math.max(0, Number(r.previousReading ?? 0));
+      if (prevVal === 0 && fallbackBaseline > 0 && currVal >= fallbackBaseline) {
+        prevVal = fallbackBaseline;
+      }
+      if (prevVal > currVal) {
+        prevVal = fallbackBaseline <= currVal ? fallbackBaseline : 0;
+      }
+      const usageVal = Math.max(0, currVal - prevVal);
+
+      const priorUnpaid = workingReadings.filter(
         prev =>
           prev.id !== r.id &&
-          prev.accountNumber === r.accountNumber &&
+          String(prev.accountNumber || '').replace(/^#/, '').trim().toUpperCase() === cleanAcc &&
           isOfficialBillIssued(prev) &&
           prev.paymentStatus !== 'paid'
       );
@@ -2806,19 +3138,24 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         }, 0) * 100
       ) / 100;
 
-      const waterCharge = calculateWaterTariff(r.consumption, cls, activeCfg);
+      const waterCharge = calculateWaterTariff(usageVal, cls, activeCfg);
       const fTax = calculateFranchiseTax(waterCharge, activeCfg);
       const lPenalty = calculateLatePenalty(waterCharge, activeCfg);
       const totalDue = Math.round((waterCharge + fTax + computedArrears) * 100) / 100;
       const afterDue = Math.round((totalDue + lPenalty) * 100) / 100;
       const finalDueDate = (customDueDate && customDueDate.trim()) || r.dueDate || computeDefaultDueDate(r.readingDate);
+      const issuedIso = new Date(baseTimestampMs + seqIdx).toISOString();
 
       const billedRecord: MeterReading = {
         ...r,
+        previousReading: prevVal,
+        presentReading: currVal,
+        currentReading: currVal,
+        consumption: usageVal,
         status: 'verified',
         classification: cls,
         isBillingIssued: true,
-        billingIssuedAt: issuedTimestamp,
+        billingIssuedAt: issuedIso,
         billingIssuedBy: currentUser.name,
         invoiceNumber: r.invoiceNumber || `INV-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`,
         dueDate: finalDueDate,
@@ -2833,21 +3170,46 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         paidAmount: r.paidAmount || 0,
         remainingBalance: Math.max(0, totalDue - (r.paidAmount || 0)),
       };
+
       issuedMap.set(r.id, billedRecord);
-      return billedRecord;
+      if (idxInWorking >= 0) {
+        workingReadings[idxInWorking] = billedRecord;
+      } else {
+        workingReadings.unshift(billedRecord);
+      }
+
+      fetch(`/api/readings/${encodeURIComponent(r.id)}/approve`, { method: 'POST' }).catch(() => {});
     });
+
+    const updatedReadings = workingReadings.map(r => (targetIds.has(r.id) ? issuedMap.get(r.id) || r : r)).sort(
+      (a, b) =>
+        new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
+        Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
+        new Date(b.billingIssuedAt || b.submittedAt || 0).getTime() - new Date(a.billingIssuedAt || a.submittedAt || 0).getTime()
+    );
 
     mockDb.saveReadings(updatedReadings);
     setReadings(updatedReadings);
 
-    // Recalculate consumer outstandingBalance across officially issued unpaid bills
-    const affectedAccounts = new Set(Array.from(issuedMap.values()).map(b => (b.accountNumber || '').trim().toLowerCase()).filter(Boolean));
+    // Recalculate consumer outstandingBalance AND roll forward Previous/Present/Current meter baselines
+    const affectedAccounts = new Set(
+      Array.from(issuedMap.values())
+        .map(b => (b.accountNumber || '').replace(/^#/, '').trim().toLowerCase())
+        .filter(Boolean)
+    );
     const updatedConsumers = consumers.map(c => {
-      const cAcct = (c.accountNumber || '').trim().toLowerCase();
+      const cAcct = (c.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
       if (!affectedAccounts.has(cAcct)) return c;
-      const consumerUnpaid = updatedReadings.filter(
-        r => (r.accountNumber || '').trim().toLowerCase() === cAcct && isOfficialBillIssued(r) && r.paymentStatus !== 'paid'
-      );
+      const consumerVerified = updatedReadings
+        .filter(r => (r.accountNumber || '').replace(/^#/, '').trim().toLowerCase() === cAcct && r.status === 'verified')
+        .sort(
+          (a, b) =>
+            new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
+            Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
+            new Date(b.billingIssuedAt || 0).getTime() - new Date(a.billingIssuedAt || 0).getTime()
+        );
+      const latestVerified = consumerVerified[0];
+      const consumerUnpaid = consumerVerified.filter(r => isOfficialBillIssued(r) && r.paymentStatus !== 'paid');
       const newArrears = Math.round(
         consumerUnpaid.reduce((sum, r) => {
           const gross = calculateCostOf(r, r.classification);
@@ -2855,23 +3217,56 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           return sum + Math.max(0, gross - paid);
         }, 0) * 100
       ) / 100;
-      return { ...c, outstandingBalance: newArrears };
+      return {
+        ...c,
+        outstandingBalance: newArrears,
+        previousReading: latestVerified ? latestVerified.previousReading : c.previousReading,
+        presentReading: latestVerified ? (latestVerified.presentReading ?? latestVerified.currentReading) : c.presentReading,
+        currentReading: latestVerified ? latestVerified.currentReading : c.currentReading,
+        lastConsumption: latestVerified ? latestVerified.consumption : c.lastConsumption,
+        lastReadingDate: latestVerified ? latestVerified.readingDate : c.lastReadingDate,
+      };
     });
     mockDb.saveConsumers(updatedConsumers);
     setConsumers(updatedConsumers);
+
+    // Also advance WaterMeter.lastReadingValue so next meter reader inspection always starts from the approved dial index
+    let metersChanged = false;
+    const updatedMeters = meters.map(m => {
+      const mAcct = (m.linkedAccountNumber || '').replace(/^#/, '').trim().toLowerCase();
+      if (!mAcct || !affectedAccounts.has(mAcct)) return m;
+      const matchingCons = updatedConsumers.find(
+        c => (c.accountNumber || '').replace(/^#/, '').trim().toLowerCase() === mAcct
+      );
+      if (matchingCons && typeof matchingCons.currentReading === 'number') {
+        metersChanged = true;
+        return {
+          ...m,
+          lastReadingValue: Math.max(Number(m.lastReadingValue || 0), matchingCons.currentReading),
+          lastReadingDate: matchingCons.lastReadingDate || m.lastReadingDate,
+        };
+      }
+      return m;
+    });
+    if (metersChanged) {
+      mockDb.saveMeters(updatedMeters);
+      setMeters(updatedMeters);
+    }
 
     // Dispatch Official Billing Notification + Cross-Device Reconcile + Real-Time Broadcast
     const issuedBillsList = Array.from(issuedMap.values());
     const createdNotifs: any[] = [];
     issuedMap.forEach(bill => {
-      const matchedConsumer = updatedConsumers.find(c => c.accountNumber === bill.accountNumber);
+      const matchedConsumer = updatedConsumers.find(
+        c => (c.accountNumber || '').replace(/^#/, '').trim().toLowerCase() === (bill.accountNumber || '').replace(/^#/, '').trim().toLowerCase()
+      );
       const notif = mockDb.addNotification({
         accountNumber: bill.accountNumber,
         consumerId: matchedConsumer?.id,
         userId: matchedConsumer?.linkedUserId,
         consumerEmail: matchedConsumer?.email,
         title: `Water Bill Issued - ${bill.billingPeriod || 'New Statement'}`,
-        message: `Your official water billing statement for ${bill.billingPeriod} (${bill.consumption} m³) has been issued by Tagoloan Water District Administration. Total Basic Charge: ₱${(bill.billAmount || 0).toFixed(2)} (Total Due: ₱${(bill.totalAmount || 0).toFixed(2)}). Due Date: ${bill.dueDate}. Your Water Billing Notice & Receipt is now available on your dashboard.`,
+        message: `Your meter reading for ${bill.billingPeriod} has been approved by Administration (Previous: ${bill.previousReading} m³ → Present: ${bill.presentReading ?? bill.currentReading} m³ • Usage: ${bill.consumption} m³). Basic Charge: ₱${(bill.billAmount || 0).toFixed(2)} | Total Due: ₱${(bill.totalAmount || 0).toFixed(2)} (Due: ${bill.dueDate}). Your official Water Billing Notice & Receipt is now available on your dashboard.`,
         type: 'billing',
         readingId: bill.id,
         billingPeriod: bill.billingPeriod,
@@ -2884,10 +3279,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         consumerEmail: matchedConsumer?.email,
         userId: matchedConsumer?.linkedUserId,
         billingPeriod: bill.billingPeriod,
+        previousReading: bill.previousReading,
+        presentReading: bill.presentReading ?? bill.currentReading,
+        currentReading: bill.currentReading,
         consumption: bill.consumption,
         reading: bill,
         notification: notif,
-        message: `Official water bill for ${bill.billingPeriod} (${bill.consumption} m³ • ₱${(bill.totalAmount || bill.billAmount || 0).toFixed(2)}) has been issued.`,
+        message: `Official water bill for ${bill.billingPeriod} (Prev ${bill.previousReading} → Pres ${bill.currentReading} m³ = ${bill.consumption} m³ • ₱${(bill.totalAmount || bill.billAmount || 0).toFixed(2)}) has been issued.`,
       });
       sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
         accountNumber: bill.accountNumber,
@@ -2908,7 +3306,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-portal': 'admin' },
         body: JSON.stringify({
-          consumers: updatedConsumers.filter(c => affectedAccounts.has((c.accountNumber || '').trim().toLowerCase())),
+          consumers: updatedConsumers.filter(c => affectedAccounts.has((c.accountNumber || '').replace(/^#/, '').trim().toLowerCase())),
           notifications: createdNotifs,
         }),
       }).catch(() => {});
@@ -2922,13 +3320,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         currentUser.id,
         currentUser.name,
         'admin',
-        'Issued Official Water Billing',
-        `Generated and issued billing ${single.invoiceNumber} for ${single.consumerName} (Account #${single.accountNumber}, ${single.billingPeriod}, ${single.consumption} m³, Total Due: ₱${(single.totalAmount || 0).toFixed(2)}).`
+        'Approved Reading & Issued Official Billing',
+        `Approved reading #${single.id} (Prev ${single.previousReading} → Pres ${single.currentReading} m³ = ${single.consumption} m³) and issued billing ${single.invoiceNumber} for ${single.consumerName} (Account #${single.accountNumber}, ${single.billingPeriod}, Total Due: ₱${(single.totalAmount || 0).toFixed(2)}).`
       );
       toast.success(
-        'Official Billing Issued',
-        `Billing statement for ${single.consumerName} (#${single.accountNumber}) — ₱${(single.totalAmount || 0).toFixed(2)} published to Consumer Portal.`,
-        5000
+        'Reading Approved & Bill Issued',
+        `${single.consumerName} (#${single.accountNumber}): Prev ${single.previousReading} → Pres ${single.currentReading} m³ (${single.consumption} m³) • ₱${(single.totalAmount || 0).toFixed(2)} sent to Consumer Portal.`,
+        5500
       );
     } else {
       const totalIssuedAmt = Array.from(issuedMap.values()).reduce((s, b) => s + (b.totalAmount || 0), 0);
@@ -2936,13 +3334,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         currentUser.id,
         currentUser.name,
         'admin',
-        'Batch Issued Official Water Billings',
-        `Issued ${issuedMap.size} official billing statements totaling ₱${totalIssuedAmt.toFixed(2)} to Consumer Portal.`
+        'Batch Approved Readings & Issued Official Billings',
+        `Approved ${issuedMap.size} readings${approvalSourceLabel ? ` from ${approvalSourceLabel}` : ''} and issued official billing statements totaling ₱${totalIssuedAmt.toFixed(2)} to Consumer Portal.`
       );
       toast.success(
-        'Batch Billings Issued',
-        `Published ${issuedMap.size} official billing statements (₱${totalIssuedAmt.toFixed(2)}) and unlocked consumer dashboard notices.`,
-        5000
+        'Batch Approved & Bills Issued',
+        `Approved ${issuedMap.size} readings and published ₱${totalIssuedAmt.toFixed(2)} in official billing statements to Consumer Accounts.`,
+        5500
       );
     }
   };
@@ -2958,14 +3356,29 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const acc = chosenConsumer?.accountNumber || '';
     const consumerReads = readings
       .filter(r => r.accountNumber === acc && r.status !== 'cancelled')
-      .sort((a, b) => new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime());
+      .sort(
+        (a, b) =>
+          new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
+          Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
+          new Date(b.billingIssuedAt || b.submittedAt || 0).getTime() - new Date(a.billingIssuedAt || a.submittedAt || 0).getTime()
+      );
     const unbilledMatch = existingReading || consumerReads.find(r => !isOfficialBillIssued(r));
-    const latestIssued = consumerReads.find(r => isOfficialBillIssued(r));
+    const latestIssued = consumerReads.find(r => isOfficialBillIssued(r) && (!unbilledMatch || r.id !== unbilledMatch.id));
+    const latestVerified = consumerReads.find(r => r.status === 'verified' && (!unbilledMatch || r.id !== unbilledMatch.id));
+    const fallbackBaseline = Number(
+      latestIssued?.currentReading ??
+        latestVerified?.currentReading ??
+        chosenConsumer?.currentReading ??
+        chosenConsumer?.previousReading ??
+        0
+    );
     const basePrev = unbilledMatch
-      ? unbilledMatch.previousReading
-      : latestIssued
-        ? latestIssued.currentReading
-        : 0;
+      ? (unbilledMatch.previousReading > 0
+          ? unbilledMatch.previousReading
+          : unbilledMatch.currentReading >= fallbackBaseline
+            ? fallbackBaseline
+            : 0)
+      : fallbackBaseline;
     const baseCurr = unbilledMatch ? unbilledMatch.currentReading : basePrev;
     const rDate = unbilledMatch?.readingDate || new Date().toISOString().split('T')[0];
 
@@ -3016,6 +3429,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         ? {
             ...readings[existingIdx],
             previousReading: prevVal,
+            presentReading: currVal,
             currentReading: currVal,
             consumption: usage,
             readingDate: readDate,
@@ -3034,10 +3448,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             addressZone: targetConsumer.sitioZone || targetConsumer.barangay || '',
             route: `${targetConsumer.barangay || 'Poblacion'} Route`,
             previousReading: prevVal,
+            presentReading: currVal,
             currentReading: currVal,
             consumption: usage,
             readingDate: readDate,
             meterReaderDate: readDate,
+            submittedAt: new Date().toISOString(),
             status: 'verified',
             meterReaderName: currentUser.name || 'Billing Desk Officer',
             imageUrl: '',
@@ -3052,7 +3468,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         ? readings.map((r, i) => (i === existingIdx ? baseRecord : r))
         : [baseRecord, ...readings];
 
-    // Temporarily ensure baseRecord is in list, then invoke handleIssueBillings logic cleanly
     const activeCfg = getActiveTariffConfig();
     const priorUnpaid = seededReadings.filter(
       prev =>
@@ -3077,6 +3492,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     const finalizedBill: MeterReading = {
       ...baseRecord,
+      previousReading: prevVal,
+      presentReading: currVal,
+      currentReading: currVal,
+      consumption: usage,
       status: 'verified',
       classification: cls,
       isBillingIssued: true,
@@ -3096,10 +3515,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       remainingBalance: totalDue,
     };
 
-    const nextReadings =
+    const nextReadings = (
       existingIdx >= 0
         ? readings.map((r, i) => (i === existingIdx ? finalizedBill : r))
-        : [finalizedBill, ...readings];
+        : [finalizedBill, ...readings]
+    ).sort(
+      (a, b) =>
+        new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
+        Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
+        new Date(b.billingIssuedAt || b.submittedAt || 0).getTime() - new Date(a.billingIssuedAt || a.submittedAt || 0).getTime()
+    );
 
     mockDb.saveReadings(nextReadings);
     setReadings(nextReadings);
@@ -3112,10 +3537,32 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     ) / 100;
 
     const updatedConsumers = consumers.map(c =>
-      c.accountNumber === targetConsumer.accountNumber ? { ...c, outstandingBalance: newArrears } : c
+      c.accountNumber === targetConsumer.accountNumber
+        ? {
+            ...c,
+            outstandingBalance: newArrears,
+            previousReading: prevVal,
+            presentReading: currVal,
+            currentReading: currVal,
+            lastConsumption: usage,
+            lastReadingDate: readDate,
+          }
+        : c
     );
     mockDb.saveConsumers(updatedConsumers);
     setConsumers(updatedConsumers);
+
+    const updatedMeters = meters.map(m =>
+      m.linkedAccountNumber === targetConsumer.accountNumber || m.meterNumber === targetConsumer.meterNumber
+        ? {
+            ...m,
+            lastReadingValue: Math.max(Number(m.lastReadingValue || 0), currVal),
+            lastReadingDate: readDate,
+          }
+        : m
+    );
+    mockDb.saveMeters(updatedMeters);
+    setMeters(updatedMeters);
 
     const createdNotif = mockDb.addNotification({
       accountNumber: targetConsumer.accountNumber,
@@ -3182,17 +3629,18 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   // Filtered and sorted consumers list logic
   const filteredConsumers = consumers.filter(c => {
-    // Check if pending ID issuance
+    // Check if pending ID issuance or pending meter installation
     const isPending = !c.accountNumber || 
                       c.accountNumber.trim() === '' || 
                       c.accountNumber.toUpperCase().startsWith('PENDING') || 
                       c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || 
-                      c.status === 'pending_approval';
+                      isPendingConsumerStatus(c.status);
 
     // 1. Smart Search Matcher: multi-token + compact ID/phone normalization across all consumer fields
     const matchesSearch = smartMatch(consumerSearch, [
       c.name,
       c.accountNumber,
+      c.applicationNumber,
       c.meterNumber,
       c.rfidTag,
       c.email,
@@ -3203,7 +3651,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       c.businessName,
       c.status,
       c.consumerType,
-      isPending ? 'pending approval issuance' : 'issued active',
+      isPending ? 'pending approval issuance installation' : 'issued active',
       c.isRegistered ? 'registered online' : 'offline ledger'
     ]);
 
@@ -3231,8 +3679,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   }).sort((a, b) => {
     // 1. Pending accounts without issued IDs ALWAYS sit at the very top of the list
     // so administrators can immediately see new accounts without scrolling or searching
-    const aPending = !a.accountNumber || a.accountNumber.trim() === '' || a.accountNumber.toUpperCase().startsWith('PENDING') || a.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || a.accountNumber.toUpperCase() === 'UNASSIGNED' || a.accountNumber.toUpperCase() === 'UNISSUED' || a.status === 'pending_approval';
-    const bPending = !b.accountNumber || b.accountNumber.trim() === '' || b.accountNumber.toUpperCase().startsWith('PENDING') || b.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || b.accountNumber.toUpperCase() === 'UNASSIGNED' || b.accountNumber.toUpperCase() === 'UNISSUED' || b.status === 'pending_approval';
+    const aPending = !a.accountNumber || a.accountNumber.trim() === '' || a.accountNumber.toUpperCase().startsWith('PENDING') || a.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || a.accountNumber.toUpperCase() === 'UNASSIGNED' || a.accountNumber.toUpperCase() === 'UNISSUED' || isPendingConsumerStatus(a.status);
+    const bPending = !b.accountNumber || b.accountNumber.trim() === '' || b.accountNumber.toUpperCase().startsWith('PENDING') || b.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || b.accountNumber.toUpperCase() === 'UNASSIGNED' || b.accountNumber.toUpperCase() === 'UNISSUED' || isPendingConsumerStatus(b.status);
 
     if (aPending && !bPending) return -1;
     if (!aPending && bPending) return 1;
@@ -3274,6 +3722,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const pendingReadingsCount = readings.filter(r => r.status === 'pending').length;
   const flaggedAbnormalCount = readings.filter(r => r.status === 'flagged_abnormal').length;
   const pendingReportsCount = reports.filter(r => r.status === 'pending' || r.hasUnreadConsumerUpdate).length;
+  const pendingInstallationsCount = installationRequests.filter(
+    r => r.hasUnreadAdminAlert || r.status === 'Pending Review' || (r.status === 'Installed' && r.accountValidationStatus !== 'validated')
+  ).length;
   const activeTechnicians = readers.filter(r => r.employmentStatus !== 'inactive' && (r as any).status !== 'inactive').length;
   const routesCoveredCount = routes.filter(rt => rt.assignedReaderId || rt.assignedReaderName).length;
 
@@ -3372,9 +3823,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               <CheckCircle className="h-4 w-4 shrink-0 text-sky-400" />
               <span>Approvals</span>
             </div>
-            {pendingReadingsCount > 0 && (
+            {(pendingReadingsCount + flaggedAbnormalCount) > 0 && (
               <span className="bg-amber-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded-full animate-pulse">
-                {pendingReadingsCount}
+                {pendingReadingsCount + flaggedAbnormalCount}
               </span>
             )}
           </button>
@@ -3426,12 +3877,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           <button
             id="admin-nav-meters"
             onClick={() => handleTabChange('meters')}
-            className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition text-left cursor-pointer ${
               activeTab === 'meters' ? 'bg-blue-600 text-white shadow-md' : 'hover:text-white hover:bg-slate-800/50 text-slate-400'
             }`}
           >
-            <SlidersHorizontal className="h-4 w-4 shrink-0 text-indigo-400" />
-            <span>Water Meters</span>
+            <span className="flex items-center space-x-3">
+              <SlidersHorizontal className="h-4 w-4 shrink-0 text-indigo-400" />
+              <span>Water Meters</span>
+            </span>
+            {pendingInstallationsCount > 0 && (
+              <span className="bg-sky-500 text-slate-950 font-black font-mono tabular-nums text-[10px] px-2 py-0.5 rounded-md">
+                {pendingInstallationsCount}
+              </span>
+            )}
           </button>
 
           {/* Meter Readers Module */}
@@ -3565,7 +4023,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 {activeTab === 'bills' && 'Bills & Invoicing Ledger Management'}
                 {activeTab === 'payments' && 'Process Payments & Cashier Receipt Counter'}
                 {activeTab === 'readings' && 'Meter Readings & Field Telemetry'}
-                {activeTab === 'meters' && 'Water Meters Master Inventory'}
+                {activeTab === 'meters' && (
+                  metersSubTab === 'installations'
+                    ? 'Water Meter Installations & Account Validation'
+                    : 'Water Meters Master Inventory'
+                )}
                 {activeTab === 'readers' && 'Meter Readers Field Staff Registry'}
                 {activeTab === 'staff' && 'Admin User Staff & Permissions'}
                 {activeTab === 'barangays' && 'Barangays & Service Area Zones'}
@@ -3581,11 +4043,243 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           </div>
 
           <div className="flex items-center space-x-2 sm:space-x-3 shrink-0 ml-2">
+            {/* Admin Notification Bell for Consumer Replies, Notice Inquiries & Installation Requests */}
+            {(() => {
+              type CombinedAdminAlert =
+                | { kind: 'installation'; timestamp: number; isUnread: boolean; req: WaterMeterInstallationRequest }
+                | { kind: 'report'; timestamp: number; isUnread: boolean; rep: ConsumerReport };
+
+              const installationAlertItems: CombinedAdminAlert[] = installationRequests.map(req => ({
+                kind: 'installation',
+                timestamp: new Date(req.updatedAt || req.submissionDate || 0).getTime(),
+                isUnread: Boolean(req.hasUnreadAdminAlert || req.status === 'Pending Review' || (req.status === 'Installed' && req.accountValidationStatus !== 'validated')),
+                req,
+              }));
+
+              const reportAlertItems: CombinedAdminAlert[] = reports.map(rep => ({
+                kind: 'report',
+                timestamp: new Date(rep.updatedAt || rep.createdAt || 0).getTime(),
+                isUnread: Boolean(rep.hasUnreadConsumerUpdate || rep.status === 'pending'),
+                rep,
+              }));
+
+              const combinedAlerts = [...installationAlertItems, ...reportAlertItems].sort(
+                (a, b) => b.timestamp - a.timestamp
+              );
+              const unreadAdminCount = combinedAlerts.filter(item => item.isUnread).length;
+
+              return (
+                <div ref={adminBellRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminBellDropdown(prev => !prev)}
+                    className="relative p-2.5 min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 transition cursor-pointer shadow-xs"
+                    title="Installation Requests, Consumer Replies & Official Notice Inquiries"
+                    aria-label="Admin Notification Bell"
+                    id="admin-notification-bell-btn"
+                  >
+                    <Bell className="h-4 w-4 text-sky-400" />
+                    {unreadAdminCount > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-mono tabular-nums font-black flex items-center justify-center border border-slate-950">
+                        {unreadAdminCount > 99 ? '99+' : unreadAdminCount}
+                      </span>
+                    )}
+                  </button>
+
+                  {showAdminBellDropdown && (
+                    <div className="fixed inset-x-3 top-16 sm:inset-x-auto sm:top-auto sm:absolute sm:right-0 sm:mt-2 sm:w-96 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl z-[120] overflow-hidden text-slate-100">
+                      <div className="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Bell className="h-4 w-4 text-sky-400 shrink-0" />
+                          <h4 className="text-xs font-bold text-white truncate">
+                            Installations &amp; Consumer Inquiries
+                          </h4>
+                        </div>
+                        {unreadAdminCount > 0 && (
+                          <span className="text-[11px] font-mono tabular-nums font-bold text-rose-400 shrink-0">
+                            {unreadAdminCount} unread
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="max-h-[65vh] sm:max-h-96 overflow-y-auto divide-y divide-slate-800/80">
+                        {combinedAlerts.length === 0 ? (
+                          <div className="p-6 text-center text-xs text-slate-400">
+                            No installation requests or consumer inquiries yet.
+                          </div>
+                        ) : (
+                          combinedAlerts.slice(0, 18).map((item) => {
+                            if (item.kind === 'installation') {
+                              const { req, isUnread } = item;
+                              const schedDate = req.confirmedInstallationDate || req.preferredInstallationDate;
+                              return (
+                                <button
+                                  key={`admin-bell-inst-${req.id}`}
+                                  type="button"
+                                  onClick={() => {
+                                    setShowAdminBellDropdown(false);
+                                    const nextList = mockDb.markInstallationReadByAdmin(req.id);
+                                    setInstallationRequests(nextList);
+                                    setActiveTab('meters');
+                                    setMetersSubTab('installations');
+                                    setSelectedInstallationRequestId(req.id);
+                                  }}
+                                  className={`w-full text-left px-3.5 py-3 hover:bg-slate-800/80 transition cursor-pointer space-y-1 group ${
+                                    isUnread ? 'bg-sky-950/35' : ''
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                                    <div className="flex items-center gap-1.5 min-w-0 truncate">
+                                      <span className="font-bold text-white truncate">
+                                        {req.consumerName}
+                                      </span>
+                                      <span aria-hidden="true" className="text-slate-600">·</span>
+                                      <span className="font-mono tabular-nums font-semibold text-emerald-400 shrink-0">
+                                        {req.applicationNumber}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <span className="font-mono tabular-nums text-[10px] text-slate-400">
+                                        {new Date(req.updatedAt || req.submissionDate).toLocaleDateString([], {
+                                          month: 'short',
+                                          day: 'numeric',
+                                        })}
+                                      </span>
+                                      {isUnread && (
+                                        <span className="h-2 w-2 rounded-full bg-sky-400 shrink-0" />
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div className="text-[11px] font-semibold text-sky-300 truncate">
+                                    Meter Installation · {req.status}
+                                    {req.status === 'Installed' && req.accountValidationStatus !== 'validated' ? ' (Validate & Issue IDs)' : ''}
+                                  </div>
+
+                                  <p className="text-[11px] text-slate-300 line-clamp-2 leading-snug">
+                                    Brgy. {req.barangay} · Preferred/Scheduled: {formatInstallationDateDisplay(schedDate)}
+                                    {req.consumerRemarks ? ` — "${req.consumerRemarks}"` : ''}
+                                  </p>
+
+                                  <div className="flex items-center justify-between pt-0.5 text-[10px] text-slate-400">
+                                    <span className="font-mono tabular-nums">{req.contactNumber}</span>
+                                    <span className="font-bold text-sky-400 group-hover:text-sky-300 inline-flex items-center gap-0.5">
+                                      <span>Review Schedule</span>
+                                      <ChevronRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                                    </span>
+                                  </div>
+                                </button>
+                              );
+                            }
+
+                            const { rep, isUnread } = item;
+                            const consumerReplies = (rep.replies || []).filter(
+                              m => m.senderRole === 'consumer'
+                            );
+                            const rawPreview =
+                              consumerReplies.length > 0
+                                ? consumerReplies[consumerReplies.length - 1].message
+                                : rep.description;
+                            const cleanPreview = normalizeSingleLinePreview(rawPreview);
+                            const ref = rep.referencedNotice;
+
+                            return (
+                              <button
+                                key={`admin-bell-${rep.id}`}
+                                type="button"
+                                onClick={() => {
+                                  setShowAdminBellDropdown(false);
+                                  mockDb.markReportReadByAdmin(rep.id);
+                                  setReports(mockDb.getReports());
+                                  setActiveAdminBellReportId(rep.id);
+                                }}
+                                className={`w-full text-left px-3.5 py-3 hover:bg-slate-800/80 transition cursor-pointer space-y-1 group ${
+                                  isUnread ? 'bg-blue-950/30' : ''
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-2 text-[11px]">
+                                  <div className="flex items-center gap-1.5 min-w-0 truncate">
+                                    <span className="font-bold text-white truncate">
+                                      {rep.consumerName}
+                                    </span>
+                                    <span aria-hidden="true" className="text-slate-600">·</span>
+                                    <span className="font-mono tabular-nums font-semibold text-sky-400 shrink-0">
+                                      #{rep.accountNumber}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className="font-mono tabular-nums text-[10px] text-slate-400">
+                                      {new Date(rep.updatedAt || rep.createdAt).toLocaleDateString([], {
+                                        month: 'short',
+                                        day: 'numeric',
+                                      })}
+                                    </span>
+                                    {isUnread && (
+                                      <span className="h-2 w-2 rounded-full bg-rose-400 shrink-0" />
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="text-[11px] font-semibold text-sky-300 truncate">
+                                  {ref
+                                    ? ref.meterStatus
+                                      ? `Re: Water Meter (${formatMeterStatusLabel(ref.meterStatus)})${ref.meterNumber ? ` · #${ref.meterNumber}` : ''}`
+                                      : `Re: ${ref.subject}`
+                                    : rep.title}
+                                </div>
+
+                                <p className="text-[11px] text-slate-300 line-clamp-2 leading-snug">
+                                  {cleanPreview}
+                                </p>
+
+                                <div className="flex items-center justify-between pt-0.5 text-[10px] text-slate-400">
+                                  <span className="font-mono tabular-nums">{rep.ticketNumber}</span>
+                                  <span className="font-bold text-blue-400 group-hover:text-blue-300 inline-flex items-center gap-0.5">
+                                    <span>Read &amp; Reply</span>
+                                    <ChevronRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      <div className="p-2.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2 px-4">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAdminBellDropdown(false);
+                            setActiveTab('meters');
+                            setMetersSubTab('installations');
+                          }}
+                          className="text-xs font-bold text-sky-400 hover:text-sky-300 hover:underline cursor-pointer whitespace-nowrap"
+                        >
+                          Installations ({installationRequests.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAdminBellDropdown(false);
+                            setActiveTab('announcements');
+                            setAnnouncementsSubTab('customer_service');
+                          }}
+                          className="text-xs font-bold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer whitespace-nowrap"
+                        >
+                          Inquiries ({reports.length})
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* Quick manual refresh data button */}
             <button
               onClick={handleManualRefresh}
               disabled={isRefreshing}
-              className="px-3 sm:px-3.5 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 shadow-xs cursor-pointer"
+              className="px-3 sm:px-3.5 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 shadow-xs cursor-pointer whitespace-nowrap shrink-0"
               title={`Last synchronized at ${lastSyncTime}`}
               id="admin-manual-refresh-btn"
             >
@@ -3918,14 +4612,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {/* Dark, Eye-Friendly Header */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
                 <div>
-                  <h3 className="text-base sm:text-lg font-black text-white tracking-tight font-sans">Meter Reading Approvals</h3>
+                  <h3 className="text-base sm:text-lg font-black text-white tracking-tight font-sans">Meter Reading Approvals & Automatic Billing</h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
-                    Review and verify field meter readings submitted by meter readers. Once verified, generate and issue official consumer billing statements in the Bills module.
+                    Review field meter inspections (Previous Baseline → Present Inspection → Current Usage). Approving a reading automatically triggers official consumer billing, preserves baseline continuity for future cycles, and sends the Water Billing Notice to the consumer.
                   </p>
                 </div>
                 <div className="flex items-center space-x-3 shrink-0">
                   <div className="bg-slate-950 border border-slate-800 px-4 py-2.5 rounded-xl text-center shadow-inner">
-                    <span className="text-xl sm:text-2xl font-black text-amber-400 block leading-tight font-mono">{readings.filter(r => r.status === 'pending').length}</span>
+                    <span className="text-xl sm:text-2xl font-black text-amber-400 block leading-tight font-mono">
+                      {readings.filter(r => r.status === 'pending' || r.status === 'flagged_abnormal').length}
+                    </span>
                     <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Pending Approvals</span>
                   </div>
                 </div>
@@ -3943,7 +4639,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 >
                   <span>Pending Verification</span>
                   <span className="bg-amber-950/80 text-amber-300 border border-amber-800/80 text-[11px] font-semibold px-2 py-0.5 rounded-full font-mono">
-                    {readings.filter(r => r.status === 'pending').length}
+                    {readings.filter(r => r.status === 'pending' || r.status === 'flagged_abnormal').length}
                   </span>
                 </button>
 
@@ -3957,7 +4653,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 >
                   <span>Approval History</span>
                   <span className="bg-slate-800 text-slate-300 border border-slate-750 text-[11px] font-semibold px-2 py-0.5 rounded-full font-mono">
-                    {readings.filter(r => r.status !== 'pending').length}
+                    {readings.filter(r => r.status !== 'pending' && r.status !== 'flagged_abnormal').length}
                   </span>
                 </button>
               </div>
@@ -3967,7 +4663,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <>
                   {/* Search, Reader Filter, and Summary bar for pending items */}
                   {(() => {
-                    const pendingList = readings.filter(r => r.status === 'pending');
+                    const pendingList = readings.filter(r => r.status === 'pending' || r.status === 'flagged_abnormal');
                     const distinctReaders: string[] = Array.from(
                       new Set<string>(
                         pendingList.map(r => (r.meterReaderName && r.meterReaderName.trim()) ? r.meterReaderName.trim() : 'Field Reader')
@@ -4046,9 +4742,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 if (filtered.length > 0) {
                                   setConfirmDialog({
                                     isOpen: true,
-                                    title: 'Batch Approve Readings',
-                                    message: `Approve all ${filtered.length} pending readings across all matching readers? This will finalize them for consumer billing statements.`,
-                                    confirmLabel: `Approve All (${filtered.length})`,
+                                    title: 'Batch Approve & Issue Bills',
+                                    message: `Approve all ${filtered.length} pending readings and automatically issue their official consumer billing statements? Previous baselines will be locked and rolled forward automatically.`,
+                                    confirmLabel: `Approve & Issue (${filtered.length})`,
                                     confirmVariant: 'success',
                                     onConfirm: () => handleApproveReadingBatch(filtered, 'All Field Readers')
                                   });
@@ -4057,7 +4753,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition shadow-md flex items-center space-x-1.5 cursor-pointer border border-emerald-500/40"
                             >
                               <CheckCheck className="h-4 w-4" />
-                              <span>Approve All Matching ({pendingList.length})</span>
+                              <span>Approve & Issue All ({pendingList.length})</span>
                             </button>
                           </div>
                         )}
@@ -4066,7 +4762,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   })()}
 
                   {(() => {
-                    const pendingList = readings.filter(r => r.status === 'pending');
+                    const pendingList = readings.filter(r => r.status === 'pending' || r.status === 'flagged_abnormal');
                     const filteredPending = pendingList.filter(r => {
                       const rName = (r.meterReaderName && r.meterReaderName.trim()) ? r.meterReaderName.trim() : 'Field Reader';
                       if (selectedPendingReaderFilter !== 'all' && rName !== selectedPendingReaderFilter) {
@@ -4092,7 +4788,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           </h4>
                           <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
                             {pendingList.length === 0
-                              ? 'All field readings have been reviewed and approved.'
+                              ? 'All field readings have been reviewed, approved, and billed.'
                               : 'No pending readings match your filter criteria or search query.'}
                           </p>
                         </div>
@@ -4185,10 +4881,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     type="button"
                                     onClick={() => handleApproveReadingBatch(group.readings, group.readerName)}
                                     className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition shadow-md flex items-center space-x-1.5 cursor-pointer border border-emerald-500/40"
-                                    title={`Approve all ${group.readings.length} readings submitted by ${group.readerName}`}
+                                    title={`Approve and issue bills for all ${group.readings.length} readings submitted by ${group.readerName}`}
                                   >
                                     <CheckCircle className="h-4 w-4" />
-                                    <span>Approve All ({group.readings.length})</span>
+                                    <span>Approve & Issue ({group.readings.length})</span>
                                   </button>
 
                                   {/* Toggle Collapse/Expand */}
@@ -4213,6 +4909,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 <div className="p-4 sm:p-5 space-y-3.5 bg-slate-950/40">
                                   {group.readings.map((reading, pIdx) => {
                                     const totalCalculatedBill = calculateCostOf(reading, reading.classification);
+                                    const isFlaggedHigh = reading.status === 'flagged_abnormal' || Number(reading.consumption || 0) >= 50;
 
                                     return (
                                       <div 
@@ -4246,6 +4943,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                                   <span>{reading.classification ? reading.classification.toUpperCase() : 'RESIDENTIAL'}</span>
                                                 </span>
                                               )}
+
+                                              {isFlaggedHigh && (
+                                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-300">
+                                                  <AlertTriangle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+                                                  <span>High Usage — Verify Baseline</span>
+                                                </span>
+                                              )}
                                             </div>
 
                                             <div className="flex items-center space-x-3 text-xs text-slate-400 flex-wrap">
@@ -4265,28 +4969,28 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           </div>
                                         </div>
 
-                                        {/* Reading Metrics: Previous, Present, Consumption, Bill */}
+                                        {/* Reading Metrics: Previous (Baseline), Present (Inspection), Current Consumption, Bill */}
                                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950 border border-slate-800/90 rounded-xl p-3.5 shadow-inner">
                                           <div>
-                                            <span className="text-[11px] font-medium text-slate-400 block">Previous Index</span>
+                                            <span className="text-[11px] font-medium text-slate-400 block">Previous Reading (Baseline)</span>
                                             <div className="mt-0.5 flex items-baseline space-x-1">
-                                              <span className="text-base font-mono font-bold text-slate-300">{reading.previousReading}</span>
+                                              <span className="text-base font-mono tabular-nums font-bold text-slate-300">{reading.previousReading}</span>
                                               <span className="text-xs text-slate-500">m³</span>
                                             </div>
                                           </div>
 
                                           <div>
-                                            <span className="text-[11px] font-medium text-slate-400 block">Present Index</span>
+                                            <span className="text-[11px] font-medium text-slate-400 block">Present Reading (Inspection)</span>
                                             <div className="mt-0.5 flex items-baseline space-x-1">
-                                              <span className="text-base font-mono font-bold text-blue-400">{reading.currentReading}</span>
+                                              <span className="text-base font-mono tabular-nums font-bold text-blue-400">{reading.presentReading ?? reading.currentReading}</span>
                                               <span className="text-xs text-blue-500">m³</span>
                                             </div>
                                           </div>
 
                                           <div>
-                                            <span className="text-[11px] font-medium text-slate-400 block">Consumption</span>
+                                            <span className="text-[11px] font-medium text-slate-400 block">Current Usage (Consumption)</span>
                                             <div className="mt-0.5 flex items-baseline space-x-1">
-                                              <span className="text-base font-mono font-bold text-emerald-400">+{reading.consumption}</span>
+                                              <span className="text-base font-mono tabular-nums font-bold text-emerald-400">+{reading.consumption}</span>
                                               <span className="text-xs text-emerald-500">m³</span>
                                             </div>
                                           </div>
@@ -4294,7 +4998,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           <div>
                                             <span className="text-[11px] font-medium text-slate-400 block">Calculated Bill</span>
                                             <div className="mt-0.5 flex items-baseline space-x-1">
-                                              <span className="text-base font-mono font-black text-amber-300">₱{totalCalculatedBill.toFixed(2)}</span>
+                                              <span className="text-base font-mono tabular-nums font-black text-amber-300">₱{totalCalculatedBill.toFixed(2)}</span>
                                             </div>
                                             <span className={`text-[10px] font-bold block mt-0.5 ${
                                               reading.classification?.toLowerCase().includes('comm') ? 'text-purple-400' : 'text-emerald-400'
@@ -4330,6 +5034,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           <div className="flex items-center space-x-2 shrink-0">
                                             <button
                                               type="button"
+                                              onClick={() => openCreateBillModal(reading.accountNumber, reading)}
+                                              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-lg text-xs transition border border-slate-700 cursor-pointer"
+                                              title="Review or adjust Previous/Present readings before issuing bill"
+                                            >
+                                              Review Indices
+                                            </button>
+                                            <button
+                                              type="button"
                                               onClick={() => handleApproveReadingBatch([reading])}
                                               className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs transition shadow-md flex items-center justify-center space-x-1.5 cursor-pointer border border-emerald-500/30"
                                             >
@@ -4356,7 +5068,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {approvalsSubTab === 'history' && (
                 <div className="space-y-4">
                   {(() => {
-                    const allHistoryItems = readings.filter(r => r.status !== 'pending');
+                    const allHistoryItems = readings.filter(r => r.status !== 'pending' && r.status !== 'flagged_abnormal');
                     const filteredHistory = allHistoryItems.filter(r =>
                       smartMatch(approvalHistorySearch, [
                         r.id,
@@ -4538,9 +5250,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             <div className="space-y-6 animate-fade-in" id="consumers-tab">
               {(() => {
                 const totalCount = consumers.length;
-                const activeCount = consumers.filter(c => c.status === 'active' && Boolean(c.accountNumber && !c.accountNumber.toUpperCase().startsWith('PENDING') && c.status !== 'pending_approval')).length;
+                const activeCount = consumers.filter(c => c.status === 'active' && Boolean(c.accountNumber && !c.accountNumber.toUpperCase().startsWith('PENDING') && !isPendingConsumerStatus(c.status))).length;
                 const disconnectionCount = consumers.filter(c => c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice').length;
-                const pendingCount = consumers.filter(c => !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || c.status === 'pending_approval').length;
+                const pendingCount = consumers.filter(c => !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || isPendingConsumerStatus(c.status)).length;
                 const blockedCount = consumers.filter(c => c.status === 'blocked').length;
                 const inactiveCount = consumers.filter(c => c.status === 'inactive' || c.status === 'archived').length;
                 const hasActiveFilters = Boolean(
@@ -4559,9 +5271,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   setConsumerSortBy('recent');
                 };
 
-                // Real-time System Audit: Detect duplicate Account Numbers, RFID Tags, Meter Tags, and Phone Numbers
+                // Real-time System Audit: Detect duplicate Account Numbers, Meter Tags, and Phone Numbers
                 const accMap = new Map<string, Consumer[]>();
-                const rfidMap = new Map<string, Consumer[]>();
                 const meterMap = new Map<string, Consumer[]>();
                 const phoneMap = new Map<string, Consumer[]>();
 
@@ -4571,13 +5282,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     const list = accMap.get(acc) || [];
                     list.push(c);
                     accMap.set(acc, list);
-                  }
-
-                  const rfid = (c.rfidTag || '').trim().toUpperCase();
-                  if (rfid && !rfid.startsWith('PENDING') && rfid !== 'UNASSIGNED') {
-                    const list = rfidMap.get(rfid) || [];
-                    list.push(c);
-                    rfidMap.set(rfid, list);
                   }
 
                   const meter = (c.meterNumber || '').trim().toUpperCase();
@@ -4600,11 +5304,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   if (list.length > 1) duplicateAccounts.add(acc);
                 });
 
-                const duplicateRfids = new Set<string>();
-                rfidMap.forEach((list, rfid) => {
-                  if (list.length > 1) duplicateRfids.add(rfid);
-                });
-
                 const duplicateMeters = new Set<string>();
                 meterMap.forEach((list, meter) => {
                   if (list.length > 1) duplicateMeters.add(meter);
@@ -4615,7 +5314,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   if (list.length > 1) duplicatePhones.add(phone);
                 });
 
-                const hasAnyDuplicate = duplicateAccounts.size > 0 || duplicateRfids.size > 0 || duplicateMeters.size > 0 || duplicatePhones.size > 0;
+                const hasAnyDuplicate = duplicateAccounts.size > 0 || duplicateMeters.size > 0 || duplicatePhones.size > 0;
 
                 return (
                   <>
@@ -4637,9 +5336,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       <div className="flex items-center gap-2.5 self-start md:self-auto shrink-0 flex-wrap">
                         <button
                           onClick={() => {
-                            const headers = ['Name', 'Email', 'Phone', 'Barangay', 'Sitio / Zone', 'Classification', 'Status', 'Account Number', 'Meter Number', 'RFID Tag', 'Address', 'Outstanding Balance'];
+                            const headers = ['Name', 'Email', 'Phone', 'Barangay', 'Sitio / Zone', 'Classification', 'Status', 'Account Number', 'Meter Tag Number', 'Address', 'Outstanding Balance'];
                             const rows = filteredConsumers.map(c => [
-                              c.name, c.email, c.contactNumber, c.barangay || '', c.sitioZone || '', c.consumerType || 'Residential', c.status.toUpperCase(), c.accountNumber, c.meterNumber, c.rfidTag || '', c.address, c.outstandingBalance || 0
+                              c.name, c.email, c.contactNumber, c.barangay || '', c.sitioZone || '', c.consumerType || 'Residential', c.status.toUpperCase(), c.accountNumber, c.meterNumber, c.address, c.outstandingBalance || 0
                             ]);
                             exportToCsv('twd_consumers_master_export.csv', headers, rows);
                           }}
@@ -4666,9 +5365,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               </span>
                             </h4>
                             <p className="text-[11px] text-rose-200 mt-1 max-w-3xl leading-relaxed">
-                              Tagoloan Water District system policy strictly prohibits duplicate Account Numbers, Meter Serial Tags, or RFID Tags.
+                              Tagoloan Water District system policy strictly prohibits duplicate Account Numbers or Meter Tag Numbers.
                               {duplicateAccounts.size > 0 && ` Conflicting Account Number(s): ${Array.from(duplicateAccounts).join(', ')}.`}
-                              {duplicateRfids.size > 0 && ` Conflicting RFID Tag(s): ${Array.from(duplicateRfids).join(', ')}.`}
                               {duplicateMeters.size > 0 && ` Conflicting Meter Tag(s): ${Array.from(duplicateMeters).join(', ')}.`}
                               {duplicatePhones.size > 0 && ` Conflicting Phone Number(s): ${Array.from(duplicatePhones).join(', ')}.`}
                               {' '}Please re-issue unique identifiers to maintain data integrity.
@@ -4683,7 +5381,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <ShieldCheck className="h-4 w-4" />
                           </div>
                           <div className="text-xs text-emerald-200">
-                            <strong className="text-white font-bold">Uniqueness Verification:</strong> All Account Numbers, Smart RFID Tags, and Meter Serial Tags are 100% unique. Duplicate identifiers are strictly forbidden.
+                            <strong className="text-white font-bold">Uniqueness Verification:</strong> All Account Numbers and Meter Tag Numbers are 100% unique. Duplicate identifiers are strictly forbidden.
                           </div>
                         </div>
                         <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full shrink-0">
@@ -5041,7 +5739,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               <tr>
                                 <th className="px-4 py-3.5 whitespace-nowrap min-w-[190px]">Consumer Details</th>
                                 <th className="px-3 py-3.5 whitespace-nowrap min-w-[170px]">Official Account #</th>
-                                <th className="px-3 py-3.5 whitespace-nowrap min-w-[190px]">Tag Numbers (Meter & RFID)</th>
+                                <th className="px-3 py-3.5 whitespace-nowrap min-w-[160px]">Meter Tag Number</th>
                                 <th className="px-3 py-3.5 text-center whitespace-nowrap min-w-[120px]">Classification</th>
                                 <th className="px-3 py-3.5 whitespace-nowrap min-w-[120px]">Phone (11 Digits)</th>
                                 <th className="px-3 py-3.5 whitespace-nowrap min-w-[140px]">Barangay & Sitio</th>
@@ -5055,21 +5753,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 return paginatedConsumers.map((c, cIdx) => {
                                 const addrParts = c.address.split(',').map(p => p.trim());
                                 const barangayDisplay = c.barangay || (addrParts.length >= 2 ? addrParts[1] : c.address);
-                                const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || c.status === 'pending_approval';
+                                const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || isPendingConsumerStatus(c.status);
+                                const rowGate = isPending ? canAdminIssueIdentifiersForConsumer(c, installationRequests) : null;
 
                                 const isDupAccount = Boolean(c.accountNumber && !c.accountNumber.toUpperCase().startsWith('PENDING') && duplicateAccounts.has(c.accountNumber.trim().toUpperCase()));
                                 const isDupMeter = Boolean(c.meterNumber && !c.meterNumber.toUpperCase().startsWith('PENDING') && c.meterNumber !== 'UNASSIGNED' && duplicateMeters.has(c.meterNumber.trim().toUpperCase()));
-                                const isDupRfid = Boolean(c.rfidTag && !c.rfidTag.toUpperCase().startsWith('PENDING') && c.rfidTag !== 'UNASSIGNED' && duplicateRfids.has(c.rfidTag.trim().toUpperCase()));
                                 const isDupPhone = Boolean(c.contactNumber && duplicatePhones.has(normalizePhoneNumber(c.contactNumber)));
 
                                 return (
                                   <tr 
                                     key={`cons-row-${c.accountNumber || c.email || c.name || cIdx}-${cIdx}`} 
                                     className={`transition-colors ${
-                                      isDupAccount || isDupMeter || isDupRfid || isDupPhone
-                                        ? 'bg-rose-950/40 hover:bg-rose-900/50 border-l-4 border-l-rose-500'
+                                      isDupAccount || isDupMeter || isDupPhone
+                                        ? 'bg-rose-950/40 hover:bg-rose-900/50'
                                         : isPending 
-                                          ? 'bg-amber-950/25 hover:bg-amber-950/45 border-l-4 border-l-amber-500' 
+                                          ? 'bg-amber-950/25 hover:bg-amber-950/45' 
                                           : 'bg-slate-900/90 hover:bg-slate-850'
                                     }`}
                                   >
@@ -5086,6 +5784,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                       <div className="font-mono text-[10px] text-slate-400 truncate max-w-[180px]" title={c.email}>
                                         {c.email}
                                       </div>
+                                      {c.applicationNumber && (
+                                        <div className="font-mono tabular-nums text-[10px] text-sky-400 truncate max-w-[180px]">
+                                          App: {c.applicationNumber}
+                                        </div>
+                                      )}
                                     </td>
 
                                     {/* 2. Official Account # (Strictly Unique) */}
@@ -5106,6 +5809,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                             </div>
                                           )}
                                         </div>
+                                      ) : rowGate && !rowGate.allowed ? (
+                                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-amber-500/40 text-amber-300 shadow-xs">
+                                          <Lock className="w-3 h-3 text-amber-400 shrink-0" />
+                                          <span className="font-bold text-amber-200 text-[11px] tracking-wide">
+                                            {c.status === 'installation_not_scheduled' ? 'Not Scheduled Yet' : 'Awaiting Meter Install'}
+                                          </span>
+                                        </div>
                                       ) : (
                                         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-300 shadow-xs">
                                           <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
@@ -5114,7 +5824,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                       )}
                                     </td>
 
-                                    {/* 3. Tag Numbers (Meter Tag & RFID Tag - Strictly Unique) */}
+                                    {/* 3. Meter Tag Number (Strictly Unique) */}
                                     <td className="px-3 py-3.5 whitespace-nowrap">
                                       <div className="space-y-1.5">
                                         <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold">
@@ -5132,24 +5842,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-600 text-white text-[8px] font-black w-fit">
                                             <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
                                             <span>DUPLICATE METER TAG</span>
-                                          </div>
-                                        )}
-
-                                        <div className="flex items-center gap-1.5 text-[10px] font-mono font-semibold">
-                                          <Tag className="h-3.5 w-3.5 text-purple-400 shrink-0" />
-                                          <span className="text-slate-400 font-medium text-[9px]">RFID:</span>
-                                          {c.rfidTag && c.rfidTag !== 'Pending' && c.rfidTag !== 'UNASSIGNED' ? (
-                                            <span className="font-bold text-purple-300 bg-purple-950/60 px-1.5 py-0.5 rounded border border-purple-700/60">{c.rfidTag}</span>
-                                          ) : (
-                                            <span className="font-bold text-purple-300/90 bg-purple-950/40 px-1.5 py-0.5 rounded border border-purple-800/60 text-[9px]">
-                                              Pending RFID
-                                            </span>
-                                          )}
-                                        </div>
-                                        {isDupRfid && (
-                                          <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-600 text-white text-[8px] font-black w-fit">
-                                            <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
-                                            <span>DUPLICATE RFID TAG</span>
                                           </div>
                                         )}
                                       </div>
@@ -5209,7 +5901,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                       <div className="flex flex-col items-center justify-center space-y-1">
                                         <span className={`inline-block px-2.5 py-0.5 rounded text-[9px] font-black uppercase border shrink-0 ${
                                           isPending
-                                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-xs'
+                                            ? rowGate?.latestRequest?.status === 'Installed'
+                                              ? 'bg-emerald-950/60 text-emerald-300 border-emerald-700/70'
+                                              : 'bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-xs'
                                             : c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice'
                                             ? 'bg-rose-700 text-white border-rose-800 shadow-xs ring-1 ring-rose-500 font-black animate-pulse'
                                             : c.status === 'blocked'
@@ -5220,8 +5914,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                         }`}>
                                           {c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice'
                                             ? 'DISCONNECTION NOTICE'
-                                            : isPending 
-                                            ? 'PENDING ID' 
+                                            : isPending
+                                            ? rowGate?.latestRequest?.status === 'Installed'
+                                              ? 'INSTALLED · VALIDATE'
+                                              : c.status === 'installation_not_scheduled'
+                                              ? 'NOT SCHEDULED'
+                                              : c.status === 'pending_installation' || (rowGate && !rowGate.allowed)
+                                              ? 'PENDING INSTALL'
+                                              : 'PENDING ID'
                                             : c.status.toUpperCase()}
                                         </span>
                                         {(c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice') && (
@@ -5239,31 +5939,84 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     <td className="px-4 py-3.5 text-right whitespace-nowrap">
                                       <div className="flex items-center justify-end space-x-1.5 shrink-0">
                                         {isPending ? (
-                                          <button 
-                                            onClick={() => handleOpenConsumerModal(c, 'issue_ids')}
-                                            className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-sm cursor-pointer shrink-0"
-                                            title="Issue Official Account Number, Meter & RFID Tag"
-                                          >
-                                            <ShieldCheck className="h-3.5 w-3.5 text-white" />
-                                            <span className="text-white font-bold">Issue IDs</span>
-                                          </button>
+                                          rowGate && !rowGate.allowed ? (
+                                            <>
+                                              {rowGate.latestRequest ? (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    setActiveTab('meters');
+                                                    setMetersSubTab('installations');
+                                                    setSelectedInstallationRequestId(rowGate.latestRequest!.id);
+                                                  }}
+                                                  className="px-2.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-sm cursor-pointer shrink-0 whitespace-nowrap"
+                                                  title="Manage Water Meter Installation Schedule first"
+                                                >
+                                                  <Wrench className="h-3.5 w-3.5 text-white shrink-0" />
+                                                  <span>Manage Install</span>
+                                                </button>
+                                              ) : (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleOpenConsumerModal(c, 'issue_ids')}
+                                                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 font-bold rounded-lg text-xs flex items-center space-x-1 transition cursor-pointer shrink-0 whitespace-nowrap"
+                                                  title="Installation not yet confirmed — ID issuance locked"
+                                                >
+                                                  <Lock className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                                                  <span>IDs Locked</span>
+                                                </button>
+                                              )}
+                                              <button
+                                                type="button"
+                                                onClick={() => handleOpenConsumerModal(c, 'view')}
+                                                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold rounded-lg text-xs flex items-center space-x-1 transition cursor-pointer shrink-0 whitespace-nowrap"
+                                                title="View Consumer Details"
+                                              >
+                                                <Eye className="h-3.5 w-3.5 shrink-0" />
+                                                <span>View</span>
+                                              </button>
+                                            </>
+                                          ) : rowGate?.latestRequest && rowGate.latestRequest.accountValidationStatus !== 'validated' ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setActiveTab('meters');
+                                                setMetersSubTab('installations');
+                                                setSelectedInstallationRequestId(rowGate.latestRequest!.id);
+                                              }}
+                                              className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-sm cursor-pointer shrink-0 whitespace-nowrap"
+                                              title="Validate Installed Meter, Record Serial Number & Issue Official IDs"
+                                            >
+                                              <ShieldCheck className="h-3.5 w-3.5 text-white shrink-0" />
+                                              <span>Validate &amp; Issue IDs</span>
+                                            </button>
+                                          ) : (
+                                            <button 
+                                              onClick={() => handleOpenConsumerModal(c, 'issue_ids')}
+                                              className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-sm cursor-pointer shrink-0 whitespace-nowrap"
+                                              title="Issue Official Account Number & Meter Tag Number"
+                                            >
+                                              <ShieldCheck className="h-3.5 w-3.5 text-white shrink-0" />
+                                              <span className="text-white font-bold">Issue IDs</span>
+                                            </button>
+                                          )
                                         ) : (
                                           <button 
                                             onClick={() => handleOpenConsumerModal(c, 'view')}
-                                            className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-sm cursor-pointer shrink-0"
+                                            className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-sm cursor-pointer shrink-0 whitespace-nowrap"
                                             title="View Consumer Details"
                                           >
-                                            <Eye className="h-3.5 w-3.5 text-white" />
+                                            <Eye className="h-3.5 w-3.5 text-white shrink-0" />
                                             <span className="text-white font-bold">View</span>
                                           </button>
                                         )}
 
                                         <button 
                                           onClick={() => handleDeleteConsumer(c)}
-                                          className="px-2.5 py-1.5 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition border border-rose-500/30 cursor-pointer shrink-0"
+                                          className="px-2.5 py-1.5 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition border border-rose-500/30 cursor-pointer shrink-0 whitespace-nowrap"
                                           title={`Delete Consumer Record`}
                                         >
-                                          <Trash2 className="h-3.5 w-3.5" />
+                                          <Trash2 className="h-3.5 w-3.5 shrink-0" />
                                           <span className="font-bold">Delete</span>
                                         </button>
                                       </div>
@@ -5750,335 +6503,453 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           })()}
 
 
-          {/* 4. WATER METER REGISTRATION & MANAGEMENT */}
+          {/* 4. WATER METER REGISTRATION, INVENTORY & NEW CONSUMER INSTALLATIONS */}
           {activeTab === 'meters' && (
             <div className="space-y-6 animate-fade-in" id="meters-tab">
-              {/* Header */}
-              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="flex items-center space-x-3.5">
-                  <div className="p-3 bg-blue-950/60 text-blue-400 rounded-2xl border border-blue-800/70">
-                    <Gauge className="h-6 w-6" />
-                  </div>
-                  <div>
-                    <h3 className="text-base sm:text-lg font-black text-white uppercase tracking-wider font-sans">Mechanical Water Meter Catalog & Hardware Inventory</h3>
-                    <p className="text-xs text-slate-400 font-medium mt-0.5">Track serial numbers, hardware brands, installation telemetry, and linked consumer accounts</p>
-                  </div>
-                </div>
-
-                <div className="flex items-center space-x-2.5">
+              {/* Sub-Module Segmented Navigation */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 shadow-lg">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={() => setShowAddMeter(!showAddMeter)}
-                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition flex items-center space-x-2 shadow-xs cursor-pointer active:scale-95"
+                    onClick={() => setMetersSubTab('inventory')}
+                    className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 ${
+                      metersSubTab === 'inventory'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
                   >
-                    <Plus className="h-4 w-4" />
-                    <span>{showAddMeter ? 'Close Form' : 'Register Mechanical Meter'}</span>
+                    <Gauge className="h-4 w-4 shrink-0" />
+                    <span>Physical Meter Inventory &amp; Status</span>
+                    <span className="font-mono tabular-nums text-[11px] opacity-85">({meters.length})</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setMetersSubTab('installations')}
+                    className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 ${
+                      metersSubTab === 'installations'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <Wrench className="h-4 w-4 shrink-0" />
+                    <span>Installation Requests &amp; Account Validation</span>
+                    <span className="font-mono tabular-nums text-[11px] opacity-85">({installationRequests.length})</span>
+                    {pendingInstallationsCount > 0 && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 font-mono tabular-nums font-black text-[10px]">
+                        {pendingInstallationsCount} action
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                <div className="text-[11px] text-slate-400 px-2 hidden lg:block">
+                  Water Meter Serial Numbers are strictly restricted to this module.
                 </div>
               </div>
 
-              {/* Add Meter Form */}
-              {showAddMeter && (
-                <form onSubmit={handleCreateMeter} className="bg-slate-900 border border-blue-500/40 p-6 rounded-3xl shadow-2xl space-y-4 max-w-3xl animate-slide-down">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <h4 className="text-sm font-bold uppercase text-white flex items-center gap-2">
-                      <Plus className="w-4 h-4 text-blue-400" />
-                      Register New Water Meter Hardware
-                    </h4>
-                    <span className="text-[11px] text-slate-400 font-medium">Step 1 of 1</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Meter Serial Number *</label>
-                      <input 
-                        type="text" 
-                        required
-                        placeholder="e.g. MT-8844"
-                        value={newMeter.meterNumber}
-                        onChange={(e) => setNewMeter({ ...newMeter, meterNumber: e.target.value })}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Manufacturer / Brand *</label>
-                      <input 
-                        type="text" 
-                        required
-                        placeholder="e.g. NBI WaterTech / Kent"
-                        value={newMeter.brand}
-                        onChange={(e) => setNewMeter({ ...newMeter, brand: e.target.value })}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Linked Account Number</label>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. 1001-A (optional)"
-                        value={newMeter.linkedAccountNumber}
-                        onChange={(e) => setNewMeter({ ...newMeter, linkedAccountNumber: e.target.value })}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex justify-end space-x-2 pt-3 border-t border-slate-800">
-                    <button 
-                      type="button" 
-                      onClick={() => setShowAddMeter(false)} 
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-xs font-bold text-slate-300 transition cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      type="submit" 
-                      className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer active:scale-95"
-                    >
-                      Insert Water Meter
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              {/* Meter Summary & Filter Chips */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <button
-                  type="button"
-                  onClick={() => setMeterStatusFilter('all')}
-                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
-                    meterStatusFilter === 'all'
-                      ? 'bg-slate-800 border-blue-500 ring-2 ring-blue-500/20 shadow-md'
-                      : 'bg-slate-900 border-slate-800 hover:bg-slate-800/80'
-                  }`}
-                >
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Total Meters</span>
-                  <span className="text-xl sm:text-2xl font-black text-white">{meters.length}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setMeterStatusFilter('active')}
-                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
-                    meterStatusFilter === 'active'
-                      ? 'bg-emerald-950/80 border-emerald-500 ring-2 ring-emerald-500/20 shadow-md'
-                      : 'bg-emerald-950/40 border-emerald-900/60 hover:bg-emerald-900/50'
-                  }`}
-                >
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 block">Active & Deployed</span>
-                  <span className="text-xl sm:text-2xl font-black text-emerald-300">{meters.filter(m => m.status === 'active').length}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setMeterStatusFilter('damaged')}
-                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
-                    meterStatusFilter === 'damaged'
-                      ? 'bg-rose-950/80 border-rose-500 ring-2 ring-rose-500/20 shadow-md'
-                      : 'bg-rose-950/40 border-rose-900/60 hover:bg-rose-900/50'
-                  }`}
-                >
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-rose-400 block">Damaged / Faulty</span>
-                  <span className="text-xl sm:text-2xl font-black text-rose-300">{meters.filter(m => m.status === 'damaged').length}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setMeterStatusFilter('maintenance')}
-                  className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
-                    meterStatusFilter === 'maintenance' || meterStatusFilter === 'inactive'
-                      ? 'bg-amber-950/80 border-amber-500 ring-2 ring-amber-500/20 shadow-md'
-                      : 'bg-amber-950/40 border-amber-900/60 hover:bg-amber-900/50'
-                  }`}
-                >
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400 block">Under Maintenance</span>
-                  <span className="text-xl sm:text-2xl font-black text-amber-300">{meters.filter(m => m.status === 'maintenance' || m.status === 'inactive').length}</span>
-                </button>
-              </div>
-
-              {/* Search and Filters Bar & Meter List Table */}
-              {(() => {
-                const filteredMetersList = meters.filter((m) => {
-                  if (meterStatusFilter !== 'all') {
-                    if (meterStatusFilter === 'maintenance' && m.status !== 'maintenance' && m.status !== 'inactive') return false;
-                    if (meterStatusFilter !== 'maintenance' && m.status !== meterStatusFilter) return false;
-                  }
-                  const linkedConsumer = consumers.find(c => c.accountNumber === m.linkedAccountNumber);
-                  return smartMatch(meterSearch, [
-                    m.meterNumber,
-                    m.brand,
-                    m.linkedAccountNumber,
-                    m.installationDate,
-                    m.status,
-                    linkedConsumer?.name,
-                    linkedConsumer?.barangay,
-                    linkedConsumer?.consumerType
-                  ]);
-                });
-                const paginatedMeters = filteredMetersList.slice((meterPage - 1) * 10, meterPage * 10);
-
-                return (
-                  <>
-                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center gap-3">
-                      <div className="flex-1 w-full">
-                        <SmartSearchBar
-                          variant="dark"
-                          value={meterSearch}
-                          onChange={setMeterSearch}
-                          resultCount={filteredMetersList.length}
-                          totalCount={meters.length}
-                          placeholder="Smart search meter serial, brand, linked account #, consumer name, or barangay..."
-                          id="admin-meters-smart-search"
-                        />
+              {metersSubTab === 'installations' ? (
+                <WaterMeterInstallationsManager
+                  requests={installationRequests}
+                  consumers={consumers}
+                  barangays={barangayList}
+                  adminUser={currentUser}
+                  initialSelectedRequestId={selectedInstallationRequestId}
+                  onClearInitialSelection={() => setSelectedInstallationRequestId(null)}
+                  onRefreshData={() => loadAllDataFromStore(false)}
+                />
+              ) : (
+                <>
+                  {/* Header */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="flex items-center space-x-3.5">
+                      <div className="p-3 bg-blue-950/60 text-blue-400 rounded-2xl border border-blue-800/70">
+                        <Gauge className="h-6 w-6" />
                       </div>
+                      <div>
+                        <h3 className="text-base sm:text-lg font-black text-white uppercase tracking-wider font-sans">Mechanical Water Meter Catalog &amp; Hardware Inventory</h3>
+                        <p className="text-xs text-slate-400 font-medium mt-0.5">Track physical serial numbers, official meter tag numbers, hardware brands, and linked consumer accounts</p>
+                      </div>
+                    </div>
 
-                      <div className="flex items-center gap-2 w-full sm:w-auto">
-                        <select
-                          value={meterStatusFilter}
-                          onChange={(e) => setMeterStatusFilter(e.target.value as any)}
-                          className="min-h-[42px] bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer w-full sm:w-auto"
+                    <div className="flex items-center space-x-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setShowAddMeter(!showAddMeter)}
+                        className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition flex items-center space-x-2 shadow-xs cursor-pointer active:scale-95 whitespace-nowrap shrink-0"
+                      >
+                        <Plus className="h-4 w-4" />
+                        <span>{showAddMeter ? 'Close Form' : 'Register Mechanical Meter'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Add Meter Form */}
+                  {showAddMeter && (
+                    <form onSubmit={handleCreateMeter} className="bg-slate-900 border border-blue-500/40 p-6 rounded-3xl shadow-2xl space-y-4 max-w-4xl animate-slide-down">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                        <h4 className="text-sm font-bold uppercase text-white flex items-center gap-2">
+                          <Plus className="w-4 h-4 text-blue-400" />
+                          Register New Water Meter Hardware
+                        </h4>
+                        <span className="text-[11px] text-slate-400 font-medium">Water Meters Hardware Registry</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Meter Tag Number *</label>
+                          <input 
+                            type="text" 
+                            required
+                            placeholder="e.g. MT-8844"
+                            value={newMeter.meterNumber}
+                            onChange={(e) => setNewMeter({ ...newMeter, meterNumber: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-mono tabular-nums font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Water Meter Serial Number *</label>
+                          <input 
+                            type="text" 
+                            required
+                            placeholder="e.g. SN-TWD-2026-0001"
+                            value={newMeter.serialNumber}
+                            onChange={(e) => setNewMeter({ ...newMeter, serialNumber: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-mono tabular-nums font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Manufacturer / Brand *</label>
+                          <input 
+                            type="text" 
+                            required
+                            placeholder="e.g. NBI WaterTech / Kent"
+                            value={newMeter.brand}
+                            onChange={(e) => setNewMeter({ ...newMeter, brand: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Linked Account Number</label>
+                          <input 
+                            type="text" 
+                            placeholder="e.g. BRG-01-1001 (optional)"
+                            value={newMeter.linkedAccountNumber}
+                            onChange={(e) => setNewMeter({ ...newMeter, linkedAccountNumber: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-mono tabular-nums font-medium text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end space-x-2 pt-3 border-t border-slate-800">
+                        <button 
+                          type="button" 
+                          onClick={() => setShowAddMeter(false)} 
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-xs font-bold text-slate-300 transition cursor-pointer whitespace-nowrap shrink-0"
                         >
-                          <option value="all">All Meter Statuses</option>
-                          <option value="active">Active Only</option>
-                          <option value="damaged">Damaged Only</option>
-                          <option value="maintenance">Maintenance Only</option>
-                          <option value="inactive">Inactive Only</option>
-                        </select>
-
-                        {(meterSearch || meterStatusFilter !== 'all') && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setMeterSearch('');
-                              setMeterStatusFilter('all');
-                            }}
-                            className="min-h-[42px] px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer whitespace-nowrap shrink-0 border border-slate-700"
-                          >
-                            Reset
-                          </button>
-                        )}
+                          Cancel
+                        </button>
+                        <button 
+                          type="submit" 
+                          className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer active:scale-95 whitespace-nowrap shrink-0"
+                        >
+                          Insert Water Meter
+                        </button>
                       </div>
-                    </div>
+                    </form>
+                  )}
 
-                    <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs text-left border-collapse">
-                        <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[11px] tracking-wider border-b border-slate-800">
-                          <tr>
-                            <th className="px-4 py-3.5 whitespace-nowrap">Meter Serial</th>
-                            <th className="px-4 py-3.5 min-w-[170px]">Brand / Manufacturer</th>
-                            <th className="px-4 py-3.5 whitespace-nowrap">Installation Date</th>
-                            <th className="px-4 py-3.5 min-w-[180px]">Linked Consumer Account</th>
-                            <th className="px-4 py-3.5 whitespace-nowrap text-center">Operational Status</th>
-                            <th className="px-4 py-3.5 whitespace-nowrap text-right min-w-[140px]">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
-                          {filteredMetersList.length === 0 ? (
-                            <tr>
-                              <td colSpan={6} className="px-6 py-12 text-center text-slate-500 text-xs">
-                                No water meters found matching your filter criteria.
-                              </td>
-                            </tr>
-                          ) : (
-                            paginatedMeters.map((m, mIdx) => {
-                              const linkedConsumer = consumers.find(c => c.accountNumber === m.linkedAccountNumber);
-                              return (
-                                <tr key={`meter-inv-${m.meterNumber || mIdx}-${mIdx}`} className="hover:bg-slate-800/60 transition-colors">
-                                  {/* Serial */}
-                                  <td className="px-4 py-3.5 whitespace-nowrap">
-                                    <div className="flex items-center gap-1.5 font-mono text-white font-black text-xs">
-                                      <Tag className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                                      <span>{m.meterNumber}</span>
-                                    </div>
+                  {/* Meter Summary & Filter Chips */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setMeterStatusFilter('all')}
+                      className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                        meterStatusFilter === 'all'
+                          ? 'bg-slate-800 border-blue-500 ring-2 ring-blue-500/20 shadow-md'
+                          : 'bg-slate-900 border-slate-800 hover:bg-slate-800/80'
+                      }`}
+                    >
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Total Meters</span>
+                      <span className="text-xl sm:text-2xl font-black font-mono tabular-nums text-white">{meters.length}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setMeterStatusFilter('active')}
+                      className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                        meterStatusFilter === 'active'
+                          ? 'bg-emerald-950/80 border-emerald-500 ring-2 ring-emerald-500/20 shadow-md'
+                          : 'bg-emerald-950/40 border-emerald-900/60 hover:bg-emerald-900/50'
+                      }`}
+                    >
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 block">Active</span>
+                      <span className="text-xl sm:text-2xl font-black font-mono tabular-nums text-emerald-300">{meters.filter(m => m.status === 'active').length}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setMeterStatusFilter('inactive')}
+                      className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                        meterStatusFilter === 'inactive'
+                          ? 'bg-slate-800 border-slate-400 ring-2 ring-slate-400/20 shadow-md'
+                          : 'bg-slate-900/90 border-slate-700/80 hover:bg-slate-800/70'
+                      }`}
+                    >
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300 block">Inactive</span>
+                      <span className="text-xl sm:text-2xl font-black font-mono tabular-nums text-slate-200">{meters.filter(m => m.status === 'inactive').length}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setMeterStatusFilter('damaged')}
+                      className={`p-3.5 rounded-2xl border text-left transition cursor-pointer ${
+                        meterStatusFilter === 'damaged'
+                          ? 'bg-rose-950/80 border-rose-500 ring-2 ring-rose-500/20 shadow-md'
+                          : 'bg-rose-950/40 border-rose-900/60 hover:bg-rose-900/50'
+                      }`}
+                    >
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-rose-400 block">Damaged</span>
+                      <span className="text-xl sm:text-2xl font-black font-mono tabular-nums text-rose-300">{meters.filter(m => m.status === 'damaged').length}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setMeterStatusFilter('maintenance')}
+                      className={`p-3.5 rounded-2xl border text-left transition cursor-pointer col-span-2 sm:col-span-1 ${
+                        meterStatusFilter === 'maintenance'
+                          ? 'bg-amber-950/80 border-amber-500 ring-2 ring-amber-500/20 shadow-md'
+                          : 'bg-amber-950/40 border-amber-900/60 hover:bg-amber-900/50'
+                      }`}
+                    >
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400 block">Under Maintenance</span>
+                      <span className="text-xl sm:text-2xl font-black font-mono tabular-nums text-amber-300">{meters.filter(m => m.status === 'maintenance').length}</span>
+                    </button>
+                  </div>
+
+                  {/* Search and Filters Bar & Meter List Table */}
+                  {(() => {
+                    const filteredMetersList = meters.filter((m) => {
+                      if (meterStatusFilter !== 'all' && m.status !== meterStatusFilter) {
+                        return false;
+                      }
+                      const linkedConsumer = resolveLinkedConsumerForMeter(m, consumers);
+                      return smartMatch(meterSearch, [
+                        m.meterNumber,
+                        m.serialNumber,
+                        m.brand,
+                        m.linkedAccountNumber || linkedConsumer?.accountNumber,
+                        m.installationDate,
+                        m.status,
+                        formatMeterStatusLabel(m.status),
+                        m.remarks,
+                        linkedConsumer?.name,
+                        linkedConsumer?.barangay,
+                        linkedConsumer?.consumerType
+                      ]);
+                    });
+                    const paginatedMeters = filteredMetersList.slice((meterPage - 1) * 10, meterPage * 10);
+
+                    return (
+                      <>
+                        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center gap-3">
+                          <div className="flex-1 w-full">
+                            <SmartSearchBar
+                              variant="dark"
+                              value={meterSearch}
+                              onChange={setMeterSearch}
+                              resultCount={filteredMetersList.length}
+                              totalCount={meters.length}
+                              placeholder="Smart search meter tag #, physical serial #, brand, linked account #, consumer name, status, or remarks..."
+                              id="admin-meters-smart-search"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-2 w-full sm:w-auto">
+                            <select
+                              value={meterStatusFilter}
+                              onChange={(e) => setMeterStatusFilter(e.target.value as any)}
+                              className="min-h-[42px] bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer w-full sm:w-auto"
+                            >
+                              <option value="all">All Meter Statuses</option>
+                              <option value="active">Active Only</option>
+                              <option value="inactive">Inactive Only</option>
+                              <option value="damaged">Damaged Only</option>
+                              <option value="maintenance">Under Maintenance Only</option>
+                            </select>
+
+                            {(meterSearch || meterStatusFilter !== 'all') && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMeterSearch('');
+                                  setMeterStatusFilter('all');
+                                }}
+                                className="min-h-[42px] px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer whitespace-nowrap shrink-0 border border-slate-700"
+                              >
+                                Reset
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs text-left border-collapse">
+                            <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[11px] tracking-wider border-b border-slate-800">
+                              <tr>
+                                <th className="px-4 py-3.5 whitespace-nowrap">Meter Tag #</th>
+                                <th className="px-4 py-3.5 whitespace-nowrap">Water Meter Serial #</th>
+                                <th className="px-4 py-3.5 min-w-[150px]">Brand / Manufacturer</th>
+                                <th className="px-4 py-3.5 whitespace-nowrap">Installation Date</th>
+                                <th className="px-4 py-3.5 min-w-[185px]">Linked Consumer Account</th>
+                                <th className="px-4 py-3.5 whitespace-nowrap text-center min-w-[160px]">Operational Status</th>
+                                <th className="px-4 py-3.5 whitespace-nowrap text-right min-w-[175px]">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
+                              {filteredMetersList.length === 0 ? (
+                                <tr>
+                                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500 text-xs">
+                                    No water meters found matching your filter criteria.
                                   </td>
+                                </tr>
+                              ) : (
+                                paginatedMeters.map((m, mIdx) => {
+                                  const linkedConsumer = resolveLinkedConsumerForMeter(m, consumers);
+                                  const displayAccountNumber = m.linkedAccountNumber || linkedConsumer?.accountNumber;
+                                  const statusNorm = normalizeMeterStatus(m.status);
+                                  const statusLabel = formatMeterStatusLabel(statusNorm);
+                                  return (
+                                    <tr key={`meter-inv-${m.meterNumber || mIdx}-${mIdx}`} className="hover:bg-slate-800/60 transition-colors">
+                                      {/* Meter Tag # */}
+                                      <td className="px-4 py-3.5 whitespace-nowrap">
+                                        <div className="flex items-center gap-1.5 font-mono tabular-nums text-white font-black text-xs">
+                                          <Tag className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                          <span>{m.meterNumber}</span>
+                                        </div>
+                                      </td>
 
-                                  {/* Brand */}
-                                  <td className="px-4 py-3.5">
-                                    <span className="font-bold text-slate-200 text-xs block">{m.brand}</span>
-                                    <span className="text-[10px] text-slate-400">Mechanical Meter</span>
-                                  </td>
+                                      {/* Physical Water Meter Serial # (Restricted strictly to Water Meters module) */}
+                                      <td className="px-4 py-3.5 whitespace-nowrap">
+                                        {m.serialNumber ? (
+                                          <span className="font-mono tabular-nums text-xs font-bold text-indigo-300">
+                                            {m.serialNumber}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[11px] text-slate-500 font-mono">—</span>
+                                        )}
+                                      </td>
 
-                                  {/* Date */}
-                                  <td className="px-4 py-3.5 font-sans text-slate-400 whitespace-nowrap text-xs">
-                                    {m.installationDate || 'N/A'}
-                                  </td>
+                                      {/* Brand */}
+                                      <td className="px-4 py-3.5">
+                                        <span className="font-bold text-slate-200 text-xs block">{m.brand}</span>
+                                        <span className="text-[10px] text-slate-400">Mechanical Meter</span>
+                                      </td>
 
-                                  {/* Linked Consumer */}
-                                  <td className="px-4 py-3.5">
-                                    {m.linkedAccountNumber ? (
-                                      <div className="flex flex-col gap-0.5">
-                                        <div className="flex items-center gap-1.5">
-                                          <span className="font-mono font-bold text-sky-400 text-xs">#{m.linkedAccountNumber}</span>
-                                          {linkedConsumer?.consumerType && (
-                                            <span className="px-1.5 py-0.2 bg-slate-800 text-slate-300 rounded text-[9px] font-sans border border-slate-700">
-                                              {linkedConsumer.consumerType}
+                                      {/* Date */}
+                                      <td className="px-4 py-3.5 font-mono tabular-nums text-slate-400 whitespace-nowrap text-xs">
+                                        {m.installationDate || 'N/A'}
+                                      </td>
+
+                                      {/* Linked Consumer */}
+                                      <td className="px-4 py-3.5">
+                                        {displayAccountNumber ? (
+                                          <div className="flex flex-col gap-0.5">
+                                            <div className="flex items-center gap-1.5">
+                                              <span className="font-mono tabular-nums font-bold text-sky-400 text-xs">#{displayAccountNumber}</span>
+                                              {linkedConsumer?.consumerType && (
+                                                <span className="px-1.5 py-0.2 bg-slate-800 text-slate-300 rounded text-[9px] font-sans border border-slate-700">
+                                                  {linkedConsumer.consumerType}
+                                                </span>
+                                              )}
+                                            </div>
+                                            <span className="text-white font-semibold text-[11px] truncate max-w-[190px]" title={linkedConsumer?.name}>
+                                              {linkedConsumer?.name || 'Consumer Assigned'}
+                                            </span>
+                                          </div>
+                                        ) : (
+                                          <span className="text-[10px] font-bold text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 inline-block">
+                                            UNASSIGNED
+                                          </span>
+                                        )}
+                                      </td>
+
+                                      {/* Status & Remarks Preview */}
+                                      <td className="px-4 py-3.5 text-center">
+                                        <div className="inline-flex flex-col items-center gap-1">
+                                          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border shadow-2xs inline-flex items-center gap-1 whitespace-nowrap ${
+                                            statusNorm === 'active'
+                                              ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
+                                              : statusNorm === 'damaged'
+                                              ? 'bg-rose-950/80 text-rose-300 border-rose-800/80'
+                                              : statusNorm === 'maintenance'
+                                              ? 'bg-amber-950/80 text-amber-300 border-amber-800/80'
+                                              : 'bg-slate-800 text-slate-300 border-slate-700'
+                                          }`}>
+                                            {statusNorm === 'active' ? (
+                                              <CheckCircle className="w-3 h-3 shrink-0" />
+                                            ) : statusNorm === 'damaged' ? (
+                                              <AlertTriangle className="w-3 h-3 shrink-0" />
+                                            ) : statusNorm === 'maintenance' ? (
+                                              <Wrench className="w-3 h-3 shrink-0" />
+                                            ) : (
+                                              <XCircle className="w-3 h-3 shrink-0" />
+                                            )}
+                                            <span>{statusLabel}</span>
+                                          </span>
+                                          {m.remarks && (
+                                            <span
+                                              className="text-[10px] text-slate-400 max-w-[170px] truncate block"
+                                              title={m.remarks}
+                                            >
+                                              Note: {m.remarks}
                                             </span>
                                           )}
                                         </div>
-                                        <span className="text-white font-semibold text-[11px] truncate max-w-[180px]" title={linkedConsumer?.name}>
-                                          {linkedConsumer?.name || 'Consumer Assigned'}
-                                        </span>
-                                      </div>
-                                    ) : (
-                                      <span className="text-[10px] font-bold text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 inline-block">
-                                        UNASSIGNED
-                                      </span>
-                                    )}
-                                  </td>
+                                      </td>
 
-                                  {/* Status */}
-                                  <td className="px-4 py-3.5 whitespace-nowrap text-center">
-                                    <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border shadow-2xs inline-block ${
-                                      m.status === 'active' 
-                                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80' 
-                                        : m.status === 'damaged' 
-                                        ? 'bg-rose-950/80 text-rose-300 border-rose-800/80 animate-pulse' 
-                                        : 'bg-amber-950/80 text-amber-300 border-amber-800/80'
-                                    }`}>
-                                      {m.status.toUpperCase()}
-                                    </span>
-                                  </td>
-
-                                  {/* Actions */}
-                                  <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                                    <div className="flex items-center justify-end gap-1.5">
-                                      <button
-                                        type="button"
-                                        onClick={() => setEditingMeterModal({ ...m })}
-                                        className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 rounded-lg text-xs font-bold transition cursor-pointer inline-flex items-center gap-1 shrink-0"
-                                        title="Edit Meter Parameters"
-                                      >
-                                        <Edit3 className="w-3.5 h-3.5" />
-                                        <span>Edit</span>
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteMeter(m)}
-                                        className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/60 rounded-lg text-xs font-bold transition cursor-pointer inline-flex items-center gap-1 shrink-0"
-                                        title="Deregister Meter"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                        <span>Delete</span>
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                    <TablePagination
-                      currentPage={meterPage}
-                      totalItems={filteredMetersList.length}
-                      pageSize={10}
-                      onPageChange={setMeterPage}
-                      itemName="water meters"
-                    />
-                  </div>
-                  </>
-                );
-              })()}
+                                      {/* Actions */}
+                                      <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                                        <div className="flex items-center justify-end gap-1.5">
+                                          <button
+                                            type="button"
+                                            onClick={() => openMeterEditModal(m)}
+                                            className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 rounded-lg text-xs font-bold transition cursor-pointer inline-flex items-center gap-1 whitespace-nowrap shrink-0"
+                                            title="Update Water Meter Status & Notify Consumer"
+                                          >
+                                            <Edit3 className="w-3.5 h-3.5" />
+                                            <span>Update Status</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteMeter(m)}
+                                            className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/60 rounded-lg text-xs font-bold transition cursor-pointer inline-flex items-center gap-1 whitespace-nowrap shrink-0"
+                                            title="Deregister Meter"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                            <span>Delete</span>
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                        <TablePagination
+                          currentPage={meterPage}
+                          totalItems={filteredMetersList.length}
+                          pageSize={10}
+                          onPageChange={setMeterPage}
+                          itemName="water meters"
+                        />
+                      </div>
+                      </>
+                    );
+                  })()}
+                </>
+              )}
             </div>
           )}
 
@@ -6616,6 +7487,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     reports={reports}
                     barangays={barangayList}
                     onRefreshReports={syncAdminReportsLive}
+                    selectedReportId={selectedAdminReportId}
+                    onClearSelectedReport={() => setSelectedAdminReportId(null)}
                   />
                 </div>
               )}
@@ -7075,7 +7948,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     </span>
                   </div>
                   <h3 className="text-xl font-black uppercase tracking-tight mt-1 text-white">Process Consumer Payments & Issue Official Receipts (OR)</h3>
-                  <p className="text-xs text-emerald-200/80 mt-0.5">Search consumer by Account Number, Name, Phone, or RFID tag to process cash payments and issue official receipts.</p>
+                  <p className="text-xs text-emerald-200/80 mt-0.5">Search consumer by Account Number, Name, Phone, or Meter Tag # to process cash payments and issue official receipts.</p>
                 </div>
                 <div className="bg-emerald-950/90 border border-emerald-800/80 p-4 rounded-2xl text-center shrink-0 min-w-[200px]">
                   <span className="text-2xl font-black text-emerald-400 font-mono block">
@@ -7094,12 +7967,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   </div>
                   
                   <div className="space-y-2">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">Smart Search Name, Account #, Meter #, Phone, or RFID</label>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">Smart Search Name, Account #, Meter Tag #, or Phone</label>
                     <SmartSearchBar
                       variant="light"
                       value={paymentSearch}
                       onChange={setPaymentSearch}
-                      placeholder="e.g. 1001-A, Juan Dela Cruz, 09171234567, RFID..."
+                      placeholder="e.g. BRG-01-1001, Juan Dela Cruz, 09171234567, MT-..."
                       id="admin-cashier-payment-smart-search"
                     />
                   </div>
@@ -7111,7 +7984,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           c.accountNumber,
                           c.name,
                           c.contactNumber,
-                          c.rfidTag,
                           c.meterNumber,
                           c.barangay,
                           c.address,
@@ -7167,8 +8039,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <div>
                               <div className="flex items-center space-x-2">
                                 <span className="font-mono font-bold text-blue-600 text-xs">#{c.accountNumber}</span>
-                                {c.rfidTag && (
-                                  <span className="bg-slate-200 text-slate-700 text-[9px] font-mono px-1.5 py-0.2 rounded font-semibold">RFID</span>
+                                {c.meterNumber && (
+                                  <span className="bg-slate-200 text-slate-700 text-[9px] font-mono px-1.5 py-0.2 rounded font-semibold">{c.meterNumber}</span>
                                 )}
                               </div>
                               <h5 className="font-extrabold text-slate-900 text-xs mt-0.5">{c.name}</h5>
@@ -8134,7 +9006,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     .map((bg, bgIdx) => {
                     const bgConsumers = getConsumersForBarangay(bg);
                     const activeCount = bgConsumers.filter(c => c.status === 'active').length;
-                    const pendingCount = bgConsumers.filter(c => c.status === 'pending_approval' || c.status === 'pending').length;
+                    const pendingCount = bgConsumers.filter(c => isPendingConsumerStatus(c.status)).length;
                     const inactiveCount = bgConsumers.filter(c => c.status === 'inactive').length;
                     const activeMeters = bgConsumers.filter(c => c.meterNumber && c.status === 'active').length;
                     const resCount = bgConsumers.filter(c => (c.consumerType || 'Residential') === 'Residential').length;
@@ -8377,7 +9249,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         const uniqueSitios = Array.from(new Set(allInBarangay.map(c => (c.sitioZone || '').trim()).filter(Boolean)));
         const activeMeters = allInBarangay.filter(c => c.meterNumber && c.status === 'active').length;
         const activeCount = allInBarangay.filter(c => c.status === 'active').length;
-        const pendingCount = allInBarangay.filter(c => c.status === 'pending_approval' || c.status === 'pending').length;
+        const pendingCount = allInBarangay.filter(c => isPendingConsumerStatus(c.status)).length;
         const resCount = allInBarangay.filter(c => (c.consumerType || 'Residential') === 'Residential').length;
         const commCount = allInBarangay.filter(c => c.consumerType === 'Commercial').length;
         const totalArrearsInBarangay = allInBarangay.reduce((sum, c) => sum + (Number(c.outstandingBalance) || 0), 0);
@@ -8397,7 +9269,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             c.name,
             c.accountNumber,
             c.meterNumber,
-            c.rfidTag,
             c.sitioZone,
             c.contactNumber,
             c.email,
@@ -8611,17 +9482,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           <th className="py-3 px-4">Account Number</th>
                           <th className="py-3 px-4">Consumer Name</th>
                           <th className="py-3 px-4">Sitio / Zone</th>
-                          <th className="py-3 px-4">Meter Serial & Brand</th>
+                          <th className="py-3 px-4">Meter Tag &amp; Brand</th>
                           <th className="py-3 px-4">Category</th>
                           <th className="py-3 px-4">Outstanding Due</th>
                           <th className="py-3 px-4">Status</th>
-                          <th className="py-3 px-4 text-right">Details & Action</th>
+                          <th className="py-3 px-4 text-right">Details &amp; Action</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium">
                         {paginatedBarangayConsumers.length > 0 ? (
                           paginatedBarangayConsumers.map((c, cIdx) => {
-                            const isPending = !c.accountNumber || String(c.accountNumber).toUpperCase().startsWith('PENDING') || c.status === 'pending_approval';
+                            const isPending = !c.accountNumber || String(c.accountNumber).toUpperCase().startsWith('PENDING') || isPendingConsumerStatus(c.status);
                             const consumerKey = String(c.accountNumber || c.id || `c-${cIdx}`);
                             const isExpanded = expandedBarangayConsumerId === consumerKey;
 
@@ -8675,11 +9546,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${
                                       c.status === 'active'
                                         ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
-                                        : c.status === 'pending_approval' || c.status === 'pending'
+                                        : isPendingConsumerStatus(c.status)
                                         ? 'bg-amber-950 text-amber-300 border-amber-800'
                                         : 'bg-slate-800 text-slate-400 border-slate-700'
                                     }`}>
-                                      {c.status === 'pending_approval' ? 'Pending Approval' : c.status}
+                                      {c.status === 'pending_approval'
+                                        ? 'Pending Approval'
+                                        : c.status === 'pending_installation'
+                                        ? 'Pending Installation'
+                                        : c.status === 'installation_not_scheduled'
+                                        ? 'Installation Not Scheduled'
+                                        : c.status}
                                     </span>
                                   </td>
                                   <td className="py-3 px-4 text-right whitespace-nowrap space-x-1.5">
@@ -8750,7 +9627,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/80 space-y-1">
                                             <span className="text-[10px] text-slate-400 font-bold uppercase block">Water Meter Specs</span>
                                             <p className="font-semibold text-emerald-400 font-mono">{c.meterNumber || 'Unassigned Meter'}</p>
-                                            <p className="text-[10px] text-slate-400">Brand: {c.meterBrand || 'EVER Standard'} • RFID: {c.rfidTag || 'None'}</p>
+                                            <p className="text-[10px] text-slate-400">Brand: {c.meterBrand || 'EVER Standard'} • Size: {c.meterSize || '1/2"'}</p>
                                           </div>
 
                                           <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/80 space-y-1">
@@ -8966,7 +9843,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <span>
                   {selectedConsumerModal.accountNumber && 
                    !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') &&
-                   selectedConsumerModal.status !== 'pending_approval'
+                   !isPendingConsumerStatus(selectedConsumerModal.status)
                     ? 'Account & Tag IDs'
                     : 'Issue IDs & Tag'}
                 </span>
@@ -9006,18 +9883,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   </div>
 
                   {/* Issued Credentials Quick Bar */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1 text-xs">
                     <div className="bg-slate-950/90 p-2.5 rounded-xl border border-emerald-500/40 flex flex-col">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Official Account Number</span>
                       <span className="font-mono font-black text-white text-xs mt-0.5">#{issueSuccessMessage.accNum}</span>
                     </div>
                     <div className="bg-slate-950/90 p-2.5 rounded-xl border border-emerald-500/40 flex flex-col">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Meter Tag / Serial</span>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Meter Tag Number</span>
                       <span className="font-mono font-black text-blue-300 text-xs mt-0.5">{issueSuccessMessage.meterNum}</span>
-                    </div>
-                    <div className="bg-slate-950/90 p-2.5 rounded-xl border border-emerald-500/40 flex flex-col">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Smart RFID Tag</span>
-                      <span className="font-mono font-black text-emerald-300 text-xs mt-0.5">{issueSuccessMessage.rfidTag}</span>
                     </div>
                   </div>
 
@@ -9025,7 +9898,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     <button
                       type="button"
                       onClick={() => {
-                        const info = `Tagoloan Water District - Official Identifiers\nConsumer: ${issueSuccessMessage.consumerName}\nAccount Number: #${issueSuccessMessage.accNum}\nMeter Serial: #${issueSuccessMessage.meterNum}\nRFID Tag: ${issueSuccessMessage.rfidTag}`;
+                        const info = `Tagoloan Water District - Official Identifiers\nConsumer: ${issueSuccessMessage.consumerName}\nAccount Number: #${issueSuccessMessage.accNum}\nMeter Tag Number: #${issueSuccessMessage.meterNum}`;
                         navigator.clipboard.writeText(info);
                         setCopiedIssueInfo(true);
                         setTimeout(() => setCopiedIssueInfo(false), 3000);
@@ -9135,13 +10008,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     </div>
 
                     <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Assigned Meter</span>
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Assigned Meter Tag</span>
                       <span className="font-mono font-black text-blue-300 text-xs truncate block">{selectedConsumerModal.meterNumber || 'UNASSIGNED'}</span>
                     </div>
 
                     <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Smart RFID Tag</span>
-                      <span className="font-mono font-black text-slate-200 text-xs truncate block">{selectedConsumerModal.rfidTag || 'None Assigned'}</span>
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Barangay &amp; Zone</span>
+                      <span className="font-bold text-slate-200 text-xs truncate block" title={`${selectedConsumerModal.barangay || 'Tagoloan'}${selectedConsumerModal.sitioZone ? ` • ${selectedConsumerModal.sitioZone}` : ''}`}>
+                        {selectedConsumerModal.barangay || 'Tagoloan'}{selectedConsumerModal.sitioZone ? ` • ${selectedConsumerModal.sitioZone}` : ''}
+                      </span>
                     </div>
 
                     <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
@@ -9330,8 +10205,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   selectedConsumerModal.accountNumber && 
                   !selectedConsumerModal.accountNumber.toUpperCase().startsWith('PENDING') &&
                   selectedConsumerModal.accountNumber.toUpperCase() !== 'PENDING ADMIN ISSUANCE' &&
-                  selectedConsumerModal.status !== 'pending_approval'
+                  !isPendingConsumerStatus(selectedConsumerModal.status)
                 );
+                const modalGate: {
+                  allowed: boolean;
+                  requiresInstallationFirst: boolean;
+                  latestRequest?: WaterMeterInstallationRequest;
+                  reason?: string;
+                } = !isAlreadyIssued
+                  ? canAdminIssueIdentifiersForConsumer(selectedConsumerModal, installationRequests)
+                  : { allowed: true, requiresInstallationFirst: false, reason: '' };
+                const isIssuanceLocked = !isAlreadyIssued && !modalGate.allowed;
 
                 return (
                 <form onSubmit={handleIssueIdentifiers} className="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4 text-xs">
@@ -9339,34 +10223,109 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     <div className="bg-slate-950 p-4 rounded-xl border border-blue-500/50 space-y-1.5 shadow-2xs">
                       <h5 className="font-black text-blue-300 flex items-center space-x-1.5 text-xs">
                         <Cpu className="h-4 w-4 text-blue-400 mr-1 inline shrink-0" />
-                        <span>Permanent Meter Tag Hardware Entity & Editable Account Number</span>
+                        <span>Assigned Meter Tag Number &amp; Editable Account Number</span>
                       </h5>
                       <p className="text-slate-300 font-medium text-[11px] leading-relaxed">
-                        The Smart RFID Tag (<strong>{selectedConsumerModal.rfidTag}</strong>) and Meter Serial (<strong>#{selectedConsumerModal.meterNumber}</strong>) are permanent physical hardware entities attached to the consumer's water pipe. You can update or transfer the <strong>Account Number</strong> below (e.g. for change of ownership, transfer of service, or account re-numbering) while retaining the physical meter tag.
+                        The Meter Tag Number (<strong>#{selectedConsumerModal.meterNumber}</strong>) remains permanently linked to the consumer&apos;s installed water meter. You can update or transfer the <strong>Account Number</strong> below (e.g. for change of ownership, transfer of service, or account re-numbering) while retaining the assigned meter tag.
                       </p>
                     </div>
+                  ) : isIssuanceLocked ? (
+                    <div className="bg-amber-950/35 p-5 rounded-2xl border border-amber-500/45 space-y-3">
+                      <div className="flex items-start gap-3">
+                        <div className="p-2.5 bg-amber-500/20 text-amber-300 rounded-xl border border-amber-500/40 shrink-0">
+                          <Lock className="h-5 w-5" />
+                        </div>
+                        <div className="space-y-1">
+                          <h5 className="font-black text-amber-200 text-xs sm:text-sm">
+                            Water Meter Installation Confirmation Required — Identifier Issuance Locked
+                          </h5>
+                          <p className="text-amber-100/90 font-medium text-[11px] leading-relaxed">
+                            {modalGate.reason}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-[11px] text-slate-300 font-mono tabular-nums">
+                            {selectedConsumerModal.applicationNumber && (
+                              <span>Application: <strong className="text-white">{selectedConsumerModal.applicationNumber}</strong></span>
+                            )}
+                            {modalGate.latestRequest ? (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span>Installation Status: <strong className="text-amber-300">{modalGate.latestRequest.status}</strong></span>
+                                <span aria-hidden="true">·</span>
+                                <span>
+                                  Schedule: <strong className="text-white">{formatInstallationDateDisplay(modalGate.latestRequest.confirmedInstallationDate || modalGate.latestRequest.preferredInstallationDate)}</strong>
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span>Status: <strong className="text-amber-300">Installation Not Yet Scheduled</strong></span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-amber-500/25">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const reqId = modalGate.latestRequest?.id || null;
+                            setSelectedConsumerModal(null);
+                            setActiveTab('meters');
+                            setMetersSubTab('installations');
+                            setSelectedInstallationRequestId(reqId);
+                          }}
+                          className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl text-xs transition cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                        >
+                          <Wrench className="h-3.5 w-3.5 shrink-0" />
+                          <span>Open Water Meters → Installation Requests</span>
+                        </button>
+                      </div>
+                    </div>
                   ) : (
-                    <div className="bg-blue-950/60 p-4 rounded-xl border border-blue-600/60 space-y-1">
-                      <h5 className="font-black text-blue-200 flex items-center space-x-1.5 text-xs">
-                        <ShieldCheck className="h-4 w-4 text-blue-400 mr-1 inline shrink-0" />
-                        <span>Issue Official Identifiers & Activate Consumer Account</span>
-                      </h5>
-                      <p className="text-blue-100 font-medium text-[11px]">
-                        Assign official Account Number, physical Meter Tag / Serial Number, and Smart RFID Tag for <strong>{selectedConsumerModal.name}</strong> ({selectedConsumerModal.barangay || 'Tagoloan'}). Every tag number must be a strictly unique entity in the water district.
-                      </p>
+                    <div className="space-y-3">
+                      <div className="bg-blue-950/60 p-4 rounded-xl border border-blue-600/60 space-y-1">
+                        <h5 className="font-black text-blue-200 flex items-center space-x-1.5 text-xs">
+                          <ShieldCheck className="h-4 w-4 text-blue-400 mr-1 inline shrink-0" />
+                          <span>Issue Official Identifiers &amp; Activate Consumer Account</span>
+                        </h5>
+                        <p className="text-blue-100 font-medium text-[11px]">
+                          Assign official Account Number and Meter Tag Number for <strong>{selectedConsumerModal.name}</strong> ({selectedConsumerModal.barangay || 'Tagoloan'}). Every Account Number and Meter Tag Number must be strictly unique in the water district.
+                        </p>
+                      </div>
+
+                      {modalGate.latestRequest && modalGate.latestRequest.status === 'Installed' && modalGate.latestRequest.accountValidationStatus !== 'validated' && (
+                        <div className="bg-emerald-950/40 p-3.5 rounded-xl border border-emerald-600/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="text-[11px] text-emerald-100 leading-relaxed">
+                            <strong className="text-emerald-300">Physical Meter Installed ({modalGate.latestRequest.applicationNumber}):</strong>{' '}
+                            To record the physical Water Meter Serial Number alongside issuing the Account Number and Meter Tag Number, open the Water Meters validation form.
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const reqId = modalGate.latestRequest!.id;
+                              setSelectedConsumerModal(null);
+                              setActiveTab('meters');
+                              setMetersSubTab('installations');
+                              setSelectedInstallationRequestId(reqId);
+                            }}
+                            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            Validate in Water Meters
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
 
                   {(() => {
                     const accWarning = modalIssueAccountNumber.trim() ? checkDuplicateAccountNumber(modalIssueAccountNumber, selectedConsumerModal) : null;
                     const meterWarning = modalIssueMeterNumber.trim() ? checkDuplicateMeterTag(modalIssueMeterNumber, selectedConsumerModal) : null;
-                    const rfidWarning = modalIssueRfidTag.trim() ? checkDuplicateRfidTag(modalIssueRfidTag, selectedConsumerModal) : null;
-                    const hasAnyDuplicate = Boolean(accWarning || (!isAlreadyIssued && (meterWarning || rfidWarning)));
+                    const hasAnyDuplicate = Boolean(accWarning || (!isAlreadyIssued && meterWarning));
 
                     return (
                       <>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                          {/* ACCOUNT NUMBER (ALWAYS EDITABLE) */}
+                        <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${isIssuanceLocked ? 'opacity-50 pointer-events-none select-none' : ''}`}>
+                          {/* ACCOUNT NUMBER (ALWAYS EDITABLE WHEN UNLOCKED) */}
                           <div>
                             <div className="flex items-center justify-between mb-1.5">
                               <label className="block text-slate-200 font-extrabold text-xs">Account Number *</label>
@@ -9379,7 +10338,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <input
                               type="text"
                               required
-                              placeholder="e.g. NT-2026-001"
+                              disabled={isIssuanceLocked}
+                              placeholder="e.g. BRG-01-1001"
                               value={modalIssueAccountNumber}
                               onChange={(e) => setModalIssueAccountNumber(e.target.value)}
                               className={`w-full text-white border rounded-lg p-2.5 font-mono font-black text-xs shadow-2xs focus:outline-none transition ${
@@ -9398,16 +10358,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             ) : (
                               <p className="text-[10px] text-slate-400 mt-1">
                                 {isAlreadyIssued 
-                                  ? '✏️ Editable for account updates, transfer, or re-numbering.'
+                                  ? 'Editable for account updates, transfer, or re-numbering.'
                                   : 'Assign unique official municipal account number.'}
                               </p>
                             )}
                           </div>
 
-                          {/* METER SERIAL / TAG (LOCKED IF ISSUED) */}
+                          {/* METER TAG NUMBER (LOCKED IF ISSUED) */}
                           <div>
                             <div className="flex items-center justify-between mb-1.5">
-                              <label className="block text-slate-200 font-extrabold text-xs">Meter Tag / Serial *</label>
+                              <label className="block text-slate-200 font-extrabold text-xs">Meter Tag Number *</label>
                               {isAlreadyIssued && (
                                 <span className="text-[10px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/60 flex items-center space-x-0.5">
                                   <Lock className="h-3 w-3 mr-0.5 inline shrink-0" /> Permanent
@@ -9417,6 +10377,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <input
                               type="text"
                               required
+                              disabled={isIssuanceLocked}
                               placeholder="e.g. MT-88204"
                               value={modalIssueMeterNumber}
                               onChange={(e) => setModalIssueMeterNumber(e.target.value)}
@@ -9439,49 +10400,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             ) : (
                               <p className="text-[10px] text-slate-400 mt-1">
                                 {isAlreadyIssued
-                                  ? '🔒 Fixed physical mechanical meter serial attached on-site.'
-                                  : 'Assign unique meter serial number.'}
-                              </p>
-                            )}
-                          </div>
-
-                          {/* SMART RFID TAG (LOCKED IF ISSUED) */}
-                          <div>
-                            <div className="flex items-center justify-between mb-1.5">
-                              <label className="block text-slate-200 font-extrabold text-xs">Smart RFID Tag *</label>
-                              {isAlreadyIssued && (
-                                <span className="text-[10px] font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-600/60 flex items-center space-x-0.5">
-                                  <Lock className="h-3 w-3 mr-0.5 inline shrink-0" /> Permanent
-                                </span>
-                              )}
-                            </div>
-                            <input
-                              type="text"
-                              required
-                              placeholder="e.g. RFID-88204"
-                              value={modalIssueRfidTag}
-                              onChange={(e) => setModalIssueRfidTag(e.target.value)}
-                              readOnly={isAlreadyIssued}
-                              className={`w-full border rounded-lg p-2.5 font-mono font-black text-xs shadow-2xs transition ${
-                                isAlreadyIssued
-                                  ? 'bg-slate-950/80 text-slate-400 border-slate-800 cursor-not-allowed select-none'
-                                  : rfidWarning
-                                    ? 'bg-rose-950/80 border-2 border-rose-500 text-rose-100 ring-2 ring-rose-500/30'
-                                    : 'bg-slate-950 text-white border-slate-700 focus:outline-none focus:border-blue-500'
-                              }`}
-                            />
-                            {rfidWarning && !isAlreadyIssued ? (
-                              <div className="mt-1.5 p-2 bg-rose-950/90 border border-rose-500/80 rounded-lg text-rose-200 text-[10px] flex items-start gap-1.5 leading-tight">
-                                <XCircle className="h-3.5 w-3.5 text-rose-400 shrink-0 mt-0.5" />
-                                <div>
-                                  <strong className="font-bold text-rose-100">Duplicate RFID:</strong> {rfidWarning.message}
-                                </div>
-                              </div>
-                            ) : (
-                              <p className="text-[10px] text-slate-400 mt-1">
-                                {isAlreadyIssued
-                                  ? '🔒 Unique physical RFID entity across Tagoloan Water District.'
-                                  : 'Assign unique RFID reader tag.'}
+                                  ? 'Fixed official meter tag attached on-site.'
+                                  : 'Assign unique official meter tag number.'}
                               </p>
                             )}
                           </div>
@@ -9504,15 +10424,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           ) : (
                             <button
                               type="submit"
-                              disabled={hasAnyDuplicate}
+                              disabled={hasAnyDuplicate || isIssuanceLocked}
                               className={`px-6 py-2.5 font-black rounded-xl text-xs transition shadow-md uppercase tracking-wider flex items-center space-x-1.5 ${
-                                hasAnyDuplicate
+                                hasAnyDuplicate || isIssuanceLocked
                                   ? 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-60'
                                   : 'bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer'
                               }`}
                             >
-                              <ShieldCheck className="h-4 w-4" />
-                              <span>{hasAnyDuplicate ? 'Resolve Duplicate First' : 'Issue Identifiers & Activate Account'}</span>
+                              {isIssuanceLocked ? <Lock className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
+                              <span>
+                                {isIssuanceLocked
+                                  ? 'Awaiting Meter Installation Confirmation'
+                                  : hasAnyDuplicate
+                                  ? 'Resolve Duplicate First'
+                                  : 'Issue Identifiers & Activate Account'}
+                              </span>
                             </button>
                           )}
                         </div>
@@ -9723,98 +10649,228 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         </div>
       )}
 
-      {/* EDIT METER MODAL */}
-      {editingMeterModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-white shadow-2xl space-y-6 animate-fade-in">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-              <div>
-                <h3 className="text-base font-extrabold text-white">Edit Water Meter #{editingMeterModal.meterNumber}</h3>
-                <p className="text-xs text-slate-400">Update hardware details and operational status</p>
-              </div>
-              <button
-                onClick={() => setEditingMeterModal(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <form onSubmit={handleUpdateMeter} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+      {/* EDIT METER MODAL (Restricted strictly to Water Meters Module) */}
+      {activeTab === 'meters' && editingMeterModal && (() => {
+        const lookupSerial = (editingMeterOriginalNumber || editingMeterModal.meterNumber || '').trim();
+        const persistedMeter = meters.find(
+          m => (m.meterNumber || '').trim().toUpperCase() === lookupSerial.toUpperCase()
+        );
+        const baselineStatus = persistedMeter ? normalizeMeterStatus(persistedMeter.status) : 'active';
+        const selectedStatus = normalizeMeterStatus(editingMeterModal.status);
+        const willChangeStatus = baselineStatus !== selectedStatus;
+        const modalLinkedConsumer = resolveLinkedConsumerForMeter(editingMeterModal, consumers);
+        const modalAccountNum = (editingMeterModal.linkedAccountNumber || modalLinkedConsumer?.accountNumber || '').replace(/^#/, '').trim();
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-7 max-w-xl w-full text-white shadow-2xl space-y-5 animate-fade-in max-h-[92vh] overflow-y-auto">
+              <div className="flex justify-between items-start border-b border-slate-800 pb-4 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Meter Serial Number</label>
-                  <input
-                    type="text"
-                    required
-                    value={editingMeterModal.meterNumber}
-                    onChange={(e) => setEditingMeterModal({ ...editingMeterModal, meterNumber: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono"
-                  />
+                  <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                    <Gauge className="h-5 w-5 text-sky-400 shrink-0" />
+                    <span>Update Water Meter #{editingMeterModal.meterNumber}</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Update operational status, record remarks, and automatically notify the registered consumer
+                  </p>
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Brand / Manufacturer</label>
-                  <input
-                    type="text"
-                    required
-                    value={editingMeterModal.brand}
-                    onChange={(e) => setEditingMeterModal({ ...editingMeterModal, brand: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Linked Account #</label>
-                  <input
-                    type="text"
-                    value={editingMeterModal.linkedAccountNumber || ''}
-                    placeholder="Unassigned"
-                    onChange={(e) => setEditingMeterModal({ ...editingMeterModal, linkedAccountNumber: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Operational Status</label>
-                  <select
-                    value={editingMeterModal.status}
-                    onChange={(e: any) => setEditingMeterModal({ ...editingMeterModal, status: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
-                  >
-                    <option value="active">Active</option>
-                    <option value="damaged">Damaged</option>
-                    <option value="maintenance">Maintenance</option>
-                    <option value="inactive">Inactive</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Installation Date</label>
-                <input
-                  type="date"
-                  value={editingMeterModal.installationDate}
-                  onChange={(e) => setEditingMeterModal({ ...editingMeterModal, installationDate: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono"
-                />
-              </div>
-              <div className="flex justify-end space-x-3 pt-4 border-t border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setEditingMeterModal(null)}
-                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl"
+                  onClick={() => {
+                    setEditingMeterModal(null);
+                    setEditingMeterOriginalNumber('');
+                    setMeterStatusRemarks('');
+                  }}
+                  className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 cursor-pointer shrink-0"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl uppercase tracking-wider"
-                >
-                  Save Changes
+                  <X className="h-5 w-5" />
                 </button>
               </div>
-            </form>
+
+              {/* Linked Consumer Summary */}
+              <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-0.5 min-w-0">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                    Associated Consumer Account
+                  </span>
+                  {modalLinkedConsumer ? (
+                    <>
+                      <p className="text-sm font-extrabold text-white truncate">{modalLinkedConsumer.name}</p>
+                      <p className="text-xs text-slate-300 font-mono tabular-nums">
+                        Account #{modalAccountNum} · Brgy. {modalLinkedConsumer.barangay}
+                      </p>
+                    </>
+                  ) : modalAccountNum ? (
+                    <p className="text-sm font-bold text-sky-300 font-mono tabular-nums">Account #{modalAccountNum}</p>
+                  ) : (
+                    <p className="text-xs font-semibold text-slate-400">No consumer account currently linked</p>
+                  )}
+                </div>
+                <div className="shrink-0">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block sm:text-right">
+                    Current Saved Status
+                  </span>
+                  <span className="text-xs font-black text-slate-200 uppercase sm:text-right block mt-0.5">
+                    {formatMeterStatusLabel(baselineStatus)}
+                  </span>
+                </div>
+              </div>
+
+              <form onSubmit={handleUpdateMeter} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Meter Tag Number *</label>
+                    <input
+                      type="text"
+                      required
+                      value={editingMeterModal.meterNumber}
+                      onChange={(e) => setEditingMeterModal({ ...editingMeterModal, meterNumber: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono tabular-nums focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Water Meter Serial Number</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. SN-TWD-2026-0001"
+                      value={editingMeterModal.serialNumber || ''}
+                      onChange={(e) => setEditingMeterModal({ ...editingMeterModal, serialNumber: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono tabular-nums focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Brand / Manufacturer *</label>
+                    <input
+                      type="text"
+                      required
+                      value={editingMeterModal.brand}
+                      onChange={(e) => setEditingMeterModal({ ...editingMeterModal, brand: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Linked Account #</label>
+                    <input
+                      type="text"
+                      value={editingMeterModal.linkedAccountNumber || ''}
+                      placeholder="Unassigned"
+                      onChange={(e) => setEditingMeterModal({ ...editingMeterModal, linkedAccountNumber: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono tabular-nums focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Water Meter Status *</label>
+                    <select
+                      value={editingMeterModal.status}
+                      onChange={(e) => setEditingMeterModal({ ...editingMeterModal, status: e.target.value as WaterMeter['status'] })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs font-bold text-white focus:outline-none focus:border-blue-500 cursor-pointer"
+                    >
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                      <option value="damaged">Damaged</option>
+                      <option value="maintenance">Under Maintenance</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-400 uppercase">
+                      Administrator Remarks (Included in Consumer Notice & Activity Log)
+                    </label>
+                    {meterStatusRemarks && (
+                      <button
+                        type="button"
+                        onClick={() => setMeterStatusRemarks('')}
+                        className="text-[11px] font-bold text-slate-400 hover:text-slate-200 cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={meterStatusRemarks}
+                    onChange={(e) => setMeterStatusRemarks(e.target.value)}
+                    placeholder="Optional: Add inspection findings, scheduled maintenance details, or instructions for the consumer..."
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-y"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Installation Date</label>
+                  <input
+                    type="date"
+                    value={editingMeterModal.installationDate}
+                    onChange={(e) => setEditingMeterModal({ ...editingMeterModal, installationDate: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white font-mono tabular-nums focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {/* Automatic Consumer Notification Status Banner */}
+                <div className={`rounded-2xl p-3.5 border text-xs flex items-start gap-2.5 ${
+                  willChangeStatus && modalLinkedConsumer
+                    ? 'bg-blue-950/50 border-blue-700/60 text-blue-200'
+                    : 'bg-slate-950 border-slate-800 text-slate-400'
+                }`}>
+                  <Bell className={`h-4 w-4 shrink-0 mt-0.5 ${
+                    willChangeStatus && modalLinkedConsumer ? 'text-blue-400' : 'text-slate-500'
+                  }`} />
+                  <div className="space-y-0.5 leading-relaxed">
+                    {willChangeStatus && modalLinkedConsumer ? (
+                      <>
+                        <p className="font-bold text-white">
+                          Automatic Notification Ready: {formatMeterStatusLabel(baselineStatus)} → {formatMeterStatusLabel(selectedStatus)}
+                        </p>
+                        <p className="text-[11px] text-blue-200/90">
+                          Once this update is saved, <span className="font-semibold text-white">{modalLinkedConsumer.name}</span> (<span className="font-mono tabular-nums">#{modalAccountNum}</span>) will automatically receive an official Tagoloan Water District notice in their Notification Center and history.
+                        </p>
+                      </>
+                    ) : willChangeStatus && !modalLinkedConsumer ? (
+                      <p className="text-[11px]">
+                        Status will change from <span className="font-bold text-slate-200">{formatMeterStatusLabel(baselineStatus)}</span> to <span className="font-bold text-slate-200">{formatMeterStatusLabel(selectedStatus)}</span> and be recorded in the Activity Logs (no consumer account is linked to notify).
+                      </p>
+                    ) : (
+                      <p className="text-[11px]">
+                        Meter status remains <span className="font-bold text-slate-200">{formatMeterStatusLabel(selectedStatus)}</span>. Saving hardware or remarks changes will not send a duplicate notification to the consumer.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex justify-end space-x-3 pt-4 border-t border-slate-800">
+                  <button
+                    type="button"
+                    disabled={isSavingMeterUpdate}
+                    onClick={() => {
+                      setEditingMeterModal(null);
+                      setEditingMeterOriginalNumber('');
+                      setMeterStatusRemarks('');
+                    }}
+                    className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingMeterUpdate}
+                    className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-black text-xs rounded-xl uppercase tracking-wider cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    {isSavingMeterUpdate
+                      ? 'Saving Update...'
+                      : willChangeStatus && modalLinkedConsumer
+                      ? 'Save & Notify Consumer'
+                      : 'Save Changes'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* EDIT ANNOUNCEMENT MODAL */}
       {editingAnnouncementModal && (
@@ -10412,6 +11468,28 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           </div>
         );
       })()}
+
+      {/* DIRECT ADMIN NOTIFICATION BELL MODAL (READ & REPLY IN PLACE) */}
+      <AdminInquiryReplyModal
+        report={
+          activeAdminBellReportId
+            ? reports.find(
+                r => r.id === activeAdminBellReportId || r.ticketNumber === activeAdminBellReportId
+              ) || null
+            : null
+        }
+        currentUser={currentUser}
+        onClose={() => setActiveAdminBellReportId(null)}
+        onReportUpdated={() => {
+          syncAdminReportsLive();
+        }}
+        onOpenInCustomerService={(rep) => {
+          setActiveAdminBellReportId(null);
+          setActiveTab('announcements');
+          setAnnouncementsSubTab('customer_service');
+          setSelectedAdminReportId(rep.id);
+        }}
+      />
 
     </div>
   );

@@ -10,7 +10,7 @@
         "name": { "type": "string", "maxLength": 200, "description": "Full name of the user" },
         "role": { "type": "string", "enum": ["admin", "consumer", "staff", "cashier", "meter_reader"], "description": "System role" },
         "linkedAccountNumber": { "type": "string", "maxLength": 64, "description": "Associated water meter account number" },
-        "status": { "type": "string", "enum": ["active", "inactive", "suspended", "pending", "pending_approval"], "description": "Account status" },
+        "status": { "type": "string", "enum": ["active", "inactive", "suspended", "pending", "pending_approval", "pending_installation", "installation_not_scheduled"], "description": "Account status" },
         "password": { "type": "string", "maxLength": 256, "description": "Portal credential" },
         "registrationDate": { "type": "string", "maxLength": 64, "description": "Creation date" }
       },
@@ -29,9 +29,14 @@
         "sitioZone": { "type": "string", "maxLength": 200, "description": "Zone or sitio details" },
         "contactNumber": { "type": "string", "maxLength": 64, "description": "Contact phone number" },
         "email": { "type": "string", "maxLength": 256, "description": "Email address" },
-        "meterNumber": { "type": "string", "maxLength": 64, "description": "Physical meter serial identifier" },
+        "meterNumber": { "type": "string", "maxLength": 64, "description": "Official meter tag number" },
         "rfidTag": { "type": "string", "maxLength": 64, "description": "RFID hardware tag identifier" },
-        "status": { "type": "string", "enum": ["active", "inactive", "archived", "disconnected", "pending", "pending_approval", "maintenance", "temporary_cutoff", "Disconnection Notice"], "description": "Connection status" },
+        "status": { "type": "string", "enum": ["active", "inactive", "archived", "disconnected", "pending", "pending_approval", "pending_installation", "installation_not_scheduled", "maintenance", "temporary_cutoff", "Disconnection Notice"], "description": "Connection status" },
+        "applicationNumber": { "type": "string", "maxLength": 64, "description": "Registration application number" },
+        "hasExistingMeter": { "type": "boolean", "description": "Whether consumer already had an installed water meter at registration" },
+        "installationRequestId": { "type": "string", "maxLength": 128, "description": "Linked water meter installation request ID" },
+        "installationStatus": { "type": "string", "maxLength": 64, "description": "Current water meter installation status" },
+        "accountValidationStatus": { "type": "string", "maxLength": 64, "description": "Post-installation account validation state" },
         "isRegistered": { "type": "boolean", "description": "Whether consumer has created an online account" },
         "registrationDate": { "type": "string", "maxLength": 64, "description": "Date registered" },
         "linkedUserId": { "type": "string", "maxLength": 128, "description": "Linked user profile ID" },
@@ -59,13 +64,20 @@
       "description": "Physical water meter asset registration",
       "type": "object",
       "properties": {
-        "meterNumber": { "type": "string", "maxLength": 64, "description": "Serial number" },
+        "meterNumber": { "type": "string", "maxLength": 64, "description": "Official meter tag number" },
+        "serialNumber": { "type": "string", "maxLength": 64, "description": "Physical water meter serial number (Water Meters module only)" },
         "rfidTag": { "type": "string", "maxLength": 64, "description": "RFID tag" },
         "linkedAccountNumber": { "type": "string", "maxLength": 64, "description": "Linked consumer account number" },
         "installationDate": { "type": "string", "maxLength": 64, "description": "Installation date" },
+        "completionDate": { "type": "string", "maxLength": 64, "description": "Installation completion date" },
+        "installedBy": { "type": "string", "maxLength": 200, "description": "Responsible installation personnel" },
         "brand": { "type": "string", "maxLength": 128, "description": "Brand manufacturer" },
         "size": { "type": "string", "maxLength": 32, "description": "Pipe size" },
-        "status": { "type": "string", "description": "Asset condition status" }
+        "status": { "type": "string", "enum": ["active", "inactive", "damaged", "maintenance", "unassigned"], "description": "Asset condition status" },
+        "remarks": { "type": "string", "maxLength": 1000, "description": "Administrator remarks for the status update" },
+        "previousStatus": { "type": "string", "maxLength": 64, "description": "Previous water meter status" },
+        "statusUpdatedAt": { "type": "string", "maxLength": 64, "description": "Timestamp of last status update" },
+        "statusUpdatedBy": { "type": "string", "maxLength": 200, "description": "Administrator who updated the meter status" }
       },
       "required": ["meterNumber", "status"]
     },
@@ -139,7 +151,15 @@
         "message": { "type": "string", "maxLength": 2000, "description": "Message text" },
         "timestamp": { "type": "string", "maxLength": 64, "description": "ISO timestamp" },
         "read": { "type": "boolean", "description": "Read status" },
-        "type": { "type": "string", "description": "Notification category" }
+        "type": { "type": "string", "description": "Notification category" },
+        "subject": { "type": "string", "maxLength": 300, "description": "Notification subject line" },
+        "consumerName": { "type": "string", "maxLength": 200, "description": "Target consumer full name" },
+        "meterNumber": { "type": "string", "maxLength": 64, "description": "Associated water meter serial number" },
+        "meterStatus": { "type": "string", "enum": ["active", "inactive", "damaged", "maintenance"], "description": "Updated water meter status" },
+        "previousMeterStatus": { "type": "string", "maxLength": 64, "description": "Previous water meter status" },
+        "statusUpdateDate": { "type": "string", "maxLength": 64, "description": "ISO timestamp of status update" },
+        "remarks": { "type": "string", "maxLength": 1000, "description": "Administrator remarks" },
+        "updatedByAdmin": { "type": "string", "maxLength": 200, "description": "Administrator responsible for update" }
       },
       "required": ["id", "title", "message", "type"]
     },
@@ -178,6 +198,35 @@
         "createdAt": { "type": "string", "maxLength": 64, "description": "ISO creation timestamp" }
       },
       "required": ["id", "ticketNumber", "title", "status"]
+    },
+    "InstallationRequest": {
+      "title": "InstallationRequest",
+      "description": "New consumer water meter installation scheduling and post-installation account validation record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "description": "Installation request ID" },
+        "applicationNumber": { "type": "string", "maxLength": 64, "description": "Official registration/application number" },
+        "linkedUserId": { "type": "string", "maxLength": 128, "description": "Consumer portal user ID" },
+        "consumerName": { "type": "string", "maxLength": 200, "description": "Applicant full name" },
+        "consumerEmail": { "type": "string", "maxLength": 256, "description": "Applicant email address" },
+        "contactNumber": { "type": "string", "maxLength": 64, "description": "Applicant contact number" },
+        "address": { "type": "string", "maxLength": 500, "description": "Service installation address" },
+        "barangay": { "type": "string", "maxLength": 128, "description": "Service barangay" },
+        "preferredInstallationDate": { "type": "string", "maxLength": 64, "description": "Consumer preferred installation date" },
+        "confirmedInstallationDate": { "type": "string", "maxLength": 64, "description": "Admin confirmed installation date" },
+        "consumerRemarks": { "type": "string", "maxLength": 1000, "description": "Consumer installation instructions" },
+        "adminRemarks": { "type": "string", "maxLength": 1000, "description": "Administrator remarks" },
+        "submissionDate": { "type": "string", "maxLength": 64, "description": "ISO submission date" },
+        "updatedAt": { "type": "string", "maxLength": 64, "description": "ISO last updated date" },
+        "status": { "type": "string", "enum": ["Pending Review", "Approved", "Scheduled", "Rescheduled", "Installation in Progress", "Installed", "Cancelled"], "description": "Installation request status" },
+        "completionDate": { "type": "string", "maxLength": 64, "description": "Physical installation completion date" },
+        "responsiblePersonnel": { "type": "string", "maxLength": 200, "description": "Personnel who completed physical installation" },
+        "meterSerialNumber": { "type": "string", "maxLength": 64, "description": "Physical water meter serial number (Water Meters module only)" },
+        "assignedMeterTagNumber": { "type": "string", "maxLength": 64, "description": "Issued official meter tag number" },
+        "assignedAccountNumber": { "type": "string", "maxLength": 64, "description": "Issued official consumer account number" },
+        "accountValidationStatus": { "type": "string", "enum": ["pending_installation", "awaiting_validation", "validated"], "description": "Account validation state" }
+      },
+      "required": ["id", "applicationNumber", "consumerName", "status"]
     }
   },
   "firestore": {
@@ -228,6 +277,10 @@
     "/consumer_reports/{reportId}": {
       "schema": "ConsumerReport",
       "description": "Consumer service complaints, water incident reports, and district replies"
+    },
+    "/installation_requests/{requestId}": {
+      "schema": "InstallationRequest",
+      "description": "New consumer water meter installation scheduling and validation records"
     }
   }
 }

@@ -63,10 +63,13 @@ import {
   Award,
   MessageSquare,
   Plus,
-  UserCheck
+  UserCheck,
+  Gauge,
+  Wrench,
+  Building
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
-import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotification, ConsumerReport } from '../types';
+import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotification, ConsumerReport, WaterMeterInstallationRequest } from '../types';
 import { ConsumerPortalSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import DataLoadingIndicator from './common/DataLoadingIndicator';
 import { OverdueBillBanner } from './consumer/OverdueBillBanner';
@@ -75,11 +78,13 @@ import { UploadReceiptModal } from './consumer/UploadReceiptModal';
 import { MonthlyUsageReportModal, downloadConsumerUsageReportPdf } from './consumer/MonthlyUsageReportModal';
 import { BillDetails } from './consumer/BillDetails';
 import { ConsumerReportsSection } from './consumer/ConsumerReportsSection';
+import { ConsumerInstallationSection } from './consumer/ConsumerInstallationSection';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
 import { calculateWaterTariff, getActiveTariffConfig, getReadingEffectiveBillAmount, isOfficialBillIssued, saveActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
+import { inferNotificationType, isTransactionalPaymentOrReceiptItem, normalizeAdvisoryComparisonTitle, sanitizeAnnouncements } from '../utils/announcementSanitizer';
 import { apiClient, safeBackendFetch } from '../services/apiClient';
-import { initRealtimeSocket } from '../services/realtimeSocket';
+import { initRealtimeSocket, sendRealtimeMessage } from '../services/realtimeSocket';
 import {
   resolveConsumerAccountInFirestore,
   ensureRealtimeFirestoreListeners,
@@ -91,6 +96,26 @@ import {
 import { TablePagination } from './common/TablePagination';
 import { SmartSearchBar } from './common/SmartSearchBar';
 import { smartMatch } from '../utils/smartSearch';
+import {
+  formatMeterStatusLabel,
+  formatMeterStatusUpdateDate,
+  normalizeMeterStatus
+} from '../utils/meterStatusNotification';
+import {
+  filterInstallationRequestsForConsumer,
+  formatInstallationDateDisplay,
+  isPendingConsumerStatus
+} from '../utils/installationWorkflow';
+import {
+  getNotificationAdminAttribution,
+  buildReferencedNoticeFromNotification,
+  getReportCategoryForNotification,
+  getReportUrgencyForNotification,
+  buildContextualInquiryTitle,
+  findLinkedReportForNotification,
+  normalizeCompactParagraphs,
+  normalizeSingleLinePreview
+} from '../utils/notificationContext';
 
 interface ConsumerPortalProps {
   currentUser: UserType;
@@ -101,8 +126,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const toast = useToast();
   const { showLoading, hideLoading } = useLoading();
 
-  // Navigation Modules: Dashboard, My Bills, My Usage, Reports & Inquiries, Notifications, My Profile
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'bills' | 'usage' | 'reports' | 'notifications' | 'profile'>('dashboard');
+  // Navigation Modules: Dashboard, Installation, My Bills, My Usage, Reports & Inquiries, Notifications, My Profile
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'installation' | 'bills' | 'usage' | 'reports' | 'notifications' | 'profile'>('dashboard');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Loading States
@@ -124,11 +149,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const getConsumerTabLoadingMessage = (tab: typeof activeTab) => {
     switch (tab) {
       case 'dashboard': return { title: 'Compiling Water Service Dashboard...', subtitle: 'Fetching current cubic meter index, billing summary, and active notices' };
+      case 'installation': return { title: 'Loading Water Meter Installation Tracker...', subtitle: 'Retrieving installation schedule, field progress, and account validation status' };
       case 'bills': return { title: 'Loading My Water Bills Ledger...', subtitle: 'Calculating itemized tariff breakdown, due dates, and official payment receipts' };
       case 'usage': return { title: 'Querying Historical Consumption Telemetry...', subtitle: 'Aggregating monthly cubic meter trends and conservation metrics' };
       case 'reports': return { title: 'Querying Consumer Service Reports...', subtitle: 'Retrieving water leak reports, pressure issues, and administrative reply threads' };
       case 'notifications': return { title: 'Retrieving Account Alerts & Bulletins...', subtitle: 'Loading water advisory notices, billing alerts, and payment confirmations' };
-      case 'profile': return { title: 'Loading Consumer Profile Information...', subtitle: 'Fetching registered address, account credentials, and meter serials' };
+      case 'profile': return { title: 'Loading Consumer Profile Information...', subtitle: 'Fetching registered address, account credentials, and meter tag identifiers' };
       default: return { title: 'Fetching Consumer Records...', subtitle: 'Synchronizing with Tagoloan Water District database' };
     }
   };
@@ -140,13 +166,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [notifications, setNotifications] = useState<ConsumerNotification[]>([]);
   const [reports, setReports] = useState<ConsumerReport[]>([]);
+  const [installationRequests, setInstallationRequests] = useState<WaterMeterInstallationRequest[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
 
-  // Notification spotlight and highlight states
+  // Notification spotlight, bell dropdown, and notification detail modal states
   const [spotlightReading, setSpotlightReading] = useState<MeterReading | null>(null);
   const [highlightedReadingId, setHighlightedReadingId] = useState<string | null>(null);
   const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+  const [selectedBellNotification, setSelectedBellNotification] = useState<ConsumerNotification | null>(null);
 
   // Immediate Real-Time Payment Confirmation Toast/Banner
   const [paymentConfirmationToast, setPaymentConfirmationToast] = useState<{
@@ -162,7 +190,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const [idConfirmedBanner, setIdConfirmedBanner] = useState<{
     accountNumber: string;
     meterNumber: string;
-    rfidTag: string;
     confirmedAt: string;
     isUpdate?: boolean;
   } | null>(null);
@@ -206,7 +233,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   }, [consumerUsageSearch]);
 
   // Notifications Filter State
-  const [notifFilter, setNotifFilter] = useState<'all' | 'billing' | 'payment' | 'account_issue' | 'announcement'>('all');
+  const [notifFilter, setNotifFilter] = useState<'all' | 'installation' | 'meter_status' | 'billing' | 'payment' | 'account_issue' | 'announcement'>('all');
 
   // Official Office Receipt Upload & Validation Modal States
   const [isUploadReceiptOpen, setIsUploadReceiptOpen] = useState(false);
@@ -232,6 +259,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const consumerRecordRef = useRef<Consumer | null>(null);
   const readingsRef = useRef<MeterReading[]>([]);
   const notifsRef = useRef<any[]>([]);
+  const installationsRef = useRef<WaterMeterInstallationRequest[]>([]);
   const announcementsRef = useRef<any[]>([]);
   const lastMetaSyncRef = useRef<number>(0);
   const lastBillingsSyncRef = useRef<number>(0);
@@ -271,6 +299,28 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     };
   }, [showNotifDropdown]);
 
+  const [bellReplyText, setBellReplyText] = useState('');
+  const [isSubmittingBellReply, setIsSubmittingBellReply] = useState(false);
+
+  // Reset inline reply draft when switching notifications in the Bell Detail Modal
+  useEffect(() => {
+    setBellReplyText('');
+  }, [selectedBellNotification?.id]);
+
+  // Close Notification Detail Modal on Escape key
+  useEffect(() => {
+    if (!selectedBellNotification) return;
+    const handleModalEsc = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedBellNotification(null);
+      }
+    };
+    document.addEventListener('keydown', handleModalEsc);
+    return () => {
+      document.removeEventListener('keydown', handleModalEsc);
+    };
+  }, [selectedBellNotification]);
+
   // Helper: Check whether a consumer record has officially issued IDs
   const isConsumerRecordIssued = (rec?: Consumer | null): boolean => {
     if (!rec) return false;
@@ -287,9 +337,136 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Helper: Detect whether a notification is a Consumer Report / Concern Reply notification
   const isReportNotification = (n?: ConsumerNotification | null): boolean => {
     if (!n) return false;
+    if (n.type && n.type !== 'report') return false;
     if (n.type === 'report' || Boolean(n.reportId || n.ticketNumber)) return true;
     const combined = `${n.title || ''} ${n.message || ''}`;
     return /concern\s*#?twd-cr-|ticket\s*#?twd-cr-|official reply on concern/i.test(combined);
+  };
+
+  // Direct Contextual Reply inside Notification Bell Detail Modal
+  const handleSendBellNotificationReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedBellNotification || !bellReplyText.trim() || !consumerRecord) return;
+
+    const n = selectedBellNotification;
+    const cleanMsg = bellReplyText.trim();
+    const existingLinkedReport = findLinkedReportForNotification(n, reports);
+
+    setIsSubmittingBellReply(true);
+    try {
+      if (existingLinkedReport) {
+        const replyId = `REP-MSG-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const replyTimestamp = new Date().toISOString();
+        const senderId = consumerRecord.accountNumber || currentUser.id || 'consumer';
+        const senderName = consumerRecord.name || currentUser.name || 'Consumer';
+
+        const updated = mockDb.replyToReport(existingLinkedReport.id, {
+          id: replyId,
+          timestamp: replyTimestamp,
+          senderId,
+          senderName,
+          senderRole: 'consumer',
+          message: cleanMsg,
+        });
+
+        setBellReplyText('');
+        const refreshed = getConsumerReportsFromLocal(consumerRecord);
+        setReports(refreshed);
+
+        if (updated) {
+          sendRealtimeMessage('CONSUMER_REPLIED_TO_REPORT', {
+            report: updated,
+            reply: {
+              id: replyId,
+              reportId: updated.id,
+              senderId,
+              senderName,
+              senderRole: 'consumer',
+              message: cleanMsg,
+              timestamp: replyTimestamp,
+            },
+            ticketNumber: updated.ticketNumber,
+            message: `Consumer ${senderName} replied regarding "${updated.referencedNotice?.subject || updated.title}" [Ticket #${updated.ticketNumber}].`,
+          });
+
+          toast.success(
+            'Reply Sent to Administration',
+            `Your reply was added to Ticket #${updated.ticketNumber} with the referenced Official Notice attached.`
+          );
+
+          apiClient
+            .replyToReport(existingLinkedReport.id, {
+              id: replyId,
+              replyId,
+              timestamp: replyTimestamp,
+              senderId,
+              senderName,
+              senderRole: 'consumer',
+              message: cleanMsg,
+              report: existingLinkedReport,
+            })
+            .then((res) => {
+              if (res?.report) {
+                mockDb.mergeExternalReports([res.report]);
+                setReports(getConsumerReportsFromLocal(consumerRecord));
+              }
+            })
+            .catch(() => {});
+        }
+      } else {
+        const referencedNotice = buildReferencedNoticeFromNotification(n, consumerRecord);
+        const contextualTitle = buildContextualInquiryTitle(n, consumerRecord);
+        const category = getReportCategoryForNotification(n);
+        const urgency = getReportUrgencyForNotification(n);
+
+        const created = mockDb.createReport({
+          accountNumber: consumerRecord.accountNumber || currentUser.linkedAccountNumber || 'PENDING',
+          consumerName: consumerRecord.name || currentUser.name || 'Valued Consumer',
+          consumerEmail: (consumerRecord.email || currentUser.email || '').trim().toLowerCase(),
+          consumerPhone: consumerRecord.contactNumber || '',
+          barangay: consumerRecord.barangay || 'Poblacion',
+          address: consumerRecord.address || '',
+          meterNumber: n.meterNumber || consumerRecord.meterNumber || '',
+          category,
+          urgency,
+          title: contextualTitle,
+          description: cleanMsg,
+          sourceNotificationId: n.id,
+          referencedNotice,
+        });
+
+        setBellReplyText('');
+        setReports(getConsumerReportsFromLocal(consumerRecord));
+
+        sendRealtimeMessage('CONSUMER_REPORT_CREATED', {
+          report: created,
+          ticketNumber: created.ticketNumber,
+          consumerName: created.consumerName,
+          accountNumber: created.accountNumber,
+          category: created.category,
+          title: created.title,
+          urgency: created.urgency,
+          message: `Consumer ${created.consumerName} (#${created.accountNumber}) replied directly to Official Notice "${referencedNotice.subject}" [${created.ticketNumber}].`,
+        });
+
+        toast.success(
+          'Contextual Reply Sent to Administration',
+          `Ticket #${created.ticketNumber} created with Official Notice "${referencedNotice.subject}" automatically attached so Admin knows your exact concern.`
+        );
+
+        apiClient
+          .createReport(created)
+          .then((res) => {
+            if (res?.report) {
+              mockDb.mergeExternalReports([res.report]);
+              setReports(getConsumerReportsFromLocal(consumerRecord));
+            }
+          })
+          .catch(() => {});
+      }
+    } finally {
+      setIsSubmittingBellReply(false);
+    }
   };
 
   // Helper: Resolve exact report ID or ticket number from a notification
@@ -428,6 +605,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         .catch(() => {});
     }
 
+    const localInstallations = filterInstallationRequestsForConsumer(
+      activeRec,
+      mockDb.getInstallationRequests(),
+      currentUser.email,
+      currentUser.id
+    );
+    if (JSON.stringify(installationsRef.current) !== JSON.stringify(localInstallations)) {
+      installationsRef.current = localInstallations;
+      setInstallationRequests(localInstallations);
+    }
+
     if (shouldPollReportsAndNotifs) {
       const notifParams = new URLSearchParams();
       if (validAcc) notifParams.set('accountNumber', validAcc);
@@ -448,27 +636,56 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           })
           .catch(() => {});
       }
+
+      apiClient
+        .getInstallations(
+          {
+            email: myEmail,
+            userId: activeRec?.linkedUserId || currentUser.id,
+            applicationNumber: activeRec?.applicationNumber,
+          },
+          { skipLogging: true }
+        )
+        .then((instData) => {
+          if (instData?.success && Array.isArray(instData.installations) && instData.installations.length > 0) {
+            mockDb.mergeExternalInstallations(instData.installations);
+            const refreshedInst = filterInstallationRequestsForConsumer(
+              consumerRecordRef.current,
+              mockDb.getInstallationRequests(),
+              currentUser.email,
+              currentUser.id
+            );
+            if (JSON.stringify(installationsRef.current) !== JSON.stringify(refreshedInst)) {
+              installationsRef.current = refreshedInst;
+              setInstallationRequests(refreshedInst);
+            }
+          }
+        })
+        .catch(() => {});
     }
   };
 
   // Helper: Match whether an incoming consumer or notification payload belongs to the logged-in consumer
   const doesPayloadBelongToCurrentUser = (payload: any): boolean => {
     if (!payload) return false;
-    const targetConsumer = payload.consumer || payload.report || payload;
+    const targetConsumer = payload.consumer || payload.request || payload.report || payload;
     const myEmail = (currentUser.email || consumerRecordRef.current?.email || '').trim().toLowerCase();
     const myUid = (currentUser.id || consumerRecordRef.current?.linkedUserId || '').trim();
     const myAcc = (currentUser.linkedAccountNumber || consumerRecordRef.current?.accountNumber || '').trim().toUpperCase();
+    const myAppNo = (consumerRecordRef.current?.applicationNumber || installationsRef.current[0]?.applicationNumber || '').trim().toUpperCase();
     const myName = (currentUser.name || consumerRecordRef.current?.name || '').trim().toLowerCase();
 
     const pEmail = (targetConsumer.email || targetConsumer.consumerEmail || payload.email || payload.consumerEmail || '').trim().toLowerCase();
     const pUid = (targetConsumer.linkedUserId || payload.linkedUserId || payload.userId || '').trim();
-    const pAcc = (targetConsumer.accountNumber || payload.accountNumber || '').trim().toUpperCase();
+    const pAcc = (targetConsumer.accountNumber || targetConsumer.assignedAccountNumber || payload.accountNumber || '').trim().toUpperCase();
     const pPrevAcc = (payload.previousAccountNumber || '').trim().toUpperCase();
+    const pAppNo = (targetConsumer.applicationNumber || payload.applicationNumber || '').trim().toUpperCase();
     const pName = (targetConsumer.name || targetConsumer.consumerName || '').trim().toLowerCase();
 
     if (pAcc === 'ALL' || pAcc === 'BROADCAST' || pAcc === 'DISTRICT') return true;
     if (myUid && pUid && myUid === pUid) return true;
     if (myEmail && pEmail && myEmail === pEmail) return true;
+    if (myAppNo && pAppNo && myAppNo === pAppNo) return true;
     if (myAcc && !myAcc.startsWith('PENDING') && ((pAcc && myAcc === pAcc) || (pPrevAcc && myAcc === pPrevAcc))) return true;
     if (myName && pName && myName === pName && !pEmail && !pUid) return true;
     return false;
@@ -485,15 +702,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
     const accNum = issuedConsumer.accountNumber.trim().toUpperCase();
     const meterNum = (issuedConsumer.meterNumber || `MT-${accNum}`).trim().toUpperCase();
-    const rfid = (issuedConsumer.rfidTag || `RFID-${meterNum}`).trim().toUpperCase();
 
     const normalizedConsumer: Consumer = {
       ...consumerRecordRef.current,
       ...issuedConsumer,
       accountNumber: accNum,
       meterNumber: meterNum,
-      rfidTag: rfid,
-      status: issuedConsumer.status && issuedConsumer.status !== 'pending_approval' ? issuedConsumer.status : 'active',
+      status: issuedConsumer.status && !isPendingConsumerStatus(issuedConsumer.status) ? issuedConsumer.status : 'active',
       isRegistered: true
     };
 
@@ -584,8 +799,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           consumerId: normalizedConsumer.id,
           userId: normalizedConsumer.linkedUserId || currentUser.id,
           consumerEmail: normalizedConsumer.email || currentUser.email,
-          title: isUpdate ? `Account Number Updated to #${accNum}` : `Official Account Number & Meter Issued!`,
-          message: `Your water service account has been officially confirmed and activated by Tagoloan Water District Administration. Your permanent Account Number is #${accNum} and Meter Serial is #${meterNum}. Smart RFID Tag: ${rfid}.`,
+          title: isUpdate ? `Account Number Updated to #${accNum}` : `Official Account Number & Meter Tag Issued!`,
+          message: `Your water service account has been officially confirmed and activated by Tagoloan Water District Administration. Your permanent Account Number is #${accNum} and Meter Tag Number is #${meterNum}.`,
           type: 'account_issue'
         });
       }
@@ -616,13 +831,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       setIdConfirmedBanner({
         accountNumber: accNum,
         meterNumber: meterNum,
-        rfidTag: rfid,
         confirmedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         isUpdate
       });
       toast.success(
         isUpdate ? `Account Updated to #${accNum}` : 'Official Account Confirmed & Activated!',
-        `Account #${accNum} and Meter #${meterNum} (${rfid}) have been issued by Administration. Your portal and notifications are now live.`,
+        `Account #${accNum} and Meter Tag #${meterNum} have been issued by Administration. Your portal and notifications are now live.`,
         7000
       );
     }
@@ -654,7 +868,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       const sessionWasUnlinked = Boolean(
         !sessionBefore?.linkedAccountNumber ||
         sessionBefore.linkedAccountNumber.toUpperCase().startsWith('PENDING') ||
-        sessionBefore.status === 'pending_approval'
+        isPendingConsumerStatus(sessionBefore.status)
       );
 
       // Heal any locally stored issued accounts & notifications first
@@ -817,10 +1031,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             record?.meterNumber && !record.meterNumber.toUpperCase().startsWith('PENDING')
               ? record.meterNumber
               : `MT-${userLinkedAcc}`,
-          rfidTag:
-            record?.rfidTag && !record.rfidTag.toUpperCase().startsWith('PENDING')
-              ? record.rfidTag
-              : `RFID-MT-${userLinkedAcc}`,
           status: 'active',
         };
       }
@@ -831,7 +1041,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
         if (nowIssued) {
           const normalizedRecord: Consumer =
-            record.status === 'pending_approval' || (record.status as string) === 'pending'
+            isPendingConsumerStatus(record.status)
               ? { ...record, status: 'active' }
               : record;
           record = normalizedRecord;
@@ -899,16 +1109,19 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
         const allCustomerReads = hasValidAccId || hasValidMeterId
           ? allReadings.filter(r => {
+              if (r.status === 'cancelled') return false;
               const rAcc = (r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
               const rMeter = (r.meterNumber || '').trim().toUpperCase();
               return (hasValidAccId && rAcc === recAccClean) || (hasValidMeterId && rMeter === recMeterClean);
             })
           : [];
-        // Sort newest first (by readingDate desc, then billingIssuedAt desc)
+        // Sort newest first deterministically: readingDate desc -> cumulative meter dial (currentReading/presentReading) desc -> timestamp desc
+        // This guarantees multiple readings sent on the same day never invert their Previous -> Present -> Current chain.
         allCustomerReads.sort(
           (a, b) =>
-            new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime() ||
-            new Date(b.billingIssuedAt || 0).getTime() - new Date(a.billingIssuedAt || 0).getTime()
+            new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
+            Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
+            new Date(b.billingIssuedAt || b.submittedAt || 0).getTime() - new Date(a.billingIssuedAt || a.submittedAt || 0).getTime()
         );
         
         // CRITICAL GHOST-PROCESS PREVENTION:
@@ -927,9 +1140,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               dismissedSpotlightIdsRef.current.delete(newR.id);
               setSpotlightReading(newR);
               if (newR.paymentStatus !== 'paid') {
+                const presDial = newR.presentReading ?? newR.currentReading;
                 toast.info(
                   `Water Bill Issued — ${newR.billingPeriod}`,
-                  `Meter reading: ${newR.consumption} m³ (Index: ${newR.currentReading}). Total Due: ₱${calculateCostOf(newR, record.consumerType).toFixed(2)}. Official Billing Notice & Receipt unlocked.`,
+                  `Prev: ${newR.previousReading} m³ → Pres: ${presDial} m³ (${newR.consumption} m³ used). Total Due: ₱${calculateCostOf(newR, record.consumerType).toFixed(2)}.`,
                   6500
                 );
               }
@@ -1145,6 +1359,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     // Clear notifications and active cache on user identity switch to prevent cross-account display
     setNotifications([]);
     notifsRef.current = [];
+    setInstallationRequests([]);
+    installationsRef.current = [];
     setConsumerRecord(null);
     consumerRecordRef.current = null;
     setReadings([]);
@@ -1274,11 +1490,105 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       } else if (data.type === 'CONSUMER_NOTIFICATION_CREATED') {
         const notif = data.payload?.notification;
         if (notif && doesPayloadBelongToCurrentUser(notif)) {
+          const alreadyHad = notifsRef.current.some(existing => existing.id === notif.id);
           mockDb.mergeExternalNotifications([notif]);
           const refreshedNotifs = getConsumerNotificationsFromLocal();
           if (JSON.stringify(notifsRef.current) !== JSON.stringify(refreshedNotifs)) {
             notifsRef.current = refreshedNotifs;
             setNotifications(refreshedNotifs);
+          }
+          if (!alreadyHad && inferNotificationType(notif) === 'meter_status') {
+            const statusNorm = normalizeMeterStatus(notif.meterStatus);
+            const statusText = formatMeterStatusLabel(statusNorm);
+            if (statusNorm === 'active') {
+              toast.success(
+                'Water Meter Status Update',
+                `Your water meter status has been updated to ${statusText}. Check your Notification Center for details.`
+              );
+            } else {
+              toast.warning(
+                'Important Notice Regarding Your Water Meter',
+                `Your water meter status has been marked as ${statusText}. Open your Notification Center for full details.`
+              );
+            }
+          } else if (!alreadyHad && inferNotificationType(notif) === 'installation') {
+            toast.info(
+              notif.title || 'Water Meter Installation Update',
+              'A new update on your water meter installation request is available in your Notification Center.'
+            );
+          }
+        }
+      } else if (
+        data.type === 'INSTALLATION_REQUEST_UPDATED' ||
+        data.type === 'INSTALLATION_REQUEST_SUBMITTED'
+      ) {
+        const payload = data.payload;
+        const incomingReq = payload?.request as WaterMeterInstallationRequest | undefined;
+        if (incomingReq) {
+          mockDb.mergeExternalInstallations([incomingReq]);
+        }
+        const belongsToMe =
+          doesPayloadBelongToCurrentUser(payload) ||
+          (incomingReq && doesPayloadBelongToCurrentUser(incomingReq)) ||
+          (payload?.notification && doesPayloadBelongToCurrentUser(payload.notification));
+        if (payload?.notification && belongsToMe) {
+          mockDb.mergeExternalNotifications([payload.notification]);
+        }
+        if (belongsToMe) {
+          const refreshedInst = filterInstallationRequestsForConsumer(
+            consumerRecordRef.current,
+            mockDb.getInstallationRequests(),
+            currentUser.email,
+            currentUser.id
+          );
+          installationsRef.current = refreshedInst;
+          setInstallationRequests(refreshedInst);
+          const refreshedNotifs = getConsumerNotificationsFromLocal();
+          notifsRef.current = refreshedNotifs;
+          setNotifications(refreshedNotifs);
+
+          if (data.type === 'INSTALLATION_REQUEST_UPDATED' && incomingReq) {
+            if (payload?.consumer && isConsumerRecordIssued(payload.consumer)) {
+              applyAutomaticIdConfirmation(payload.consumer, payload?.notification, false, true);
+              return;
+            }
+            toast.info(
+              `Installation Update — ${incomingReq.status}`,
+              incomingReq.status === 'Installed'
+                ? `Physical installation for ${incomingReq.applicationNumber} is completed and awaiting administrative validation.`
+                : `Application ${incomingReq.applicationNumber} status updated to ${incomingReq.status}.`
+            );
+          }
+        }
+        loadConsumerInfo(true);
+      } else if (data.type === 'METER_STATUS_UPDATED') {
+        const payload = data.payload;
+        const notif = payload?.notification;
+        const belongsToMe =
+          doesPayloadBelongToCurrentUser(payload) ||
+          (notif && doesPayloadBelongToCurrentUser(notif));
+        if (belongsToMe && notif) {
+          const alreadyHad = notifsRef.current.some(existing => existing.id === notif.id);
+          mockDb.mergeExternalNotifications([notif]);
+          const refreshedNotifs = getConsumerNotificationsFromLocal();
+          if (JSON.stringify(notifsRef.current) !== JSON.stringify(refreshedNotifs)) {
+            notifsRef.current = refreshedNotifs;
+            setNotifications(refreshedNotifs);
+          }
+          if (!alreadyHad) {
+            const statusNorm = normalizeMeterStatus(notif.meterStatus || payload?.newStatus);
+            const statusText = formatMeterStatusLabel(statusNorm);
+            if (statusNorm === 'active') {
+              toast.success(
+                'Water Meter Status Update',
+                `Your water meter status has been updated to ${statusText}. Check your Notification Center for details.`
+              );
+            } else {
+              toast.warning(
+                'Important Notice Regarding Your Water Meter',
+                `Your water meter status has been marked as ${statusText}. Open your Notification Center for full details.`
+              );
+            }
           }
         }
       } else if (
@@ -1310,7 +1620,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         syncConsumerReportsAndNotifications(true);
       } else if (data.type === 'ANNOUNCEMENT_PUBLISHED') {
         const ann = data.payload?.announcement;
-        if (ann) {
+        if (ann && !isTransactionalPaymentOrReceiptItem(ann)) {
           const merged = mockDb.mergeExternalAnnouncements([ann]);
           announcementsRef.current = merged;
           setAnnouncements(merged);
@@ -1471,9 +1781,28 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Check Account Setup Pending Status (Awaiting Admin Account & Meter Issuance)
   const isAccountPending = !isConsumerRecordIssued(consumerRecord) && !isRealIssuedAccountNumber(currentUser.linkedAccountNumber);
 
-  // Compute Account Metrics & Arrears (strictly separating Verified Readings from Admin-Issued Billings)
+  // Compute Account Metrics & Unbreakable Reading Basis (Previous -> Present -> Current)
+  // These 3 reading indices are NEVER absent on an active consumer account:
+  // - Previous Reading: baseline index from the prior cycle (never lost when new readings arrive)
+  // - Present Reading: dial index recorded by the meter reader at inspection
+  // - Current Reading: latest tracked dial index & net consumption (Present - Previous)
   const latestRead = (readings && readings.length > 0) ? readings[0] : null;
-  const currentConsumptionVal = latestRead ? latestRead.consumption : 0;
+  const pendingInspectionRead = (allHistoryReadings || []).find(
+    r => r.status === 'pending' || r.status === 'flagged_abnormal'
+  ) || null;
+
+  const prevReadingVal = latestRead
+    ? Math.max(0, Number(latestRead.previousReading ?? 0))
+    : Math.max(0, Number(consumerRecord?.previousReading ?? 0));
+  const presReadingVal = latestRead
+    ? Math.max(prevReadingVal, Number(latestRead.presentReading ?? latestRead.currentReading ?? prevReadingVal))
+    : Math.max(prevReadingVal, Number(consumerRecord?.presentReading ?? consumerRecord?.currentReading ?? prevReadingVal));
+  const currReadingVal = latestRead
+    ? Math.max(presReadingVal, Number(latestRead.currentReading ?? presReadingVal))
+    : Math.max(presReadingVal, Number(consumerRecord?.currentReading ?? presReadingVal));
+  const currentConsumptionVal = latestRead
+    ? Math.max(0, Number(latestRead.consumption ?? (presReadingVal - prevReadingVal)))
+    : Math.max(0, Number(consumerRecord?.lastConsumption ?? (presReadingVal - prevReadingVal)));
 
   // Official Billings issued by Administration
   const billedReadings = readings.filter(r => isOfficialBillIssued(r));
@@ -1522,12 +1851,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     return acc + Math.max(0, total - paid);
   }, 0);
 
-  // Trend vs Previous Month
+  // Trend vs Previous Month & Problem / Leak Detection
   const previousMonthRead = readings[1] || null;
   const consumptionDiff = previousMonthRead ? currentConsumptionVal - previousMonthRead.consumption : 0;
   const consumptionPercentChange = previousMonthRead && previousMonthRead.consumption > 0
     ? ((consumptionDiff / previousMonthRead.consumption) * 100).toFixed(1)
     : null;
+
+  const isAbnormalSpike = Boolean(
+    latestRead && (
+      latestRead.status === 'flagged_abnormal' ||
+      currentConsumptionVal >= 45 ||
+      (previousMonthRead && previousMonthRead.consumption >= 5 && consumptionDiff >= 12 && (consumptionDiff / previousMonthRead.consumption) >= 0.4)
+    )
+  );
 
   // Chart Data preparation (chronological order)
   const chartReadings = [...readings].reverse().slice(-6); // last 6 verified readings in chronological order
@@ -1538,17 +1875,64 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Unread admin reply count on filed reports
   const unreadReportsCount = reports.filter(r => r.hasUnreadAdminReply).length;
 
-  // Action: Handle clicking a notification to route accurately to the requested view (Reports & Inquiries ONLY for report replies)
-  const handleNotificationClick = (
-    notif: ConsumerNotification,
-    targetPreference?: 'dashboard' | 'bills' | 'announcements' | 'profile' | 'reports'
-  ) => {
-    // 1. Mark as read in storage and state
-    if (!notif.read) {
+  // Helper: Resolve an exact linked MeterReading for billing/payment/disconnection notifications
+  const resolveNotificationLinkedReading = (notif?: ConsumerNotification | null): MeterReading | undefined => {
+    if (!notif) return undefined;
+    const effType = inferNotificationType(notif);
+    if (effType === 'announcement' || effType === 'account_issue' || effType === 'installation' || effType === 'report' || isReportNotification(notif)) {
+      return undefined;
+    }
+    const candidateBills = readings.filter(r => isOfficialBillIssued(r));
+    if (notif.readingId) {
+      const byId = candidateBills.find(r => r.id === notif.readingId) || readings.find(r => r.id === notif.readingId);
+      if (byId) return byId;
+    }
+    if (notif.orNumber) {
+      const targetOr = notif.orNumber.trim().toLowerCase();
+      const byOr = candidateBills.find(
+        r => (r.orNumber || r.paymentReference || '').trim().toLowerCase() === targetOr
+      );
+      if (byOr) return byOr;
+    }
+    if (notif.billingPeriod) {
+      const targetBp = notif.billingPeriod.trim().toLowerCase();
+      const byBp = candidateBills.find(r => (r.billingPeriod || '').trim().toLowerCase() === targetBp);
+      if (byBp) return byBp;
+    }
+    const nTitle = (notif.title || '').toLowerCase();
+    const nMsg = (notif.message || '').toLowerCase();
+    return candidateBills.find(r => {
+      const bp = (r.billingPeriod || '').trim().toLowerCase();
+      return bp ? nTitle.includes(bp) || nMsg.includes(bp) : false;
+    });
+  };
+
+  // Action: Open Notification Detail Pop-Up Modal (marks notification as read and closes bell popover)
+  const handleOpenNotificationDetailModal = (notif: ConsumerNotification) => {
+    if (!notif.read && notif.id && !notif.id.startsWith('ADVISORY-PREVIEW-')) {
       mockDb.markNotificationRead(notif.id);
-      setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
+      const updated = notifications.map(n => (n.id === notif.id ? { ...n, read: true } : n));
+      notifsRef.current = updated;
+      setNotifications(updated);
     }
     setShowNotifDropdown(false);
+    setSelectedBellNotification({ ...notif, read: true });
+  };
+
+  // Action: Handle clicking a notification action to route accurately to the requested view (Reports & Inquiries ONLY for report replies)
+  const handleNotificationClick = (
+    notif: ConsumerNotification,
+    targetPreference?: 'dashboard' | 'installation' | 'bills' | 'announcements' | 'profile' | 'reports'
+  ) => {
+    // 1. Mark as read in storage and state
+    if (!notif.read && notif.id && !notif.id.startsWith('ADVISORY-PREVIEW-')) {
+      mockDb.markNotificationRead(notif.id);
+      const updated = notifications.map(n => (n.id === notif.id ? { ...n, read: true } : n));
+      notifsRef.current = updated;
+      setNotifications(updated);
+    }
+    setShowNotifDropdown(false);
+    setSelectedBellNotification(null);
 
     const scrollMainToTop = () => {
       setTimeout(() => {
@@ -1569,15 +1953,24 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
 
     // Determine effective target for non-report notifications
-    const effectiveTarget: 'dashboard' | 'bills' | 'announcements' | 'profile' | 'reports' =
+    const effectiveNotifType = inferNotificationType(notif);
+    const effectiveTarget: 'dashboard' | 'installation' | 'bills' | 'announcements' | 'profile' | 'reports' =
       targetPreference ||
-      (notif.type === 'account_issue'
+      (effectiveNotifType === 'installation'
+        ? 'installation'
+        : effectiveNotifType === 'account_issue'
         ? 'profile'
-        : notif.type === 'announcement'
+        : effectiveNotifType === 'announcement'
         ? 'announcements'
-        : notif.type === 'billing' || notif.type === 'balance'
+        : effectiveNotifType === 'billing' || effectiveNotifType === 'balance'
         ? 'bills'
         : 'dashboard');
+
+    if (effectiveTarget === 'installation') {
+      setActiveTab('installation');
+      scrollMainToTop();
+      return;
+    }
 
     if (effectiveTarget === 'profile') {
       setActiveTab('profile');
@@ -1619,7 +2012,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         return bp ? (nTitle.includes(bp) || nMsg.includes(bp)) : false;
       });
     }
-    if (!matchedReading && candidateBills.length > 0 && notif.type !== 'account_issue') {
+    if (!matchedReading && candidateBills.length > 0 && effectiveNotifType !== 'account_issue') {
       matchedReading = candidateBills[0];
     }
 
@@ -1629,7 +2022,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
 
     // If clicked directly without explicit tab override and it's a paid receipt notification, open receipt modal
-    if (!targetPreference && notif.type === 'payment' && matchedReading && matchedReading.paymentStatus === 'paid') {
+    if (!targetPreference && effectiveNotifType === 'payment' && matchedReading && matchedReading.paymentStatus === 'paid') {
       setReceiptDetailModal(matchedReading);
       return;
     }
@@ -2190,7 +2583,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             {isAccountPending ? (
               <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-amber-500/15 text-amber-300 border border-amber-500/30">
                 <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse"></span>
-                <span>Pending Issuance</span>
+                <span>
+                  {consumerRecord.status === 'installation_not_scheduled'
+                    ? 'Schedule Needed'
+                    : consumerRecord.status === 'pending_installation' || installationRequests.length > 0
+                    ? installationRequests[0]?.status === 'Installed'
+                      ? 'Awaiting Validation'
+                      : 'Pending Installation'
+                    : 'Pending Issuance'}
+                </span>
               </span>
             ) : (
               <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -2201,9 +2602,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           </div>
           <div>
             <h4 className="text-xs font-black text-white truncate">{consumerRecord.name}</h4>
-            <div className="flex items-center gap-1.5 mt-1 font-mono text-[10px]">
+            <div className="flex flex-wrap items-center gap-1.5 mt-1 font-mono tabular-nums text-[10px]">
               <span className="text-blue-300 bg-blue-950/60 px-1.5 py-0.2 rounded border border-blue-800/50">
-                {isAccountPending ? 'Acc #PENDING' : `Acc #${consumerRecord.accountNumber}`}
+                {isAccountPending
+                  ? consumerRecord.applicationNumber || installationRequests[0]?.applicationNumber
+                    ? `${consumerRecord.applicationNumber || installationRequests[0]?.applicationNumber}`
+                    : 'Acc #PENDING'
+                  : `Acc #${consumerRecord.accountNumber}`}
               </span>
               <span className="text-slate-300 bg-slate-700/60 px-1.5 py-0.2 rounded">
                 Tag #{isAccountPending ? 'PENDING' : (consumerRecord.meterNumber || 'ISSUED')}
@@ -2242,6 +2647,42 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
               <ChevronRight className={`h-3.5 w-3.5 shrink-0 transition-transform ${activeTab === 'dashboard' ? 'rotate-90 text-white' : 'text-slate-600 group-hover:text-slate-400'}`} />
             </button>
+
+            {/* Module: Water Meter Installation (shown when pending/unscheduled or has installation history) */}
+            {(isAccountPending || consumerRecord.hasExistingMeter === false || installationRequests.length > 0) && (
+              <button
+                onClick={() => handleConsumerTabChange('installation')}
+                className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-left transition cursor-pointer group ${
+                  activeTab === 'installation'
+                    ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/30'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                }`}
+                id="sidebar-mod-installation"
+              >
+                <div className="flex items-center space-x-3 min-w-0">
+                  <div className={`p-1.5 rounded-lg ${activeTab === 'installation' ? 'bg-white/20' : 'bg-slate-800 text-cyan-400 group-hover:text-cyan-300'}`}>
+                    <Wrench className="h-4 w-4" />
+                  </div>
+                  <div className="truncate">
+                    <div className="text-xs font-bold leading-tight">Meter Installation</div>
+                    <div className={`text-[10px] truncate ${activeTab === 'installation' ? 'text-blue-100' : 'text-slate-400'}`}>
+                      Schedule & activation tracker
+                    </div>
+                  </div>
+                </div>
+                {isAccountPending ? (
+                  <span className="px-2 py-0.5 bg-amber-400 text-slate-950 text-[9px] font-black rounded-md whitespace-nowrap shrink-0">
+                    {installationRequests[0] && installationRequests[0].status !== 'Cancelled'
+                      ? installationRequests[0].status === 'Installed'
+                        ? 'Validate'
+                        : 'Tracked'
+                      : 'Schedule'}
+                  </span>
+                ) : (
+                  <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${activeTab === 'installation' ? 'rotate-90 text-white' : 'text-slate-600 group-hover:text-slate-400'}`} />
+                )}
+              </button>
+            )}
 
             {/* Module 2: My Bills */}
             <button
@@ -2437,6 +2878,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 <span className="hidden sm:inline text-slate-600">/</span>
                 <span className="text-[11px] sm:text-xs font-black uppercase tracking-wider text-blue-400 truncate">
                   {activeTab === 'dashboard' && 'Dashboard Overview'}
+                  {activeTab === 'installation' && 'Water Meter Installation'}
                   {activeTab === 'bills' && 'My Water Bills'}
                   {activeTab === 'usage' && 'Consumption & Usage'}
                   {activeTab === 'reports' && 'Service Reports & Inquiries'}
@@ -2446,6 +2888,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
               <h2 className="text-sm sm:text-base font-black text-white capitalize tracking-tight mt-0.5 truncate">
                 {activeTab === 'dashboard' && 'Account & Telemetry Dashboard'}
+                {activeTab === 'installation' && 'Installation Scheduling & Account Activation'}
                 {activeTab === 'bills' && 'Billing Ledger & Online Settle'}
                 {activeTab === 'usage' && 'Meter Telemetry & Historical Readings'}
                 {activeTab === 'reports' && 'Service Concerns & Administrator Replies'}
@@ -2532,32 +2975,77 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     </div>
                   </div>
 
-                  <div className="max-h-[65vh] sm:max-h-80 overflow-y-auto divide-y divide-slate-800/80">
+                  <div className="max-h-[65vh] sm:max-h-96 overflow-y-auto divide-y divide-slate-800/80">
                     {notifications.length === 0 ? (
                       <div className="p-6 text-center text-xs text-slate-400">
                         No notifications yet.
                       </div>
                     ) : (
-                      notifications.slice(0, 6).map((n, idx) => {
-                        const isReport = isReportNotification(n);
-                        const isBilling = !isReport && (n.type === 'billing' || n.type === 'balance');
-                        const isPayment = !isReport && (n.type === 'payment' || n.type === 'receipt_upload');
-                        const isAccountIssue = !isReport && n.type === 'account_issue';
-                        const isDisconnection = !isReport && n.type === 'disconnection';
-                        const isPartialAlert = !isReport && ((n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining'));
-                        const defaultTarget = isReport ? 'reports' : isAccountIssue ? 'profile' : isBilling ? 'bills' : 'dashboard';
+                      notifications.slice(0, 25).map((n, idx) => {
+                        const effectiveType = inferNotificationType(n);
+                        const isReport = isReportNotification(n) || effectiveType === 'report';
+                        const isAnnouncement = !isReport && effectiveType === 'announcement';
+                        const isInstallation = !isReport && !isAnnouncement && effectiveType === 'installation';
+                        const isMeterStatus = !isReport && !isAnnouncement && !isInstallation && effectiveType === 'meter_status';
+                        const meterStatusNorm = isMeterStatus ? normalizeMeterStatus(n.meterStatus) : 'active';
+                        const isBilling = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && (effectiveType === 'billing' || effectiveType === 'balance');
+                        const isReceiptUpload = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'receipt_upload';
+                        const isPayment = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && (effectiveType === 'payment' || isReceiptUpload);
+                        const isAccountIssue = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'account_issue';
+                        const isDisconnection = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'disconnection';
+                        const isPartialAlert =
+                          !isReport &&
+                          (isPayment || isBilling) &&
+                          ((n.title || '').toLowerCase().includes('partial') ||
+                            (n.message || '').toLowerCase().includes('remaining'));
+
+                        const categoryLabel = isReport
+                          ? 'Support Inquiry'
+                          : isAnnouncement
+                          ? 'District Advisory'
+                          : isInstallation
+                          ? `Meter Installation${n.installationStatus ? ` · ${n.installationStatus}` : ''}`
+                          : isMeterStatus
+                          ? `Meter Status · ${formatMeterStatusLabel(meterStatusNorm)}`
+                          : isDisconnection
+                          ? 'Disconnection Notice'
+                          : isAccountIssue
+                          ? 'Account & ID'
+                          : isPartialAlert
+                          ? 'Balance Notice'
+                          : isBilling
+                          ? 'Bill Issued'
+                          : isReceiptUpload
+                          ? 'Receipt Verified'
+                          : isPayment
+                          ? 'Payment Receipt'
+                          : 'Notice';
+
+                        const attribution = getNotificationAdminAttribution(n);
+                        const linkedThread = findLinkedReportForNotification(n, reports);
 
                         return (
-                          <div
+                          <button
+                            type="button"
                             key={`dropdown-notif-${n.id || idx}`}
-                            onClick={() => handleNotificationClick(n, defaultTarget)}
-                            className={`p-3.5 hover:bg-slate-800/80 transition cursor-pointer flex items-start space-x-3 ${
+                            onClick={() => handleOpenNotificationDetailModal(n)}
+                            className={`w-full text-left p-3.5 hover:bg-slate-800/80 transition cursor-pointer flex items-start space-x-3 group ${
                               !n.read ? 'bg-blue-950/35' : ''
                             }`}
                           >
                             <div className={`p-2 rounded-xl shrink-0 mt-0.5 border ${
-                              isReport
+                              isReport || isAnnouncement
                                 ? 'bg-indigo-950/80 text-indigo-300 border-indigo-800/60'
+                                : isInstallation
+                                ? 'bg-cyan-950/80 text-cyan-300 border-cyan-800/60'
+                                : isMeterStatus
+                                ? meterStatusNorm === 'damaged'
+                                  ? 'bg-rose-950/80 text-rose-300 border-rose-800/60'
+                                  : meterStatusNorm === 'maintenance'
+                                  ? 'bg-amber-950/80 text-amber-300 border-amber-800/60'
+                                  : meterStatusNorm === 'active'
+                                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
+                                  : 'bg-slate-800 text-slate-300 border-slate-700'
                                 : isDisconnection
                                 ? 'bg-rose-950/80 text-rose-300 border-rose-800/60'
                                 : isAccountIssue
@@ -2566,10 +3054,18 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                 ? 'bg-amber-950/80 text-amber-300 border-amber-800/60'
                                 : isBilling
                                 ? 'bg-blue-950/80 text-blue-300 border-blue-800/60'
-                                : 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
+                                : isPayment
+                                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
+                                : 'bg-slate-800 text-slate-300 border-slate-700'
                             }`}>
                               {isReport ? (
                                 <MessageSquare className="h-4 w-4" />
+                              ) : isAnnouncement ? (
+                                <Bell className="h-4 w-4" />
+                              ) : isInstallation ? (
+                                <Wrench className="h-4 w-4" />
+                              ) : isMeterStatus ? (
+                                <Gauge className="h-4 w-4" />
                               ) : isDisconnection ? (
                                 <AlertOctagon className="h-4 w-4" />
                               ) : isAccountIssue ? (
@@ -2578,82 +3074,61 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                 <AlertTriangle className="h-4 w-4" />
                               ) : isBilling ? (
                                 <ReceiptText className="h-4 w-4" />
-                              ) : (
+                              ) : isPayment ? (
                                 <CheckCircle2 className="h-4 w-4" />
+                              ) : (
+                                <Info className="h-4 w-4" />
                               )}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center justify-between gap-1 mb-0.5">
-                                <h4 className="text-xs font-black text-white truncate">
-                                  {n.title}
-                                </h4>
-                                {!n.read && (
-                                  <span className="h-2 w-2 rounded-full bg-blue-400 shrink-0"></span>
-                                )}
-                              </div>
-                              <p className="text-[11px] text-slate-300 line-clamp-2 leading-relaxed">
-                                {n.message}
-                              </p>
-                              <div className="flex flex-wrap items-center justify-between gap-2 mt-2 pt-1.5 border-t border-slate-800/80">
-                                <span className="text-[9px] font-mono text-slate-400">
-                                  {new Date(n.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                                </span>
-                                <div className="flex items-center gap-2">
-                                  {isReport ? (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleNotificationClick(n, 'reports');
-                                      }}
-                                      className="text-[10px] font-black text-indigo-300 hover:text-indigo-200 bg-indigo-950/70 hover:bg-indigo-900/70 border border-indigo-700/60 px-2.5 py-0.5 rounded-lg transition flex items-center space-x-1 cursor-pointer"
-                                    >
-                                      <span>Reports & Inquiries</span>
-                                      <ChevronRight className="h-3 w-3" />
-                                    </button>
-                                  ) : (
-                                    <>
-                                      {isAccountIssue && (
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleNotificationClick(n, 'profile');
-                                          }}
-                                          className="text-[10px] font-black text-purple-300 hover:text-purple-200 bg-purple-950/70 hover:bg-purple-900/70 border border-purple-700/60 px-2 py-0.5 rounded-lg transition cursor-pointer"
-                                        >
-                                          Account Profile
-                                        </button>
-                                      )}
-                                      {(isBilling || isPayment) && (
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleNotificationClick(n, 'bills');
-                                          }}
-                                          className="text-[10px] font-black text-emerald-300 hover:text-emerald-200 bg-emerald-950/70 hover:bg-emerald-900/70 border border-emerald-700/60 px-2 py-0.5 rounded-lg transition cursor-pointer"
-                                        >
-                                          My Bills
-                                        </button>
-                                      )}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleNotificationClick(n, 'dashboard');
-                                        }}
-                                        className="text-[10px] font-black text-blue-300 hover:text-blue-200 bg-blue-950/70 hover:bg-blue-900/70 border border-blue-700/60 px-2 py-0.5 rounded-lg transition flex items-center space-x-0.5 cursor-pointer"
-                                      >
-                                        <span>Dashboard</span>
-                                        <ChevronRight className="h-3 w-3" />
-                                      </button>
-                                    </>
+                              <div className="flex items-center justify-between gap-1.5 mb-1">
+                                <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                                  {attribution.isFromAdmin && (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sky-950/90 text-sky-300 border border-sky-800/70 text-[9px] font-black uppercase tracking-wider shrink-0">
+                                      <Building className="h-2.5 w-2.5 text-sky-400" />
+                                      <span>{attribution.senderBadgeLabel}</span>
+                                    </span>
+                                  )}
+                                  {linkedThread && !isReport && (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-950/90 text-indigo-300 border border-indigo-800/70 text-[9px] font-mono font-bold shrink-0">
+                                      <span>Replied · {linkedThread.ticketNumber}</span>
+                                    </span>
+                                  )}
+                                  {isReport && n.referencedNotice && (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-950/90 text-indigo-300 border border-indigo-800/70 text-[9px] font-bold truncate max-w-[170px]">
+                                      <span className="truncate">
+                                        {n.referencedNotice.meterStatus
+                                          ? `Re: Meter (${formatMeterStatusLabel(n.referencedNotice.meterStatus)})`
+                                          : `Re: ${n.referencedNotice.subject}`}
+                                      </span>
+                                    </span>
                                   )}
                                 </div>
+                                {!n.read && (
+                                  <span className="h-2 w-2 rounded-full bg-blue-400 shrink-0" aria-label="Unread notification"></span>
+                                )}
+                              </div>
+                              <h4 className="text-xs font-bold text-white truncate">
+                                {n.title || n.subject}
+                              </h4>
+                              <p className="text-[11px] text-slate-300 line-clamp-2 leading-snug mt-0.5">
+                                {normalizeSingleLinePreview(n.message)}
+                              </p>
+                              <div className="flex items-center justify-between gap-2 mt-1.5 pt-1 border-t border-slate-800/80 text-[10px]">
+                                <div className="flex items-center gap-1.5 text-slate-400 min-w-0 truncate">
+                                  <span className="font-semibold text-slate-300 truncate">{categoryLabel}</span>
+                                  <span aria-hidden="true" className="text-slate-600">·</span>
+                                  <span className="font-mono tabular-nums shrink-0">
+                                    {new Date(n.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                  </span>
+                                </div>
+                                <span className="font-bold text-blue-400 group-hover:text-blue-300 inline-flex items-center gap-0.5 shrink-0">
+                                  <span>{attribution.canReplyDirectly ? 'Read & Reply' : 'Read full info'}</span>
+                                  <ChevronRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                                </span>
                               </div>
                             </div>
-                          </div>
+                          </button>
                         );
                       })
                     )}
@@ -2710,9 +3185,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   </span>
                   <span className="text-[10px] font-mono font-bold bg-black/20 px-2.5 py-0.5 rounded-full">
                     Meter #{idConfirmedBanner.meterNumber}
-                  </span>
-                  <span className="text-[10px] font-mono font-bold bg-black/20 px-2.5 py-0.5 rounded-full">
-                    {idConfirmedBanner.rfidTag}
                   </span>
                 </h4>
                 <p className="text-xs text-emerald-50 mt-1 leading-relaxed">
@@ -2811,96 +3283,145 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           />
         )}
 
-        {/* ACCOUNT STATUS: SHOWS ACCOUNT SETUP PENDING MESSAGE UNTIL ADMIN ISSUES OFFICIAL IDENTIFIERS */}
-        {isAccountPending ? (
-          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl p-6 sm:p-8 text-slate-100 space-y-5 shadow-lg">
-            <div className="flex items-start space-x-4">
-              <div className="p-3 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-2xl shrink-0">
-                <Clock className="h-7 w-7" />
-              </div>
-              <div className="space-y-1.5">
-                <div className="flex flex-wrap items-center gap-2 text-xs text-amber-300 font-semibold">
-                  <span>Account Setup Pending</span>
-                  <span aria-hidden="true">·</span>
-                  <span className="font-mono tabular-nums text-amber-200">
-                    Status: {consumerRecord.accountNumber ? `#${consumerRecord.accountNumber}` : 'Pending Admin Issuance'}
-                  </span>
+        {/* ACCOUNT STATUS: ONLY DISPLAYED IN DASHBOARD MODULE */}
+        {activeTab === 'dashboard' && (
+          isAccountPending ? (
+            <div className="space-y-5">
+              <div className="bg-slate-900 border border-amber-500/40 rounded-3xl p-6 sm:p-8 text-slate-100 space-y-5 shadow-lg">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                  <div className="flex items-start space-x-4">
+                    <div className="p-3 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-2xl shrink-0">
+                      {consumerRecord.hasExistingMeter === false || installationRequests.length > 0 ? (
+                        <Wrench className="h-7 w-7" />
+                      ) : (
+                        <Clock className="h-7 w-7" />
+                      )}
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-amber-300 font-semibold">
+                        <span>
+                          {consumerRecord.status === 'installation_not_scheduled'
+                            ? 'Installation Not Scheduled'
+                            : installationRequests[0]?.status === 'Installed'
+                            ? 'Water Meter Installed · Awaiting Account Validation'
+                            : consumerRecord.status === 'pending_installation' || installationRequests.length > 0
+                            ? `Pending Water Meter Installation (${installationRequests[0]?.status || 'Pending Review'})`
+                            : 'Account Setup Pending'}
+                        </span>
+                        {(consumerRecord.applicationNumber || installationRequests[0]?.applicationNumber) && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="font-mono tabular-nums text-sky-300">
+                              App #{consumerRecord.applicationNumber || installationRequests[0]?.applicationNumber}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      <h3 className="text-lg font-black text-white">
+                        {consumerRecord.status === 'installation_not_scheduled'
+                          ? 'Schedule Your Water Meter Installation to Unlock Official Account Issuance'
+                          : installationRequests[0]?.status === 'Installed'
+                          ? 'Physical Water Meter Installed — Pending Administrative Validation'
+                          : consumerRecord.hasExistingMeter === false || installationRequests.length > 0
+                          ? 'Water Meter Installation & Official Account Activation in Progress'
+                          : 'Official Account & Meter Identifiers Pending Administrative Issuance'}
+                      </h3>
+                      <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">
+                        {consumerRecord.hasExistingMeter === false || installationRequests.length > 0 ? (
+                          <>
+                            Your official permanent <strong className="text-white">Account Number</strong> and{' '}
+                            <strong className="text-white">Meter Tag Number</strong> will be issued strictly after physical water meter installation is completed and verified by the Tagoloan Water District administrator.
+                          </>
+                        ) : (
+                          <>
+                            Your registration application for water connection service has been received and verified. The Tagoloan Water District administration office is currently provisioning your official permanent <strong className="text-white">Account Number</strong> and physical <strong className="text-white">Meter Tag Number</strong>.
+                          </>
+                        )}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <h3 className="text-lg font-black text-white">
-                  Official Account & Meter Identifiers Pending Administrative Issuance
-                </h3>
-                <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">
-                  Your registration application for water connection service has been received and verified. The Tagoloan Water District administration office is currently provisioning your official permanent <strong className="text-white">Account Number</strong> and physical <strong className="text-white">Meter Tag Number</strong>. Once issued, your telemetry readings, rate bracket schedules, and automated billing ledgers will activate automatically.
-                </p>
-              </div>
-            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3 border-t border-slate-800 text-xs">
-              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
-                <span className="text-[11px] text-slate-400 font-medium block">Applicant Name</span>
-                <span className="font-bold text-white mt-0.5 block">{consumerRecord.name}</span>
-              </div>
-              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
-                <span className="text-[11px] text-slate-400 font-medium block">Designated Barangay</span>
-                <span className="font-bold text-white mt-0.5 block">{consumerRecord.barangay || 'Poblacion East'}</span>
-              </div>
-              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
-                <span className="text-[11px] text-slate-400 font-medium block">Classification</span>
-                <span className="font-bold text-white mt-0.5 block">{consumerRecord.consumerType || 'Residential'}</span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          /* OFFICIAL IDENTIFIERS ACTIVE BANNER */
-          <div className="bg-gradient-to-r from-blue-700 via-blue-650 to-sky-600 rounded-3xl p-6 sm:p-7 text-white shadow-lg relative overflow-hidden">
-            <div className="absolute top-0 right-0 h-48 w-48 bg-white/5 rounded-full blur-2xl transform translate-x-1/4 -translate-y-1/4"></div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center relative">
-              <div className="md:col-span-8 space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="bg-white/20 text-white border border-white/20 font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-lg">
-                    {consumerRecord.consumerType || 'Residential'} Line
-                  </span>
-                  <span className="bg-emerald-400/20 text-emerald-200 border border-emerald-400/30 font-bold text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-lg flex items-center space-x-1">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
-                    <span>Line Active</span>
-                  </span>
-                </div>
-                
-                <h2 className="text-2xl sm:text-3xl font-black tracking-tight">{consumerRecord.name}</h2>
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-blue-100">
-                  <span className="flex items-center space-x-1">
-                    <MapPin className="h-3.5 w-3.5 text-sky-300 shrink-0" />
-                    <span>{consumerRecord.address}</span>
-                  </span>
-                  <span className="flex items-center space-x-1 font-bold text-amber-200">
-                    <MapPin className="h-3.5 w-3.5 shrink-0" />
-                    <span>Barangay: {consumerRecord.barangay || 'Poblacion'}</span>
-                  </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3 border-t border-slate-800 text-xs">
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                    <span className="text-[11px] text-slate-400 font-medium block">Applicant Name</span>
+                    <span className="font-bold text-white mt-0.5 block">{consumerRecord.name}</span>
+                  </div>
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                    <span className="text-[11px] text-slate-400 font-medium block">Designated Barangay</span>
+                    <span className="font-bold text-white mt-0.5 block">{consumerRecord.barangay || 'Poblacion'}</span>
+                  </div>
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                    <span className="text-[11px] text-slate-400 font-medium block">Classification</span>
+                    <span className="font-bold text-white mt-0.5 block">{consumerRecord.consumerType || 'Residential'}</span>
+                  </div>
                 </div>
               </div>
 
-              {/* Official Account Number & Tag Number Identifiers Display */}
-              <div className="md:col-span-4 bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/15 space-y-2.5">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-blue-200 font-medium">Account Number:</span>
-                  <span className="font-mono font-black text-amber-300 text-sm bg-black/20 px-2 py-0.5 rounded border border-white/10">
-                    {consumerRecord.accountNumber}
-                  </span>
+              {(consumerRecord.hasExistingMeter === false ||
+                isPendingConsumerStatus(consumerRecord.status) ||
+                installationRequests.length > 0) && (
+                <ConsumerInstallationSection
+                  user={currentUser}
+                  consumerRecord={consumerRecord}
+                  installationRequests={installationRequests}
+                  onRefresh={() => loadConsumerInfo(true)}
+                  compactHeader
+                />
+              )}
+            </div>
+          ) : (
+            /* OFFICIAL IDENTIFIERS ACTIVE BANNER */
+            <div className="bg-gradient-to-r from-blue-700 via-blue-650 to-sky-600 rounded-3xl p-6 sm:p-7 text-white shadow-lg relative overflow-hidden">
+              <div className="absolute top-0 right-0 h-48 w-48 bg-white/5 rounded-full blur-2xl transform translate-x-1/4 -translate-y-1/4"></div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center relative">
+                <div className="md:col-span-8 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-blue-100 font-semibold">
+                    <span className="text-white font-bold">
+                      {consumerRecord.consumerType || 'Residential'} Line
+                    </span>
+                    <span aria-hidden="true" className="text-blue-200/70">·</span>
+                    <span className="text-emerald-200 font-bold">
+                      Line Active
+                    </span>
+                  </div>
+                  
+                  <h2 className="text-2xl sm:text-3xl font-black tracking-tight">{consumerRecord.name}</h2>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-blue-100">
+                    <span className="flex items-center space-x-1">
+                      <MapPin className="h-3.5 w-3.5 text-sky-300 shrink-0" />
+                      <span>{consumerRecord.address}</span>
+                    </span>
+                    <span className="flex items-center space-x-1 font-bold text-amber-200">
+                      <MapPin className="h-3.5 w-3.5 shrink-0" />
+                      <span>Barangay: {consumerRecord.barangay || 'Poblacion'}</span>
+                    </span>
+                  </div>
                 </div>
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-blue-200 font-medium">Meter Tag Number:</span>
-                  <span className="font-mono font-black text-white text-sm bg-black/20 px-2 py-0.5 rounded border border-white/10">
-                    {consumerRecord.meterNumber || 'MT-7711'}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-blue-200 font-medium">Classification:</span>
-                  <span className="font-bold text-blue-100">{consumerRecord.consumerType || 'Residential'}</span>
+
+                {/* Official Account Number & Tag Number Identifiers Display */}
+                <div className="md:col-span-4 bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/15 space-y-2.5">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-blue-200 font-medium">Account Number:</span>
+                    <span className="font-mono tabular-nums font-black text-amber-300 text-sm">
+                      {consumerRecord.accountNumber}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-blue-200 font-medium">Meter Tag Number:</span>
+                    <span className="font-mono tabular-nums font-black text-white text-sm">
+                      {consumerRecord.meterNumber || 'MT-7711'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-blue-200 font-medium">Classification:</span>
+                    <span className="font-bold text-blue-100">{consumerRecord.consumerType || 'Residential'}</span>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          )
         )}
 
         {/* ------------------------------------------------------------- */}
@@ -2915,6 +3436,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           />
         ) : (
           <>
+            {/* ------------------------------------------------------------- */}
+            {/* MODULE: WATER METER INSTALLATION & ACCOUNT ACTIVATION         */}
+            {/* ------------------------------------------------------------- */}
+            {activeTab === 'installation' && (
+              <div className="space-y-6 animate-fade-in" id="consumer-tab-installation">
+                <ConsumerInstallationSection
+                  user={currentUser}
+                  consumerRecord={consumerRecord}
+                  installationRequests={installationRequests}
+                  onRefresh={() => loadConsumerInfo(true)}
+                />
+              </div>
+            )}
+
             {/* ------------------------------------------------------------- */}
             {/* MODULE 1: DASHBOARD                                          */}
             {/* ------------------------------------------------------------- */}
@@ -3006,7 +3541,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       Official Meter Reading for {spotlightReading.billingPeriod}
                     </h3>
                     <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-                      Your meter index was verified by our district field reader. Net consumption computed at <strong className="text-white font-mono tabular-nums">{spotlightReading.consumption} m³</strong> with a total calculated bill of <strong className="text-sky-400 font-mono tabular-nums">₱{calculateCostOf(spotlightReading, consumerRecord?.consumerType).toFixed(2)}</strong>.
+                      Your meter reading was approved by Administration. Baseline <strong className="text-slate-100 font-mono tabular-nums">{spotlightReading.previousReading} m³</strong> to Present <strong className="text-white font-mono tabular-nums">{spotlightReading.presentReading ?? spotlightReading.currentReading} m³</strong> yielded <strong className="text-sky-300 font-mono tabular-nums">{spotlightReading.consumption} m³</strong> net usage with a calculated bill of <strong className="text-emerald-400 font-mono tabular-nums">₱{calculateCostOf(spotlightReading, consumerRecord?.consumerType).toFixed(2)}</strong>.
                     </p>
                   </div>
 
@@ -3026,36 +3561,38 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   </div>
                 </div>
 
-                {/* 4 Index & Bill Telemetry Metric Tiles */}
+                {/* 4 Index & Bill Basis Metric Tiles */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 my-5">
                   <div className="bg-slate-950 border border-slate-800 rounded-2xl p-3.5 space-y-1">
                     <span className="text-[11px] font-semibold text-slate-400 block">
-                      Previous Index
+                      Previous Reading
                     </span>
                     <span className="text-lg font-black font-mono tabular-nums text-slate-200 block">
                       {spotlightReading.previousReading} m³
                     </span>
-                    <span className="text-[10px] text-slate-500">Prior baseline dial</span>
+                    <span className="text-[10px] text-slate-500">Baseline from prior cycle</span>
                   </div>
 
                   <div className="bg-slate-950 border border-blue-500/30 rounded-2xl p-3.5 space-y-1">
                     <span className="text-[11px] font-semibold text-blue-400 block">
-                      Current Index
+                      Present Reading
                     </span>
                     <span className="text-lg font-black font-mono tabular-nums text-white block">
-                      {spotlightReading.currentReading} m³
+                      {spotlightReading.presentReading ?? spotlightReading.currentReading} m³
                     </span>
-                    <span className="text-[10px] text-blue-400 font-medium">Latest dial recorded</span>
+                    <span className="text-[10px] text-blue-400 font-medium">Recorded at inspection</span>
                   </div>
 
                   <div className="bg-slate-950 border border-sky-500/30 rounded-2xl p-3.5 space-y-1">
                     <span className="text-[11px] font-semibold text-sky-400 block">
-                      Net Consumption
+                      Current Reading & Usage
                     </span>
                     <span className="text-lg font-black font-mono tabular-nums text-sky-300 block">
                       {spotlightReading.consumption} m³
                     </span>
-                    <span className="text-[10px] text-sky-400/80 font-medium">Actual volume used</span>
+                    <span className="text-[10px] text-sky-400/80 font-mono tabular-nums font-medium">
+                      Index {spotlightReading.currentReading} m³ · Net used
+                    </span>
                   </div>
 
                   <div className="bg-slate-950 border border-emerald-500/30 rounded-2xl p-3.5 space-y-1">
@@ -3171,9 +3708,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               {/* Card 1: Current Month Consumption */}
               <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-md space-y-3">
                 <div className="flex justify-between items-start">
-                  <span className="text-xs font-semibold text-slate-400">
-                    Current Consumption
-                  </span>
+                  <div>
+                    <span className="text-xs font-semibold text-slate-400 block">
+                      Current Consumption
+                    </span>
+                    <span className="text-[11px] font-mono tabular-nums text-slate-500 block mt-0.5">
+                      Prev {prevReadingVal} → Pres {presReadingVal} m³
+                    </span>
+                  </div>
                   <div className="p-2 bg-blue-500/15 text-blue-400 border border-blue-500/20 rounded-xl">
                     <Droplet className="h-5 w-5" />
                   </div>
@@ -3209,9 +3751,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               {/* Card 2: Latest Meter Reading */}
               <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-md space-y-3">
                 <div className="flex justify-between items-start">
-                  <span className="text-xs font-semibold text-slate-400">
-                    Latest Meter Reading
-                  </span>
+                  <div>
+                    <span className="text-xs font-semibold text-slate-400 block">
+                      Latest Meter Reading
+                    </span>
+                    <span className="text-[11px] font-mono tabular-nums text-sky-400/90 block mt-0.5">
+                      Baseline: {prevReadingVal} m³
+                    </span>
+                  </div>
                   <div className="p-2 bg-sky-500/15 text-sky-400 border border-sky-500/20 rounded-xl">
                     <Activity className="h-5 w-5" />
                   </div>
@@ -3219,19 +3766,23 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 <div>
                   <div className="flex items-baseline space-x-2">
                     <span className="text-3xl font-black text-white font-mono tabular-nums">
-                      {latestRead ? latestRead.currentReading : 0}
+                      {currReadingVal}
                     </span>
                     <span className="text-xs font-semibold text-slate-400">m³ Index</span>
                   </div>
                   <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1 font-medium">
                     <span>
-                      {latestRead ? `Recorded: ${latestRead.readingDate}` : 'Awaiting reading cycle'}
+                      {latestRead ? `Recorded: ${latestRead.readingDate}` : consumerRecord?.lastReadingDate ? `Recorded: ${consumerRecord.lastReadingDate}` : 'Baseline index active'}
                     </span>
-                    {latestRead && isOfficialBillIssued(latestRead) && (
+                    {latestRead && isOfficialBillIssued(latestRead) ? (
                       <span className="text-[10px] font-bold text-sky-400">
                         Billed
                       </span>
-                    )}
+                    ) : pendingInspectionRead ? (
+                      <span className="text-[10px] font-bold text-amber-400">
+                        New Read Pending
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -3366,6 +3917,157 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
 
             </div>
+
+            {/* PERMANENT METER READING BASIS & CONTINUITY PANEL (Previous -> Present -> Current) */}
+            {!isAccountPending && (
+              <div
+                className="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-md space-y-4"
+                id="consumer-reading-continuity-panel"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-slate-800">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                      <h3 className="text-sm font-bold text-white">
+                        Meter Reading Basis & Consumption Continuity
+                      </h3>
+                      <span aria-hidden="true" className="text-slate-600">·</span>
+                      <span className="text-xs font-mono tabular-nums text-sky-400 font-semibold">
+                        Meter #{consumerRecord?.meterNumber || latestRead?.meterNumber || 'Assigned'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Your Previous Reading sets the baseline, Present Reading records usage at inspection, and Current Reading tracks latest water consumption for billing and leak detection.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('usage')}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl transition flex items-center space-x-1.5 cursor-pointer self-start sm:self-center shrink-0"
+                  >
+                    <BarChart3 className="h-3.5 w-3.5 text-sky-400" />
+                    <span>View Monthly Usage</span>
+                    <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
+                  </button>
+                </div>
+
+                {/* 3-Column Reading Continuity Basis */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* 1. Previous Reading (Baseline) */}
+                  <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-4 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                        Previous Reading
+                      </span>
+                      <span className="text-[11px] font-medium text-slate-500">
+                        Baseline Index
+                      </span>
+                    </div>
+                    <div className="flex items-baseline space-x-2">
+                      <span className="text-2xl font-black font-mono tabular-nums text-slate-200">
+                        {prevReadingVal}
+                      </span>
+                      <span className="text-xs font-semibold text-slate-400">m³</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 leading-snug">
+                      {previousMonthRead
+                        ? `Carried forward from ${previousMonthRead.billingPeriod} (${previousMonthRead.readingDate})`
+                        : 'Preserved baseline index prior to latest inspection'}
+                    </p>
+                  </div>
+
+                  {/* 2. Present Reading (Inspection) */}
+                  <div className="bg-slate-950/90 border border-blue-500/30 rounded-2xl p-4 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-blue-400">
+                        Present Reading
+                      </span>
+                      <span className="text-[11px] font-medium text-blue-300/80">
+                        Inspection Index
+                      </span>
+                    </div>
+                    <div className="flex items-baseline space-x-2">
+                      <span className="text-2xl font-black font-mono tabular-nums text-white">
+                        {presReadingVal}
+                      </span>
+                      <span className="text-xs font-semibold text-slate-400">m³</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      {latestRead
+                        ? `Recorded on ${latestRead.readingDate} (${latestRead.billingPeriod})`
+                        : 'Awaiting first approved field meter inspection'}
+                    </p>
+                  </div>
+
+                  {/* 3. Current Reading & Latest Consumption */}
+                  <div className="bg-slate-950/90 border border-sky-500/30 rounded-2xl p-4 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-sky-400">
+                        Current Reading & Usage
+                      </span>
+                      <span className="text-[11px] font-mono tabular-nums font-semibold text-sky-300">
+                        Dial: {currReadingVal} m³
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-2">
+                      <div className="flex items-baseline space-x-2">
+                        <span className="text-2xl font-black font-mono tabular-nums text-sky-300">
+                          {currentConsumptionVal}
+                        </span>
+                        <span className="text-xs font-semibold text-slate-300">m³ used</span>
+                      </div>
+                      <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                        {presReadingVal} − {prevReadingVal} = {currentConsumptionVal} m³
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      {latestBill
+                        ? `Assessed Bill: ₱${calculateCostOf(latestBill, consumerRecord?.consumerType).toFixed(2)} (${latestBill.paymentStatus === 'paid' ? 'Paid' : 'Billed'})`
+                        : latestRead
+                        ? `Estimated Charge: ₱${calculateCostOf(latestRead, consumerRecord?.consumerType).toFixed(2)}`
+                        : 'Tracks latest consumption & billing basis'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Comparison, Expense Management & Leak / Problem Detection Strip */}
+                <div className="pt-3 border-t border-slate-800/80 flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                    {isAbnormalSpike ? (
+                      <span className="text-rose-400 font-bold flex items-center gap-1.5">
+                        <AlertTriangle className="h-4 w-4 shrink-0" />
+                        <span>High Usage Alert — Possible Concealed Leak Detected:</span>
+                      </span>
+                    ) : consumptionDiff < 0 && previousMonthRead ? (
+                      <span className="text-emerald-400 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="h-4 w-4 shrink-0" />
+                        <span>Lower Water Usage vs Prior Cycle:</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 font-semibold flex items-center gap-1.5">
+                        <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
+                        <span>Reading Continuity & Leak Check:</span>
+                      </span>
+                    )}
+                    <span className="text-slate-400">
+                      {isAbnormalSpike
+                        ? `Latest usage (${currentConsumptionVal} m³) rose sharply${previousMonthRead ? ` from ${previousMonthRead.consumption} m³` : ''}. Inspect indoor fixtures, float valves, and service lines.`
+                        : previousMonthRead
+                        ? `Compared to ${previousMonthRead.billingPeriod} (${previousMonthRead.consumption} m³), usage changed by ${consumptionDiff > 0 ? `+${consumptionDiff}` : consumptionDiff} m³.`
+                        : latestRead
+                        ? `Baseline ${prevReadingVal} m³ → Present ${presReadingVal} m³ verified with normal consumption.`
+                        : 'Previous baseline will automatically chain forward when your meter is read.'}
+                    </span>
+                  </div>
+
+                  {pendingInspectionRead && (
+                    <div className="text-[11px] font-mono tabular-nums text-amber-300 bg-amber-950/40 border border-amber-700/40 rounded-xl px-3 py-1.5 shrink-0">
+                      New Field Inspection Logged ({pendingInspectionRead.previousReading} → {pendingInspectionRead.presentReading ?? pendingInspectionRead.currentReading} m³ · {pendingInspectionRead.consumption} m³) — Awaiting Admin Approval
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* OFFICIAL DISTRICT ADVISORIES & ANNOUNCEMENTS BULLETIN */}
             {announcements.length > 0 && (
@@ -3869,28 +4571,34 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <p className="text-[11px] text-slate-500">Field meter recordings will appear here in chronological order.</p>
                     </div>
                   ) : (
-                    readings.slice(0, 3).map((r, idx) => (
-                      <div key={`dash-read-${r.id || idx}`} className="py-3.5 space-y-1">
-                        <div className="flex justify-between items-center">
-                          <span className="text-xs font-bold text-slate-200">{r.readingDate}</span>
-                          <span className={`text-[11px] font-semibold ${
-                            r.status === 'flagged_abnormal'
-                              ? 'text-rose-400'
-                              : 'text-emerald-400'
-                          }`}>
-                            {r.status === 'flagged_abnormal' ? 'High / Flagged' : 'Verified'}
-                          </span>
+                    readings.slice(0, 4).map((r, idx) => {
+                      const presVal = r.presentReading ?? r.currentReading;
+                      return (
+                        <div key={`dash-read-${r.id || idx}`} className="py-3.5 space-y-1">
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs font-bold text-slate-200">
+                              {r.billingPeriod || r.readingDate}
+                              <span className="text-[10px] text-slate-500 font-normal ml-1.5">({r.readingDate})</span>
+                            </span>
+                            <span className={`text-[11px] font-semibold ${
+                              r.status === 'flagged_abnormal'
+                                ? 'text-rose-400'
+                                : 'text-emerald-400'
+                            }`}>
+                              {r.status === 'flagged_abnormal' ? 'High / Flagged' : 'Verified'}
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-baseline text-xs">
+                            <span className="text-slate-400 font-mono tabular-nums text-[11px]">
+                              Prev {r.previousReading} → Pres {presVal} m³
+                            </span>
+                            <span className="font-mono tabular-nums font-black text-sky-400 text-sm">
+                              {r.consumption} m³
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex justify-between items-baseline text-xs">
-                          <span className="text-slate-400 font-mono tabular-nums text-[11px]">
-                            {r.previousReading} m³ → {r.currentReading} m³
-                          </span>
-                          <span className="font-mono tabular-nums font-black text-sky-400 text-sm">
-                            {r.consumption} m³
-                          </span>
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -4112,16 +4820,19 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               </span>
                             </td>
 
-                            {/* Meter Readings Index */}
-                            <td className="px-4 py-3.5 whitespace-nowrap font-mono text-slate-300 font-medium">
-                              {r.previousReading} → <strong className="text-white font-bold">{r.currentReading}</strong>
+                            {/* Meter Readings Index (Previous -> Present) */}
+                            <td className="px-4 py-3.5 whitespace-nowrap font-mono tabular-nums text-slate-300 font-medium">
+                              <div>
+                                <span className="text-slate-400">Prev {r.previousReading}</span> → <strong className="text-white font-bold">Pres {r.presentReading ?? r.currentReading}</strong>
+                              </div>
+                              <span className="text-[10px] text-slate-500 block">
+                                Current Index: {r.currentReading} m³
+                              </span>
                             </td>
 
                             {/* Consumption Volume */}
-                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-bold text-blue-300">
-                              <span className="inline-block px-2 py-0.5 bg-blue-950/80 border border-blue-800/80 rounded-md">
-                                {r.consumption} m³
-                              </span>
+                            <td className="px-4 py-3.5 whitespace-nowrap font-mono tabular-nums font-bold text-sky-300">
+                              {r.consumption} m³
                             </td>
 
                             {/* Gross Bill */}
@@ -4492,35 +5203,130 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 </button>
               </div>
 
-              {/* Summary Stats Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                  <span className="text-[11px] text-slate-400 font-semibold block">Total Volume Consumed</span>
-                  <span className="text-2xl font-black font-mono tabular-nums text-sky-400 mt-1 block">
-                    {allHistoryReadings.reduce((acc, r) => acc + (r.consumption || 0), 0)} m³
-                  </span>
-                </div>
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                  <span className="text-[11px] text-slate-400 font-semibold block">Average Monthly Usage</span>
-                  <span className="text-2xl font-black font-mono tabular-nums text-white mt-1 block">
-                    {allHistoryReadings.length > 0 
-                      ? (allHistoryReadings.reduce((acc, r) => acc + (r.consumption || 0), 0) / allHistoryReadings.length).toFixed(1)
-                      : 0} m³
-                  </span>
-                </div>
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                  <span className="text-[11px] text-slate-400 font-semibold block">Peak Month Consumption</span>
-                  <span className="text-2xl font-black font-mono tabular-nums text-rose-400 mt-1 block">
-                    {allHistoryReadings.length > 0 ? Math.max(...allHistoryReadings.map(r => r.consumption || 0)) : 0} m³
-                  </span>
-                </div>
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                  <span className="text-[11px] text-slate-400 font-semibold block">Audited Reading Cycles</span>
-                  <span className="text-2xl font-black font-mono tabular-nums text-emerald-400 mt-1 block">
-                    {readings.length} Approved ({allHistoryReadings.length} Logged)
-                  </span>
-                </div>
-              </div>
+              {/* Summary Stats Grid (calculated from approved cycles when available so pending drafts never double-count) */}
+              {(() => {
+                const statsSource = readings.length > 0 ? readings : allHistoryReadings;
+                const totalVol = statsSource.reduce((acc, r) => acc + (r.consumption || 0), 0);
+                const avgVol = statsSource.length > 0 ? (totalVol / statsSource.length).toFixed(1) : '0';
+                const peakVol = statsSource.length > 0 ? Math.max(...statsSource.map(r => r.consumption || 0)) : 0;
+                const maxBarM3 = Math.max(25, peakVol);
+                const monthlySeries = [...statsSource].slice(0, 8).reverse();
+
+                return (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                        <span className="text-[11px] text-slate-400 font-semibold block">Total Volume Consumed</span>
+                        <span className="text-2xl font-black font-mono tabular-nums text-sky-400 mt-1 block">
+                          {totalVol} m³
+                        </span>
+                        <span className="text-[11px] text-slate-500 mt-0.5 block font-mono tabular-nums">
+                          Latest Index: {currReadingVal} m³
+                        </span>
+                      </div>
+                      <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                        <span className="text-[11px] text-slate-400 font-semibold block">Average Monthly Usage</span>
+                        <span className="text-2xl font-black font-mono tabular-nums text-white mt-1 block">
+                          {avgVol} m³
+                        </span>
+                        <span className="text-[11px] text-slate-500 mt-0.5 block">
+                          Across {statsSource.length} reading cycle{statsSource.length === 1 ? '' : 's'}
+                        </span>
+                      </div>
+                      <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                        <span className="text-[11px] text-slate-400 font-semibold block">Peak Cycle Consumption</span>
+                        <span className="text-2xl font-black font-mono tabular-nums text-rose-400 mt-1 block">
+                          {peakVol} m³
+                        </span>
+                        <span className="text-[11px] text-slate-500 mt-0.5 block font-mono tabular-nums">
+                          Baseline Now: {prevReadingVal} → {presReadingVal} m³
+                        </span>
+                      </div>
+                      <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                        <span className="text-[11px] text-slate-400 font-semibold block">Audited Reading Cycles</span>
+                        <span className="text-2xl font-black font-mono tabular-nums text-emerald-400 mt-1 block">
+                          {readings.length} Approved
+                        </span>
+                        <span className="text-[11px] text-slate-500 mt-0.5 block">
+                          {allHistoryReadings.length > readings.length
+                            ? `${allHistoryReadings.length - readings.length} awaiting Admin approval`
+                            : 'All field readings verified'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Monthly Consumption & Expense Comparison Breakdown */}
+                    {monthlySeries.length > 0 && (
+                      <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-5 space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div>
+                            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                              Monthly Water Consumption & Reading Progression
+                            </h4>
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              Cycle-by-cycle comparison of Previous baseline, Present inspection reading, net m³ consumed, and billed expense.
+                            </p>
+                          </div>
+                          <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                            Showing {monthlySeries.length} recent cycle{monthlySeries.length === 1 ? '' : 's'}
+                          </span>
+                        </div>
+
+                        <div className="space-y-3">
+                          {monthlySeries.map((cycleRead, idx) => {
+                            const priorCycle = idx > 0 ? monthlySeries[idx - 1] : null;
+                            const deltaM3 = priorCycle ? (cycleRead.consumption || 0) - (priorCycle.consumption || 0) : 0;
+                            const presIndex = cycleRead.presentReading ?? cycleRead.currentReading;
+                            const pctWidth = Math.max(6, Math.min(100, Math.round(((cycleRead.consumption || 0) / maxBarM3) * 100)));
+                            const estBill = calculateCostOf(cycleRead, consumerRecord?.consumerType);
+                            const spikeFlag =
+                              cycleRead.status === 'flagged_abnormal' ||
+                              (cycleRead.consumption || 0) >= 45 ||
+                              (priorCycle && priorCycle.consumption >= 5 && deltaM3 >= 12);
+
+                            return (
+                              <div key={`monthly-prog-${cycleRead.id || idx}`} className="space-y-1.5">
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                  <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
+                                    <span className="font-bold text-white">{cycleRead.billingPeriod || cycleRead.readingDate}</span>
+                                    <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                                      Prev {cycleRead.previousReading} → Pres {presIndex} m³
+                                    </span>
+                                    {spikeFlag && (
+                                      <span className="text-[11px] font-semibold text-rose-400">
+                                        · High Usage Spike
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-3 font-mono tabular-nums">
+                                    {priorCycle && (
+                                      <span className={`text-[11px] font-semibold ${
+                                        deltaM3 > 0 ? 'text-rose-400' : deltaM3 < 0 ? 'text-emerald-400' : 'text-slate-500'
+                                      }`}>
+                                        {deltaM3 > 0 ? `+${deltaM3} m³` : deltaM3 < 0 ? `${deltaM3} m³` : '0 m³'} vs prev
+                                      </span>
+                                    )}
+                                    <span className="font-black text-sky-400">{cycleRead.consumption} m³</span>
+                                    <span className="text-slate-300 font-bold">₱{estBill.toFixed(2)}</span>
+                                  </div>
+                                </div>
+                                <div className="h-2 w-full bg-slate-900 rounded-full overflow-hidden border border-slate-800/80">
+                                  <div
+                                    className={`h-full rounded-full transition-all ${
+                                      spikeFlag ? 'bg-rose-500' : 'bg-sky-500'
+                                    }`}
+                                    style={{ width: `${pctWidth}%` }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
 
             {/* Comprehensive Reading History Table */}
@@ -4532,6 +5338,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   r.meterNumber,
                   `${r.consumption} m3`,
                   r.previousReading,
+                  r.presentReading ?? r.currentReading,
                   r.currentReading,
                   r.status,
                   r.meterReaderName,
@@ -4543,8 +5350,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl text-slate-100">
                   <div className="p-4 sm:p-5 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
-                      <h4 className="text-sm font-black text-white uppercase tracking-wider">Historical Meter Reading Log</h4>
-                      <p className="text-xs text-slate-400 mt-0.5">Search reading dates, billing periods, meter serials, cubic meter usage, or verification notes.</p>
+                      <h4 className="text-sm font-black text-white uppercase tracking-wider">Historical Meter Reading Log (Previous · Present · Current)</h4>
+                      <p className="text-xs text-slate-400 mt-0.5">Complete ledger preserving every Previous baseline, Present inspection reading, Current dial index, consumption variance, and billed statement.</p>
                     </div>
                     <div className="w-full sm:w-96">
                       <SmartSearchBar
@@ -4553,7 +5360,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         onChange={setConsumerUsageSearch}
                         resultCount={filteredUsageReadings.length}
                         totalCount={allHistoryReadings.length}
-                        placeholder="Smart search reading date, period, meter #, m³, or status..."
+                        placeholder="Search period, date, prev/present index, m³, or status..."
                         id="consumer-usage-smart-search"
                       />
                     </div>
@@ -4562,59 +5369,120 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     <table className="min-w-full text-xs text-left">
                       <thead className="bg-slate-950 text-slate-300 font-bold text-xs border-b border-slate-800">
                         <tr>
-                          <th className="px-6 py-4">Reading Date</th>
-                          <th className="px-6 py-4">Meter Serial / Tag</th>
-                          <th className="px-6 py-4">Prev → Current Index</th>
-                          <th className="px-6 py-4">Consumption (m³)</th>
-                          <th className="px-6 py-4">Reading Status</th>
-                          <th className="px-6 py-4">Log Method</th>
-                          <th className="px-6 py-4">Notes</th>
+                          <th className="px-5 py-4">Billing Cycle & Date</th>
+                          <th className="px-5 py-4">Previous Reading</th>
+                          <th className="px-5 py-4">Present Reading</th>
+                          <th className="px-5 py-4">Current & Usage (m³)</th>
+                          <th className="px-5 py-4">Bill & Expense</th>
+                          <th className="px-5 py-4">Status & Leak Check</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
                         {paginatedUsageReadings.length === 0 ? (
                           <tr>
-                            <td colSpan={7} className="px-6 py-10 text-center text-slate-400">
+                            <td colSpan={6} className="px-6 py-10 text-center text-slate-400">
                               {consumerUsageSearch.trim()
                                 ? `No meter readings match "${consumerUsageSearch}".`
                                 : 'No meter reading inspections recorded yet for this account.'}
                             </td>
                           </tr>
                         ) : (
-                          paginatedUsageReadings.map((r, idx) => (
-                            <tr key={`usage-tbl-${r.id || idx}`} className="hover:bg-slate-800/60 transition">
-                              <td className="px-6 py-4 font-bold text-white">
-                                {r.readingDate}
-                                <span className="text-[10px] text-slate-400 font-mono block mt-0.5">{r.billingPeriod}</span>
-                              </td>
-                              <td className="px-6 py-4 font-mono tabular-nums font-bold text-sky-400">
-                                {r.meterNumber}
-                              </td>
-                              <td className="px-6 py-4 font-mono tabular-nums text-slate-300">
-                                {r.previousReading} m³ → <strong className="text-white">{r.currentReading} m³</strong>
-                              </td>
-                              <td className="px-6 py-4 font-mono tabular-nums font-black text-sky-400 text-sm">
-                                {r.consumption} m³
-                              </td>
-                              <td className="px-6 py-4">
-                                <span className={`font-semibold text-xs ${
-                                  r.status === 'flagged_abnormal'
-                                    ? 'text-rose-400'
-                                    : r.status === 'pending'
-                                    ? 'text-amber-400'
-                                    : 'text-emerald-400'
-                                }`}>
-                                  {r.status === 'flagged_abnormal' ? 'Flagged Abnormal' : r.status === 'pending' ? 'Pending Approval' : 'Verified'}
-                                </span>
-                              </td>
-                              <td className="px-6 py-4 text-slate-400 font-mono text-[11px]">
-                                TWD Field Unit
-                              </td>
-                              <td className="px-6 py-4 text-slate-400 italic max-w-xs truncate">
-                                {r.notes || (r.status === 'pending' ? 'Awaiting verification in Approvals module' : 'Normal residential baseline reading')}
-                              </td>
-                            </tr>
-                          ))
+                          paginatedUsageReadings.map((r, idx) => {
+                            const fullIdx = allHistoryReadings.findIndex(item => item.id === r.id);
+                            const olderRead = fullIdx >= 0 ? allHistoryReadings[fullIdx + 1] : null;
+                            const diffVsOlder = olderRead ? (r.consumption || 0) - (olderRead.consumption || 0) : null;
+                            const presIndex = r.presentReading ?? r.currentReading;
+                            const billIssued = isOfficialBillIssued(r);
+                            const billTotal = calculateCostOf(r, consumerRecord?.consumerType);
+                            const highUsage =
+                              r.status === 'flagged_abnormal' ||
+                              (r.consumption || 0) >= 45 ||
+                              (olderRead && olderRead.consumption >= 5 && (diffVsOlder || 0) >= 12);
+
+                            return (
+                              <tr key={`usage-tbl-${r.id || idx}`} className="hover:bg-slate-800/60 transition">
+                                <td className="px-5 py-4">
+                                  <span className="font-bold text-white block">{r.billingPeriod || 'Field Cycle'}</span>
+                                  <span className="text-[11px] text-slate-400 font-mono tabular-nums block mt-0.5">
+                                    Read: {r.readingDate} · #{r.meterNumber}
+                                  </span>
+                                </td>
+                                <td className="px-5 py-4 font-mono tabular-nums">
+                                  <span className="text-slate-200 font-bold text-sm">{r.previousReading} m³</span>
+                                  <span className="text-[10px] text-slate-500 block">Prior baseline</span>
+                                </td>
+                                <td className="px-5 py-4 font-mono tabular-nums">
+                                  <span className="text-white font-bold text-sm">{presIndex} m³</span>
+                                  <span className="text-[10px] text-blue-400/90 block">Inspection index</span>
+                                </td>
+                                <td className="px-5 py-4 font-mono tabular-nums">
+                                  <div className="flex items-baseline gap-2">
+                                    <span className="font-black text-sky-400 text-sm">{r.consumption} m³</span>
+                                    <span className="text-[11px] text-slate-400">(Index {r.currentReading})</span>
+                                  </div>
+                                  {diffVsOlder !== null ? (
+                                    <span className={`text-[10px] font-semibold block mt-0.5 ${
+                                      diffVsOlder > 0 ? 'text-rose-400' : diffVsOlder < 0 ? 'text-emerald-400' : 'text-slate-500'
+                                    }`}>
+                                      {diffVsOlder > 0 ? `+${diffVsOlder} m³` : diffVsOlder < 0 ? `${diffVsOlder} m³` : 'Same m³'} vs prior read
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-500 block mt-0.5">Initial baseline cycle</span>
+                                  )}
+                                </td>
+                                <td className="px-5 py-4 font-mono tabular-nums">
+                                  {billIssued ? (
+                                    <div className="space-y-1">
+                                      <span className="font-bold text-white block">₱{billTotal.toFixed(2)}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (r.paymentStatus === 'paid') {
+                                            setReceiptDetailModal(r);
+                                          } else {
+                                            setBillDetailsReading(r);
+                                            setIsBillDetailsOpen(true);
+                                          }
+                                        }}
+                                        className="text-[11px] font-sans font-bold text-sky-400 hover:text-sky-300 hover:underline cursor-pointer"
+                                      >
+                                        {r.paymentStatus === 'paid' ? 'View Receipt →' : 'View Bill Notice →'}
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div>
+                                      <span className="text-slate-400 font-semibold block">₱{billTotal.toFixed(2)} est.</span>
+                                      <span className="text-[10px] font-sans text-amber-400 block">Pending Admin Approval</span>
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="px-5 py-4">
+                                  <span className={`font-semibold text-xs block ${
+                                    r.status === 'flagged_abnormal'
+                                      ? 'text-rose-400'
+                                      : r.status === 'pending'
+                                      ? 'text-amber-400'
+                                      : 'text-emerald-400'
+                                  }`}>
+                                    {r.status === 'flagged_abnormal'
+                                      ? 'Flagged Abnormal — Pending Review'
+                                      : r.status === 'pending'
+                                      ? 'Submitted — Awaiting Admin Approval'
+                                      : r.paymentStatus === 'paid'
+                                      ? 'Approved & Paid'
+                                      : 'Approved & Billed'}
+                                  </span>
+                                  <span className={`text-[11px] block mt-0.5 ${
+                                    highUsage ? 'text-rose-300/90' : 'text-slate-400'
+                                  }`}>
+                                    {highUsage
+                                      ? 'Elevated consumption — check pipes/valves'
+                                      : r.notes || 'Normal consumption trajectory'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })
                         )}
                       </tbody>
                     </table>
@@ -4656,27 +5524,82 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             
             {/* Notifications Search, Filter & Grid */}
             {(() => {
-              const filteredNotifications = notifications
+              const cleanAnnouncements = sanitizeAnnouncements(announcements);
+              const announcementTitleKeys = new Set(
+                cleanAnnouncements
+                  .map(ann => normalizeAdvisoryComparisonTitle(ann.title))
+                  .filter(Boolean)
+              );
+
+              // Prevent duplicate cards when a published District Advisory exists in both `announcements` and broadcast `notifications`
+              const displayNotifications = notifications.filter(n => {
+                const effType = inferNotificationType(n);
+                if (effType === 'announcement') {
+                  const normKey = normalizeAdvisoryComparisonTitle(n.title);
+                  if (normKey && announcementTitleKeys.has(normKey)) {
+                    return false;
+                  }
+                }
+                return true;
+              });
+
+              const countInstallation = displayNotifications.filter(n => {
+                const t = inferNotificationType(n);
+                return !isReportNotification(n) && t === 'installation';
+              }).length;
+              const countMeterStatus = displayNotifications.filter(n => {
+                const t = inferNotificationType(n);
+                return !isReportNotification(n) && t === 'meter_status';
+              }).length;
+              const countAccountAndId = displayNotifications.filter(n => {
+                const t = inferNotificationType(n);
+                return t === 'account_issue' || t === 'disconnection' || t === 'report' || isReportNotification(n);
+              }).length;
+              const countBilling = displayNotifications.filter(n => {
+                const t = inferNotificationType(n);
+                return !isReportNotification(n) && (t === 'billing' || t === 'balance');
+              }).length;
+              const countPayments = displayNotifications.filter(n => {
+                const t = inferNotificationType(n);
+                return !isReportNotification(n) && (t === 'payment' || t === 'receipt_upload');
+              }).length;
+              const countStandaloneAdvisoryNotifs = displayNotifications.filter(
+                n => !isReportNotification(n) && inferNotificationType(n) === 'announcement'
+              ).length;
+              const countAdvisories = cleanAnnouncements.length + countStandaloneAdvisoryNotifs;
+
+              const filteredNotifications = displayNotifications
                 .filter(n => {
+                  const effType = inferNotificationType(n);
                   if (notifFilter === 'all') return true;
-                  if (notifFilter === 'billing') return n.type === 'billing' || n.type === 'balance';
-                  if (notifFilter === 'payment') return n.type === 'payment' || n.type === 'receipt_upload';
-                  if (notifFilter === 'account_issue') return n.type === 'account_issue' || n.type === 'disconnection' || isReportNotification(n);
-                  if (notifFilter === 'announcement') return false;
-                  return notifFilter === n.type;
+                  if (notifFilter === 'installation') return !isReportNotification(n) && effType === 'installation';
+                  if (notifFilter === 'meter_status') return !isReportNotification(n) && effType === 'meter_status';
+                  if (notifFilter === 'billing') return !isReportNotification(n) && (effType === 'billing' || effType === 'balance');
+                  if (notifFilter === 'payment') return !isReportNotification(n) && (effType === 'payment' || effType === 'receipt_upload');
+                  if (notifFilter === 'account_issue') return effType === 'account_issue' || effType === 'disconnection' || effType === 'report' || isReportNotification(n);
+                  if (notifFilter === 'announcement') return !isReportNotification(n) && effType === 'announcement';
+                  return notifFilter === effType;
                 })
                 .filter(n =>
                   smartMatch(consumerNotifSearch, [
                     n.title,
+                    n.subject,
                     n.message,
-                    n.type,
+                    inferNotificationType(n),
                     n.billingPeriod,
+                    n.consumerName,
+                    n.accountNumber,
+                    n.applicationNumber,
+                    n.installationStatus,
+                    n.meterNumber,
+                    n.meterStatus ? formatMeterStatusLabel(n.meterStatus) : undefined,
+                    n.remarks,
                     new Date(n.timestamp).toLocaleString()
                   ])
                 );
               const showAnnouncements = notifFilter === 'all' || notifFilter === 'announcement';
               const filteredAnnouncements = showAnnouncements
-                ? announcements.filter(ann =>
+                ? cleanAnnouncements.filter(ann =>
                     smartMatch(consumerNotifSearch, [
                       ann.title,
                       ann.content,
@@ -4696,7 +5619,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <div className="space-y-1">
                         <div className="flex flex-wrap items-center gap-3">
                           <h3 className="text-base font-bold text-white">
-                            Notifications & District Advisories
+                            Notification Center & History
                           </h3>
                           {unreadNotifCount > 0 && (
                             <button
@@ -4709,7 +5632,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           )}
                         </div>
                         <p className="text-xs text-slate-400">
-                          All payment confirmations, account updates, billing alerts, and administrative district announcements.
+                          Complete history of water meter installation updates, meter status notices, payment confirmations, account activations, and district advisories.
                         </p>
                       </div>
 
@@ -4717,62 +5640,88 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         <button
                           type="button"
                           onClick={() => setNotifFilter('all')}
-                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
                             notifFilter === 'all' 
                               ? 'bg-blue-600 text-white shadow-sm' 
                               : 'text-slate-300 hover:text-white hover:bg-slate-800'
                           }`}
                           id="filter-notif-all"
                         >
-                          All ({notifications.length + announcements.length})
+                          All ({displayNotifications.length + cleanAnnouncements.length})
+                        </button>
+                        {countInstallation > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setNotifFilter('installation')}
+                            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                              notifFilter === 'installation'
+                                ? 'bg-cyan-600 text-white shadow-sm'
+                                : 'text-cyan-300 hover:text-white hover:bg-slate-800'
+                            }`}
+                            id="filter-notif-installation"
+                          >
+                            Installation ({countInstallation})
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setNotifFilter('meter_status')}
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                            notifFilter === 'meter_status'
+                              ? 'bg-amber-600 text-white shadow-sm'
+                              : 'text-amber-300 hover:text-white hover:bg-slate-800'
+                          }`}
+                          id="filter-notif-meter-status"
+                        >
+                          Meter Status ({countMeterStatus})
                         </button>
                         <button
                           type="button"
                           onClick={() => setNotifFilter('account_issue')}
-                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
                             notifFilter === 'account_issue' 
                               ? 'bg-purple-600 text-white shadow-sm' 
                               : 'text-purple-300 hover:text-white hover:bg-slate-800'
                           }`}
                           id="filter-notif-account"
                         >
-                          Account & ID ({notifications.filter(n => n.type === 'account_issue' || n.type === 'disconnection' || n.type === 'report').length})
+                          Account & ID ({countAccountAndId})
                         </button>
                         <button
                           type="button"
                           onClick={() => setNotifFilter('billing')}
-                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
                             notifFilter === 'billing' 
                               ? 'bg-sky-600 text-white shadow-sm' 
                               : 'text-sky-300 hover:text-white hover:bg-slate-800'
                           }`}
                           id="filter-notif-billing"
                         >
-                          Bills & Balances ({notifications.filter(n => n.type === 'billing' || n.type === 'balance').length})
+                          Bills & Balances ({countBilling})
                         </button>
                         <button
                           type="button"
                           onClick={() => setNotifFilter('payment')}
-                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
                             notifFilter === 'payment' 
                               ? 'bg-emerald-600 text-white shadow-sm' 
                               : 'text-emerald-300 hover:text-white hover:bg-slate-800'
                           }`}
                           id="filter-notif-payment"
                         >
-                          Payments ({notifications.filter(n => n.type === 'payment' || n.type === 'receipt_upload').length})
+                          Payments ({countPayments})
                         </button>
                         <button
                           type="button"
                           onClick={() => setNotifFilter('announcement')}
-                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
                             notifFilter === 'announcement' 
                               ? 'bg-indigo-600 text-white shadow-sm' 
                               : 'text-indigo-300 hover:text-white hover:bg-slate-800'
                           }`}
                           id="filter-notif-advisories"
                         >
-                          Advisories ({announcements.length})
+                          Advisories ({countAdvisories})
                         </button>
                       </div>
                     </div>
@@ -4782,8 +5731,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       value={consumerNotifSearch}
                       onChange={setConsumerNotifSearch}
                       resultCount={totalVisible}
-                      totalCount={notifications.length + announcements.length}
-                      placeholder="Smart search notifications, advisories, account ID notices, or billing alerts..."
+                      totalCount={displayNotifications.length + cleanAnnouncements.length}
+                      placeholder="Smart search water meter status updates, remarks, advisories, account ID notices, or billing alerts..."
                       id="consumer-notifications-smart-search"
                     />
                   </div>
@@ -4794,34 +5743,54 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <p className="text-sm font-bold text-slate-200">
                         {consumerNotifSearch.trim() ? `No notifications match "${consumerNotifSearch}"` : 'No notifications in this category'}
                       </p>
-                      <p className="text-xs text-slate-500">New account notices, billing statements, and district advisories will appear here.</p>
+                      <p className="text-xs text-slate-500">Water meter status notices, billing statements, and district advisories will appear here.</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 gap-4">
-                  {/* Account, Payment & Billing Notifications */}
+                  {/* Account, Installation, Meter Status, Payment, Billing & Standalone Advisory Notifications */}
                   {filteredNotifications.map((n, idx) => {
-                    const isReport = isReportNotification(n);
-                    const isBilling = !isReport && (n.type === 'billing' || n.type === 'balance');
-                    const isPayment = !isReport && (n.type === 'payment' || n.type === 'receipt_upload');
-                    const isAccountIssue = !isReport && n.type === 'account_issue';
-                    const isDisconnection = !isReport && n.type === 'disconnection';
-                    const isReceiptUpload = !isReport && n.type === 'receipt_upload';
-                    const isPartialAlert = !isReport && ((n.title || '').toLowerCase().includes('partial') || (n.message || '').toLowerCase().includes('remaining'));
+                    const effectiveType = inferNotificationType(n);
+                    const isReport = isReportNotification(n) || effectiveType === 'report';
+                    const isAnnouncement = !isReport && effectiveType === 'announcement';
+                    const isInstallation = !isReport && !isAnnouncement && effectiveType === 'installation';
+                    const isMeterStatus = !isReport && !isAnnouncement && !isInstallation && effectiveType === 'meter_status';
+                    const meterStatusNorm = isMeterStatus ? normalizeMeterStatus(n.meterStatus) : 'active';
+                    const meterStatusLabel = formatMeterStatusLabel(meterStatusNorm);
+                    const isBilling = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && (effectiveType === 'billing' || effectiveType === 'balance');
+                    const isReceiptUpload = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'receipt_upload';
+                    const isPayment = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && (effectiveType === 'payment' || isReceiptUpload);
+                    const isAccountIssue = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'account_issue';
+                    const isDisconnection = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'disconnection';
+                    const isPartialAlert =
+                      !isReport &&
+                      (isPayment || isBilling) &&
+                      ((n.title || '').toLowerCase().includes('partial') ||
+                        (n.message || '').toLowerCase().includes('remaining'));
 
                     return (
                       <div 
                         key={`notif-tab-${n.id || idx}`}
-                        onClick={() => handleNotificationClick(n)}
+                        onClick={() => handleOpenNotificationDetailModal(n)}
                         className={`border rounded-2xl p-5 shadow-md flex flex-col lg:flex-row items-start justify-between gap-4 transition cursor-pointer ${
                           !n.read
                             ? 'bg-blue-950/30 border-blue-500/50 text-white hover:border-blue-400/70'
                             : 'bg-slate-900 border-slate-800 text-slate-100 hover:border-slate-700'
                         }`}
                       >
-                        <div className="flex items-start space-x-3.5">
+                        <div className="flex items-start space-x-3.5 min-w-0 flex-1">
                           <div className={`p-2.5 rounded-xl border shrink-0 mt-0.5 ${
-                            isReport
+                            isReport || isAnnouncement
                               ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
+                              : isInstallation
+                              ? 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30'
+                              : isMeterStatus
+                              ? meterStatusNorm === 'damaged'
+                                ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                                : meterStatusNorm === 'maintenance'
+                                ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                : meterStatusNorm === 'active'
+                                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                : 'bg-slate-700/40 text-slate-300 border-slate-600/60'
                               : isDisconnection
                               ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
                               : isAccountIssue
@@ -4830,10 +5799,18 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
                               : isBilling
                               ? 'bg-sky-500/15 text-sky-400 border-sky-500/30'
-                              : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                              : isPayment
+                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                              : 'bg-slate-800 text-slate-300 border-slate-700'
                           }`}>
                             {isReport ? (
                               <MessageSquare className="h-5 w-5" />
+                            ) : isAnnouncement ? (
+                              <Bell className="h-5 w-5" />
+                            ) : isInstallation ? (
+                              <Wrench className="h-5 w-5" />
+                            ) : isMeterStatus ? (
+                              <Gauge className="h-5 w-5" />
                             ) : isDisconnection ? (
                               <AlertOctagon className="h-5 w-5" />
                             ) : isAccountIssue ? (
@@ -4842,15 +5819,27 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               <AlertTriangle className="h-5 w-5" />
                             ) : isBilling ? (
                               <ReceiptText className="h-5 w-5" />
-                            ) : (
+                            ) : isPayment ? (
                               <CheckCircle2 className="h-5 w-5" />
+                            ) : (
+                              <Info className="h-5 w-5" />
                             )}
                           </div>
-                          <div className="space-y-1">
+                          <div className="space-y-1.5 min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2 text-xs">
                               <span className={`font-bold ${
-                                isReport
+                                isReport || isAnnouncement
                                   ? 'text-indigo-400'
+                                  : isInstallation
+                                  ? 'text-cyan-400'
+                                  : isMeterStatus
+                                  ? meterStatusNorm === 'damaged'
+                                    ? 'text-rose-400'
+                                    : meterStatusNorm === 'maintenance'
+                                    ? 'text-amber-400'
+                                    : meterStatusNorm === 'active'
+                                    ? 'text-emerald-400'
+                                    : 'text-slate-300'
                                   : isDisconnection
                                   ? 'text-rose-400'
                                   : isAccountIssue
@@ -4859,12 +5848,54 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   ? 'text-amber-400'
                                   : isBilling
                                   ? 'text-sky-400'
-                                  : isReceiptUpload
+                                  : isPayment
                                   ? 'text-emerald-400'
-                                  : 'text-emerald-400'
+                                  : 'text-slate-300'
                               }`}>
-                                {isReport ? 'Reports & Inquiries' : isDisconnection ? 'Disconnection Notice' : isAccountIssue ? 'Account & ID Notice' : isPartialAlert ? 'Remaining Balance' : isBilling ? 'Bill Issued' : isReceiptUpload ? 'Receipt Verified' : 'Payment Success'}
+                                {isReport
+                                  ? 'Reports & Inquiries'
+                                  : isAnnouncement
+                                  ? 'District Advisory'
+                                  : isInstallation
+                                  ? 'Water Meter Installation'
+                                  : isMeterStatus
+                                  ? 'Water Meter Status Notice'
+                                  : isDisconnection
+                                  ? 'Disconnection Notice'
+                                  : isAccountIssue
+                                  ? 'Account & ID Notice'
+                                  : isPartialAlert
+                                  ? 'Remaining Balance'
+                                  : isBilling
+                                  ? 'Bill Issued'
+                                  : isReceiptUpload
+                                  ? 'Receipt Verified'
+                                  : isPayment
+                                  ? 'Payment Success'
+                                  : 'System Notice'}
                               </span>
+                              {(() => {
+                                const cardAttr = getNotificationAdminAttribution(n);
+                                const cardThread = findLinkedReportForNotification(n, reports);
+                                return (
+                                  <>
+                                    {cardAttr.isFromAdmin && (
+                                      <>
+                                        <span aria-hidden="true" className="text-slate-600">·</span>
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-950/90 text-sky-300 border border-sky-800/70 text-[10px] font-bold">
+                                          <Building className="h-2.5 w-2.5 text-sky-400" />
+                                          <span>{cardAttr.senderBadgeLabel} ({cardAttr.senderName})</span>
+                                        </span>
+                                      </>
+                                    )}
+                                    {cardThread && !isReport && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-950/90 text-indigo-300 border border-indigo-800/70 text-[10px] font-mono font-bold">
+                                        <span>Replied · {cardThread.ticketNumber}</span>
+                                      </span>
+                                    )}
+                                  </>
+                                );
+                              })()}
                               <span aria-hidden="true" className="text-slate-600">·</span>
                               <span className="text-[11px] font-mono tabular-nums text-slate-400">
                                 {new Date(n.timestamp).toLocaleString()}
@@ -4876,27 +5907,160 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                 </>
                               )}
                             </div>
-                            <h4 className="text-sm font-bold text-white">{n.title}</h4>
-                            <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">{n.message}</p>
+                            <h4 className="text-sm font-bold text-white">{n.title || n.subject}</h4>
+
+                            {/* Structured Installation Summary Strip */}
+                            {isInstallation && (n.applicationNumber || n.installationStatus || n.confirmedDate || n.preferredDate) && (
+                              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-[11px] my-1.5">
+                                {n.applicationNumber && (
+                                  <div>
+                                    <span className="text-slate-400 uppercase font-bold text-[10px] block">Application No.</span>
+                                    <span className="font-mono tabular-nums text-cyan-300 font-bold">{n.applicationNumber}</span>
+                                  </div>
+                                )}
+                                {n.installationStatus && (
+                                  <div>
+                                    <span className="text-slate-400 uppercase font-bold text-[10px] block">Installation Status</span>
+                                    <span className="text-white font-bold">{n.installationStatus}</span>
+                                  </div>
+                                )}
+                                {(n.confirmedDate || n.preferredDate) && (
+                                  <div>
+                                    <span className="text-slate-400 uppercase font-bold text-[10px] block">
+                                      {n.confirmedDate ? 'Confirmed Date' : 'Preferred Date'}
+                                    </span>
+                                    <span className="font-mono tabular-nums text-slate-200">
+                                      {formatInstallationDateDisplay(n.confirmedDate || n.preferredDate)}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Structured Water Meter Status Summary Strip */}
+                            {isMeterStatus && (
+                              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-[11px] my-1.5">
+                                <div>
+                                  <span className="text-slate-400 uppercase font-bold text-[10px] block">Consumer</span>
+                                  <span className="text-white font-semibold">{n.consumerName || consumerRecord?.name || 'Registered Consumer'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400 uppercase font-bold text-[10px] block">Account Number</span>
+                                  <span className="font-mono tabular-nums text-sky-300 font-bold">
+                                    #{n.accountNumber || consumerRecord?.accountNumber}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400 uppercase font-bold text-[10px] block">Water Meter Status</span>
+                                  <span className={`font-black uppercase ${
+                                    meterStatusNorm === 'damaged'
+                                      ? 'text-rose-400'
+                                      : meterStatusNorm === 'maintenance'
+                                      ? 'text-amber-400'
+                                      : meterStatusNorm === 'active'
+                                      ? 'text-emerald-400'
+                                      : 'text-slate-300'
+                                  }`}>
+                                    {meterStatusLabel}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400 uppercase font-bold text-[10px] block">Date Updated</span>
+                                  <span className="font-mono tabular-nums text-slate-200">
+                                    {formatMeterStatusUpdateDate(n.statusUpdateDate || n.timestamp)}
+                                  </span>
+                                </div>
+                                {n.remarks && (
+                                  <div className="sm:col-span-2 lg:col-span-4 pt-1.5 border-t border-slate-800/80">
+                                    <span className="text-slate-400 uppercase font-bold text-[10px] mr-1.5">Administrator Remarks:</span>
+                                    <span className="text-slate-200">{n.remarks}</span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            <p className="text-xs text-slate-300 leading-snug max-w-3xl line-clamp-3">
+                              {normalizeCompactParagraphs(n.message, {
+                                stripAdminEnvelope: true,
+                                hideDuplicateRemarks: isMeterStatus,
+                              }).join(' ')}
+                            </p>
                           </div>
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 self-end lg:self-center shrink-0">
                           {isReport ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenNotificationDetailModal(n);
+                                }}
+                                className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition flex items-center space-x-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                                title="Read & Reply Directly"
+                              >
+                                <Send className="h-3.5 w-3.5" />
+                                <span>Read & Reply</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleNotificationClick(n, 'reports');
+                                }}
+                                className="px-3.5 py-2 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-200 font-bold text-xs rounded-xl border border-indigo-700/60 transition flex items-center space-x-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                                title="Open in Reports & Inquiries"
+                              >
+                                <MessageSquare className="h-3.5 w-3.5 text-indigo-400" />
+                                <span>Full Ticket</span>
+                              </button>
+                            </>
+                          ) : isAnnouncement ? (
                             <button
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleNotificationClick(n, 'reports');
+                                handleNotificationClick(n, 'announcements');
                               }}
-                              className="px-3.5 py-2 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-200 font-bold text-xs rounded-xl border border-indigo-700/60 transition flex items-center space-x-1.5 cursor-pointer"
-                              title="Open in Reports & Inquiries"
+                              className="px-3.5 py-2 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-200 font-bold text-xs rounded-xl border border-indigo-700/60 transition flex items-center space-x-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                              title="View in District Advisories"
                             >
-                              <MessageSquare className="h-3.5 w-3.5 text-indigo-400" />
-                              <span>Reports & Inquiries</span>
+                              <Bell className="h-3.5 w-3.5 text-indigo-400" />
+                              <span>District Advisories</span>
                             </button>
                           ) : (
                             <>
+                              {getNotificationAdminAttribution(n).canReplyDirectly && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenNotificationDetailModal(n);
+                                  }}
+                                  className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition flex items-center space-x-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                                  title="Open Official Notice and Reply Directly to Admin"
+                                >
+                                  <MessageSquare className="h-3.5 w-3.5" />
+                                  <span>{findLinkedReportForNotification(n, reports) ? 'View Reply Thread' : 'Reply to Notice'}</span>
+                                </button>
+                              )}
+
+                              {isInstallation && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleNotificationClick(n, 'installation');
+                                  }}
+                                  className="px-3.5 py-2 bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-200 font-bold text-xs rounded-xl border border-cyan-700/60 transition flex items-center space-x-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                                  title="Open Water Meter Installation Tracker"
+                                >
+                                  <Wrench className="h-3.5 w-3.5 text-cyan-400" />
+                                  <span>Track Installation</span>
+                                </button>
+                              )}
+
                               {/* View Account Profile Button (for Account & ID notifications) */}
                               {isAccountIssue && (
                                 <button
@@ -4905,7 +6069,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                     e.stopPropagation();
                                     handleNotificationClick(n, 'profile');
                                   }}
-                                  className="px-3.5 py-2 bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 font-bold text-xs rounded-xl border border-purple-700/60 transition flex items-center space-x-1.5 cursor-pointer"
+                                  className="px-3.5 py-2 bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 font-bold text-xs rounded-xl border border-purple-700/60 transition flex items-center space-x-1.5 cursor-pointer whitespace-nowrap shrink-0"
                                   title="Navigate to My Account Profile"
                                 >
                                   <UserCheck className="h-3.5 w-3.5 text-purple-400" />
@@ -4920,7 +6084,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   e.stopPropagation();
                                   handleNotificationClick(n, 'dashboard');
                                 }}
-                                className="px-3.5 py-2 bg-blue-950/60 hover:bg-blue-900/80 text-blue-200 font-bold text-xs rounded-xl border border-blue-700/60 transition flex items-center space-x-1.5 cursor-pointer"
+                                className="px-3.5 py-2 bg-blue-950/60 hover:bg-blue-900/80 text-blue-200 font-bold text-xs rounded-xl border border-blue-700/60 transition flex items-center space-x-1.5 cursor-pointer whitespace-nowrap shrink-0"
                                 title="Navigate to Consumer Dashboard"
                               >
                                 <LayoutDashboard className="h-3.5 w-3.5 text-blue-400" />
@@ -4935,7 +6099,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                     e.stopPropagation();
                                     handleNotificationClick(n, 'bills');
                                   }}
-                                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl border border-slate-700 transition flex items-center space-x-1.5 cursor-pointer"
+                                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl border border-slate-700 transition flex items-center space-x-1.5 cursor-pointer whitespace-nowrap shrink-0"
                                   title="View Statement in My Bills"
                                 >
                                   <ReceiptText className="h-3.5 w-3.5 text-sky-400" />
@@ -4982,7 +6146,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                   {/* District Announcements */}
                   {filteredAnnouncements.map((ann, idx) => (
-                    <div key={`ann-${ann.id || idx}`} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-md flex items-start justify-between gap-4 text-slate-100">
+                    <div
+                      key={`ann-${ann.id || idx}`}
+                      onClick={() =>
+                        handleOpenNotificationDetailModal({
+                          id: `ADVISORY-PREVIEW-${ann.id || idx}`,
+                          accountNumber: 'ALL',
+                          title: ann.title,
+                          message: ann.content,
+                          timestamp: ann.date || new Date().toISOString(),
+                          type: 'announcement',
+                          read: true,
+                        })
+                      }
+                      className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-5 shadow-md flex items-start justify-between gap-4 text-slate-100 transition cursor-pointer"
+                    >
                       <div className="flex items-start space-x-3.5">
                         <div className="p-2.5 bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 rounded-xl shrink-0 mt-0.5">
                           <Bell className="h-5 w-5" />
@@ -5784,6 +6962,847 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           </div>
         </div>
       )}
+
+      {/* NOTIFICATION DETAIL POP-UP MODAL */}
+      {selectedBellNotification && (() => {
+        const n = selectedBellNotification;
+        const effectiveType = inferNotificationType(n);
+        const isReport = isReportNotification(n) || effectiveType === 'report';
+        const isAnnouncement = !isReport && effectiveType === 'announcement';
+        const isInstallation = !isReport && !isAnnouncement && effectiveType === 'installation';
+        const isMeterStatus = !isReport && !isAnnouncement && !isInstallation && effectiveType === 'meter_status';
+        const meterStatusNorm = isMeterStatus ? normalizeMeterStatus(n.meterStatus) : 'active';
+        const meterStatusLabel = formatMeterStatusLabel(meterStatusNorm);
+        const isBilling = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && (effectiveType === 'billing' || effectiveType === 'balance');
+        const isReceiptUpload = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'receipt_upload';
+        const isPayment = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && (effectiveType === 'payment' || isReceiptUpload);
+        const isAccountIssue = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'account_issue';
+        const isDisconnection = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'disconnection';
+        const isPartialAlert =
+          !isReport &&
+          (isPayment || isBilling) &&
+          ((n.title || '').toLowerCase().includes('partial') ||
+            (n.message || '').toLowerCase().includes('remaining'));
+
+        const categoryLabel = isReport
+          ? 'Reports & Inquiries Update'
+          : isAnnouncement
+          ? 'District Advisory'
+          : isInstallation
+          ? `Water Meter Installation${n.installationStatus ? ` · ${n.installationStatus}` : ''}`
+          : isMeterStatus
+          ? `Water Meter Status Notice · ${meterStatusLabel}`
+          : isDisconnection
+          ? 'Disconnection Notice'
+          : isAccountIssue
+          ? 'Account & Meter ID Notice'
+          : isPartialAlert
+          ? 'Remaining Balance Notice'
+          : isBilling
+          ? 'Official Billing Statement'
+          : isReceiptUpload
+          ? 'Cashier Receipt Verification'
+          : isPayment
+          ? 'Payment Confirmation'
+          : 'System Notice';
+
+        const linkedReading = resolveNotificationLinkedReading(n);
+        const reportTarget = isReport ? resolveNotificationReportTarget(n) : null;
+        const matchedReport =
+          findLinkedReportForNotification(n, reports) ||
+          (reportTarget
+            ? reports.find(
+                r =>
+                  r.id === reportTarget ||
+                  r.ticketNumber.toUpperCase() === String(reportTarget).toUpperCase()
+              )
+            : undefined);
+
+        const attribution = getNotificationAdminAttribution(n);
+        const isPreviewAdvisory = Boolean(n.id && n.id.startsWith('ADVISORY-PREVIEW-'));
+        const canReplyInModal = attribution.canReplyDirectly && !isPreviewAdvisory;
+        const effectiveRefNotice =
+          n.referencedNotice ||
+          matchedReport?.referencedNotice ||
+          (!isReport && canReplyInModal ? buildReferencedNoticeFromNotification(n, consumerRecord) : undefined);
+
+        const parsedDate = n.timestamp ? new Date(n.timestamp) : null;
+        const formattedTimestamp =
+          parsedDate && !Number.isNaN(parsedDate.getTime())
+            ? parsedDate.toLocaleString([], {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+              })
+            : n.timestamp || 'N/A';
+
+        const rawAcc = (n.accountNumber || '').trim();
+        const scopeLabel =
+          !rawAcc || rawAcc.toUpperCase() === 'ALL' || isAnnouncement
+            ? 'All Registered Consumers (District-Wide)'
+            : rawAcc.toUpperCase().startsWith('PENDING')
+            ? consumerRecord.accountNumber && !consumerRecord.accountNumber.toUpperCase().startsWith('PENDING')
+              ? `Account #${consumerRecord.accountNumber}`
+              : n.applicationNumber
+              ? `Application #${n.applicationNumber}`
+              : 'Pending Account Issuance'
+            : `Account #${rawAcc}`;
+
+        const effectiveBillingPeriod = n.billingPeriod || linkedReading?.billingPeriod;
+        const effectiveOrNumber =
+          n.orNumber ||
+          (isPayment ? linkedReading?.orNumber || linkedReading?.paymentReference : undefined);
+        const effectiveAmountPaid =
+          typeof n.amountPaid === 'number'
+            ? n.amountPaid
+            : isPayment && typeof linkedReading?.paidAmount === 'number' && linkedReading.paidAmount > 0
+            ? linkedReading.paidAmount
+            : undefined;
+        const effectiveBalance =
+          typeof n.remainingBalance === 'number'
+            ? n.remainingBalance
+            : isBilling && linkedReading
+            ? Math.max(
+                0,
+                calculateCostOf(linkedReading, consumerRecord.consumerType) - (linkedReading.paidAmount || 0)
+              )
+            : undefined;
+        const attachedReceiptImg =
+          n.receiptUrl || (isPayment && linkedReading?.paymentReceiptUrl ? linkedReading.paymentReceiptUrl : undefined);
+
+        const humanReplies = matchedReport
+          ? mockDb
+              .dedupeReplies(matchedReport.replies)
+              .filter(
+                rep =>
+                  !(rep.id || '').startsWith('ACK-') && rep.senderId !== 'system-admin-ack'
+              )
+          : [];
+
+        const firstReplyMatchesDesc =
+          matchedReport &&
+          humanReplies.length > 0 &&
+          humanReplies[0].senderRole === 'consumer' &&
+          humanReplies[0].message.trim().toLowerCase() ===
+            (matchedReport.description || '').trim().toLowerCase();
+
+        const followUpReplies = firstReplyMatchesDesc
+          ? humanReplies.slice(1)
+          : humanReplies;
+
+        const hasAdminHumanReply = humanReplies.some(
+          rep => rep.senderRole === 'admin' || rep.senderRole === 'staff'
+        );
+
+        const noticeParagraphs = normalizeCompactParagraphs(n.message, {
+          stripAdminEnvelope: true,
+          hideDuplicateRemarks: isMeterStatus || isInstallation,
+        });
+
+        const hasBillingOrAccountSummary = Boolean(
+          !isMeterStatus &&
+            !isInstallation &&
+            !isReport &&
+            (effectiveBillingPeriod ||
+              linkedReading ||
+              effectiveOrNumber ||
+              typeof effectiveAmountPaid === 'number' ||
+              typeof effectiveBalance === 'number' ||
+              (isAccountIssue && !isAccountPending))
+        );
+
+        return (
+          <div
+            className="fixed inset-0 z-[130] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fade-in"
+            onClick={() => setSelectedBellNotification(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="notif-detail-modal-title"
+          >
+            <div
+              className="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl w-full max-w-2xl max-h-[85vh] shadow-2xl overflow-hidden flex flex-col animate-scale-up"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Zone 1: Compact Unified Header */}
+              <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-3 shrink-0">
+                <div className="flex items-start gap-3 min-w-0">
+                  <div
+                    className={`p-2 rounded-xl border shrink-0 mt-0.5 ${
+                      isReport || isAnnouncement
+                        ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
+                        : isInstallation
+                        ? 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30'
+                        : isMeterStatus
+                        ? meterStatusNorm === 'damaged'
+                          ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                          : meterStatusNorm === 'maintenance'
+                          ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                          : meterStatusNorm === 'active'
+                          ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                          : 'bg-slate-700/40 text-slate-300 border-slate-600/60'
+                        : isDisconnection
+                        ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                        : isAccountIssue
+                        ? 'bg-purple-500/15 text-purple-400 border-purple-500/30'
+                        : isPartialAlert
+                        ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                        : isBilling
+                        ? 'bg-sky-500/15 text-sky-400 border-sky-500/30'
+                        : isPayment
+                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                        : 'bg-slate-800 text-slate-300 border-slate-700'
+                    }`}
+                  >
+                    {isReport ? (
+                      <MessageSquare className="h-4 w-4" />
+                    ) : isAnnouncement ? (
+                      <Bell className="h-4 w-4" />
+                    ) : isInstallation ? (
+                      <Wrench className="h-4 w-4" />
+                    ) : isMeterStatus ? (
+                      <Gauge className="h-4 w-4" />
+                    ) : isDisconnection ? (
+                      <AlertOctagon className="h-4 w-4" />
+                    ) : isAccountIssue ? (
+                      <UserCheck className="h-4 w-4" />
+                    ) : isPartialAlert ? (
+                      <AlertTriangle className="h-4 w-4" />
+                    ) : isBilling ? (
+                      <ReceiptText className="h-4 w-4" />
+                    ) : isPayment ? (
+                      <CheckCircle2 className="h-4 w-4" />
+                    ) : (
+                      <Info className="h-4 w-4" />
+                    )}
+                  </div>
+
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400">
+                      {attribution.isFromAdmin && (
+                        <>
+                          <span className="font-bold text-sky-300">
+                            {attribution.senderBadgeLabel}
+                          </span>
+                          <span aria-hidden="true" className="text-slate-600">·</span>
+                        </>
+                      )}
+                      <span className="font-semibold text-slate-200">{categoryLabel}</span>
+                      <span aria-hidden="true" className="text-slate-600">·</span>
+                      <span className="font-mono tabular-nums">{formattedTimestamp}</span>
+                    </div>
+
+                    <h3
+                      id="notif-detail-modal-title"
+                      className="text-sm sm:text-base font-bold text-white leading-snug break-words"
+                    >
+                      {n.title || n.subject}
+                    </h3>
+
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400">
+                      {attribution.isFromAdmin && (
+                        <>
+                          <span>
+                            Sent by: <strong className="text-sky-300 font-semibold">{attribution.senderFullLabel}</strong>
+                          </span>
+                          <span aria-hidden="true" className="text-slate-600">·</span>
+                        </>
+                      )}
+                      <span>{scopeLabel}</span>
+                      {(matchedReport?.ticketNumber || n.ticketNumber) && (
+                        <>
+                          <span aria-hidden="true" className="text-slate-600">·</span>
+                          <span className="font-mono tabular-nums text-indigo-300 font-semibold">
+                            {matchedReport?.ticketNumber || n.ticketNumber}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedBellNotification(null)}
+                  className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                  aria-label="Close notification details"
+                  title="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Zone 2: Clean Compact Summary + Message & Conversation Stream */}
+              <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3.5 space-y-3 bg-slate-900">
+                {/* Compact Summary Bar — Water Meter Installation */}
+                {isInstallation && (
+                  <div className="rounded-xl bg-slate-950/90 border border-slate-800 px-3.5 py-2.5 text-xs space-y-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-slate-300">
+                        {n.applicationNumber && (
+                          <span>
+                            Application:{' '}
+                            <strong className="font-mono tabular-nums text-cyan-300">
+                              {n.applicationNumber}
+                            </strong>
+                          </span>
+                        )}
+                        {(n.confirmedDate || n.preferredDate) && (
+                          <>
+                            <span aria-hidden="true" className="text-slate-600">·</span>
+                            <span>
+                              {n.confirmedDate ? 'Confirmed Date:' : 'Preferred Date:'}{' '}
+                              <strong className="font-mono tabular-nums text-white">
+                                {formatInstallationDateDisplay(n.confirmedDate || n.preferredDate)}
+                              </strong>
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      {n.installationStatus && (
+                        <span className="font-bold whitespace-nowrap shrink-0 text-cyan-400">
+                          {n.installationStatus}
+                        </span>
+                      )}
+                    </div>
+                    {n.remarks && n.remarks.trim() && (
+                      <p className="text-[11px] text-slate-200 pt-1 border-t border-slate-800/80 leading-snug">
+                        <span className="text-slate-400 font-semibold">Admin Remarks: </span>
+                        {n.remarks.trim()}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Compact Summary Bar — Meter Status */}
+                {isMeterStatus && (
+                  <div className="rounded-xl bg-slate-950/90 border border-slate-800 px-3.5 py-2.5 text-xs space-y-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-slate-300">
+                        <span>
+                          Meter:{' '}
+                          <strong className="font-mono tabular-nums text-white">
+                            #{n.meterNumber || consumerRecord.meterNumber || 'N/A'}
+                          </strong>
+                        </span>
+                        <span aria-hidden="true" className="text-slate-600">·</span>
+                        <span>
+                          Account:{' '}
+                          <strong className="font-mono tabular-nums text-sky-300">
+                            #{n.accountNumber || consumerRecord.accountNumber}
+                          </strong>
+                        </span>
+                      </div>
+                      <span
+                        className={`font-bold whitespace-nowrap shrink-0 ${
+                          meterStatusNorm === 'damaged'
+                            ? 'text-rose-400'
+                            : meterStatusNorm === 'maintenance'
+                            ? 'text-amber-300'
+                            : meterStatusNorm === 'active'
+                            ? 'text-emerald-400'
+                            : 'text-slate-300'
+                        }`}
+                      >
+                        {n.previousMeterStatus
+                          ? `${n.previousMeterStatus} → ${meterStatusLabel}`
+                          : `Status: ${meterStatusLabel}`}
+                      </span>
+                    </div>
+                    {n.remarks && n.remarks.trim() && (
+                      <p className="text-[11px] text-slate-200 pt-1 border-t border-slate-800/80 leading-snug">
+                        <span className="text-slate-400 font-semibold">Admin Remarks: </span>
+                        {n.remarks.trim()}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Compact Summary Bar — Referenced Official Notice on Admin Reply */}
+                {isReport && effectiveRefNotice && (() => {
+                  const refMeterNorm = effectiveRefNotice.meterStatus
+                    ? normalizeMeterStatus(effectiveRefNotice.meterStatus)
+                    : null;
+                  const refMeterLabel = refMeterNorm ? formatMeterStatusLabel(refMeterNorm) : null;
+                  return (
+                    <div className="rounded-xl bg-slate-950/90 border border-slate-800 px-3.5 py-2.5 text-xs space-y-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-sky-400 font-semibold mr-1.5">Referenced Notice:</span>
+                          <span className="font-bold text-white">{effectiveRefNotice.subject}</span>
+                        </div>
+                        {refMeterLabel && (
+                          <span
+                            className={`font-bold text-[11px] whitespace-nowrap shrink-0 ${
+                              refMeterNorm === 'damaged'
+                                ? 'text-rose-400'
+                                : refMeterNorm === 'maintenance'
+                                ? 'text-amber-300'
+                                : refMeterNorm === 'active'
+                                ? 'text-emerald-400'
+                                : 'text-slate-300'
+                            }`}
+                          >
+                            {effectiveRefNotice.previousMeterStatus
+                              ? `${effectiveRefNotice.previousMeterStatus} → ${refMeterLabel}`
+                              : `Meter Status: ${refMeterLabel}`}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400">
+                        {effectiveRefNotice.meterNumber && (
+                          <>
+                            <span>
+                              Meter{' '}
+                              <strong className="font-mono tabular-nums text-slate-200">
+                                #{effectiveRefNotice.meterNumber}
+                              </strong>
+                            </span>
+                            <span aria-hidden="true" className="text-slate-600">·</span>
+                          </>
+                        )}
+                        {effectiveRefNotice.accountNumber && (
+                          <>
+                            <span>
+                              Account{' '}
+                              <strong className="font-mono tabular-nums text-sky-300">
+                                #{effectiveRefNotice.accountNumber}
+                              </strong>
+                            </span>
+                            <span aria-hidden="true" className="text-slate-600">·</span>
+                          </>
+                        )}
+                        <span className="font-mono tabular-nums">
+                          {formatMeterStatusUpdateDate(
+                            effectiveRefNotice.statusUpdateDate || effectiveRefNotice.sentAt
+                          )}
+                        </span>
+                      </div>
+                      {effectiveRefNotice.remarks && (
+                        <p className="text-[11px] text-slate-300 pt-1 border-t border-slate-800/80 leading-snug">
+                          <span className="text-slate-400 font-semibold">Original Admin Remarks: </span>
+                          {effectiveRefNotice.remarks}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Compact Summary Bar — Billing / Payment / Account Identifiers */}
+                {hasBillingOrAccountSummary && (
+                  <div className="rounded-xl bg-slate-950/90 border border-slate-800 px-3.5 py-2.5 text-xs flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                    {effectiveBillingPeriod && (
+                      <span>
+                        <span className="text-slate-400">Cycle: </span>
+                        <strong className="text-white">{effectiveBillingPeriod}</strong>
+                      </span>
+                    )}
+                    {(isBilling || isPayment || isDisconnection) && linkedReading && (
+                      <span>
+                        <span className="text-slate-400">Readings: </span>
+                        <strong className="font-mono tabular-nums text-sky-300">
+                          {linkedReading.previousReading} → {linkedReading.presentReading ?? linkedReading.currentReading} m³ ({linkedReading.consumption} m³)
+                        </strong>
+                      </span>
+                    )}
+                    {effectiveOrNumber && (
+                      <span>
+                        <span className="text-slate-400">OR #: </span>
+                        <strong className="font-mono tabular-nums text-amber-300">{effectiveOrNumber}</strong>
+                      </span>
+                    )}
+                    {typeof effectiveAmountPaid === 'number' && (
+                      <span>
+                        <span className="text-slate-400">Paid: </span>
+                        <strong className="font-mono tabular-nums text-emerald-400">
+                          ₱{effectiveAmountPaid.toFixed(2)}
+                        </strong>
+                      </span>
+                    )}
+                    {typeof effectiveBalance === 'number' && (
+                      <span>
+                        <span className="text-slate-400">Balance: </span>
+                        <strong
+                          className={`font-mono tabular-nums ${
+                            effectiveBalance > 0 ? 'text-rose-400' : 'text-emerald-400'
+                          }`}
+                        >
+                          ₱{effectiveBalance.toFixed(2)}
+                        </strong>
+                      </span>
+                    )}
+                    {linkedReading?.dueDate && (isBilling || isDisconnection) && (
+                      <span>
+                        <span className="text-slate-400">Due: </span>
+                        <strong className="text-amber-300">{linkedReading.dueDate}</strong>
+                      </span>
+                    )}
+                    {isAccountIssue && !isAccountPending && (
+                      <>
+                        <span>
+                          <span className="text-slate-400">Account: </span>
+                          <strong className="font-mono tabular-nums text-amber-300">
+                            #{consumerRecord.accountNumber}
+                          </strong>
+                        </span>
+                        {consumerRecord.meterNumber && (
+                          <span>
+                            <span className="text-slate-400">Meter: </span>
+                            <strong className="font-mono tabular-nums text-sky-400">
+                              #{consumerRecord.meterNumber}
+                            </strong>
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Primary Message or Unified Conversation Stream */}
+                {isReport && matchedReport ? (
+                  <div className="space-y-2.5">
+                    {/* Consumer's Initial Inquiry / Reply */}
+                    <div className="flex flex-col items-end">
+                      <div className="max-w-[92%] space-y-1">
+                        <div className="flex items-center justify-end gap-1.5 text-[11px] text-slate-400">
+                          <span className="font-bold text-slate-200">You ({consumerRecord.name})</span>
+                          <span aria-hidden="true" className="text-slate-600">·</span>
+                          <span className="font-mono tabular-nums">
+                            {new Date(matchedReport.createdAt).toLocaleString([], {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                        </div>
+                        <div className="rounded-xl bg-slate-800 border border-slate-700 px-3.5 py-2.5 text-xs sm:text-[13px] text-slate-100 leading-snug space-y-1.5">
+                          {normalizeCompactParagraphs(matchedReport.description).map((p, idx) => (
+                            <p key={idx}>{p}</p>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Chronological Replies */}
+                    {followUpReplies.map((rep, rIdx) => {
+                      const fromAdmin = rep.senderRole === 'admin' || rep.senderRole === 'staff';
+                      const repParagraphs = normalizeCompactParagraphs(rep.message, {
+                        stripAdminEnvelope: true,
+                      });
+                      return (
+                        <div
+                          key={rep.id || rIdx}
+                          className={`flex flex-col ${fromAdmin ? 'items-start' : 'items-end'}`}
+                        >
+                          <div className="max-w-[92%] space-y-1">
+                            <div
+                              className={`flex items-center gap-1.5 text-[11px] text-slate-400 ${
+                                fromAdmin ? 'justify-start' : 'justify-end'
+                              }`}
+                            >
+                              <span className={fromAdmin ? 'font-bold text-sky-300' : 'font-bold text-slate-200'}>
+                                {fromAdmin ? `Admin (${rep.senderName})` : `You (${consumerRecord.name})`}
+                              </span>
+                              <span aria-hidden="true" className="text-slate-600">·</span>
+                              <span className="font-mono tabular-nums">
+                                {new Date(rep.timestamp).toLocaleString([], {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  hour: 'numeric',
+                                  minute: '2-digit',
+                                })}
+                              </span>
+                            </div>
+                            <div
+                              className={`rounded-xl px-3.5 py-2.5 text-xs sm:text-[13px] leading-snug space-y-1.5 border ${
+                                fromAdmin
+                                  ? 'bg-blue-950/75 text-slate-100 border-blue-800/70'
+                                  : 'bg-slate-800 text-slate-100 border-slate-700'
+                              }`}
+                            >
+                              {repParagraphs.map((p, pIdx) => (
+                                <p key={pIdx}>{p}</p>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {!hasAdminHumanReply && (
+                      <p className="text-[11px] text-slate-400 text-center pt-1">
+                        Delivered to Tagoloan Water District Administration ({matchedReport.ticketNumber}) — awaiting reply.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {/* Compact Normalized Notice Body */}
+                    <div className="space-y-1.5 text-[13px] sm:text-sm text-slate-100 leading-snug break-words">
+                      {noticeParagraphs.length > 0 ? (
+                        noticeParagraphs.map((para, pIdx) => <p key={pIdx}>{para}</p>)
+                      ) : (
+                        <p>{n.message}</p>
+                      )}
+                    </div>
+
+                    {/* Attached Receipt Image Preview if Available */}
+                    {attachedReceiptImg && (
+                      <div className="rounded-xl overflow-hidden border border-slate-800 bg-slate-950 p-2 flex items-center justify-center max-h-48">
+                        <img
+                          src={attachedReceiptImg}
+                          alt="Attached Payment Receipt"
+                          referrerPolicy="no-referrer"
+                          className="max-h-44 w-auto object-contain rounded-lg"
+                        />
+                      </div>
+                    )}
+
+                    {/* Inline Thread if Consumer Already Replied to This Official Notice */}
+                    {matchedReport && (
+                      <div className="pt-2.5 border-t border-slate-800 space-y-2">
+                        <div className="flex items-center justify-between text-[11px] text-slate-400">
+                          <span className="font-bold text-slate-200">
+                            Conversation on This Notice
+                          </span>
+                          <span className="font-mono tabular-nums text-indigo-300 font-semibold">
+                            {matchedReport.ticketNumber}
+                          </span>
+                        </div>
+
+                        {/* Initial Consumer Reply */}
+                        <div className="flex flex-col items-end">
+                          <div className="max-w-[92%] space-y-0.5">
+                            <div className="flex items-center justify-end gap-1.5 text-[10px] text-slate-400">
+                              <span className="font-bold text-slate-200">You</span>
+                              <span aria-hidden="true" className="text-slate-600">·</span>
+                              <span className="font-mono tabular-nums">
+                                {new Date(matchedReport.createdAt).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </span>
+                            </div>
+                            <div className="rounded-xl bg-slate-800 border border-slate-700 px-3 py-2 text-xs text-slate-100 leading-snug space-y-1">
+                              {normalizeCompactParagraphs(matchedReport.description).map((p, idx) => (
+                                <p key={idx}>{p}</p>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Follow-up Messages */}
+                        {followUpReplies.map((rep, rIdx) => {
+                          const fromAdmin = rep.senderRole === 'admin' || rep.senderRole === 'staff';
+                          return (
+                            <div
+                              key={rep.id || rIdx}
+                              className={`flex flex-col ${fromAdmin ? 'items-start' : 'items-end'}`}
+                            >
+                              <div className="max-w-[92%] space-y-0.5">
+                                <div
+                                  className={`flex items-center gap-1.5 text-[10px] text-slate-400 ${
+                                    fromAdmin ? 'justify-start' : 'justify-end'
+                                  }`}
+                                >
+                                  <span className={fromAdmin ? 'font-bold text-sky-300' : 'font-bold text-slate-200'}>
+                                    {fromAdmin ? `Admin (${rep.senderName})` : 'You'}
+                                  </span>
+                                  <span aria-hidden="true" className="text-slate-600">·</span>
+                                  <span className="font-mono tabular-nums">
+                                    {new Date(rep.timestamp).toLocaleTimeString([], {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </span>
+                                </div>
+                                <div
+                                  className={`rounded-xl px-3 py-2 text-xs leading-snug space-y-1 border ${
+                                    fromAdmin
+                                      ? 'bg-blue-950/75 text-slate-100 border-blue-800/70'
+                                      : 'bg-slate-800 text-slate-100 border-slate-700'
+                                  }`}
+                                >
+                                  {normalizeCompactParagraphs(rep.message, {
+                                    stripAdminEnvelope: true,
+                                  }).map((p, pIdx) => (
+                                    <p key={pIdx}>{p}</p>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {!hasAdminHumanReply && (
+                          <p className="text-[11px] text-slate-400 text-right">
+                            Delivered to Administration — awaiting official reply.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Zone 3: Pinned Always-Visible Reply Bar & Compact Footer */}
+              <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 shrink-0 space-y-2">
+                {canReplyInModal && (
+                  <form onSubmit={handleSendBellNotificationReply} className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="font-semibold text-sky-300 flex items-center gap-1.5">
+                        <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                        <span>
+                          {matchedReport
+                            ? 'Reply to Administration on this notice thread'
+                            : 'Reply directly to Administration about this notice'}
+                        </span>
+                      </span>
+                      <span className="text-slate-400 font-mono tabular-nums text-[10px] shrink-0">
+                        {matchedReport ? matchedReport.ticketNumber : 'Notice auto-attached'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-end gap-2">
+                      <textarea
+                        rows={2}
+                        value={bellReplyText}
+                        onChange={(e) => setBellReplyText(e.target.value)}
+                        disabled={isSubmittingBellReply}
+                        placeholder={
+                          isMeterStatus
+                            ? `Write your reply regarding this ${meterStatusLabel.toLowerCase()} water meter notice...`
+                            : matchedReport
+                            ? 'Write a follow-up message to Administration...'
+                            : 'Write your reply or question to Administration...'
+                        }
+                        className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none resize-none leading-snug"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isSubmittingBellReply || !bellReplyText.trim()}
+                        className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <Send className="h-3.5 w-3.5" />
+                        <span>{isSubmittingBellReply ? 'Sending...' : 'Send Reply'}</span>
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                <div className="flex items-center justify-between gap-2 pt-0.5 text-xs">
+                  <div className="flex flex-wrap items-center gap-3 min-w-0">
+                    {(isReport || matchedReport) && (
+                      <button
+                        type="button"
+                        onClick={() => handleNotificationClick(n, 'reports')}
+                        className="text-indigo-300 hover:text-indigo-200 font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      >
+                        <span>Open in Inquiries</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </button>
+                    )}
+
+                    {isAnnouncement && (
+                      <button
+                        type="button"
+                        onClick={() => handleNotificationClick(n, 'announcements')}
+                        className="text-indigo-300 hover:text-indigo-200 font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      >
+                        <span>All Advisories</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </button>
+                    )}
+
+                    {isInstallation && (
+                      <button
+                        type="button"
+                        onClick={() => handleNotificationClick(n, 'installation')}
+                        className="text-cyan-300 hover:text-cyan-200 font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      >
+                        <span>Track Installation</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </button>
+                    )}
+
+                    {isAccountIssue && (
+                      <button
+                        type="button"
+                        onClick={() => handleNotificationClick(n, 'profile')}
+                        className="text-purple-300 hover:text-purple-200 font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      >
+                        <span>Account Profile</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </button>
+                    )}
+
+                    {isPayment &&
+                      linkedReading &&
+                      isOfficialBillIssued(linkedReading) &&
+                      (linkedReading.paymentStatus === 'paid' ||
+                        linkedReading.paymentStatus === 'partial' ||
+                        (linkedReading.paidAmount || 0) > 0) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedBellNotification(null);
+                            setReceiptDetailModal(linkedReading);
+                          }}
+                          className="text-emerald-300 hover:text-emerald-200 font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                        >
+                          <span>Official Receipt</span>
+                          <ExternalLink className="h-3 w-3" />
+                        </button>
+                      )}
+
+                    {(isBilling || isDisconnection) &&
+                      linkedReading &&
+                      isOfficialBillIssued(linkedReading) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedBellNotification(null);
+                            setBillDetailsReading(linkedReading);
+                            setIsBillDetailsOpen(true);
+                          }}
+                          className="text-sky-300 hover:text-sky-200 font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                        >
+                          <span>Itemized Statement</span>
+                          <ExternalLink className="h-3 w-3" />
+                        </button>
+                      )}
+
+                    {(isBilling || isPayment || isDisconnection) && (
+                      <button
+                        type="button"
+                        onClick={() => handleNotificationClick(n, 'bills')}
+                        className="text-slate-300 hover:text-white font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      >
+                        <span>My Bills</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBellNotification(null)}
+                    className={
+                      canReplyInModal
+                        ? 'text-slate-300 hover:text-white font-semibold cursor-pointer whitespace-nowrap ml-auto'
+                        : 'px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold transition cursor-pointer whitespace-nowrap ml-auto'
+                    }
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Footer */}
       <footer className="bg-slate-900 text-slate-400 py-6 border-t border-slate-800 shrink-0">

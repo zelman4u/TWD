@@ -116,7 +116,7 @@ export function computeBillBreakdown(
   const schedule = resolveScheduleForReading(reading, isComm);
   
   const previousReading = reading ? Math.max(0, reading.previousReading || 0) : 0;
-  const presentReading = reading ? Math.max(0, reading.currentReading || 0) : 0;
+  const presentReading = reading ? Math.max(previousReading, reading.presentReading ?? reading.currentReading ?? 0) : 0;
   const consumption = reading ? Math.max(0, reading.consumption ?? (presentReading - previousReading)) : 0;
 
   // Basic Water Charge (Bill Amt.) — honors locked billAmount or reading's historical tariff
@@ -326,12 +326,12 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
             </div>
 
             <div className="bg-slate-950/60 border border-white/10 rounded-2xl p-3">
-              <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Net Usage</span>
-              <span className="font-black font-mono text-cyan-300 text-base block mt-0.5">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Reading Basis & Usage</span>
+              <span className="font-black font-mono tabular-nums text-cyan-300 text-base block mt-0.5">
                 {breakdown.consumption} m³
               </span>
-              <span className="text-[10px] text-slate-300 font-mono">
-                {breakdown.previousReading} → {breakdown.presentReading} m³
+              <span className="text-[10px] text-slate-300 font-mono tabular-nums">
+                Prev {breakdown.previousReading} → Pres {breakdown.presentReading} m³
               </span>
             </div>
           </div>
@@ -517,15 +517,17 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-slate-400 print:text-slate-600 font-bold border-b border-slate-800 print:border-slate-300">
-                    <th className="text-left pb-1.5">Previous Reading (Prev. Rdg.)</th>
-                    <th className="text-center pb-1.5">Present Reading (Pres. Rdg.)</th>
-                    <th className="text-right pb-1.5">Usage (cu.m)</th>
+                    <th className="text-left pb-1.5">Previous Reading (Baseline)</th>
+                    <th className="text-center pb-1.5">Present Reading (Inspection)</th>
+                    <th className="text-center pb-1.5">Current Index</th>
+                    <th className="text-right pb-1.5">Net Usage (cu.m)</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="font-mono font-bold text-sm text-white print:text-slate-900">
-                    <td className="py-2 text-left">{breakdown.previousReading.toLocaleString()}</td>
-                    <td className="py-2 text-center">{breakdown.presentReading.toLocaleString()}</td>
+                  <tr className="font-mono tabular-nums font-bold text-sm text-white print:text-slate-900">
+                    <td className="py-2 text-left">{breakdown.previousReading.toLocaleString()} m³</td>
+                    <td className="py-2 text-center">{breakdown.presentReading.toLocaleString()} m³</td>
+                    <td className="py-2 text-center">{(reading?.currentReading ?? breakdown.presentReading).toLocaleString()} m³</td>
                     <td className="py-2 text-right font-black text-sky-400 print:text-blue-700">{breakdown.consumption} m³</td>
                   </tr>
                 </tbody>

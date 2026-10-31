@@ -1,4 +1,9 @@
 import { ConsumerNotification } from '../types';
+import {
+  inferNotificationType,
+  isPersonalNotificationType,
+  isTransactionalPaymentOrReceiptItem,
+} from './announcementSanitizer';
 
 const PLACEHOLDER_ACCOUNTS = new Set([
   '',
@@ -49,7 +54,7 @@ export function getNotificationSemanticKey(n: Partial<ConsumerNotification>): st
     target = `UID:${uid}`;
   }
 
-  const type = String(n.type || 'announcement').trim().toLowerCase();
+  const type = inferNotificationType(n);
   const normTitle = String(n.title || '')
     .trim()
     .replace(/\s+/g, ' ')
@@ -85,8 +90,26 @@ export function getNotificationSemanticKey(n: Partial<ConsumerNotification>): st
     return `${type}::${target}::${payKey}::${normTitle}::${normMsg.slice(0, 80)}`;
   }
 
+  if (type === 'meter_status') {
+    const meterKey = String(n.meterNumber || '').trim().toLowerCase();
+    const statusKey = String(n.meterStatus || '').trim().toLowerCase();
+    const eventStamp = String(n.statusUpdateDate || n.id || n.timestamp || '').trim();
+    return `meter_status::${target}::${meterKey}::${statusKey}::${eventStamp}`;
+  }
+
+  if (type === 'installation') {
+    const reqKey = String(n.installationRequestId || n.applicationNumber || '').trim().toLowerCase();
+    const instStatus = String(n.installationStatus || normTitle).trim().toLowerCase();
+    const eventId = String(n.id || n.timestamp || '').trim();
+    return `installation::${target}::${reqKey}::${instStatus}::${eventId}`;
+  }
+
   if (type === 'report') {
     const repKey = String(n.reportId || n.ticketNumber || '').trim().toLowerCase();
+    const replyKey = String(n.replyId || '').trim().toLowerCase();
+    if (repKey && replyKey) {
+      return `report::${target}::${repKey}::reply::${replyKey}`;
+    }
     return `report::${target}::${repKey}::${normTitle}::${normMsg.slice(0, 140)}`;
   }
 
@@ -115,8 +138,23 @@ export function dedupeNotifications(
   for (const raw of valid) {
     const cleanAcc = normalizeNotifAccount(raw.accountNumber);
     const cleanEmail = raw.consumerEmail ? String(raw.consumerEmail).trim().toLowerCase() : undefined;
+    const inferredType = inferNotificationType(raw);
+
+    // Block personal payment/receipt/account notifications that were mistakenly broadcast to 'ALL' without a recipient
+    if (
+      isBroadcastNotifAccount(cleanAcc) &&
+      !cleanEmail &&
+      !raw.userId &&
+      !raw.consumerId &&
+      (isPersonalNotificationType(inferredType) ||
+        isTransactionalPaymentOrReceiptItem(raw as unknown as Record<string, unknown>))
+    ) {
+      continue;
+    }
+
     const item: ConsumerNotification = {
       ...raw,
+      type: inferredType,
       id: String(raw.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`),
       accountNumber: cleanAcc || raw.accountNumber || 'PENDING',
       ...(cleanEmail ? { consumerEmail: cleanEmail } : {}),
