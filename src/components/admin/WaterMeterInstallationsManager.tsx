@@ -46,6 +46,7 @@ import { TablePagination } from '../common/TablePagination';
 import { smartMatch } from '../../utils/smartSearch';
 import { sendRealtimeMessage } from '../../services/realtimeSocket';
 import { useToast } from '../../context/ToastContext';
+import { compareInstallationsCanonical } from '../../utils/canonicalSort';
 
 export interface WaterMeterInstallationsManagerProps {
   requests: WaterMeterInstallationRequest[];
@@ -104,6 +105,9 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | InstallationStatus | 'Awaiting Validation'>('All');
   const [currentPage, setCurrentPage] = useState(1);
+
+  // Modal 0: Complete Read-Only Request & Applicant Details Viewer (Row Click)
+  const [viewingRequestDetail, setViewingRequestDetail] = useState<WaterMeterInstallationRequest | null>(null);
 
   // Modal 1: Review & Schedule Management
   const [reviewingRequest, setReviewingRequest] = useState<WaterMeterInstallationRequest | null>(null);
@@ -272,14 +276,17 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
         (a, b) =>
           Number(Boolean(b.hasUnreadAdminAlert)) - Number(Boolean(a.hasUnreadAdminAlert)) ||
           new Date(b.updatedAt || b.submissionDate || 0).getTime() -
-            new Date(a.updatedAt || a.submissionDate || 0).getTime()
+            new Date(a.updatedAt || a.submissionDate || 0).getTime() ||
+          compareInstallationsCanonical(a, b)
       );
   }, [requests, statusFilter, searchQuery]);
 
+  const safePage = Math.min(currentPage, Math.max(1, Math.ceil(filteredRequests.length / 10)));
+
   const paginatedRequests = useMemo(() => {
-    const start = (currentPage - 1) * 10;
+    const start = (safePage - 1) * 10;
     return filteredRequests.slice(start, start + 10);
-  }, [filteredRequests, currentPage]);
+  }, [filteredRequests, safePage]);
 
   const handleSaveScheduleAndStatus = (proceedToValidation = false) => {
     if (!reviewingRequest) return;
@@ -599,12 +606,20 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                 return (
                   <tr
                     key={req.id}
-                    className={`transition ${
+                    onClick={() => {
+                      if (req.hasUnreadAdminAlert) {
+                        mockDb.markInstallationReadByAdmin(req.id);
+                        onRefreshData();
+                      }
+                      setViewingRequestDetail(req);
+                    }}
+                    title="Click row to open complete installation & applicant details"
+                    className={`transition cursor-pointer ${
                       req.hasUnreadAdminAlert
                         ? 'bg-sky-950/25 hover:bg-sky-950/40'
                         : isInstalled && !isValidated
                         ? 'bg-cyan-950/15 hover:bg-cyan-950/30'
-                        : 'hover:bg-slate-800/60'
+                        : 'hover:bg-slate-800/70'
                     }`}
                   >
                     {/* Application # & Submission Date */}
@@ -763,7 +778,10 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                       <div className="flex flex-col sm:flex-row items-end sm:items-center justify-end gap-1.5">
                         <button
                           type="button"
-                          onClick={() => openReviewModal(req)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openReviewModal(req);
+                          }}
                           className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer"
                         >
                           Manage Schedule
@@ -772,7 +790,10 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                         {isValidated ? (
                           <button
                             type="button"
-                            onClick={() => openValidationModal(req)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openValidationModal(req);
+                            }}
                             className="px-3 py-1.5 rounded-xl bg-emerald-950/80 hover:bg-emerald-900/80 border border-emerald-700/60 text-emerald-300 text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer flex items-center gap-1"
                           >
                             <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
@@ -782,7 +803,10 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                           <button
                             type="button"
                             disabled={!isInstalled}
-                            onClick={() => openValidationModal(req)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openValidationModal(req);
+                            }}
                             title={
                               isInstalled
                                 ? 'Register installed meter serial number and issue official Account Number & Meter Tag Number'
@@ -826,7 +850,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
         </div>
 
         <TablePagination
-          currentPage={currentPage}
+          currentPage={safePage}
           totalItems={filteredRequests.length}
           pageSize={10}
           onPageChange={setCurrentPage}
@@ -1418,6 +1442,215 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               )}
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Complete Read-Only Installation Request & Applicant Details Modal (Row Click) */}
+      {viewingRequestDetail && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setViewingRequestDetail(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 max-h-[88vh] flex flex-col"
+          >
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 bg-cyan-500/15 border border-cyan-500/30 rounded-xl text-cyan-400 shrink-0">
+                  <FileText className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-black text-white truncate">
+                      {viewingRequestDetail.consumerName}
+                    </h3>
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase border ${getStatusBadgeClasses(
+                        viewingRequestDetail.status
+                      )}`}
+                    >
+                      {viewingRequestDetail.status}
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-mono tabular-nums text-slate-400 truncate mt-0.5">
+                    Application #{viewingRequestDetail.applicationNumber} · Submitted {formatInstallationDateDisplay(viewingRequestDetail.submissionDate)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingRequestDetail(null)}
+                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 overflow-y-auto text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Consumer Name</span>
+                  <span className="font-bold text-white">{viewingRequestDetail.consumerName}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Classification</span>
+                  <span className="font-semibold text-slate-200">{viewingRequestDetail.consumerType || 'Residential'}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Contact Number</span>
+                  <span className="font-mono tabular-nums text-slate-200">{viewingRequestDetail.contactNumber || 'N/A'}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Email Address</span>
+                  <span className="text-slate-200">{viewingRequestDetail.consumerEmail || 'N/A'}</span>
+                </div>
+                <div className="sm:col-span-2">
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Service Address &amp; Barangay</span>
+                  <span className="text-slate-200 font-medium">
+                    {viewingRequestDetail.address} (Brgy. {viewingRequestDetail.barangay || 'Tagoloan'})
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Requested Schedule</span>
+                  <span className="font-mono tabular-nums font-bold text-slate-200">
+                    {formatInstallationDateDisplay(viewingRequestDetail.preferredInstallationDate)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Confirmed Schedule</span>
+                  <span className="font-mono tabular-nums font-bold text-sky-300">
+                    {viewingRequestDetail.confirmedInstallationDate
+                      ? formatInstallationDateDisplay(viewingRequestDetail.confirmedInstallationDate)
+                      : 'Not yet confirmed'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Completion Date</span>
+                  <span className="font-mono tabular-nums font-bold text-emerald-400">
+                    {viewingRequestDetail.completionDate
+                      ? formatInstallationDateDisplay(viewingRequestDetail.completionDate)
+                      : 'Pending completion'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Official Account #</span>
+                  <span className="font-mono tabular-nums font-bold text-sky-400">
+                    {viewingRequestDetail.assignedAccountNumber ? `#${viewingRequestDetail.assignedAccountNumber}` : 'Pending Validation'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Official Meter Tag #</span>
+                  <span className="font-mono tabular-nums font-bold text-white">
+                    {viewingRequestDetail.assignedMeterTagNumber ? `#${viewingRequestDetail.assignedMeterTagNumber}` : 'Pending Validation'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Meter Serial #</span>
+                  <span className="font-mono tabular-nums font-bold text-amber-300">
+                    {viewingRequestDetail.meterSerialNumber || 'Not recorded yet'}
+                  </span>
+                </div>
+              </div>
+
+              {(viewingRequestDetail.consumerRemarks || viewingRequestDetail.adminRemarks || viewingRequestDetail.responsiblePersonnel) && (
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                  {viewingRequestDetail.responsiblePersonnel && (
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Responsible Personnel</span>
+                      <span className="text-slate-200 font-semibold">{viewingRequestDetail.responsiblePersonnel}</span>
+                    </div>
+                  )}
+                  {viewingRequestDetail.consumerRemarks && (
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Applicant Instructions / Remarks</span>
+                      <p className="text-slate-300 leading-relaxed">{viewingRequestDetail.consumerRemarks}</p>
+                    </div>
+                  )}
+                  {viewingRequestDetail.adminRemarks && (
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Administrator Remarks</span>
+                      <p className="text-slate-200 leading-relaxed">{viewingRequestDetail.adminRemarks}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {Array.isArray(viewingRequestDetail.history) && viewingRequestDetail.history.length > 0 && (
+                <div className="space-y-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                    Activity &amp; Schedule History
+                  </span>
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                    {[...viewingRequestDetail.history]
+                      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+                      .map((h) => (
+                        <div
+                          key={h.id}
+                          className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2 text-[11px]"
+                        >
+                          <div>
+                            <span className="font-bold text-white">{h.action || h.status}</span>
+                            {h.remarks && <p className="text-slate-400 mt-0.5">{h.remarks}</p>}
+                          </div>
+                          <span className="font-mono tabular-nums text-[10px] text-slate-500 shrink-0">
+                            {new Date(h.timestamp).toLocaleString()}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = viewingRequestDetail;
+                    setViewingRequestDetail(null);
+                    openReviewModal(target);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold transition cursor-pointer"
+                >
+                  Manage Schedule
+                </button>
+                {viewingRequestDetail.status === 'Installed' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = viewingRequestDetail;
+                      setViewingRequestDetail(null);
+                      openValidationModal(target);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    <span>
+                      {viewingRequestDetail.accountValidationStatus === 'validated'
+                        ? 'Validated Details'
+                        : 'Validate & Issue IDs'}
+                    </span>
+                  </button>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setViewingRequestDetail(null)}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition cursor-pointer ml-auto"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -19,7 +19,8 @@ import {
   UserCheck, 
   Clock, 
   Database,
-  ArrowUpDown
+  ArrowUpDown,
+  X
 } from 'lucide-react';
 import { Consumer, WaterMeter, MeterReading, AuditLog } from '../../types';
 import { TablePagination } from '../common/TablePagination';
@@ -27,6 +28,12 @@ import { SmartSearchBar } from '../common/SmartSearchBar';
 import { smartMatch } from '../../utils/smartSearch';
 import { isOfficialBillIssued } from '../../utils/tariffCalculator';
 import { isPendingConsumerStatus } from '../../utils/installationWorkflow';
+import {
+  compareAuditLogsCanonical,
+  compareConsumersCanonical,
+  compareMetersCanonical,
+  compareReadingsCanonical,
+} from '../../utils/canonicalSort';
 
 interface RecordsArchiveViewProps {
   recordsTab: 'consumers' | 'meters' | 'readings' | 'bills' | 'payments' | 'audit';
@@ -61,10 +68,23 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
   exportToCsv
 }) => {
   const [currentPage, setCurrentPage] = useState(1);
+  const [selectedArchiveRecord, setSelectedArchiveRecord] = useState<{
+    type: 'consumer' | 'meter' | 'reading' | 'bill' | 'payment' | 'audit';
+    data: any;
+  } | null>(null);
 
   useEffect(() => {
     setCurrentPage(1);
   }, [recordsTab, searchQuery, classificationFilter]);
+
+  useEffect(() => {
+    if (!selectedArchiveRecord) return;
+    const handleEsc = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setSelectedArchiveRecord(null);
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [selectedArchiveRecord]);
 
   // Metrics for Cards
   const totalConsumers = consumers.length;
@@ -84,108 +104,125 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
   }, 0);
 
   // Filtered Consumers
-  const filteredConsumers = consumers.filter(c => {
-    const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || isPendingConsumerStatus(c.status);
-    const matchesSearch = smartMatch(searchQuery, [
-      c.name,
-      c.accountNumber,
-      c.meterNumber,
-      c.address,
-      c.barangay,
-      c.sitioZone,
-      c.contactNumber,
-      c.email,
-      c.businessName,
-      c.consumerType || 'Residential',
-      c.status,
-      isPending ? 'pending id issuance' : 'active issued',
-    ]);
-    const matchesType = classificationFilter === 'all' || (c.consumerType || 'Residential') === classificationFilter;
-    return matchesSearch && matchesType;
-  });
+  const filteredConsumers = consumers
+    .filter(c => {
+      const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || isPendingConsumerStatus(c.status);
+      const matchesSearch = smartMatch(searchQuery, [
+        c.name,
+        c.accountNumber,
+        c.meterNumber,
+        c.address,
+        c.barangay,
+        c.sitioZone,
+        c.contactNumber,
+        c.email,
+        c.businessName,
+        c.consumerType || 'Residential',
+        c.status,
+        isPending ? 'pending id issuance' : 'active issued',
+      ]);
+      const matchesType = classificationFilter === 'all' || (c.consumerType || 'Residential') === classificationFilter;
+      return matchesSearch && matchesType;
+    })
+    .sort(compareConsumersCanonical);
 
   // Filtered Meters
-  const filteredMeters = meters.filter(m => {
-    const linked = consumers.find(c => c.accountNumber === m.linkedAccountNumber);
-    return smartMatch(searchQuery, [
-      m.meterNumber,
-      m.brand,
-      m.linkedAccountNumber || 'unassigned',
-      linked?.name,
-      linked?.barangay,
-      linked?.address,
-      m.installationDate,
-      m.status,
-      m.status === 'maintenance' ? 'under maintenance' : m.status,
-      m.remarks,
-      m.statusUpdatedBy,
-    ]);
-  });
+  const filteredMeters = meters
+    .filter(m => {
+      const linked = consumers.find(c => c.accountNumber === m.linkedAccountNumber);
+      return smartMatch(searchQuery, [
+        m.meterNumber,
+        m.brand,
+        m.linkedAccountNumber || 'unassigned',
+        linked?.name,
+        linked?.barangay,
+        linked?.address,
+        m.installationDate,
+        m.status,
+        m.status === 'maintenance' ? 'under maintenance' : m.status,
+        m.remarks,
+        m.statusUpdatedBy,
+      ]);
+    })
+    .sort(compareMetersCanonical);
 
   // Filtered Readings
-  const filteredReadings = readings.filter(r => {
-    return smartMatch(searchQuery, [
-      r.id,
-      r.accountNumber,
-      r.consumerName,
-      r.meterNumber,
-      r.billingPeriod,
-      r.readingDate,
-      r.meterReaderName,
-      r.route,
-      r.status,
-      r.notes,
-      `${r.consumption} m3`,
-    ]);
-  });
+  const filteredReadings = readings
+    .filter(r => {
+      return smartMatch(searchQuery, [
+        r.id,
+        r.accountNumber,
+        r.consumerName,
+        r.meterNumber,
+        r.billingPeriod,
+        r.readingDate,
+        r.meterReaderName,
+        r.route,
+        r.status,
+        r.notes,
+        `${r.consumption} m3`,
+      ]);
+    })
+    .sort(compareReadingsCanonical);
 
   // Filtered Bills
-  const filteredBills = bills.filter(r => {
-    const billAmt = calculateCostOf(r, r.classification).toFixed(2);
-    return smartMatch(searchQuery, [
-      r.id,
-      r.accountNumber,
-      r.consumerName,
-      r.meterNumber,
-      r.billingPeriod,
-      r.dueDate,
-      r.paymentStatus || 'unpaid',
-      r.classification || 'Residential',
-      billAmt,
-      `${r.consumption} m3`,
-    ]);
-  });
+  const filteredBills = bills
+    .filter(r => {
+      const billAmt = calculateCostOf(r, r.classification).toFixed(2);
+      return smartMatch(searchQuery, [
+        r.id,
+        r.accountNumber,
+        r.consumerName,
+        r.meterNumber,
+        r.billingPeriod,
+        r.dueDate,
+        r.paymentStatus || 'unpaid',
+        r.classification || 'Residential',
+        billAmt,
+        `${r.consumption} m3`,
+      ]);
+    })
+    .sort(compareReadingsCanonical);
 
   // Filtered Payments
-  const filteredPayments = paidBills.filter(r => {
-    const paidAmt = (r.paidAmount && r.paidAmount > 0 ? r.paidAmount : calculateCostOf(r, r.classification)).toFixed(2);
-    return smartMatch(searchQuery, [
-      r.transactionId,
-      r.orNumber,
-      r.paymentReference,
-      r.accountNumber,
-      r.consumerName,
-      r.billingPeriod,
-      r.paymentDate,
-      r.readingDate,
-      r.paymentMethod || 'Cash',
-      paidAmt,
-    ]);
-  });
+  const filteredPayments = paidBills
+    .filter(r => {
+      const paidAmt = (r.paidAmount && r.paidAmount > 0 ? r.paidAmount : calculateCostOf(r, r.classification)).toFixed(2);
+      return smartMatch(searchQuery, [
+        r.transactionId,
+        r.orNumber,
+        r.paymentReference,
+        r.accountNumber,
+        r.consumerName,
+        r.billingPeriod,
+        r.paymentDate,
+        r.readingDate,
+        r.paymentMethod || 'Cash',
+        paidAmt,
+      ]);
+    })
+    .sort(
+      (a, b) =>
+        new Date(b.paymentDate || b.readingDate || 0).getTime() -
+          new Date(a.paymentDate || a.readingDate || 0).getTime() ||
+        compareReadingsCanonical(a, b)
+    );
 
   // Filtered Audit Logs
-  const filteredAuditLogs = auditLogs.filter(log => {
-    const formattedTs = log.timestamp ? new Date(log.timestamp).toLocaleString() : '';
-    return smartMatch(searchQuery, [
-      log.userName,
-      log.userRole,
-      log.action,
-      log.details,
-      log.ipAddress,
-      formattedTs,
-      log.timestamp,
-    ]);
-  });
+  const filteredAuditLogs = auditLogs
+    .filter(log => {
+      const formattedTs = log.timestamp ? new Date(log.timestamp).toLocaleString() : '';
+      return smartMatch(searchQuery, [
+        log.userName,
+        log.userRole,
+        log.action,
+        log.details,
+        log.ipAddress,
+        formattedTs,
+        log.timestamp,
+      ]);
+    })
+    .sort(compareAuditLogsCanonical);
 
   const activeTotalCount =
     recordsTab === 'consumers' ? consumers.length :
@@ -400,7 +437,8 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
         {/* SUBTAB A: CONSUMERS ARCHIVE */}
         {recordsTab === 'consumers' && (() => {
-          const paginatedConsumers = filteredConsumers.slice((currentPage - 1) * 10, currentPage * 10);
+          const safePage = Math.min(currentPage, Math.max(1, Math.ceil(filteredConsumers.length / 10)));
+          const paginatedConsumers = filteredConsumers.slice((safePage - 1) * 10, safePage * 10);
           return (
             <div>
               <div className="overflow-x-auto">
@@ -419,7 +457,12 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                     {paginatedConsumers.map((c, cIdx) => {
                       const isPending = !c.accountNumber || c.accountNumber.trim() === '' || c.accountNumber.toUpperCase().startsWith('PENDING') || c.accountNumber.toUpperCase() === 'PENDING ADMIN ISSUANCE' || isPendingConsumerStatus(c.status);
                       return (
-                      <tr key={`rec-cons-${c.accountNumber || c.meterNumber || cIdx}-${cIdx}`} className={`transition ${isPending ? 'bg-amber-950/20 hover:bg-amber-950/40' : 'hover:bg-slate-800/60'}`}>
+                      <tr
+                        key={`rec-cons-${c.id || c.accountNumber || c.email || c.applicationNumber || cIdx}`}
+                        onClick={() => setSelectedArchiveRecord({ type: 'consumer', data: c })}
+                        title="Click row to open complete consumer archive record"
+                        className={`transition cursor-pointer ${isPending ? 'bg-amber-950/20 hover:bg-amber-950/40' : 'hover:bg-slate-800/70'}`}
+                      >
                         <td className="px-5 py-3 font-mono font-bold border-r border-slate-800/80">
                           {isPending ? (
                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40 text-[11px] font-bold">
@@ -500,7 +543,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                 </table>
               </div>
               <TablePagination
-                currentPage={currentPage}
+                currentPage={safePage}
                 totalItems={filteredConsumers.length}
                 pageSize={10}
                 onPageChange={setCurrentPage}
@@ -512,7 +555,8 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
 
         {/* SUBTAB B: METERS INVENTORY */}
         {recordsTab === 'meters' && (() => {
-          const paginatedMeters = filteredMeters.slice((currentPage - 1) * 10, currentPage * 10);
+          const safePage = Math.min(currentPage, Math.max(1, Math.ceil(filteredMeters.length / 10)));
+          const paginatedMeters = filteredMeters.slice((safePage - 1) * 10, safePage * 10);
           return (
             <div>
               <div className="overflow-x-auto">
@@ -528,7 +572,12 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
                     {paginatedMeters.map((m, mIdx) => (
-                      <tr key={`rec-meter-${m.meterNumber || m.id || mIdx}-${mIdx}`} className="hover:bg-slate-800/60 transition">
+                      <tr
+                        key={`rec-meter-${m.meterNumber || m.id || mIdx}`}
+                        onClick={() => setSelectedArchiveRecord({ type: 'meter', data: m })}
+                        title="Click row to open complete water meter record"
+                        className="hover:bg-slate-800/70 transition cursor-pointer"
+                      >
                         <td className="px-5 py-3 font-mono font-bold text-white border-r border-slate-800/80">
                           {m.meterNumber}
                         </td>
@@ -568,7 +617,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                 </table>
               </div>
               <TablePagination
-                currentPage={currentPage}
+                currentPage={safePage}
                 totalItems={filteredMeters.length}
                 pageSize={10}
                 onPageChange={setCurrentPage}
@@ -580,7 +629,8 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
 
         {/* SUBTAB C: READINGS TRAIL */}
         {recordsTab === 'readings' && (() => {
-          const paginatedReadings = filteredReadings.slice((currentPage - 1) * 10, currentPage * 10);
+          const safePage = Math.min(currentPage, Math.max(1, Math.ceil(filteredReadings.length / 10)));
+          const paginatedReadings = filteredReadings.slice((safePage - 1) * 10, safePage * 10);
           return (
             <div>
               <div className="overflow-x-auto">
@@ -599,7 +649,12 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
                     {paginatedReadings.map((r, rIdx) => (
-                      <tr key={`rec-reading-${r.id || r.accountNumber || rIdx}-${rIdx}`} className="hover:bg-slate-800/60 transition">
+                      <tr
+                        key={`rec-reading-${r.id || rIdx}`}
+                        onClick={() => setSelectedArchiveRecord({ type: 'reading', data: r })}
+                        title="Click row to open complete meter reading record"
+                        className="hover:bg-slate-800/70 transition cursor-pointer"
+                      >
                         <td className="px-4 py-3 font-mono font-bold text-slate-400 border-r border-slate-800/80">
                           {r.id}
                         </td>
@@ -635,7 +690,10 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                             {r.status !== 'verified' ? (
                               <button
                                 type="button"
-                                onClick={() => handleVerifyReading(r.id, 'verified')}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleVerifyReading(r.id, 'verified');
+                                }}
                                 className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] uppercase transition flex items-center space-x-1 cursor-pointer"
                               >
                                 <CheckCircle className="h-3 w-3" />
@@ -649,7 +707,10 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                             )}
                             <button
                               type="button"
-                              onClick={() => handleDeleteReading(r.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteReading(r.id);
+                              }}
                               className="px-2 py-1 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 font-bold text-[10px] uppercase rounded border border-rose-800/60 transition cursor-pointer"
                             >
                               Delete
@@ -670,7 +731,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                 </table>
               </div>
               <TablePagination
-                currentPage={currentPage}
+                currentPage={safePage}
                 totalItems={filteredReadings.length}
                 pageSize={10}
                 onPageChange={setCurrentPage}
@@ -682,42 +743,56 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
 
         {/* SUBTAB D: BILLS LEDGER */}
         {recordsTab === 'bills' && (() => {
-          const paginatedBills = filteredBills.slice((currentPage - 1) * 10, currentPage * 10);
+          const safePage = Math.min(currentPage, Math.max(1, Math.ceil(filteredBills.length / 10)));
+          const paginatedBills = filteredBills.slice((safePage - 1) * 10, safePage * 10);
           return (
-            <div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs text-left border-collapse">
+            <div className="w-full min-w-0">
+              <div className="w-full overflow-x-auto">
+                <table className="w-full min-w-[900px] table-fixed text-xs text-left border-collapse">
+                  <colgroup>
+                    <col className="w-[16%]" />
+                    <col className="w-[15%]" />
+                    <col className="w-[26%]" />
+                    <col className="w-[13%]" />
+                    <col className="w-[16%]" />
+                    <col className="w-[14%]" />
+                  </colgroup>
                   <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-800">
                     <tr>
-                      <th className="px-5 py-3.5 border-r border-slate-800/80">Billing Period</th>
-                      <th className="px-5 py-3.5 border-r border-slate-800/80">Account #</th>
-                      <th className="px-5 py-3.5 border-r border-slate-800/80">Consumer Name</th>
-                      <th className="px-5 py-3.5 border-r border-slate-800/80 text-right">Volume (m³)</th>
-                      <th className="px-5 py-3.5 border-r border-slate-800/80 text-right">Assessed Amount</th>
-                      <th className="px-5 py-3.5 text-center">Settlement Status</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 whitespace-nowrap">Billing Period</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 whitespace-nowrap">Account #</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 whitespace-nowrap">Consumer Name</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 text-right whitespace-nowrap">Volume (m³)</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 text-right whitespace-nowrap">Assessed Amount</th>
+                      <th className="px-5 py-3.5 text-center whitespace-nowrap">Settlement Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
                     {paginatedBills.map((r, bIdx) => {
                       const totalBill = calculateCostOf(r, r.classification);
                       return (
-                        <tr key={`rec-bill-${r.id || r.accountNumber || bIdx}-${bIdx}`} className="hover:bg-slate-800/60 transition">
-                          <td className="px-5 py-3 font-mono font-bold text-white border-r border-slate-800/80">
+                        <tr
+                          key={`rec-bill-${r.id || bIdx}`}
+                          onClick={() => setSelectedArchiveRecord({ type: 'bill', data: r })}
+                          title="Click row to open complete bill record"
+                          className="hover:bg-slate-800/70 transition cursor-pointer"
+                        >
+                          <td className="px-5 py-3.5 font-mono tabular-nums font-bold text-white border-r border-slate-800/80 truncate" title={r.billingPeriod || 'Current Period'}>
                             {r.billingPeriod || 'Current Period'}
                           </td>
-                          <td className="px-5 py-3 font-mono font-bold text-sky-400 border-r border-slate-800/80">
+                          <td className="px-5 py-3.5 font-mono tabular-nums font-bold text-sky-400 border-r border-slate-800/80 truncate" title={r.accountNumber}>
                             {r.accountNumber}
                           </td>
-                          <td className="px-5 py-3 font-bold text-white border-r border-slate-800/80">
+                          <td className="px-5 py-3.5 font-bold text-white border-r border-slate-800/80 truncate" title={r.consumerName}>
                             {r.consumerName}
                           </td>
-                          <td className="px-5 py-3 font-mono font-bold text-slate-300 text-right border-r border-slate-800/80">
+                          <td className="px-5 py-3.5 font-mono tabular-nums font-bold text-slate-300 text-right border-r border-slate-800/80 whitespace-nowrap">
                             {r.consumption} m³
                           </td>
-                          <td className="px-5 py-3 font-mono font-black text-white text-right border-r border-slate-800/80">
+                          <td className="px-5 py-3.5 font-mono tabular-nums font-black text-white text-right border-r border-slate-800/80 whitespace-nowrap">
                             ₱{totalBill.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
-                          <td className="px-5 py-3 text-center">
+                          <td className="px-5 py-3.5 text-center whitespace-nowrap">
                             <span className={`px-2 py-0.5 text-[10px] font-extrabold uppercase border rounded ${
                               r.paymentStatus === 'paid'
                                 ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
@@ -741,7 +816,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                 </table>
               </div>
               <TablePagination
-                currentPage={currentPage}
+                currentPage={safePage}
                 totalItems={filteredBills.length}
                 pageSize={10}
                 onPageChange={setCurrentPage}
@@ -753,42 +828,56 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
 
         {/* SUBTAB E: PAYMENT RECEIPTS LOG */}
         {recordsTab === 'payments' && (() => {
-          const paginatedPayments = filteredPayments.slice((currentPage - 1) * 10, currentPage * 10);
+          const safePage = Math.min(currentPage, Math.max(1, Math.ceil(filteredPayments.length / 10)));
+          const paginatedPayments = filteredPayments.slice((safePage - 1) * 10, safePage * 10);
           return (
-            <div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs text-left border-collapse">
+            <div className="w-full min-w-0">
+              <div className="w-full overflow-x-auto">
+                <table className="w-full min-w-[900px] table-fixed text-xs text-left border-collapse">
+                  <colgroup>
+                    <col className="w-[17%]" />
+                    <col className="w-[15%]" />
+                    <col className="w-[15%]" />
+                    <col className="w-[24%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[15%]" />
+                  </colgroup>
                   <thead className="bg-slate-950 text-slate-300 font-extrabold uppercase text-[11px] tracking-wider border-b border-slate-800">
                     <tr>
-                      <th className="px-5 py-3.5 border-r border-slate-800/80">Official Receipt #</th>
-                      <th className="px-5 py-3.5 border-r border-slate-800/80">Payment Date</th>
-                      <th className="px-5 py-3.5 border-r border-slate-800/80">Account #</th>
-                      <th className="px-5 py-3.5 border-r border-slate-800/80">Consumer Name</th>
-                      <th className="px-5 py-3.5 border-r border-slate-800/80">Payment Instrument</th>
-                      <th className="px-5 py-3.5 text-right">Settled Amount</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 whitespace-nowrap">Official Receipt #</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 whitespace-nowrap">Payment Date</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 whitespace-nowrap">Account #</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 whitespace-nowrap">Consumer Name</th>
+                      <th className="px-5 py-3.5 border-r border-slate-800/80 whitespace-nowrap">Payment Instrument</th>
+                      <th className="px-5 py-3.5 text-right whitespace-nowrap">Settled Amount</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
                     {paginatedPayments.map((r, pIdx) => {
                       const totalBill = r.paidAmount && r.paidAmount > 0 ? r.paidAmount : calculateCostOf(r, r.classification);
                       return (
-                        <tr key={`rec-paid-${r.id || r.transactionId || pIdx}-${pIdx}`} className="hover:bg-slate-800/60 transition">
-                          <td className="px-5 py-3 font-mono font-bold text-emerald-400 border-r border-slate-800/80">
-                            {r.transactionId || `OR-${20260000 + pIdx}`}
+                        <tr
+                          key={`rec-paid-${r.id || r.transactionId || r.orNumber || pIdx}`}
+                          onClick={() => setSelectedArchiveRecord({ type: 'payment', data: r })}
+                          title="Click row to open complete payment receipt record"
+                          className="hover:bg-slate-800/70 transition cursor-pointer"
+                        >
+                          <td className="px-5 py-3.5 font-mono tabular-nums font-bold text-emerald-400 border-r border-slate-800/80 truncate">
+                            {r.orNumber || r.transactionId || r.paymentReference || 'OR-OFFICIAL'}
                           </td>
-                          <td className="px-5 py-3 text-slate-300 font-mono border-r border-slate-800/80">
+                          <td className="px-5 py-3.5 text-slate-300 font-mono tabular-nums border-r border-slate-800/80 whitespace-nowrap">
                             {r.paymentDate || r.readingDate}
                           </td>
-                          <td className="px-5 py-3 font-mono font-bold text-sky-400 border-r border-slate-800/80">
+                          <td className="px-5 py-3.5 font-mono tabular-nums font-bold text-sky-400 border-r border-slate-800/80 truncate">
                             {r.accountNumber}
                           </td>
-                          <td className="px-5 py-3 font-bold text-white border-r border-slate-800/80">
+                          <td className="px-5 py-3.5 font-bold text-white border-r border-slate-800/80 truncate" title={r.consumerName}>
                             {r.consumerName}
                           </td>
-                          <td className="px-5 py-3 font-bold text-slate-300 border-r border-slate-800/80">
+                          <td className="px-5 py-3.5 font-bold text-slate-300 border-r border-slate-800/80 truncate">
                             {r.paymentMethod || 'Cash'}
                           </td>
-                          <td className="px-5 py-3 font-mono font-black text-emerald-400 text-right">
+                          <td className="px-5 py-3.5 font-mono tabular-nums font-black text-emerald-400 text-right whitespace-nowrap">
                             ₱{totalBill.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
                         </tr>
@@ -806,7 +895,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                 </table>
               </div>
               <TablePagination
-                currentPage={currentPage}
+                currentPage={safePage}
                 totalItems={filteredPayments.length}
                 pageSize={10}
                 onPageChange={setCurrentPage}
@@ -818,7 +907,8 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
 
         {/* SUBTAB F: SECURITY AUDIT */}
         {recordsTab === 'audit' && (() => {
-          const paginatedAuditLogs = filteredAuditLogs.slice((currentPage - 1) * 10, currentPage * 10);
+          const safePage = Math.min(currentPage, Math.max(1, Math.ceil(filteredAuditLogs.length / 10)));
+          const paginatedAuditLogs = filteredAuditLogs.slice((safePage - 1) * 10, safePage * 10);
           return (
             <div>
               <div className="overflow-x-auto">
@@ -834,7 +924,12 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                   </thead>
                   <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium bg-slate-900">
                     {paginatedAuditLogs.map((log, lIdx) => (
-                      <tr key={`rec-audit-${log.id || lIdx}-${lIdx}`} className="hover:bg-slate-800/60 transition">
+                      <tr
+                        key={`rec-audit-${log.id || `${log.timestamp}-${lIdx}`}`}
+                        onClick={() => setSelectedArchiveRecord({ type: 'audit', data: log })}
+                        title="Click row to open complete security audit entry"
+                        className="hover:bg-slate-800/70 transition cursor-pointer"
+                      >
                         <td className="px-5 py-3 font-mono text-slate-400 text-[11px] border-r border-slate-800/80">
                           {new Date(log.timestamp).toLocaleString()}
                         </td>
@@ -864,7 +959,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                 </table>
               </div>
               <TablePagination
-                currentPage={currentPage}
+                currentPage={safePage}
                 totalItems={filteredAuditLogs.length}
                 pageSize={10}
                 onPageChange={setCurrentPage}
@@ -874,6 +969,248 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
           );
         })()}
       </div>
+
+      {/* Interactive Archive Record Complete Details Modal */}
+      {selectedArchiveRecord && (() => {
+        const { type, data } = selectedArchiveRecord;
+        const modalTitle =
+          type === 'consumer'
+            ? 'Consumer Account Archive Details'
+            : type === 'meter'
+            ? 'Water Meter Registry Details'
+            : type === 'reading'
+            ? 'Meter Reading Record Details'
+            : type === 'bill'
+            ? 'Assessed Bill Statement Details'
+            : type === 'payment'
+            ? 'Payment Receipt Record Details'
+            : 'Security Audit Log Entry';
+
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setSelectedArchiveRecord(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100"
+            >
+              <div className="px-5 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="p-2 bg-sky-500/15 border border-sky-500/30 rounded-xl text-sky-400 shrink-0">
+                    <Database className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-black text-white truncate">{modalTitle}</h3>
+                    <p className="text-[11px] font-mono tabular-nums text-slate-400 truncate">
+                      {type === 'consumer'
+                        ? data.accountNumber || data.applicationNumber || 'Pending ID'
+                        : type === 'meter'
+                        ? `Meter Tag #${data.meterNumber}`
+                        : type === 'audit'
+                        ? new Date(data.timestamp).toLocaleString()
+                        : `Record #${data.id || data.transactionId || 'N/A'}`}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedArchiveRecord(null)}
+                  className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-3.5 text-xs">
+                {type === 'consumer' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Consumer Name</span>
+                      <span className="font-bold text-white">{data.name}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Official Account #</span>
+                      <span className="font-mono tabular-nums font-bold text-sky-400">
+                        {data.accountNumber || 'Pending ID'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Assigned Meter Tag #</span>
+                      <span className="font-mono tabular-nums font-bold text-white">
+                        {data.meterNumber || 'Pending Meter'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Classification</span>
+                      <span className="font-semibold text-slate-200">{data.consumerType || 'Residential'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Contact Number</span>
+                      <span className="font-mono tabular-nums text-slate-200">{data.contactNumber || 'N/A'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Email Address</span>
+                      <span className="text-slate-200">{data.email || 'N/A'}</span>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Registered Service Address</span>
+                      <span className="text-slate-200">{data.address}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Connection Status</span>
+                      <span className="font-bold uppercase text-emerald-400">{data.status}</span>
+                    </div>
+                    {data.applicationNumber && (
+                      <div>
+                        <span className="text-[10px] font-bold uppercase text-slate-500 block">Application #</span>
+                        <span className="font-mono tabular-nums text-sky-300">{data.applicationNumber}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {type === 'meter' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Meter Tag Number</span>
+                      <span className="font-mono tabular-nums font-bold text-white">{data.meterNumber}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Water Meter Serial #</span>
+                      <span className="font-mono tabular-nums font-bold text-indigo-300">{data.serialNumber || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Brand / Manufacturer</span>
+                      <span className="font-semibold text-slate-200">{data.brand}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Commissioning Date</span>
+                      <span className="font-mono tabular-nums text-slate-200">{data.installationDate || 'N/A'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Assigned Account #</span>
+                      <span className="font-mono tabular-nums font-bold text-sky-400">
+                        {data.linkedAccountNumber || 'Unassigned'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Operational Status</span>
+                      <span className="font-bold uppercase text-emerald-400">{data.status}</span>
+                    </div>
+                    {data.remarks && (
+                      <div className="sm:col-span-2">
+                        <span className="text-[10px] font-bold uppercase text-slate-500 block">Remarks</span>
+                        <span className="text-slate-300">{data.remarks}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(type === 'reading' || type === 'bill' || type === 'payment') && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Consumer Name</span>
+                      <span className="font-bold text-white">{data.consumerName}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Account Number</span>
+                      <span className="font-mono tabular-nums font-bold text-sky-400">#{data.accountNumber}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Billing Period</span>
+                      <span className="font-semibold text-slate-200">{data.billingPeriod || 'Current Period'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Meter Tag Number</span>
+                      <span className="font-mono tabular-nums font-bold text-white">{data.meterNumber || 'N/A'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Meter Indices</span>
+                      <span className="font-mono tabular-nums text-slate-200">
+                        Prev {data.previousReading} → Curr {data.currentReading} m³
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Consumption</span>
+                      <span className="font-mono tabular-nums font-black text-sky-400">{data.consumption} m³</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Assessed Amount</span>
+                      <span className="font-mono tabular-nums font-black text-white">
+                        ₱{calculateCostOf(data, data.classification).toFixed(2)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Settlement Status</span>
+                      <span className="font-bold uppercase text-emerald-400">
+                        {data.paymentStatus || data.status || 'unpaid'}
+                      </span>
+                    </div>
+                    {(data.orNumber || data.transactionId) && (
+                      <div>
+                        <span className="text-[10px] font-bold uppercase text-slate-500 block">OR / Reference #</span>
+                        <span className="font-mono tabular-nums text-emerald-300">
+                          {data.orNumber || data.transactionId}
+                        </span>
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Date Recorded</span>
+                      <span className="font-mono tabular-nums text-slate-300">
+                        {data.paymentDate || data.readingDate || 'N/A'}
+                      </span>
+                    </div>
+                    {data.notes && (
+                      <div className="sm:col-span-2">
+                        <span className="text-[10px] font-bold uppercase text-slate-500 block">Audit Notes</span>
+                        <span className="text-slate-300">{data.notes}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {type === 'audit' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">User Operator</span>
+                      <span className="font-bold text-white">{data.userName}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Action Code</span>
+                      <span className="font-mono font-bold text-sky-400">{data.action}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Timestamp</span>
+                      <span className="font-mono tabular-nums text-slate-300">
+                        {new Date(data.timestamp).toLocaleString()}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Host IP</span>
+                      <span className="font-mono tabular-nums text-slate-300">{data.ipAddress || '127.0.0.1'}</span>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Operation Details</span>
+                      <p className="text-slate-200 leading-relaxed mt-0.5">{data.details}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setSelectedArchiveRecord(null)}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

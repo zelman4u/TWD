@@ -44,6 +44,7 @@ import { SmartSearchBar } from '../common/SmartSearchBar';
 import { smartMatch } from '../../utils/smartSearch';
 import { formatMeterStatusLabel, formatMeterStatusUpdateDate, normalizeMeterStatus } from '../../utils/meterStatusNotification';
 import { AdminInquiryReplyModal } from './AdminInquiryReplyModal';
+import { compareReportsCanonical } from '../../utils/canonicalSort';
 
 interface ConsumerReportsManagerProps {
   currentUser: UserType;
@@ -245,7 +246,7 @@ export function ConsumerReportsManager({
     }
 
     return true;
-  });
+  }).sort(compareReportsCanonical);
 
   // KPI aggregates
   const totalCount = reports.length;
@@ -541,7 +542,8 @@ export function ConsumerReportsManager({
             <p className="text-xs text-slate-400">There are no customer service inquiries matching your current filter criteria.</p>
           </div>
         ) : (() => {
-          const paginatedReports = filteredReports.slice((currentPage - 1) * 10, currentPage * 10);
+          const safePage = Math.min(currentPage, Math.max(1, Math.ceil(filteredReports.length / 10)));
+          const paginatedReports = filteredReports.slice((safePage - 1) * 10, safePage * 10);
           return (
             <div>
               <div className="overflow-x-auto">
@@ -695,7 +697,7 @@ export function ConsumerReportsManager({
                 </table>
               </div>
               <TablePagination
-                currentPage={currentPage}
+                currentPage={safePage}
                 totalItems={filteredReports.length}
                 pageSize={10}
                 onPageChange={setCurrentPage}

@@ -22,6 +22,8 @@ import {
   FileText,
   Info,
   Wrench,
+  X,
+  MapPin,
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Consumer, Barangay } from '../types';
@@ -73,6 +75,8 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
     return tomorrow.toISOString().split('T')[0];
   });
   const [installationRemarks, setInstallationRemarks] = useState('');
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
+  const [scheduleModalError, setScheduleModalError] = useState<string | null>(null);
 
   const minSelectableDate = useMemo(() => new Date().toISOString().split('T')[0], []);
   const [previewApplicationNumber] = useState<string>(() => {
@@ -113,6 +117,15 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
     window.addEventListener('twd_database_updated', refreshBarangays);
     return () => window.removeEventListener('twd_database_updated', refreshBarangays);
   }, []);
+
+  useEffect(() => {
+    if (!isScheduleModalOpen) return;
+    const handleEsc = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setIsScheduleModalOpen(false);
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [isScheduleModalOpen]);
 
   // Handle contact number input with strict 11-digit constraint & real-time duplicate detection
   const handleContactNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -205,11 +218,13 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
 
     if (!hasExistingMeter && scheduleOption === 'now') {
       if (!preferredInstallationDate) {
-        setError('Please select your preferred water meter installation date.');
+        setScheduleModalError('Please select your preferred water meter installation date.');
+        setIsScheduleModalOpen(true);
         return;
       }
       if (preferredInstallationDate < minSelectableDate) {
-        setError('Preferred installation date cannot be earlier than today.');
+        setScheduleModalError('Preferred installation date cannot be earlier than today.');
+        setIsScheduleModalOpen(true);
         return;
       }
     }
@@ -839,7 +854,11 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                           <button
                             type="button"
-                            onClick={() => setScheduleOption('now')}
+                            onClick={() => {
+                              setScheduleOption('now');
+                              setScheduleModalError(null);
+                              setIsScheduleModalOpen(true);
+                            }}
                             className={`p-3 rounded-xl border text-left transition cursor-pointer ${
                               scheduleOption === 'now'
                                 ? 'bg-blue-600/20 border-blue-500 text-white'
@@ -849,11 +868,11 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                             <div className="flex items-center justify-between gap-2">
                               <span className="text-xs font-black text-blue-300">Schedule Installation Now</span>
                               <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 whitespace-nowrap">
-                                Recommended
+                                Opens Modal
                               </span>
                             </div>
                             <p className="text-[10px] text-slate-300 mt-1 leading-snug">
-                              Submit an installation request immediately and choose your preferred installation date.
+                              Choose your preferred installation date and add site instructions in a quick popup form.
                             </p>
                           </button>
 
@@ -877,85 +896,40 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                         </div>
 
                         {scheduleOption === 'now' ? (
-                          <div className="space-y-3 pt-1 border-t border-slate-800/80">
-                            {/* Summary of Auto-Captured Installation Application Details */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 text-[11px]">
-                              <div>
-                                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 block">
-                                  Consumer Name
+                          <div className="rounded-xl bg-slate-900/90 border border-blue-500/30 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="space-y-0.5 text-[11px] min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="inline-flex items-center gap-1 font-bold text-sky-300">
+                                  <Calendar className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                                  <span>Preferred Date:</span>
                                 </span>
-                                <span className="font-semibold text-slate-200 truncate block">
-                                  {fullName.trim() || 'Enter Full Name above'}
+                                <span className="font-mono tabular-nums font-black text-white">
+                                  {preferredInstallationDate
+                                    ? formatInstallationDateDisplay(preferredInstallationDate)
+                                    : 'Not selected yet'}
                                 </span>
-                              </div>
-                              <div>
-                                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 block">
-                                  Registration / Application No.
-                                </span>
-                                <span className="font-mono tabular-nums font-bold text-sky-400 block">
-                                  {previewApplicationNumber}
+                                <span className="text-slate-600">·</span>
+                                <span className="text-[10px] font-semibold text-emerald-400">
+                                  Pending Installation
                                 </span>
                               </div>
-                              <div>
-                                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 block">
-                                  Contact Number
-                                </span>
-                                <span className="font-mono tabular-nums font-semibold text-slate-200 block">
-                                  {contactNumber || 'Enter 11-digit mobile above'}
-                                </span>
-                              </div>
-                              <div>
-                                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 block">
-                                  Service Address & Barangay
-                                </span>
-                                <span className="font-medium text-slate-200 truncate block">
-                                  {computedPreviewAddress}
-                                </span>
-                              </div>
+                              <p className="text-slate-400 truncate">
+                                {installationRemarks.trim()
+                                  ? `Note: ${installationRemarks.trim()}`
+                                  : `App #${previewApplicationNumber} · Click "Set / Edit Schedule" to adjust date or instructions.`}
+                              </p>
                             </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              <div className="space-y-1">
-                                <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider flex items-center gap-1">
-                                  <Calendar className="h-3 w-3 text-sky-400 shrink-0" />
-                                  <span>
-                                    Preferred Installation Date <span className="text-red-400">*</span>
-                                  </span>
-                                </label>
-                                <input
-                                  type="date"
-                                  required={!hasExistingMeter && scheduleOption === 'now'}
-                                  min={minSelectableDate}
-                                  value={preferredInstallationDate}
-                                  onChange={(e) => setPreferredInstallationDate(e.target.value)}
-                                  className="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs font-mono tabular-nums text-slate-100 focus:outline-none"
-                                />
-                              </div>
-
-                              <div className="space-y-1">
-                                <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider flex items-center gap-1">
-                                  <FileText className="h-3 w-3 text-sky-400 shrink-0" />
-                                  <span>Initial Application Status</span>
-                                </label>
-                                <div className="w-full bg-slate-900/70 border border-slate-800 rounded-xl py-2 px-3 text-xs font-bold text-sky-300 flex items-center justify-between">
-                                  <span>Pending Installation</span>
-                                  <span className="text-[9px] font-mono uppercase text-slate-400">Auto-Tracked</span>
-                                </div>
-                              </div>
-
-                              <div className="sm:col-span-2 space-y-1">
-                                <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider">
-                                  Additional Remarks or Installation Instructions (Optional)
-                                </label>
-                                <textarea
-                                  rows={2}
-                                  value={installationRemarks}
-                                  onChange={(e) => setInstallationRemarks(e.target.value)}
-                                  placeholder="e.g. Gate landmark near barangay chapel, preferred morning inspection, contact person on site..."
-                                  className="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none resize-none"
-                                />
-                              </div>
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setScheduleModalError(null);
+                                setIsScheduleModalOpen(true);
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 flex items-center justify-center gap-1.5 shadow-sm"
+                            >
+                              <Calendar className="h-3.5 w-3.5 shrink-0" />
+                              <span>Set / Edit Schedule</span>
+                            </button>
                           </div>
                         ) : (
                           <div className="rounded-xl bg-amber-950/40 border border-amber-700/50 p-3 flex items-start gap-2.5 text-amber-200 text-[11px] leading-relaxed">
@@ -1109,6 +1083,211 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
           </div>
         )}
       </div>
+
+      {/* Dedicated Water Meter Installation Scheduling Modal (Eliminates Form Scrolling) */}
+      {isScheduleModalOpen && !isSuccessModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setIsScheduleModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-left"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="px-5 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-9 w-9 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-sky-400 shrink-0">
+                  <Wrench className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-black text-white truncate">
+                    Schedule Water Meter Installation
+                  </h3>
+                  <p className="text-[11px] text-slate-400 truncate">
+                    Application <span className="font-mono tabular-nums font-bold text-sky-400">{previewApplicationNumber}</span> · Tagoloan Water District
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsScheduleModalOpen(false)}
+                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                aria-label="Close installation schedule modal"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4">
+              {/* Synced Applicant & Service Location Fields */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    Consumer Name
+                  </label>
+                  <input
+                    type="text"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="e.g. Juan Dela Cruz"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-2 px-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    Contact Number (11 Digits)
+                  </label>
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    maxLength={11}
+                    value={contactNumber}
+                    onChange={handleContactNumberChange}
+                    placeholder="09XXXXXXXXX"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-2 px-3 text-xs font-mono tabular-nums text-slate-100 placeholder-slate-500 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    Barangay
+                  </label>
+                  <select
+                    value={barangay}
+                    onChange={(e) => setBarangay(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-2 px-3 text-xs text-slate-100 focus:outline-none"
+                  >
+                    <option value="">-- Select Registered Barangay --</option>
+                    {availableBarangays.map((b) => (
+                      <option key={b.id} value={b.name}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    Sitio / Zone / Street
+                  </label>
+                  <div className="relative">
+                    <MapPin className="h-3.5 w-3.5 text-slate-500 absolute left-3 top-2.5" />
+                    <input
+                      type="text"
+                      value={sitioZone}
+                      onChange={(e) => setSitioZone(e.target.value)}
+                      placeholder="e.g. Zone 4, Sitio Riverside"
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl py-2 pl-8 pr-3 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800/80">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black text-slate-200 uppercase tracking-wider flex items-center gap-1">
+                    <Calendar className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                    <span>
+                      Preferred Installation Date <span className="text-rose-400">*</span>
+                    </span>
+                  </label>
+                  <input
+                    type="date"
+                    min={minSelectableDate}
+                    value={preferredInstallationDate}
+                    onChange={(e) => {
+                      setPreferredInstallationDate(e.target.value);
+                      setScheduleModalError(null);
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-xl py-2 px-3 text-xs font-mono tabular-nums text-white focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black text-slate-200 uppercase tracking-wider flex items-center gap-1">
+                    <FileText className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                    <span>Initial Application Status</span>
+                  </label>
+                  <div className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-bold text-sky-300 flex items-center justify-between">
+                    <span>Pending Installation</span>
+                    <span className="text-[10px] font-mono text-slate-500">{computedPreviewAddress.split(',')[0]}</span>
+                  </div>
+                </div>
+
+                <div className="sm:col-span-2 space-y-1">
+                  <label className="block text-[10px] font-black text-slate-200 uppercase tracking-wider">
+                    Additional Remarks or Installation Instructions (Optional)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={installationRemarks}
+                    onChange={(e) => setInstallationRemarks(e.target.value)}
+                    placeholder="e.g. Gate landmark near barangay chapel, preferred morning inspection, contact person on site..."
+                    className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-xl py-2 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none resize-none"
+                  />
+                </div>
+              </div>
+
+              {scheduleModalError && (
+                <div className="bg-rose-500/15 border border-rose-500/40 text-rose-300 p-2.5 rounded-xl text-xs flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+                  <span className="font-semibold">{scheduleModalError}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setScheduleOption('later');
+                  setIsScheduleModalOpen(false);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-amber-300 text-xs font-bold transition cursor-pointer whitespace-nowrap"
+              >
+                Schedule Later Instead
+              </button>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsScheduleModalOpen(false)}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!preferredInstallationDate) {
+                      setScheduleModalError('Please select a preferred installation date.');
+                      return;
+                    }
+                    if (preferredInstallationDate < minSelectableDate) {
+                      setScheduleModalError('Preferred installation date cannot be earlier than today.');
+                      return;
+                    }
+                    setScheduleOption('now');
+                    setScheduleModalError(null);
+                    setIsScheduleModalOpen(false);
+                    toast.info(
+                      'Installation Schedule Saved',
+                      `Preferred date set to ${formatInstallationDateDisplay(preferredInstallationDate)}. Complete your registration form to submit.`
+                    );
+                  }}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider transition cursor-pointer shadow-md whitespace-nowrap"
+                >
+                  Confirm Schedule
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

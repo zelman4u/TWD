@@ -44,6 +44,20 @@ import {
   buildInstallationStatusUpdateNotification,
   buildAccountActivatedAfterInstallationNotification,
 } from './utils/installationWorkflow';
+import {
+  compareAnnouncementsCanonical,
+  compareAuditLogsCanonical,
+  compareBarangaysCanonical,
+  compareConsumersCanonical,
+  compareInstallationsCanonical,
+  compareMetersCanonical,
+  compareReadersCanonical,
+  compareReadingsCanonical,
+  compareReportsCanonical,
+  compareRoutesCanonical,
+  compareUsersCanonical,
+  ensureMeterSerialNumber,
+} from './utils/canonicalSort';
 
 
 // Purge all legacy storage keys containing old mock data
@@ -1101,10 +1115,12 @@ function getStored<T>(key: string, initial: T): T {
         if (kEmail) seenIds.add(kEmail);
         deduplicatedReaders.push(r);
       });
-      if (deduplicatedReaders.length !== readers.length) {
-        localStorage.setItem(key, JSON.stringify(deduplicatedReaders));
-        return deduplicatedReaders as unknown as T;
+      deduplicatedReaders.sort(compareReadersCanonical);
+      const nextReadersJson = JSON.stringify(deduplicatedReaders);
+      if (deduplicatedReaders.length !== readers.length || data !== nextReadersJson) {
+        localStorage.setItem(key, nextReadersJson);
       }
+      return deduplicatedReaders as unknown as T;
     }
     if (key === KEYS.USERS) {
       const users = parsed as User[];
@@ -1240,15 +1256,17 @@ function getStored<T>(key: string, initial: T): T {
         }
       });
 
-      if (hasMockUsers || !adminExists || modified) {
-        const cleanedUsers = deduplicatedUsers
-          .filter(u => !isAccountTerminated(u) && u.email !== 'john@example.com' && u.email !== 'maria@example.com');
-        if (!cleanedUsers.some(u => u.email && u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph')) {
-          cleanedUsers.unshift(INITIAL_USERS[0]);
-        }
-        localStorage.setItem(key, JSON.stringify(cleanedUsers));
-        return cleanedUsers as unknown as T;
+      const cleanedUsers = deduplicatedUsers
+        .filter(u => !isAccountTerminated(u) && u.email !== 'john@example.com' && u.email !== 'maria@example.com');
+      if (!cleanedUsers.some(u => u.email && u.email.toLowerCase() === 'admin@tagoloanwater.gov.ph')) {
+        cleanedUsers.unshift(INITIAL_USERS[0]);
       }
+      cleanedUsers.sort(compareUsersCanonical);
+      const nextUsersJson = JSON.stringify(cleanedUsers);
+      if (hasMockUsers || !adminExists || modified || data !== nextUsersJson) {
+        localStorage.setItem(key, nextUsersJson);
+      }
+      return cleanedUsers as unknown as T;
     }
     if (key === KEYS.BARANGAYS) {
       const brgs = Array.isArray(parsed) ? [...(parsed as Barangay[])] : [];
@@ -1370,36 +1388,26 @@ function getStored<T>(key: string, initial: T): T {
         changed = true;
       }
 
-      if (changed) {
-        localStorage.setItem(key, JSON.stringify(cons));
-        return cons as unknown as T;
+      cons.sort(compareConsumersCanonical);
+      const nextConsJson = JSON.stringify(cons);
+      if (changed || data !== nextConsJson) {
+        localStorage.setItem(key, nextConsJson);
       }
+      return cons as unknown as T;
     }
     if (key === KEYS.METERS) {
       let meters = parsed as WaterMeter[];
-      let changed = false;
       INITIAL_METERS.forEach(im => {
         if (!meters.some(m => m.meterNumber === im.meterNumber)) {
           meters.push(im);
-          changed = true;
         }
       });
-      meters = meters.map((m) => {
-        if (!m.serialNumber && m.meterNumber) {
-          const brandPrefix = (m.brand || 'TWD').slice(0, 3).toUpperCase();
-          const suffix = String(m.meterNumber).replace(/[^a-zA-Z0-9]/g, '').slice(-5).toUpperCase() || '00001';
-          changed = true;
-          return {
-            ...m,
-            serialNumber: `SN-${brandPrefix}-2024-${suffix}`,
-          };
-        }
-        return m;
-      });
-      if (changed) {
-        localStorage.setItem(key, JSON.stringify(meters));
-        return meters as unknown as T;
+      meters = meters.map((m) => ensureMeterSerialNumber(m)).sort(compareMetersCanonical);
+      const nextMetersJson = JSON.stringify(meters);
+      if (data !== nextMetersJson) {
+        localStorage.setItem(key, nextMetersJson);
       }
+      return meters as unknown as T;
     }
     if (key === KEYS.READINGS) {
       let reads = parsed as MeterReading[];
@@ -1407,7 +1415,6 @@ function getStored<T>(key: string, initial: T): T {
       if (hasMockReads) {
         reads = reads.filter(r => !r.id.startsWith('R-1001-A') && !r.id.startsWith('R-1002-B'));
       }
-      let changed = hasMockReads;
 
       // Migrate any old pending Acero readings to Bruce Acero with BRG-01-3117
       reads.forEach(r => {
@@ -1418,7 +1425,6 @@ function getStored<T>(key: string, initial: T): T {
           r.meterNumber = '150309988';
           r.meterBrand = 'EVER';
           r.route = 'Poblacion Zone 3 Route';
-          changed = true;
         }
       });
 
@@ -1426,7 +1432,6 @@ function getStored<T>(key: string, initial: T): T {
         const alreadyExists = reads.some(r => r.id === ir.id || (r.consumerName.trim().toLowerCase() === ir.consumerName.trim().toLowerCase() && r.billingPeriod === ir.billingPeriod));
         if (!alreadyExists) {
           reads.push(ir);
-          changed = true;
         }
       });
 
@@ -1441,7 +1446,6 @@ function getStored<T>(key: string, initial: T): T {
               (c.name && c.name.trim().toLowerCase() === r.consumerName.trim().toLowerCase())
             );
             if (matchedConsumer && matchedConsumer.accountNumber && matchedConsumer.accountNumber !== r.accountNumber && !matchedConsumer.accountNumber.toUpperCase().startsWith('PENDING')) {
-              changed = true;
               return {
                 ...r,
                 accountNumber: matchedConsumer.accountNumber,
@@ -1454,10 +1458,12 @@ function getStored<T>(key: string, initial: T): T {
         }
       } catch {}
 
-      if (changed) {
-        localStorage.setItem(key, JSON.stringify(reads));
-        return reads as unknown as T;
+      reads.sort(compareReadingsCanonical);
+      const nextReadsJson = JSON.stringify(reads);
+      if (data !== nextReadsJson) {
+        localStorage.setItem(key, nextReadsJson);
       }
+      return reads as unknown as T;
     }
     return parsed;
   } catch (e) {
@@ -1572,23 +1578,21 @@ function diffChangedItems<T extends Record<string, any>>(key: string, nextItems:
 
 export const mockDb = {
   // Get all datasets
-  getUsers: (): User[] => getStored<User[]>(KEYS.USERS, INITIAL_USERS),
-  getConsumers: (): Consumer[] => getStored<Consumer[]>(KEYS.CONSUMERS, INITIAL_CONSUMERS),
-  getReaders: (): MeterReader[] => getStored<MeterReader[]>(KEYS.READERS, INITIAL_READERS),
-  getMeters: (): WaterMeter[] => getStored<WaterMeter[]>(KEYS.METERS, INITIAL_METERS),
-  getReadings: (): MeterReading[] => getStored<MeterReading[]>(KEYS.READINGS, INITIAL_READINGS),
-  getRoutes: (): RouteAssignment[] => getStored<RouteAssignment[]>(KEYS.ROUTES, INITIAL_ROUTES),
+  getUsers: (): User[] => [...getStored<User[]>(KEYS.USERS, INITIAL_USERS)].sort(compareUsersCanonical),
+  getConsumers: (): Consumer[] => [...getStored<Consumer[]>(KEYS.CONSUMERS, INITIAL_CONSUMERS)].sort(compareConsumersCanonical),
+  getReaders: (): MeterReader[] => [...getStored<MeterReader[]>(KEYS.READERS, INITIAL_READERS)].sort(compareReadersCanonical),
+  getMeters: (): WaterMeter[] => getStored<WaterMeter[]>(KEYS.METERS, INITIAL_METERS).map(ensureMeterSerialNumber).sort(compareMetersCanonical),
+  getReadings: (): MeterReading[] => [...getStored<MeterReading[]>(KEYS.READINGS, INITIAL_READINGS)].sort(compareReadingsCanonical),
+  getRoutes: (): RouteAssignment[] => [...getStored<RouteAssignment[]>(KEYS.ROUTES, INITIAL_ROUTES)].sort(compareRoutesCanonical),
   getAnnouncements: (): Announcement[] => {
     const deleted = getDeletedAnnouncementIds();
     const raw = getStored<Announcement[]>(KEYS.ANNOUNCEMENTS, INITIAL_ANNOUNCEMENTS).filter(
       (a) => a && (!a.id || !deleted.has(a.id))
     );
-    return sanitizeAnnouncements(raw);
+    return sanitizeAnnouncements(raw).sort(compareAnnouncementsCanonical);
   },
-  getAuditLogs: (): AuditLog[] => getStored<AuditLog[]>(KEYS.AUDIT_LOGS, INITIAL_AUDIT_LOGS).sort(
-    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  ),
-  getBarangays: (): Barangay[] => getStored<Barangay[]>(KEYS.BARANGAYS, INITIAL_BARANGAYS),
+  getAuditLogs: (): AuditLog[] => [...getStored<AuditLog[]>(KEYS.AUDIT_LOGS, INITIAL_AUDIT_LOGS)].sort(compareAuditLogsCanonical),
+  getBarangays: (): Barangay[] => [...getStored<Barangay[]>(KEYS.BARANGAYS, INITIAL_BARANGAYS)].sort(compareBarangaysCanonical),
   getCurrentUser: (): User | null => {
     try {
       const u = localStorage.getItem(KEYS.CURRENT_USER);
@@ -1646,8 +1650,9 @@ export const mockDb = {
   },
 
   saveUsers: (users: User[]): void => {
-    const changed = diffChangedItems(KEYS.USERS, users, 'id');
-    setStored(KEYS.USERS, users);
+    const sorted = [...users].sort(compareUsersCanonical);
+    const changed = diffChangedItems(KEYS.USERS, sorted, 'id');
+    setStored(KEYS.USERS, sorted);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.USERS, changed, 'id');
   },
 
@@ -1760,6 +1765,7 @@ export const mockDb = {
       return true;
     });
 
+    deduplicated.sort(compareConsumersCanonical);
     const changed = diffChangedItems(KEYS.CONSUMERS, deduplicated, 'accountNumber');
     setStored(KEYS.CONSUMERS, deduplicated);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.CONSUMERS, changed, 'accountNumber');
@@ -1792,6 +1798,7 @@ export const mockDb = {
       if (kEmail) seen.add(kEmail);
       deduplicated.push(r);
     });
+    deduplicated.sort(compareReadersCanonical);
     const changed = diffChangedItems(KEYS.READERS, deduplicated, 'id');
     setStored(KEYS.READERS, deduplicated);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.READERS, changed, 'id');
@@ -1955,50 +1962,55 @@ export const mockDb = {
   },
 
   saveMeters: (meters: WaterMeter[]): void => {
-    const changed = diffChangedItems(KEYS.METERS, meters, 'meterNumber');
-    setStored(KEYS.METERS, meters);
+    const sorted = meters.map(ensureMeterSerialNumber).sort(compareMetersCanonical);
+    const changed = diffChangedItems(KEYS.METERS, sorted, 'meterNumber');
+    setStored(KEYS.METERS, sorted);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.METERS, changed, 'meterNumber');
   },
   saveMeterAsync: async (updatedMeter: WaterMeter, previousMeterNumber?: string): Promise<WaterMeter[]> => {
     const currentMeters = getStored<WaterMeter[]>(KEYS.METERS, INITIAL_METERS);
-    const targetPrevNum = (previousMeterNumber || updatedMeter.meterNumber || '').trim();
+    const normalizedUpdated = ensureMeterSerialNumber(updatedMeter);
+    const targetPrevNum = (previousMeterNumber || normalizedUpdated.meterNumber || '').trim();
     const existingIdx = currentMeters.findIndex(
       (m) => m.meterNumber.trim().toLowerCase() === targetPrevNum.toLowerCase()
     );
     let nextMeters: WaterMeter[];
     if (existingIdx >= 0) {
-      nextMeters = currentMeters.map((m, idx) => (idx === existingIdx ? updatedMeter : m));
+      nextMeters = currentMeters.map((m, idx) => (idx === existingIdx ? normalizedUpdated : m));
     } else {
-      nextMeters = [updatedMeter, ...currentMeters];
+      nextMeters = [normalizedUpdated, ...currentMeters];
     }
+    nextMeters = nextMeters.map(ensureMeterSerialNumber).sort(compareMetersCanonical);
     setStored(KEYS.METERS, nextMeters);
-    if (previousMeterNumber && previousMeterNumber.trim() !== updatedMeter.meterNumber.trim()) {
+    if (previousMeterNumber && previousMeterNumber.trim() !== normalizedUpdated.meterNumber.trim()) {
       deleteDocFromFirestore(COLLECTIONS.METERS, previousMeterNumber.trim());
     }
     await syncDocToFirestore(
       COLLECTIONS.METERS,
-      updatedMeter.meterNumber,
-      updatedMeter as unknown as Record<string, unknown>,
+      normalizedUpdated.meterNumber,
+      normalizedUpdated as unknown as Record<string, unknown>,
       true
     );
     return nextMeters;
   },
   saveReadings: (readings: MeterReading[]): void => {
-    const normalized = readings.map(r => {
-      const currVal = Number(r.currentReading ?? r.presentReading ?? 0);
-      const prevVal = Math.max(0, Number(r.previousReading ?? 0));
-      const safePrev = prevVal <= currVal ? prevVal : 0;
-      const usageVal = typeof r.consumption === 'number' && r.consumption >= 0 && safePrev + r.consumption === currVal
-        ? r.consumption
-        : Math.max(0, currVal - safePrev);
-      return {
-        ...r,
-        previousReading: safePrev,
-        presentReading: currVal,
-        currentReading: currVal,
-        consumption: usageVal,
-      };
-    });
+    const normalized = readings
+      .map(r => {
+        const currVal = Number(r.currentReading ?? r.presentReading ?? 0);
+        const prevVal = Math.max(0, Number(r.previousReading ?? 0));
+        const safePrev = prevVal <= currVal ? prevVal : 0;
+        const usageVal = typeof r.consumption === 'number' && r.consumption >= 0 && safePrev + r.consumption === currVal
+          ? r.consumption
+          : Math.max(0, currVal - safePrev);
+        return {
+          ...r,
+          previousReading: safePrev,
+          presentReading: currVal,
+          currentReading: currVal,
+          consumption: usageVal,
+        };
+      })
+      .sort(compareReadingsCanonical);
     const changed = diffChangedItems(KEYS.READINGS, normalized, 'id');
     setStored(KEYS.READINGS, normalized);
     if (changed.length > 0) {
@@ -2106,25 +2118,19 @@ export const mockDb = {
         changed = true;
       }
     });
-    const merged = Array.from(map.values()).sort(
-      (a, b) =>
-        new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
-        Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
-        new Date(b.billingIssuedAt || b.submittedAt || 0).getTime() - new Date(a.billingIssuedAt || a.submittedAt || 0).getTime()
-    );
-    if (changed) {
-      setStored(KEYS.READINGS, merged);
-    }
+    const merged = Array.from(map.values()).sort(compareReadingsCanonical);
+    setStored(KEYS.READINGS, merged);
     return merged;
   },
   saveRoutes: (routes: RouteAssignment[]): void => {
-    const changed = diffChangedItems(KEYS.ROUTES, routes, 'id');
-    setStored(KEYS.ROUTES, routes);
+    const sorted = [...routes].sort(compareRoutesCanonical);
+    const changed = diffChangedItems(KEYS.ROUTES, sorted, 'id');
+    setStored(KEYS.ROUTES, sorted);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.ROUTES, changed, 'id');
   },
   saveAnnouncements: (anns: Announcement[]): void => {
     const deleted = getDeletedAnnouncementIds();
-    const filtered = sanitizeAnnouncements(anns.filter(a => a && (!a.id || !deleted.has(a.id))));
+    const filtered = sanitizeAnnouncements(anns.filter(a => a && (!a.id || !deleted.has(a.id)))).sort(compareAnnouncementsCanonical);
     const changed = diffChangedItems(KEYS.ANNOUNCEMENTS, filtered, 'id');
     setStored(KEYS.ANNOUNCEMENTS, filtered);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.ANNOUNCEMENTS, changed, 'id');
@@ -2144,23 +2150,21 @@ export const mockDb = {
         map.set(ia.id, prev ? { ...prev, ...ia } : ia);
       }
     });
-    const merged = sanitizeAnnouncements(
-      Array.from(map.values()).sort(
-        (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
-      )
-    );
+    const merged = sanitizeAnnouncements(Array.from(map.values())).sort(compareAnnouncementsCanonical);
     setStored(KEYS.ANNOUNCEMENTS, merged);
     return merged;
   },
   saveAuditLogs: (logs: AuditLog[]): void => {
-    const recent = logs.slice(-5);
+    const sorted = [...logs].sort(compareAuditLogsCanonical);
+    const recent = sorted.slice(0, 5);
     const changed = diffChangedItems(KEYS.AUDIT_LOGS, recent, 'id');
-    setStored(KEYS.AUDIT_LOGS, logs);
+    setStored(KEYS.AUDIT_LOGS, sorted);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.AUDIT_LOGS, changed, 'id');
   },
   saveBarangays: (barangays: Barangay[]): void => {
-    const changed = diffChangedItems(KEYS.BARANGAYS, barangays, 'id');
-    setStored(KEYS.BARANGAYS, barangays);
+    const sorted = [...barangays].sort(compareBarangaysCanonical);
+    const changed = diffChangedItems(KEYS.BARANGAYS, sorted, 'id');
+    setStored(KEYS.BARANGAYS, sorted);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.BARANGAYS, changed, 'id');
   },
 
@@ -2578,9 +2582,9 @@ export const mockDb = {
             (r.accountNumber || '').trim().toLowerCase() === cleanTarget ||
             (r.consumerEmail && r.consumerEmail.trim().toLowerCase() === cleanTarget)
         )
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        .sort(compareReportsCanonical);
     }
-    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return list.sort(compareReportsCanonical);
   },
 
   getReportById: (id: string): ConsumerReport | undefined => {
@@ -2590,10 +2594,12 @@ export const mockDb = {
   },
 
   saveReports: (reports: ConsumerReport[]): void => {
-    const cleaned = reports.map((r) => ({
-      ...r,
-      replies: mockDb.dedupeReplies(r.replies),
-    }));
+    const cleaned = reports
+      .map((r) => ({
+        ...r,
+        replies: mockDb.dedupeReplies(r.replies),
+      }))
+      .sort(compareReportsCanonical);
     const changed = diffChangedItems(KEYS.REPORTS, cleaned, 'id');
     setStored(KEYS.REPORTS, cleaned);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.REPORTS, changed, 'id');
@@ -2604,7 +2610,7 @@ export const mockDb = {
     if (!Array.isArray(incoming) || incoming.length === 0) {
       return localList
         .map((r) => ({ ...r, replies: mockDb.dedupeReplies(r.replies) }))
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        .sort(compareReportsCanonical);
     }
     const map = new Map<string, ConsumerReport>();
     localList.forEach(lr => {
@@ -2638,9 +2644,7 @@ export const mockDb = {
         });
       }
     });
-    const merged = Array.from(map.values()).sort(
-      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    );
+    const merged = Array.from(map.values()).sort(compareReportsCanonical);
     const changed = diffChangedItems(KEYS.REPORTS, merged, 'id');
     setStored(KEYS.REPORTS, merged);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.REPORTS, changed, 'id');
@@ -2881,23 +2885,20 @@ export const mockDb = {
 
   getInstallationRequests: (): WaterMeterInstallationRequest[] => {
     const list = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
-    return [...list].sort(
-      (a, b) => new Date(b.submissionDate || 0).getTime() - new Date(a.submissionDate || 0).getTime()
-    );
+    return [...list].sort(compareInstallationsCanonical);
   },
 
   saveInstallationRequests: (requests: WaterMeterInstallationRequest[]): void => {
-    const changed = diffChangedItems(KEYS.INSTALLATIONS, requests, 'id');
-    setStored(KEYS.INSTALLATIONS, requests);
+    const sorted = [...requests].sort(compareInstallationsCanonical);
+    const changed = diffChangedItems(KEYS.INSTALLATIONS, sorted, 'id');
+    setStored(KEYS.INSTALLATIONS, sorted);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.INSTALLATIONS, changed, 'id');
   },
 
   mergeExternalInstallations: (incoming: WaterMeterInstallationRequest[]): WaterMeterInstallationRequest[] => {
     const localList = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
     if (!Array.isArray(incoming) || incoming.length === 0) {
-      return [...localList].sort(
-        (a, b) => new Date(b.submissionDate || 0).getTime() - new Date(a.submissionDate || 0).getTime()
-      );
+      return [...localList].sort(compareInstallationsCanonical);
     }
     const map = new Map<string, WaterMeterInstallationRequest>();
     localList.forEach((lr) => {
@@ -2936,9 +2937,7 @@ export const mockDb = {
         });
       }
     });
-    const merged = Array.from(map.values()).sort(
-      (a, b) => new Date(b.submissionDate || 0).getTime() - new Date(a.submissionDate || 0).getTime()
-    );
+    const merged = Array.from(map.values()).sort(compareInstallationsCanonical);
     const changed = diffChangedItems(KEYS.INSTALLATIONS, merged, 'id');
     setStored(KEYS.INSTALLATIONS, merged);
     if (changed.length > 0) syncBatchToFirestore(COLLECTIONS.INSTALLATIONS, changed, 'id');

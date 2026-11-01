@@ -3080,7 +3080,9 @@ function compareReadingsServerDesc(a: any, b: any): number {
   return (
     new Date(b?.readingDate || 0).getTime() - new Date(a?.readingDate || 0).getTime() ||
     Number(b?.currentReading ?? b?.presentReading ?? 0) - Number(a?.currentReading ?? a?.presentReading ?? 0) ||
-    new Date(b?.billingIssuedAt || b?.submittedAt || 0).getTime() - new Date(a?.billingIssuedAt || a?.submittedAt || 0).getTime()
+    new Date(b?.billingIssuedAt || b?.submittedAt || 0).getTime() - new Date(a?.billingIssuedAt || a?.submittedAt || 0).getTime() ||
+    String(a?.accountNumber || "").localeCompare(String(b?.accountNumber || ""), undefined, { numeric: true, sensitivity: "base" }) ||
+    String(a?.id || "").localeCompare(String(b?.id || ""), undefined, { numeric: true, sensitivity: "base" })
   );
 }
 
@@ -3440,7 +3442,15 @@ app.post("/api/reports/reconcile", (req, res) => {
       }
     }
     if (changed) {
-      inMemoryReports.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      inMemoryReports.sort(
+        (a, b) =>
+          new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime() ||
+          new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime() ||
+          String(a.id || a.ticketNumber || "").localeCompare(String(b.id || b.ticketNumber || ""), undefined, {
+            numeric: true,
+            sensitivity: "base"
+          })
+      );
       savePortalSyncStore();
     }
     const list = filterInMemoryReports(inMemoryReports, {

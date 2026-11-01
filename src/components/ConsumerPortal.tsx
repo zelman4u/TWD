@@ -116,6 +116,11 @@ import {
   normalizeCompactParagraphs,
   normalizeSingleLinePreview
 } from '../utils/notificationContext';
+import {
+  applyIfChanged,
+  compareReadingsCanonical,
+  compareReportsCanonical
+} from '../utils/canonicalSort';
 
 interface ConsumerPortalProps {
   currentUser: UserType;
@@ -217,16 +222,27 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const [isDownloadingUsagePdf, setIsDownloadingUsagePdf] = useState(false);
 
   // My Bills, My Usage & Notifications Smart Search + Filter State
+  const [consumerBillingSection, setConsumerBillingSection] = useState<'billed' | 'history'>('billed');
   const [billFilter, setBillFilter] = useState<'all' | 'unpaid' | 'paid' | 'partial'>('all');
   const [consumerBillSearch, setConsumerBillSearch] = useState('');
   const [consumerUsageSearch, setConsumerUsageSearch] = useState('');
   const [consumerNotifSearch, setConsumerNotifSearch] = useState('');
   const [consumerBillsPage, setConsumerBillsPage] = useState(1);
   const [consumerUsagePage, setConsumerUsagePage] = useState(1);
+  const [selectedUsageReadingModal, setSelectedUsageReadingModal] = useState<MeterReading | null>(null);
 
   useEffect(() => {
     setConsumerBillsPage(1);
-  }, [billFilter, consumerBillSearch]);
+  }, [consumerBillingSection, billFilter, consumerBillSearch]);
+
+  useEffect(() => {
+    if (!selectedUsageReadingModal) return;
+    const handleEsc = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setSelectedUsageReadingModal(null);
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [selectedUsageReadingModal]);
 
   useEffect(() => {
     setConsumerUsagePage(1);
@@ -503,7 +519,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         seenIds.add(rep.id);
         return true;
       })
-      .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime() ||
+          compareReportsCanonical(a, b)
+      );
   };
 
   // Helper: Read local notifications strictly belonging to this consumer
@@ -526,7 +546,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const syncConsumerReportsAndNotifications = (silent = true) => {
     const activeRec = consumerRecordRef.current;
     const localReports = getConsumerReportsFromLocal(activeRec);
-    setReports(localReports);
+    applyIfChanged(setReports, localReports);
 
     const localNotifs = getConsumerNotificationsFromLocal(activeRec);
     if (JSON.stringify(notifsRef.current) !== JSON.stringify(localNotifs)) {
@@ -557,7 +577,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             if (res.reports.length > 0) {
               mockDb.mergeExternalReports(res.reports);
             }
-            setReports(getConsumerReportsFromLocal());
+            applyIfChanged(setReports, getConsumerReportsFromLocal());
           }
         })
         .catch(() => {
@@ -566,7 +586,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             .then(res => {
               if (res?.success && Array.isArray(res.reports) && res.reports.length > 0) {
                 mockDb.mergeExternalReports(res.reports);
-                setReports(getConsumerReportsFromLocal());
+                applyIfChanged(setReports, getConsumerReportsFromLocal());
               }
             })
             .catch(() => {});
@@ -592,11 +612,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   r.status === 'verified'
                 );
               })
-              .sort(
-                (a, b) =>
-                  new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime() ||
-                  new Date(b.billingIssuedAt || 0).getTime() - new Date(a.billingIssuedAt || 0).getTime()
-              );
+              .sort(compareReadingsCanonical);
             if (JSON.stringify(readingsRef.current) !== JSON.stringify(customerVerified)) {
               loadConsumerInfo(true);
             }
@@ -1115,14 +1131,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               return (hasValidAccId && rAcc === recAccClean) || (hasValidMeterId && rMeter === recMeterClean);
             })
           : [];
-        // Sort newest first deterministically: readingDate desc -> cumulative meter dial (currentReading/presentReading) desc -> timestamp desc
-        // This guarantees multiple readings sent on the same day never invert their Previous -> Present -> Current chain.
-        allCustomerReads.sort(
-          (a, b) =>
-            new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
-            Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
-            new Date(b.billingIssuedAt || b.submittedAt || 0).getTime() - new Date(a.billingIssuedAt || a.submittedAt || 0).getTime()
-        );
+        // Sort newest first deterministically: readingDate desc -> cumulative meter dial (currentReading/presentReading) desc -> timestamp desc -> accountNumber -> id
+        allCustomerReads.sort(compareReadingsCanonical);
         
         // CRITICAL GHOST-PROCESS PREVENTION:
         // Only APPROVED / VERIFIED readings trigger billing operations, payable ledgers, and overdue calculations!
@@ -1304,7 +1314,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           readingsRef.current = verifiedReads;
           setReadings(verifiedReads);
         }
-        setAllHistoryReadings(allCustomerReads);
+        applyIfChanged(setAllHistoryReadings, allCustomerReads);
 
         // Synchronize consumer notifications & concern reports (local + bi-directional backend sync)
         syncConsumerReportsAndNotifications(true);
@@ -1813,11 +1823,23 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     ? (latestBill.paymentStatus === 'paid' ? 0 : Math.max(0, calculateCostOf(latestBill, consumerRecord.consumerType) - (latestBill.paidAmount || 0)))
     : 0;
   
-  // Unpaid, Paid, and Partial Admin-issued bills
-  const unpaidBills = billedReadings.filter(r => r.paymentStatus !== 'paid');
-  const paidBills = billedReadings.filter(r => r.paymentStatus === 'paid');
-  const partialBills = billedReadings.filter(r => r.paymentStatus === 'partial');
-  const unpaidFullBills = billedReadings.filter(r => r.paymentStatus === 'unpaid' || !r.paymentStatus);
+  // Helper: Check if an issued bill has been cleared / settled in full
+  const isConsumerBillCleared = (r: MeterReading): boolean => {
+    if (r.status === 'cancelled') return false;
+    const gross = calculateCostOf(r, consumerRecord?.consumerType);
+    const paid = r.paidAmount || 0;
+    const rem =
+      typeof r.remainingBalance === 'number'
+        ? Math.max(0, Math.round(r.remainingBalance * 100) / 100)
+        : Math.max(0, Math.round((gross - paid) * 100) / 100);
+    return r.paymentStatus === 'paid' || (gross > 0 && rem <= 0.009);
+  };
+
+  // Unpaid/To-Settle vs Cleared (Billing History) Admin-issued bills
+  const unpaidBills = billedReadings.filter(r => !isConsumerBillCleared(r));
+  const paidBills = billedReadings.filter(r => isConsumerBillCleared(r));
+  const partialBills = unpaidBills.filter(r => r.paymentStatus === 'partial' || (r.paidAmount || 0) > 0);
+  const unpaidFullBills = unpaidBills.filter(r => !r.paymentStatus || (r.paymentStatus === 'unpaid' && !(r.paidAmount && r.paidAmount > 0)));
 
   // Helper to determine overdue status (only on Admin-issued billings)
   const isReadingOverdue = (reading: MeterReading) => {
@@ -4112,12 +4134,24 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     return (
                       <div
                         key={`dash-ann-${ann.id || idx}`}
-                        className={`rounded-2xl p-4 border flex flex-col justify-between gap-3 transition bg-slate-950 ${
+                        onClick={() =>
+                          handleOpenNotificationDetailModal({
+                            id: `ADVISORY-PREVIEW-${ann.id || idx}`,
+                            accountNumber: consumerRecord?.accountNumber || 'ALL',
+                            title: ann.title,
+                            message: ann.content,
+                            type: 'announcement',
+                            timestamp: ann.date || new Date().toISOString().split('T')[0],
+                            read: true,
+                          })
+                        }
+                        title="Click to read complete advisory"
+                        className={`rounded-2xl p-4 border flex flex-col justify-between gap-3 transition bg-slate-950 cursor-pointer ${
                           isAlert
-                            ? 'border-rose-500/40'
+                            ? 'border-rose-500/40 hover:border-rose-400'
                             : isMaint
-                            ? 'border-amber-500/40'
-                            : 'border-slate-800'
+                            ? 'border-amber-500/40 hover:border-amber-400'
+                            : 'border-slate-800 hover:border-blue-500/60'
                         }`}
                       >
                         <div className="space-y-1.5">
@@ -4452,8 +4486,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       return (
                         <div 
                           key={`dash-bill-${r.id || idx}`} 
-                          className={`py-3.5 px-3 rounded-2xl transition flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 ${
-                            isHighlight ? 'bg-blue-950/50 border border-blue-500/50 shadow-xs' : 'hover:bg-slate-800/50'
+                          onClick={() => {
+                            setBillDetailsReading(r);
+                            setIsBillDetailsOpen(true);
+                          }}
+                          title="Click to view complete bill statement & account details"
+                          className={`py-3.5 px-3 rounded-2xl transition flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 cursor-pointer ${
+                            isHighlight ? 'bg-blue-950/50 border border-blue-500/50 shadow-xs' : 'hover:bg-slate-800/60'
                           }`}
                         >
                           <div className="space-y-1">
@@ -4497,7 +4536,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             </div>
                             {isPaid ? (
                               <button
-                                onClick={() => setReceiptDetailModal(r)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setReceiptDetailModal(r);
+                                }}
                                 className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
                                 id={`dashboard-receipt-btn-${r.id}`}
                                 title="Click to view Official Electronic Payment Receipt"
@@ -4508,14 +4550,18 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             ) : isPartial ? (
                               <div className="flex items-center space-x-2">
                                 <button
-                                  onClick={() => setReceiptDetailModal(r)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setReceiptDetailModal(r);
+                                  }}
                                   className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer"
                                   title="View Partial Payment Receipt"
                                 >
                                   <ReceiptText className="h-4 w-4" />
                                 </button>
                                 <button
-                                  onClick={() => {
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     setActiveTab('bills');
                                     handleStartPayment(r, 'full');
                                   }}
@@ -4528,7 +4574,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               </div>
                             ) : (
                               <button
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   setActiveTab('bills');
                                   handleStartPayment(r, 'full');
                                 }}
@@ -4574,7 +4621,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     readings.slice(0, 4).map((r, idx) => {
                       const presVal = r.presentReading ?? r.currentReading;
                       return (
-                        <div key={`dash-read-${r.id || idx}`} className="py-3.5 space-y-1">
+                        <div
+                          key={`dash-read-${r.id || idx}`}
+                          onClick={() => setSelectedUsageReadingModal(r)}
+                          title="Click to inspect full meter reading details"
+                          className="py-3.5 px-3 rounded-xl space-y-1 hover:bg-slate-800/60 transition cursor-pointer"
+                        >
                           <div className="flex justify-between items-center">
                             <span className="text-xs font-bold text-slate-200">
                               {r.billingPeriod || r.readingDate}
@@ -4612,15 +4664,19 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         {/* MODULE 2: MY BILLS                                           */}
         {/* ------------------------------------------------------------- */}
         {activeTab === 'bills' && (
-          <div className="space-y-6 animate-fade-in" id="consumer-tab-bills">
+          <div className="w-full min-w-0 space-y-6 animate-fade-in" id="consumer-tab-bills">
             
-            {/* Complete Bills Search, Filter & Responsive Ledger */}
+            {/* Complete Bills Search, Billed vs Billing History Split & Responsive Interactive Ledger */}
             {(() => {
-              const filteredBills = billedReadings
+              const sourceBills = consumerBillingSection === 'billed' ? unpaidBills : paidBills;
+              const filteredBills = sourceBills
                 .filter(r => {
-                  if (billFilter === 'unpaid') return r.paymentStatus !== 'paid';
-                  if (billFilter === 'paid') return r.paymentStatus === 'paid';
-                  if (billFilter === 'partial') return r.paymentStatus === 'partial';
+                  if (consumerBillingSection === 'billed') {
+                    const isPart = r.paymentStatus === 'partial' || (r.paidAmount || 0) > 0;
+                    if (billFilter === 'unpaid') return !isPart;
+                    if (billFilter === 'partial') return isPart;
+                    return true;
+                  }
                   return true;
                 })
                 .filter(r =>
@@ -4631,107 +4687,82 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     r.paymentReference,
                     r.transactionId,
                     r.dueDate,
+                    r.paymentDate,
                     r.readingDate,
                     r.meterNumber,
                     r.paymentStatus || 'unpaid',
                     `${r.consumption} m3`,
                     calculateCostOf(r, consumerRecord?.consumerType).toFixed(2)
                   ])
-                );
-              const paginatedBills = filteredBills.slice((consumerBillsPage - 1) * 10, consumerBillsPage * 10);
+                )
+                .sort(compareReadingsCanonical);
+              const safeBillsPage = Math.min(consumerBillsPage, Math.max(1, Math.ceil(filteredBills.length / 10)));
+              const paginatedBills = filteredBills.slice((safeBillsPage - 1) * 10, safeBillsPage * 10);
 
               return (
                 <>
-                  {/* Header, Smart Search & Filter Controls */}
+                  {/* Header, Billed vs Billing History Tabs, Smart Search & Sub-Filters */}
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 shadow-lg space-y-5 text-white">
-                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+                    <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
                       <div>
                         <div className="flex items-center space-x-2.5">
                           <span className="p-2 bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl">
                             <ReceiptText className="h-4 w-4" />
                           </span>
                           <h3 className="text-base font-black text-white uppercase tracking-wider">
-                            Complete Water Bill History
+                            {consumerBillingSection === 'billed'
+                              ? 'Billed Statements to Settle'
+                              : 'Billing History (Cleared Monthly Accounts)'}
                           </h3>
                         </div>
                         <p className="text-xs text-slate-400 mt-1.5 font-medium">
-                          Audit all historical bills, due dates, outstanding dues, and official receipts.
+                          {consumerBillingSection === 'billed'
+                            ? 'Active bills with an outstanding or partial balance to settle. Click any row to view full statement details.'
+                            : 'Cleared monthly water bills settled in full. Click any row to view full statement or official receipt.'}
                         </p>
                       </div>
 
-                      {/* Status Filter Tabs */}
-                      <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-950/90 rounded-2xl border border-slate-800 shadow-inner">
-                        <div className="hidden sm:flex items-center space-x-1.5 pl-2.5 pr-1 text-slate-400 text-[11px] font-black uppercase tracking-wider">
-                          <ListFilter className="h-3.5 w-3.5 text-blue-400" />
-                          <span>Filter:</span>
-                        </div>
-
+                      {/* Primary Section Switcher: Billed (To Settle) vs Billing History (Cleared) */}
+                      <div className="inline-flex items-center p-1 bg-slate-950 rounded-2xl border border-slate-800 gap-1 w-full sm:w-auto">
                         <button
-                          onClick={() => setBillFilter('all')}
-                          className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
-                            billFilter === 'all' 
-                              ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30 border border-blue-500' 
-                              : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/80'
+                          type="button"
+                          onClick={() => {
+                            setConsumerBillingSection('billed');
+                            setBillFilter('all');
+                          }}
+                          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-xl text-xs font-black transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
+                            consumerBillingSection === 'billed'
+                              ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                              : 'text-slate-300 hover:text-white hover:bg-slate-900'
                           }`}
-                          id="filter-bills-all"
-                        >
-                          <span>All</span>
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
-                            billFilter === 'all' ? 'bg-black/30 text-white' : 'bg-slate-800 text-slate-300'
-                          }`}>
-                            {billedReadings.length}
-                          </span>
-                        </button>
-
-                        <button
-                          onClick={() => setBillFilter('unpaid')}
-                          className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
-                            billFilter === 'unpaid' 
-                              ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 border border-rose-500' 
-                              : 'bg-slate-900 text-rose-300 hover:text-rose-200 hover:bg-rose-950/40 border border-rose-900/60'
-                          }`}
-                          id="filter-bills-unpaid"
+                          id="consumer-bills-tab-billed"
                         >
                           <Clock className="h-3.5 w-3.5 shrink-0" />
-                          <span>Unpaid</span>
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
-                            billFilter === 'unpaid' ? 'bg-black/30 text-white' : 'bg-rose-950/80 text-rose-300'
+                          <span>Billed (To Settle)</span>
+                          <span className={`font-mono tabular-nums text-[11px] px-2 py-0.5 rounded-md ${
+                            consumerBillingSection === 'billed' ? 'bg-black/30 text-white' : 'bg-slate-800 text-amber-300'
                           }`}>
                             {unpaidBills.length}
                           </span>
                         </button>
 
                         <button
-                          onClick={() => setBillFilter('partial')}
-                          className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
-                            billFilter === 'partial' 
-                              ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30 border border-amber-500' 
-                              : 'bg-slate-900 text-amber-300 hover:text-amber-200 hover:bg-amber-950/40 border border-amber-900/60'
+                          type="button"
+                          onClick={() => {
+                            setConsumerBillingSection('history');
+                            setBillFilter('all');
+                          }}
+                          className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-xl text-xs font-black transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
+                            consumerBillingSection === 'history'
+                              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                              : 'text-slate-300 hover:text-white hover:bg-slate-900'
                           }`}
-                          id="filter-bills-partial"
-                        >
-                          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                          <span>Partial</span>
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
-                            billFilter === 'partial' ? 'bg-black/30 text-white' : 'bg-amber-950/80 text-amber-300'
-                          }`}>
-                            {partialBills.length}
-                          </span>
-                        </button>
-
-                        <button
-                          onClick={() => setBillFilter('paid')}
-                          className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center space-x-1.5 cursor-pointer ${
-                            billFilter === 'paid' 
-                              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 border border-emerald-500' 
-                              : 'bg-slate-900 text-emerald-300 hover:text-emerald-200 hover:bg-emerald-950/40 border border-emerald-900/60'
-                          }`}
-                          id="filter-bills-paid"
+                          id="consumer-bills-tab-history"
                         >
                           <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                          <span>Paid</span>
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
-                            billFilter === 'paid' ? 'bg-black/30 text-white' : 'bg-emerald-950/80 text-emerald-300'
+                          <span>Billing History</span>
+                          <span className={`font-mono tabular-nums text-[11px] px-2 py-0.5 rounded-md ${
+                            consumerBillingSection === 'history' ? 'bg-black/30 text-white' : 'bg-slate-800 text-emerald-300'
                           }`}>
                             {paidBills.length}
                           </span>
@@ -4739,111 +4770,195 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       </div>
                     </div>
 
+                    {/* Sub-Filter / Status Bar — Constant height across Billed and Billing History to prevent vertical layout shift */}
+                    <div className="flex flex-wrap items-center gap-2 pt-1 min-h-[36px]">
+                      <div className="flex items-center space-x-1.5 pr-1 text-slate-400 text-[11px] font-black uppercase tracking-wider">
+                        <ListFilter className="h-3.5 w-3.5 text-blue-400" />
+                        <span>Status:</span>
+                      </div>
+
+                      {consumerBillingSection === 'billed' ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setBillFilter('all')}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer ${
+                              billFilter === 'all'
+                                ? 'bg-slate-800 text-white border border-slate-600'
+                                : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                            }`}
+                            id="filter-bills-all"
+                          >
+                            <span>All To Settle ({unpaidBills.length})</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setBillFilter('unpaid')}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer ${
+                              billFilter === 'unpaid'
+                                ? 'bg-rose-600 text-white border border-rose-500'
+                                : 'bg-slate-950 text-rose-300 hover:text-rose-200 border border-rose-900/60'
+                            }`}
+                            id="filter-bills-unpaid"
+                          >
+                            <span>Unpaid ({unpaidFullBills.length})</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setBillFilter('partial')}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer ${
+                              billFilter === 'partial'
+                                ? 'bg-amber-600 text-white border border-amber-500'
+                                : 'bg-slate-950 text-amber-300 hover:text-amber-200 border border-amber-900/60'
+                            }`}
+                            id="filter-bills-partial"
+                          >
+                            <span>Partial Balance ({partialBills.length})</span>
+                          </button>
+                        </>
+                      ) : (
+                        <span className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-950/70 text-emerald-300 border border-emerald-800/80 inline-flex items-center gap-1.5">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                          <span>Cleared Monthly Statements ({paidBills.length})</span>
+                        </span>
+                      )}
+                    </div>
+
                     <SmartSearchBar
                       variant="dark"
                       value={consumerBillSearch}
                       onChange={setConsumerBillSearch}
                       resultCount={filteredBills.length}
-                      totalCount={billedReadings.length}
-                      placeholder="Smart search bills by billing period, OR #, reference ID, amount, m³, due date, or status..."
+                      totalCount={sourceBills.length}
+                      placeholder={
+                        consumerBillingSection === 'billed'
+                          ? 'Search unsettled bills by billing period, statement #, amount, m³, or due date...'
+                          : 'Search cleared billing history by billing period, OR #, payment date, or amount...'
+                      }
                       id="consumer-bills-smart-search"
                     />
                   </div>
 
-                  <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl text-slate-100">
+                  <div className="w-full min-w-0 bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl text-slate-100">
                   {/* Desktop & Tablet Table View */}
-                  <div className="hidden md:block overflow-x-auto">
-                    <table className="w-full text-xs text-left border-collapse">
-                      <thead className="bg-slate-950 text-slate-300 font-black uppercase text-[11px] tracking-wider border-b border-slate-800">
+                  <div className="hidden md:block w-full overflow-x-auto">
+                    <table className="w-full min-w-[1040px] table-fixed text-xs text-left border-collapse">
+                      <colgroup>
+                        <col className="w-[13%]" />
+                        <col className="w-[12%]" />
+                        <col className="w-[8%]" />
+                        <col className="w-[10%]" />
+                        <col className="w-[10%]" />
+                        <col className="w-[11%]" />
+                        <col className="w-[9%]" />
+                        <col className="w-[9%]" />
+                        <col className="w-[18%]" />
+                      </colgroup>
+                      <thead className="bg-slate-950 text-slate-300 font-black uppercase text-[11px] tracking-wider border-b border-slate-800 select-none">
                         <tr>
                           <th className="px-4 py-3.5 whitespace-nowrap">Billing Period</th>
-                          <th className="px-4 py-3.5 whitespace-nowrap">Index (m³)</th>
-                          <th className="px-4 py-3.5 whitespace-nowrap">Consumption</th>
-                          <th className="px-4 py-3.5 whitespace-nowrap">Gross Amount</th>
-                          <th className="px-4 py-3.5 whitespace-nowrap">Paid / Credit</th>
-                          <th className="px-4 py-3.5 whitespace-nowrap">Net Balance Due</th>
-                          <th className="px-4 py-3.5 whitespace-nowrap">Due Date</th>
-                          <th className="px-4 py-3.5 whitespace-nowrap">Status</th>
+                          <th className="px-3.5 py-3.5 whitespace-nowrap">Index (m³)</th>
+                          <th className="px-3.5 py-3.5 whitespace-nowrap text-right">Usage</th>
+                          <th className="px-3.5 py-3.5 whitespace-nowrap text-right">Gross Bill</th>
+                          <th className="px-3.5 py-3.5 whitespace-nowrap text-right">Paid / Credit</th>
+                          <th className="px-3.5 py-3.5 whitespace-nowrap text-right">
+                            {consumerBillingSection === 'history' ? 'OR # / Reference' : 'Net Balance Due'}
+                          </th>
+                          <th className="px-3 py-3.5 whitespace-nowrap">
+                            {consumerBillingSection === 'history' ? 'Date Cleared' : 'Due Date'}
+                          </th>
+                          <th className="px-3 py-3.5 whitespace-nowrap text-center">Status</th>
                           <th className="px-4 py-3.5 text-right whitespace-nowrap">Action</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/80 text-slate-200 font-medium">
                         {paginatedBills.length === 0 ? (
                           <tr>
-                            <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
+                            <td colSpan={9} className="px-6 py-14 text-center text-slate-400">
                               <div className="max-w-md mx-auto space-y-2">
                                 <ReceiptText className="h-8 w-8 mx-auto text-slate-600" />
                                 <p className="text-sm font-bold text-slate-200">
                                   {billedReadings.length === 0
                                     ? 'No Official Billings or Receipts Issued Yet'
-                                    : 'No Matching Bills Found'}
+                                    : consumerBillingSection === 'billed'
+                                    ? 'All Issued Monthly Bills Are Cleared!'
+                                    : 'No Cleared Billing History Yet'}
                                 </p>
                                 <p className="text-xs text-slate-400 leading-relaxed">
                                   {billedReadings.length === 0
                                     ? 'Your billing statements and official receipts will appear here automatically once Tagoloan Water District Administration generates and issues your billing.'
-                                    : 'Try clearing your search query or switching the status filter above.'}
+                                    : consumerBillingSection === 'billed'
+                                    ? 'You have no unsettled bills at this time. View your settled monthly statements under the Billing History tab.'
+                                    : 'Once your monthly water bill is settled in full, it automatically moves into Billing History.'}
                                 </p>
                               </div>
                             </td>
                           </tr>
                         ) : paginatedBills.map((r, idx) => {
                         const totalAmount = calculateCostOf(r, consumerRecord.consumerType);
-                        const isPaid = r.paymentStatus === 'paid';
-                        const isPartial = r.paymentStatus === 'partial';
-                        const paidAmt = r.paidAmount || 0;
-                        const remainingDue = Math.max(0, totalAmount - paidAmt);
+                        const isPaid = isConsumerBillCleared(r);
+                        const paidAmt = isPaid ? Math.max(totalAmount, r.paidAmount || 0) : (r.paidAmount || 0);
+                        const remainingDue = isPaid ? 0 : Math.max(0, totalAmount - paidAmt);
+                        const isPartial = !isPaid && paidAmt > 0;
                         const isHighlight = highlightedReadingId === r.id;
 
                         return (
                           <tr 
                             key={`tbl-bill-${r.id || idx}`} 
-                            className={`transition-colors duration-150 ${
+                            onClick={() => {
+                              setBillDetailsReading(r);
+                              setIsBillDetailsOpen(true);
+                            }}
+                            title="Click row to open complete bill statement & account details"
+                            className={`transition-colors duration-150 cursor-pointer ${
                               isHighlight 
                                 ? 'bg-blue-950/80 border-l-4 border-l-blue-500 ring-1 ring-blue-500/40 text-white' 
-                                : 'hover:bg-slate-800/60'
+                                : 'hover:bg-slate-800/70'
                             }`}
                           >
                             {/* Billing Period & ID */}
                             <td className="px-4 py-3.5 whitespace-nowrap">
-                              <div className="flex items-center space-x-2">
-                                <span className={`font-black text-xs ${isHighlight ? 'text-blue-300 font-extrabold' : 'text-white'}`}>
+                              <div className="flex items-center space-x-1.5 min-w-0">
+                                <span className={`font-black text-xs truncate ${isHighlight ? 'text-blue-300 font-extrabold' : 'text-white'}`} title={r.billingPeriod}>
                                   {r.billingPeriod}
                                 </span>
                                 {isHighlight && (
-                                  <span className="px-2 py-0.5 bg-blue-600 text-white font-black text-[9px] uppercase tracking-wider rounded shadow-xs">
+                                  <span className="px-1.5 py-0.5 bg-blue-600 text-white font-black text-[9px] uppercase tracking-wider rounded shadow-xs shrink-0">
                                     Selected
                                   </span>
                                 )}
                               </div>
-                              <span className="text-[11px] text-slate-400 font-mono font-medium block">
-                                Statement #{r.id}
+                              <span className="text-[10px] text-slate-400 font-mono tabular-nums font-medium block truncate">
+                                #{r.id}
                               </span>
                             </td>
 
                             {/* Meter Readings Index (Previous -> Present) */}
-                            <td className="px-4 py-3.5 whitespace-nowrap font-mono tabular-nums text-slate-300 font-medium">
-                              <div>
-                                <span className="text-slate-400">Prev {r.previousReading}</span> → <strong className="text-white font-bold">Pres {r.presentReading ?? r.currentReading}</strong>
+                            <td className="px-3.5 py-3.5 whitespace-nowrap font-mono tabular-nums text-slate-300 font-medium">
+                              <div className="truncate">
+                                <span className="text-slate-400">{r.previousReading}</span> → <strong className="text-white font-bold">{r.presentReading ?? r.currentReading}</strong>
                               </div>
-                              <span className="text-[10px] text-slate-500 block">
-                                Current Index: {r.currentReading} m³
+                              <span className="text-[10px] text-slate-500 block truncate">
+                                Dial: {r.currentReading} m³
                               </span>
                             </td>
 
                             {/* Consumption Volume */}
-                            <td className="px-4 py-3.5 whitespace-nowrap font-mono tabular-nums font-bold text-sky-300">
+                            <td className="px-3.5 py-3.5 whitespace-nowrap text-right font-mono tabular-nums font-bold text-sky-300">
                               {r.consumption} m³
                             </td>
 
                             {/* Gross Bill */}
-                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-black text-white text-sm">
+                            <td className="px-3.5 py-3.5 whitespace-nowrap text-right font-mono tabular-nums font-black text-white text-sm">
                               ₱{totalAmount.toFixed(2)}
                             </td>
 
                             {/* Paid / Credited */}
-                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-bold text-emerald-300">
+                            <td className="px-3.5 py-3.5 whitespace-nowrap text-right font-mono tabular-nums font-bold text-emerald-300">
                               {paidAmt > 0 ? (
-                                <span className="bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800/80">
+                                <span className="bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800/80 inline-block">
                                   ₱{paidAmt.toFixed(2)}
                                 </span>
                               ) : (
@@ -4851,113 +4966,134 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               )}
                             </td>
 
-                            {/* Remaining Balance Due */}
-                            <td className="px-4 py-3.5 whitespace-nowrap font-mono font-black text-sm">
-                              {isPaid ? (
-                                <span className="text-emerald-400 font-bold">₱0.00</span>
+                            {/* Remaining Balance Due OR Official Receipt # */}
+                            <td className="px-3.5 py-3.5 whitespace-nowrap text-right font-mono tabular-nums font-black text-sm">
+                              {consumerBillingSection === 'history' ? (
+                                <span className="text-emerald-300 text-xs font-bold block truncate" title={r.orNumber || r.paymentReference || r.transactionId || 'Cleared'}>
+                                  {r.orNumber || r.paymentReference || r.transactionId || 'Cleared'}
+                                </span>
                               ) : isPartial ? (
-                                <span className="text-amber-300 font-black bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800/80">
+                                <span className="text-amber-300 font-black bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800/80 inline-block">
                                   ₱{remainingDue.toFixed(2)}
                                 </span>
                               ) : (
-                                <span className="text-rose-300 font-black bg-rose-950/80 px-2 py-0.5 rounded border border-rose-800/80">
+                                <span className="text-rose-300 font-black bg-rose-950/80 px-2 py-0.5 rounded border border-rose-800/80 inline-block">
                                   ₱{totalAmount.toFixed(2)}
                                 </span>
                               )}
                             </td>
 
-                            {/* Due Date */}
-                            <td className="px-4 py-3.5 whitespace-nowrap text-slate-300 font-semibold">
-                              {r.dueDate || '20th of Month'}
+                            {/* Due Date / Date Cleared */}
+                            <td className="px-3 py-3.5 whitespace-nowrap text-slate-300 font-mono tabular-nums text-[11px] font-semibold truncate">
+                              {consumerBillingSection === 'history'
+                                ? r.paymentDate || r.readingDate || 'Cleared'
+                                : r.dueDate || '20th of Month'}
                             </td>
 
-                            {/* Payment Status Badge */}
-                            <td className="px-4 py-3.5 whitespace-nowrap">
-                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                            {/* Payment Status */}
+                            <td className="px-3 py-3.5 whitespace-nowrap text-center">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider border ${
                                 isPaid 
-                                  ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-800' 
+                                  ? 'bg-emerald-950/90 text-emerald-300 border-emerald-800' 
                                   : isPartial
-                                  ? 'bg-amber-950/90 text-amber-300 border border-amber-800'
-                                  : 'bg-rose-950/90 text-rose-300 border border-rose-800'
+                                  ? 'bg-amber-950/90 text-amber-300 border-amber-800'
+                                  : 'bg-rose-950/90 text-rose-300 border-rose-800'
                               }`}>
-                                {isPaid ? 'Paid in Full' : isPartial ? 'Partial Balance' : 'Unpaid'}
+                                {isPaid ? 'Cleared' : isPartial ? 'Partial' : 'Unpaid'}
                               </span>
                             </td>
 
                             {/* Action Buttons */}
-                            <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                              <div className="inline-flex items-center space-x-1.5">
+                            <td className="px-4 py-3.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                              <div className="inline-flex items-center justify-end gap-1.5">
                                 <button
-                                  onClick={() => {
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     setBillDetailsReading(r);
                                     setIsBillDetailsOpen(true);
                                   }}
-                                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs rounded-xl transition inline-flex items-center space-x-1 cursor-pointer border border-slate-700"
+                                  className="h-7 w-7 inline-flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition cursor-pointer border border-slate-700 shrink-0"
                                   id={`table-breakdown-btn-${r.id}`}
                                   title="View Itemized 3-Pillar Bill Breakdown"
+                                  aria-label="View Bill Breakdown"
                                 >
                                   <Calculator className="h-3.5 w-3.5 text-indigo-400" />
-                                  <span className="hidden lg:inline">Breakdown</span>
                                 </button>
                                 {isPaid ? (
-                                  <div className="inline-flex items-center space-x-1.5">
+                                  <>
                                     <button
-                                      onClick={() => setReceiptDetailModal(r)}
-                                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer border border-emerald-500"
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setReceiptDetailModal(r);
+                                      }}
+                                      className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-black text-[11px] rounded-lg shadow-xs transition inline-flex items-center gap-1 cursor-pointer border border-emerald-500 shrink-0"
                                       id={`table-receipt-btn-${r.id}`}
                                       title="View Official Electronic Payment Receipt"
                                     >
-                                      <ReceiptText className="h-3.5 w-3.5" />
+                                      <ReceiptText className="h-3.5 w-3.5 shrink-0" />
                                       <span>Receipt</span>
                                     </button>
                                     {r.paymentReceiptUrl && (
                                       <button
-                                        onClick={() => setViewingReceiptReading(r)}
-                                        className="px-2.5 py-1.5 bg-blue-900/60 hover:bg-blue-800 text-blue-300 font-bold text-xs rounded-xl transition inline-flex items-center space-x-1 cursor-pointer border border-blue-700"
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setViewingReceiptReading(r);
+                                        }}
+                                        className="h-7 w-7 inline-flex items-center justify-center bg-blue-900/60 hover:bg-blue-800 text-blue-300 rounded-lg transition cursor-pointer border border-blue-700 shrink-0"
                                         title="View Uploaded Cashier Slip"
+                                        aria-label="View Uploaded Slip"
                                       >
                                         <ImageIcon className="h-3.5 w-3.5" />
-                                        <span className="hidden xl:inline">Slip</span>
                                       </button>
                                     )}
-                                  </div>
+                                  </>
                                 ) : isPartial ? (
-                                  <div className="inline-flex items-center space-x-1.5">
+                                  <>
                                     <button
-                                      onClick={() => setReceiptDetailModal(r)}
-                                      className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setReceiptDetailModal(r);
+                                      }}
+                                      className="h-7 w-7 inline-flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition cursor-pointer border border-slate-700 shrink-0"
                                       title="View Partial Receipt"
+                                      aria-label="View Partial Receipt"
                                     >
                                       <ReceiptText className="h-3.5 w-3.5" />
                                     </button>
                                     <button
-                                      onClick={() => {
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
                                         setUploadReceiptReading(r);
                                         setIsUploadReceiptOpen(true);
                                       }}
-                                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
+                                      className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white font-black text-[11px] rounded-lg shadow-xs transition inline-flex items-center gap-1 cursor-pointer shrink-0"
                                       id={`table-pay-partial-${r.id}`}
-                                      title="Upload municipal cashier receipt to settle remaining balance"
+                                      title={`Upload municipal cashier receipt to settle remaining ₱${remainingDue.toFixed(2)}`}
                                     >
-                                      <Upload className="h-3.5 w-3.5" />
-                                      <span>Settle Balance (₱{remainingDue.toFixed(2)})</span>
+                                      <Upload className="h-3.5 w-3.5 shrink-0" />
+                                      <span>Settle</span>
                                     </button>
-                                  </div>
+                                  </>
                                 ) : (
-                                  <div className="inline-flex items-center space-x-1.5">
-                                    <button
-                                      onClick={() => {
-                                        setUploadReceiptReading(r);
-                                        setIsUploadReceiptOpen(true);
-                                      }}
-                                      className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs rounded-xl shadow-xs transition inline-flex items-center space-x-1.5 cursor-pointer"
-                                      id={`table-pay-btn-${r.id}`}
-                                      title="Upload physical Official Receipt (OR) issued by municipal cashier"
-                                    >
-                                      <ReceiptText className="h-3.5 w-3.5" />
-                                      <span>Upload Cashier Receipt (OTC)</span>
-                                    </button>
-                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setUploadReceiptReading(r);
+                                      setIsUploadReceiptOpen(true);
+                                    }}
+                                    className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-[11px] rounded-lg shadow-xs transition inline-flex items-center gap-1 cursor-pointer shrink-0"
+                                    id={`table-pay-btn-${r.id}`}
+                                    title="Upload physical Official Receipt (OR) issued by municipal cashier"
+                                  >
+                                    <ReceiptText className="h-3.5 w-3.5 shrink-0" />
+                                    <span>Upload Receipt</span>
+                                  </button>
                                 )}
                               </div>
                             </td>
@@ -4976,27 +5112,35 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     <p className="text-sm font-bold text-slate-200">
                       {billedReadings.length === 0
                         ? 'No Official Billings or Receipts Issued Yet'
-                        : 'No Matching Bills Found'}
+                        : consumerBillingSection === 'billed'
+                        ? 'All Monthly Bills Are Cleared!'
+                        : 'No Cleared Billing History Yet'}
                     </p>
                     <p className="text-xs text-slate-400 leading-relaxed">
                       {billedReadings.length === 0
                         ? 'Statements and official receipts will appear here once Administration generates and issues your billing.'
-                        : 'Try clearing your search query or switching the status filter.'}
+                        : consumerBillingSection === 'billed'
+                        ? 'Switch to Billing History above to inspect your cleared monthly statements.'
+                        : 'Cleared bills automatically move here once settled in full.'}
                     </p>
                   </div>
                 ) : paginatedBills.map((r, idx) => {
                     const totalAmount = calculateCostOf(r, consumerRecord.consumerType);
-                    const isPaid = r.paymentStatus === 'paid';
-                    const isPartial = r.paymentStatus === 'partial';
-                    const paidAmt = r.paidAmount || 0;
-                    const remainingDue = Math.max(0, totalAmount - paidAmt);
+                    const isPaid = isConsumerBillCleared(r);
+                    const paidAmt = isPaid ? Math.max(totalAmount, r.paidAmount || 0) : (r.paidAmount || 0);
+                    const remainingDue = isPaid ? 0 : Math.max(0, totalAmount - paidAmt);
+                    const isPartial = !isPaid && paidAmt > 0;
                     const isHighlight = highlightedReadingId === r.id;
 
                     return (
                       <div 
                         key={`mob-bill-${r.id || idx}`}
-                        className={`p-4 space-y-3 transition-colors ${
-                          isHighlight ? 'bg-blue-950/60 border-l-4 border-l-blue-500' : 'hover:bg-slate-850'
+                        onClick={() => {
+                          setBillDetailsReading(r);
+                          setIsBillDetailsOpen(true);
+                        }}
+                        className={`p-4 space-y-3 transition-colors cursor-pointer ${
+                          isHighlight ? 'bg-blue-950/60 border-l-4 border-l-blue-500' : 'hover:bg-slate-800/60'
                         }`}
                       >
                         <div className="flex items-center justify-between">
@@ -5018,7 +5162,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               ? 'bg-amber-950/90 text-amber-300 border border-amber-800'
                               : 'bg-rose-950/90 text-rose-300 border border-rose-800'
                           }`}>
-                            {isPaid ? 'Paid' : isPartial ? 'Partial' : 'Unpaid'}
+                            {isPaid ? 'Cleared' : isPartial ? 'Partial' : 'Unpaid'}
                           </span>
                         </div>
 
@@ -5032,8 +5176,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             <span className="font-mono font-black text-white">₱{totalAmount.toFixed(2)}</span>
                           </div>
                           <div>
-                            <span className="text-[10px] text-slate-400 font-bold uppercase block">Due Date</span>
-                            <span className="text-slate-300 font-semibold">{r.dueDate || '20th'}</span>
+                            <span className="text-[10px] text-slate-400 font-bold uppercase block">
+                              {isPaid ? 'Date Cleared' : 'Due Date'}
+                            </span>
+                            <span className="text-slate-300 font-semibold">
+                              {isPaid ? (r.paymentDate || 'Cleared') : (r.dueDate || '20th')}
+                            </span>
                           </div>
                           <div>
                             <span className="text-[10px] text-slate-400 font-bold uppercase block">Balance Due</span>
@@ -5045,7 +5193,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                         <div className="flex items-center gap-2 pt-1">
                           <button
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setBillDetailsReading(r);
                               setIsBillDetailsOpen(true);
                             }}
@@ -5059,7 +5208,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           {isPaid ? (
                             <div className="flex items-center gap-1.5 flex-1">
                               <button
-                                onClick={() => setReceiptDetailModal(r)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setReceiptDetailModal(r);
+                                }}
                                 className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
                               >
                                 <ReceiptText className="h-3.5 w-3.5" />
@@ -5067,7 +5219,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               </button>
                               {r.paymentReceiptUrl && (
                                 <button
-                                  onClick={() => setViewingReceiptReading(r)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setViewingReceiptReading(r);
+                                  }}
                                   className="px-3 py-2 bg-blue-900/60 hover:bg-blue-800 text-blue-300 font-bold text-xs rounded-xl border border-blue-700 cursor-pointer"
                                   title="View Uploaded Slip"
                                 >
@@ -5078,14 +5233,18 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           ) : isPartial ? (
                             <div className="flex items-center space-x-1.5 flex-1">
                               <button
-                                onClick={() => setReceiptDetailModal(r)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setReceiptDetailModal(r);
+                                }}
                                 className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
                                 title="Receipt"
                               >
                                 <ReceiptText className="h-3.5 w-3.5" />
                               </button>
                               <button
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   setUploadReceiptReading(r);
                                   setIsUploadReceiptOpen(true);
                                 }}
@@ -5098,7 +5257,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           ) : (
                             <div className="flex items-center gap-1.5 flex-1">
                               <button
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   setUploadReceiptReading(r);
                                   setIsUploadReceiptOpen(true);
                                 }}
@@ -5116,11 +5276,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </div>
 
               <TablePagination
-                currentPage={consumerBillsPage}
+                currentPage={safeBillsPage}
                 totalItems={filteredBills.length}
                 pageSize={10}
                 onPageChange={setConsumerBillsPage}
-                itemName="water bills"
+                itemName={consumerBillingSection === 'billed' ? 'bills to settle' : 'cleared bills'}
               />
             </div>
             </>
@@ -5344,8 +5504,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   r.meterReaderName,
                   r.notes
                 ])
-              );
-              const paginatedUsageReadings = filteredUsageReadings.slice((consumerUsagePage - 1) * 10, consumerUsagePage * 10);
+              ).sort(compareReadingsCanonical);
+              const safeUsagePage = Math.min(consumerUsagePage, Math.max(1, Math.ceil(filteredUsageReadings.length / 10)));
+              const paginatedUsageReadings = filteredUsageReadings.slice((safeUsagePage - 1) * 10, safeUsagePage * 10);
               return (
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl text-slate-100">
                   <div className="p-4 sm:p-5 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -5400,7 +5561,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               (olderRead && olderRead.consumption >= 5 && (diffVsOlder || 0) >= 12);
 
                             return (
-                              <tr key={`usage-tbl-${r.id || idx}`} className="hover:bg-slate-800/60 transition">
+                              <tr
+                                key={`usage-tbl-${r.id || idx}`}
+                                onClick={() => setSelectedUsageReadingModal(r)}
+                                title="Click row to open complete meter reading & consumption record"
+                                className="hover:bg-slate-800/70 transition cursor-pointer"
+                              >
                                 <td className="px-5 py-4">
                                   <span className="font-bold text-white block">{r.billingPeriod || 'Field Cycle'}</span>
                                   <span className="text-[11px] text-slate-400 font-mono tabular-nums block mt-0.5">
@@ -5436,8 +5602,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                       <span className="font-bold text-white block">₱{billTotal.toFixed(2)}</span>
                                       <button
                                         type="button"
-                                        onClick={() => {
-                                          if (r.paymentStatus === 'paid') {
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (isConsumerBillCleared(r)) {
                                             setReceiptDetailModal(r);
                                           } else {
                                             setBillDetailsReading(r);
@@ -5446,7 +5613,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                         }}
                                         className="text-[11px] font-sans font-bold text-sky-400 hover:text-sky-300 hover:underline cursor-pointer"
                                       >
-                                        {r.paymentStatus === 'paid' ? 'View Receipt →' : 'View Bill Notice →'}
+                                        {isConsumerBillCleared(r) ? 'View Receipt →' : 'View Bill Notice →'}
                                       </button>
                                     </div>
                                   ) : (
@@ -5489,7 +5656,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   </div>
 
                   <TablePagination
-                    currentPage={consumerUsagePage}
+                    currentPage={safeUsagePage}
                     totalItems={filteredUsageReadings.length}
                     pageSize={10}
                     onPageChange={setConsumerUsagePage}
@@ -7798,6 +7965,167 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     Close
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Interactive Meter Reading & Consumption Record Details Modal */}
+      {selectedUsageReadingModal && (() => {
+        const r = selectedUsageReadingModal;
+        const presIdx = r.presentReading ?? r.currentReading;
+        const billIssued = isOfficialBillIssued(r);
+        const isCleared = isConsumerBillCleared(r);
+        const estCost = calculateCostOf(r, consumerRecord?.consumerType);
+
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setSelectedUsageReadingModal(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100"
+            >
+              <div className="px-5 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="p-2 bg-sky-500/15 border border-sky-500/30 rounded-xl text-sky-400 shrink-0">
+                    <Activity className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-black text-white truncate">
+                      Meter Reading &amp; Consumption Details
+                    </h3>
+                    <p className="text-[11px] font-mono tabular-nums text-slate-400 truncate">
+                      {r.billingPeriod || 'Field Cycle'} · Record #{r.id}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedUsageReadingModal(null)}
+                  className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-3.5">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Account Number</span>
+                    <span className="font-mono tabular-nums font-bold text-sky-400">
+                      #{consumerRecord?.accountNumber || r.accountNumber || 'PENDING'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Meter Tag Number</span>
+                    <span className="font-mono tabular-nums font-bold text-white">
+                      #{r.meterNumber || consumerRecord?.meterNumber || 'N/A'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Inspection Date</span>
+                    <span className="font-mono tabular-nums font-semibold text-slate-200">
+                      {r.readingDate}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Previous Index</span>
+                    <span className="text-base font-mono tabular-nums font-black text-slate-200 mt-0.5 block">
+                      {r.previousReading} m³
+                    </span>
+                  </div>
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Present Index</span>
+                    <span className="text-base font-mono tabular-nums font-black text-white mt-0.5 block">
+                      {presIdx} m³
+                    </span>
+                  </div>
+                  <div className="bg-slate-950 border border-sky-800/60 rounded-xl p-3">
+                    <span className="text-[10px] font-bold uppercase text-sky-400 block">Consumption</span>
+                    <span className="text-base font-mono tabular-nums font-black text-sky-400 mt-0.5 block">
+                      {r.consumption} m³
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-3.5">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Verification Status</span>
+                    <span className={`font-bold ${
+                      r.status === 'flagged_abnormal'
+                        ? 'text-rose-400'
+                        : r.status === 'pending'
+                        ? 'text-amber-400'
+                        : 'text-emerald-400'
+                    }`}>
+                      {r.status === 'flagged_abnormal'
+                        ? 'Flagged Abnormal — Under Review'
+                        : r.status === 'pending'
+                        ? 'Submitted — Awaiting Admin Approval'
+                        : isCleared
+                        ? 'Verified & Cleared'
+                        : 'Verified & Approved'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                      {billIssued ? 'Assessed Water Bill' : 'Estimated Tariff Charge'}
+                    </span>
+                    <span className="font-mono tabular-nums font-black text-white text-sm">
+                      ₱{estCost.toFixed(2)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Field Meter Reader</span>
+                    <span className="font-semibold text-slate-200">
+                      {r.meterReaderName || 'Authorized TWD Field Inspector'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Inspection Remarks</span>
+                    <span className="text-slate-300">
+                      {r.notes || 'Normal mechanical dial reading verified.'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2">
+                {billIssued ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedUsageReadingModal(null);
+                      if (isCleared) {
+                        setReceiptDetailModal(r);
+                      } else {
+                        setBillDetailsReading(r);
+                        setIsBillDetailsOpen(true);
+                      }
+                    }}
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <ReceiptText className="h-3.5 w-3.5" />
+                    <span>{isCleared ? 'Open Official Receipt' : 'Open Statement Breakdown'}</span>
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-slate-400">
+                    Statement unlocks once Administration issues billing.
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedUsageReadingModal(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer ml-auto"
+                >
+                  Close
+                </button>
               </div>
             </div>
           </div>

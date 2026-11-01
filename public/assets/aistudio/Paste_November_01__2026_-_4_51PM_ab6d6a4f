@@ -1,0 +1,288 @@
+2m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+index.iife.js:123   Uncaught (in promise) TypeError: Failed to fetch
+    at ds (index.iife.js:123:39008)
+m=Jn51xb:4002 Uncaught (in promise) NotAllowedError: play() failed because the user didn't interact with the document first. https://goo.gl/xX8pDD
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=Q-e2RjCY0L-T' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+979The resource <URL> was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally.
+IWU5O3yRaE9v/vs/loader.js:6 Loading the script 'https://www.gstatic.com/monaco_editor/IWU5O3yRaE9v/vs/language/typescript/tsMode.js' violates the following Content Security Policy directive: "script-src 'unsafe-inline' 'unsafe-eval' blob: data: https://accounts.google.com/gsi/client https://apis.google.com/js/api.js https://billing-ads-qa-devel.corp.google.com/payments/v4/js/integrator.js https://payments.google.com/payments/v4/js/integrator.js https://payments.sandbox.google.com/payments/v4/js/integrator.js https://www.googletagmanager.com/gtm.js https://www.gstatic.com/glue/cookienotificationbar/cookienotificationbar.min.js https://www-onepick-opensocial.googleusercontent.com/gadgets/js/rpc.js https://www.google.com/tools/feedback/chat_load.js https://www.google.com/tools/feedback/help_api.js https://www.google.com/tools/feedback/load.js https://www.google.com/tools/feedback/open.js https://www.google.com/tools/feedback/open_to_help_guide_lazy.js https://www.gstatic.com/feedback/js/ https://www.gstatic.com/feedback/js/help/prod/service/lazy.min.js https://www.gstatic.com/inproduct_help/api/main.min.js https://www.gstatic.com/inproduct_help/chatsupport/chatsupport_button_v2.js https://www.gstatic.com/inproduct_help/service/lazy.min.js https://www.gstatic.com/uservoice/feedback/client/web/live/ https://www.gstatic.com/uservoice/surveys/resources/prod/js/survey/ https://www.googletagmanager.com/gtag/js https://www.google-analytics.com/analytics.js https://www.googletagmanager.com/gtag/destination https://www.gstatic.com/_/mss/boq-makersuite/_/js/k=boq-makersuite.MakerSuite.en.1tzF5_nPlPA.2018.O/ https://apis.google.com/_/scs/abc-static/_/js/ https://payments.google.com/payments/u/0/v4/js/integrator.js https://payments.youtube.com/payments/v4/js/integrator.js https://payments.youtube.com/payments/u/0/v4/js/integrator.js https://payments.cloud.google/payments/v4/js/integrator.js". Note that 'script-src-elem' was not explicitly set, so 'script-src' is used as a fallback. The policy is report-only, so the violation has been logged but no further action has been taken.
+16Creating a worker from '<URL>' violates the following Content Security Policy directive: "script-src 'unsafe-inline' 'unsafe-eval' blob: data: <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL> <URL>". Note that 'worker-src' was not explicitly set, so 'script-src' is used as a fallback. The policy is report-only, so the violation has been logged but no further action has been taken.
+2m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=Z50Jz8Ucvorz' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+2m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=a5k-PnRnXeQj' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+editor.main.js:122 Uncaught (in promise) Canceled: Canceled
+2m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=UkJrvo-72xNL' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+index.iife.js:133 Object
+2editor.main.js:122 Uncaught (in promise) Canceled: Canceled
+2m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=j42yK2C746XF' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+2m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=ZrfGh8X-qZ_i' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+20m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=fA-FYaUwZTpq' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+2m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+m=Jn51xb:2626 JetskiLog: currentStep changed to 0
+(anonymous) @ m=Jn51xb:2626
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=79RQzazqD4H-' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+2m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=uEKWUZ9rcZnm' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+m=Jn51xb:2626 JetskiLog: currentStep changed to 0
+(anonymous) @ m=Jn51xb:2626
+m=Jn51xb:2626 JetskiLog: currentStep changed to 1
+(anonymous) @ m=Jn51xb:2626
+4m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127
+eval @ (unknown)
+/apps/29aaeffc-dbd1-4669-9b5b-63d636462350?showPreview=true&showAssistant=true:1 No available adapters.
+m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+m=Jn51xb:2626 JetskiLog: currentStep changed to 1
+(anonymous) @ m=Jn51xb:2626
+4m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+alkalimakersuite-pa.clients6.google.com/$rpc/google.alkali.boq.makersuite.makersuiteappletcontrol.proto.MakersuiteAppletControlService/StreamLogs:1  Failed to load resource: net::ERR_QUIC_PROTOCOL_ERROR.QUIC_PEER_GOING_AWAY
+m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+reconcile:1  Failed to load resource: net::ERR_NETWORK_CHANGED
+reconcile:1  Failed to load resource: net::ERR_NETWORK_CHANGED
+readers:1  Failed to load resource: net::ERR_NETWORK_CHANGED
+readings:1  Failed to load resource: net::ERR_NETWORK_CHANGED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/billings:1  Failed to load resource: net::ERR_NAME_NOT_RESOLVED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+announcements:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+tariff-config:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readers:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+installations:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/billings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+alkalimakersuite-pa.clients6.google.com/$rpc/google.alkali.boq.makersuite.makersuiteappletcontrol.proto.MakersuiteAppletControlService/StreamLogs:1  Failed to load resource: net::ERR_QUIC_PROTOCOL_ERROR.QUIC_TOO_MANY_RTOS
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readers:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+announcements:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+tariff-config:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+installations:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/billings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readers:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+announcements:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+installations:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+tariff-config:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/billings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readers:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+announcements:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+tariff-config:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+installations:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/billings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readers:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+announcements:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+tariff-config:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+installations:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/billings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readers:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+announcements:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+tariff-config:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+installations:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+readings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/billings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/consumers/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/announcements:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/readers:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/tariff-config:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/installations:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/readings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/billings/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/billings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/readers:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/consumers/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/announcements:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/readings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/installations:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/tariff-config:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/billings/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/billings:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports/reconcile:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/api/reports:1  Failed to load resource: net::ERR_INTERNET_DISCONNECTED
+m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+ WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app/ws' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+VM2144:1 The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127
+eval @ VM2144:1
+/apps/29aaeffc-dbd1-4669-9b5b-63d636462350?showPreview=true&showAssistant=true:1 No available adapters.
+2m=_b:1508 No ID or name found in config.
+updateJsLog @ m=_b:1508
+_aistudio-iframe.js?v=1f94f900:313 WebSocket connection to 'wss://ais-dev-ui6fsepfskrowqsfycbac7-946013608969.asia-southeast1.run.app:24678/?token=My6gC0p3gxMI' failed: 
+createWebSocket @ _aistudio-iframe.js?v=1f94f900:313
+_aistudio-iframe.js?v=1f94f900:409 [vite] failed to connect to websocket (Error: WebSocket closed without opened.). 
+error @ _aistudio-iframe.js?v=1f94f900:409
+firestore.googleapis.com/google.firestore.v1.Firestore/Listen/channel?gsessionid=OlHTyfFw2GCwG2Kfq_nH1b_YEIcxhXz4hEG-A1JKISAwicCcwjN2EQ&VER=8&database=projects%2Fgen-lang-client-0840655687%2Fdatabases%2Fai-studio-tagoloanwaterdis-29aaeffc-dbd1-4669-9b5b-63d636462350&RID=rpc&SID=J19oUxo4bpOKHl6rq_bfLA&AID=735&CI=0&TYPE=xmlhttp&zx=rqd14a45llgj&t=1:1  Failed to load resource: the server responded with a status of 400 ()
+firestore.googleapis.com/google.firestore.v1.Firestore/Write/channel?VER=8&database=projects%2Fgen-lang-client-0840655687%2Fdatabases%2Fai-studio-tagoloanwaterdis-29aaeffc-dbd1-4669-9b5b-63d636462350&gsessionid=6FhFtB03krHJ07el-NWqSgu-LrMFH9ezdFSRAc-o-cSCxHzfCWytNA&SID=Nd69iZR3UyQwASL0Mj-EGw&RID=62394&TYPE=terminate&zx=av3932ls7wj2:1  Failed to load resource: the server responded with a status of 400 ()
+31 log entries are not shown.

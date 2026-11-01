@@ -43,6 +43,18 @@ import {
   sanitizeAnnouncements,
 } from '../utils/announcementSanitizer';
 import { isPendingConsumerStatus } from '../utils/installationWorkflow';
+import {
+  compareAnnouncementsCanonical,
+  compareBarangaysCanonical,
+  compareConsumersCanonical,
+  compareInstallationsCanonical,
+  compareMetersCanonical,
+  compareReadersCanonical,
+  compareReadingsCanonical,
+  compareReportsCanonical,
+  compareUsersCanonical,
+  ensureMeterSerialNumber,
+} from '../utils/canonicalSort';
 import { STANDARD_BARANGAYS } from '../constants';
 
 export enum OperationType {
@@ -682,8 +694,15 @@ export function startRealtimeFirestoreListeners() {
           activeLocalUsers.forEach(upsertIntoMap);
           cloudUsers.forEach(upsertIntoMap);
 
-          const finalUsers = Array.from(mergedMap.values()).filter((u) => !isAccountTerminated(u));
-          localStorage.setItem(KEYS.USERS, JSON.stringify(finalUsers));
+          const finalUsers = Array.from(mergedMap.values())
+            .filter((u) => !isAccountTerminated(u))
+            .sort(compareUsersCanonical);
+          const prevUsersRaw = localStorage.getItem(KEYS.USERS);
+          const nextUsersJson = JSON.stringify(finalUsers);
+          let currentSessionUpgraded = false;
+          if (prevUsersRaw !== nextUsersJson) {
+            localStorage.setItem(KEYS.USERS, nextUsersJson);
+          }
 
           // Also upgrade active session user if their account was confirmed on another device
           try {
@@ -710,12 +729,15 @@ export function startRealtimeFirestoreListeners() {
                       status: 'active',
                     })
                   );
+                  currentSessionUpgraded = true;
                 }
               }
             }
           } catch {}
 
-          triggerLocalUpdateEvent(KEYS.USERS);
+          if (prevUsersRaw !== nextUsersJson || currentSessionUpgraded) {
+            triggerLocalUpdateEvent(KEYS.USERS);
+          }
         }
       },
       (err) => {
@@ -882,7 +904,10 @@ export function startRealtimeFirestoreListeners() {
             return !hasIssuedTwin;
           });
 
+          finalMergedConsumers.sort(compareConsumersCanonical);
+
           // Upgrade active session user if their consumer record in finalMergedConsumers is now issued
+          let consumerSessionUpgraded = false;
           try {
             const currentRaw = localStorage.getItem(KEYS.CURRENT_USER);
             if (currentRaw) {
@@ -909,6 +934,7 @@ export function startRealtimeFirestoreListeners() {
                       status: 'active',
                     })
                   );
+                  consumerSessionUpgraded = true;
                 }
               }
             }
@@ -931,14 +957,6 @@ export function startRealtimeFirestoreListeners() {
                 cc.accountNumber.trim().toUpperCase() === lcAcc &&
                 !isPendingConsumerStatus(cc.status)
             );
-            const cloudHasStalePendingTwin = snapshot.docs.some((d) => {
-              const raw = d.data() as Consumer;
-              const isRawPending = !isRealIssuedAccountNumber(raw.accountNumber) || isPendingConsumerStatus(raw.status);
-              if (!isRawPending) return false;
-              const rEmail = (raw.email || '').trim().toLowerCase();
-              const rUid = (raw.linkedUserId || '').trim();
-              return (lcUid && rUid === lcUid) || (lcEmail && rEmail === lcEmail) || raw.accountNumber === lcAcc;
-            });
 
             if (!cloudHasIssuedAcc && !isFirestoreWriteQuotaExceeded()) {
               const matchedU = localUsersAll.find(
@@ -958,8 +976,11 @@ export function startRealtimeFirestoreListeners() {
             }
           });
 
-          localStorage.setItem(KEYS.CONSUMERS, JSON.stringify(finalMergedConsumers));
-          triggerLocalUpdateEvent(KEYS.CONSUMERS);
+          const nextConsumersJson = JSON.stringify(finalMergedConsumers);
+          if (localRaw !== nextConsumersJson || consumerSessionUpgraded) {
+            localStorage.setItem(KEYS.CONSUMERS, nextConsumersJson);
+            triggerLocalUpdateEvent(KEYS.CONSUMERS);
+          }
         }
       },
       (err) => {
@@ -1020,9 +1041,13 @@ export function startRealtimeFirestoreListeners() {
 
           cloudReaders.forEach(addUniqueReader);
           activeLocalReaders.forEach(addUniqueReader);
+          mergedList.sort(compareReadersCanonical);
 
-          localStorage.setItem(KEYS.READERS, JSON.stringify(mergedList));
-          triggerLocalUpdateEvent(KEYS.READERS);
+          const nextReadersJson = JSON.stringify(mergedList);
+          if (localRaw !== nextReadersJson) {
+            localStorage.setItem(KEYS.READERS, nextReadersJson);
+            triggerLocalUpdateEvent(KEYS.READERS);
+          }
         }
       },
       (err) => {
@@ -1031,15 +1056,64 @@ export function startRealtimeFirestoreListeners() {
     );
     realtimeUnsubscribes.push(unsubReaders);
 
-    // 4. Live METERS Listener
+    // 4. Live METERS Listener (non-destructive merge preserving local meters, serial numbers, and status timestamps)
     const unsubMeters = onSnapshot(
       collection(db, COLLECTIONS.METERS),
       (snapshot) => {
         if (!snapshot.empty) {
           const cloudMeters: WaterMeter[] = [];
-          snapshot.forEach((d) => cloudMeters.push(d.data() as WaterMeter));
-          localStorage.setItem(KEYS.METERS, JSON.stringify(cloudMeters));
-          triggerLocalUpdateEvent(KEYS.METERS);
+          snapshot.forEach((d) => {
+            const m = d.data() as WaterMeter;
+            if (m && (m.meterNumber || d.id)) {
+              cloudMeters.push({ ...m, meterNumber: m.meterNumber || d.id });
+            }
+          });
+
+          const localRaw = localStorage.getItem(KEYS.METERS);
+          const localMeters: WaterMeter[] = localRaw ? JSON.parse(localRaw) : [];
+          const meterMap = new Map<string, WaterMeter>();
+
+          localMeters.forEach((lm) => {
+            const key = String(lm?.meterNumber || '').trim().toUpperCase();
+            if (key) {
+              meterMap.set(key, ensureMeterSerialNumber(lm));
+            }
+          });
+
+          cloudMeters.forEach((cm) => {
+            const key = String(cm?.meterNumber || '').trim().toUpperCase();
+            if (!key) return;
+            const prev = meterMap.get(key);
+            if (!prev) {
+              meterMap.set(key, ensureMeterSerialNumber(cm));
+            } else {
+              const cmTime = new Date(cm.statusUpdatedAt || 0).getTime();
+              const prevTime = new Date(prev.statusUpdatedAt || 0).getTime();
+              const primary = cmTime >= prevTime ? cm : prev;
+              const secondary = cmTime >= prevTime ? prev : cm;
+              const mergedMeter = ensureMeterSerialNumber({
+                ...secondary,
+                ...primary,
+                meterNumber: primary.meterNumber || secondary.meterNumber,
+                serialNumber: cm.serialNumber || prev.serialNumber,
+                linkedAccountNumber: primary.linkedAccountNumber ?? secondary.linkedAccountNumber,
+                remarks: primary.remarks ?? secondary.remarks,
+                installedBy: primary.installedBy || secondary.installedBy,
+                completionDate: primary.completionDate || secondary.completionDate,
+                installationRequestId: primary.installationRequestId || secondary.installationRequestId,
+                applicationNumber: primary.applicationNumber || secondary.applicationNumber,
+                lastReadingValue: Math.max(Number(prev.lastReadingValue || 0), Number(cm.lastReadingValue || 0)),
+              });
+              meterMap.set(key, mergedMeter);
+            }
+          });
+
+          const finalMeters = Array.from(meterMap.values()).sort(compareMetersCanonical);
+          const nextMetersJson = JSON.stringify(finalMeters);
+          if (localRaw !== nextMetersJson) {
+            localStorage.setItem(KEYS.METERS, nextMetersJson);
+            triggerLocalUpdateEvent(KEYS.METERS);
+          }
         }
       },
       (err) => {
@@ -1125,7 +1199,7 @@ export function startRealtimeFirestoreListeners() {
             }
           });
 
-          const finalReadings = Array.from(mergedMap.values());
+          const finalReadings = Array.from(mergedMap.values()).sort(compareReadingsCanonical);
           const nextJson = JSON.stringify(finalReadings);
           const prevJson = localStorage.getItem(KEYS.READINGS) || '';
           if (prevJson !== nextJson) {
@@ -1181,10 +1255,8 @@ export function startRealtimeFirestoreListeners() {
           });
 
           const finalAnns = sanitizeAnnouncements(
-            Array.from(mergedMap.values()).sort(
-              (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
-            )
-          );
+            Array.from(mergedMap.values()).sort(compareAnnouncementsCanonical)
+          ).sort(compareAnnouncementsCanonical);
           const nextJson = JSON.stringify(finalAnns);
           if (localRaw !== nextJson) {
             localStorage.setItem(KEYS.ANNOUNCEMENTS, nextJson);
@@ -1248,7 +1320,7 @@ export function startRealtimeFirestoreListeners() {
             }
           });
 
-          cloudBrgs.sort((a, b) => String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true }));
+          cloudBrgs.sort(compareBarangaysCanonical);
 
           const prevRaw = localStorage.getItem(KEYS.BARANGAYS);
           const nextJson = JSON.stringify(cloudBrgs);
@@ -1366,7 +1438,8 @@ export function startRealtimeFirestoreListeners() {
             }
           });
 
-          const nextJson = JSON.stringify(Array.from(mergedMap.values()));
+          const sortedReports = Array.from(mergedMap.values()).sort(compareReportsCanonical);
+          const nextJson = JSON.stringify(sortedReports);
           if (localRaw !== nextJson) {
             localStorage.setItem(KEYS.REPORTS, nextJson);
             triggerLocalUpdateEvent(KEYS.REPORTS);
@@ -1468,9 +1541,7 @@ export function startRealtimeFirestoreListeners() {
             }
           });
 
-          const sorted = Array.from(mergedMap.values()).sort(
-            (a, b) => new Date(b.submissionDate || 0).getTime() - new Date(a.submissionDate || 0).getTime()
-          );
+          const sorted = Array.from(mergedMap.values()).sort(compareInstallationsCanonical);
           const nextJson = JSON.stringify(sorted);
           if (localRaw !== nextJson) {
             localStorage.setItem(KEYS.INSTALLATIONS, nextJson);
@@ -2178,7 +2249,8 @@ export function subscribeToConsumerIdentityInFirestore(
                     map.set(k, prev ? { ...prev, ...cr, id: k } : { ...cr, id: k });
                   }
                 });
-                const nextJson = JSON.stringify(Array.from(map.values()));
+                const sortedInst = Array.from(map.values()).sort(compareInstallationsCanonical);
+                const nextJson = JSON.stringify(sortedInst);
                 if (localRaw !== nextJson) {
                   localStorage.setItem(KEYS.INSTALLATIONS, nextJson);
                   triggerLocalUpdateEvent(KEYS.INSTALLATIONS);
