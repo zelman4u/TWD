@@ -210,6 +210,7 @@ export interface MeterReading {
   dueDate?: string;
   billAmount?: number; // Basic water charge (Bill Amt.) locked at reading creation/approval
   appliedTariffVersion?: number; // Tariff version in effect when reading was billed
+  tariffBaselineSchema?: string; // Official tariff baseline schema tag ('twd_per_m3_v2')
   franchiseTax?: number; // 2% Franchise Tax
   arrears?: number; // Unpaid balance from previous bills
   totalAmount?: number; // Bill Amt + Franchise Tax + Arrears

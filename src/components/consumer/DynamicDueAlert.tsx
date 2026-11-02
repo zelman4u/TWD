@@ -19,6 +19,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { Consumer, MeterReading } from '../../types';
+import { calculateLatePenalty, getReadingEffectiveBillAmount } from '../../utils/tariffCalculator';
 
 interface DynamicDueAlertProps {
   consumerRecord: Consumer;
@@ -83,10 +84,11 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
   }, 0);
 
   const totalPenalties = overdueBills.reduce((sum, r) => {
-    const gross = calculateCostOf(r, consumerRecord.consumerType);
-    const paid = r.paidAmount || 0;
-    const net = r.remainingBalance !== undefined ? r.remainingBalance : Math.max(0, gross - paid);
-    const pen = r.penaltyAmount !== undefined ? r.penaltyAmount : Math.round(net * 0.10 * 100) / 100;
+    const basicAmt = getReadingEffectiveBillAmount(
+      r,
+      consumerRecord.consumerType === 'Commercial' ? 'Commercial' : 'Residential'
+    );
+    const pen = r.penaltyAmount !== undefined ? r.penaltyAmount : calculateLatePenalty(basicAmt);
     return sum + pen;
   }, 0);
 

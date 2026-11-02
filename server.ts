@@ -2355,10 +2355,11 @@ app.post("/api/consumers/reconcile", (req, res) => {
 
         if (icIssued) {
           const meterNum = (ic.meterNumber || existing.meterNumber || `MT-${icAcc}`).toString().trim().toUpperCase();
-          const mergedPrevReading = Math.max(
-            Number(existing.previousReading || 0),
-            Number(ic.currentReading ?? ic.presentReading ?? ic.previousReading ?? 0)
-          );
+          const rawIncomingIdx = ic.currentReading ?? ic.presentReading ?? ic.previousReading;
+          const mergedPrevReading =
+            rawIncomingIdx !== undefined && rawIncomingIdx !== null
+              ? (((Math.floor(Math.max(0, Number(rawIncomingIdx) || 0)) % 100000) + 100000) % 100000)
+              : (((Math.floor(Math.max(0, Number(existing.previousReading || 0))) % 100000) + 100000) % 100000);
           const merged: MobileConsumerSync = {
             ...existing,
             ...ic,
@@ -2738,11 +2739,44 @@ Context for verification: Expected Account: ${expectedAccountNumber || "N/A"}, E
   }
 });
 
-// Helper: Resolve the authoritative cumulative meter baseline for a consumer across billed records, approved field readings, and consumer master
+// Five-Digit Odometer Helpers (00000 to 99999, modulo 100000)
+const SERVER_ODOMETER_MODULO = 100000;
+
+function normalizeOdometerServer(value: unknown): number {
+  if (value === undefined || value === null || value === "") return 0;
+  const parsed = typeof value === "string" ? Number(value.trim()) : Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return ((Math.floor(parsed) % SERVER_ODOMETER_MODULO) + SERVER_ODOMETER_MODULO) % SERVER_ODOMETER_MODULO;
+}
+
+function formatOdometerServer(value: unknown): string {
+  return String(normalizeOdometerServer(value)).padStart(5, "0");
+}
+
+function computeOdometerServer(previous: unknown, current: unknown, explicitConsumption?: unknown) {
+  const prev = normalizeOdometerServer(previous);
+  const curr = normalizeOdometerServer(current);
+  const rolledOver = curr < prev;
+  const computed = rolledOver ? SERVER_ODOMETER_MODULO - prev + curr : curr - prev;
+  if (explicitConsumption !== undefined && explicitConsumption !== null && explicitConsumption !== "") {
+    const expNum = Number(explicitConsumption);
+    if (Number.isFinite(expNum) && expNum >= 0) {
+      const rounded = Math.round(expNum);
+      if ((prev + rounded) % SERVER_ODOMETER_MODULO === curr) {
+        return { previousReading: prev, currentReading: curr, consumption: rounded, rolledOver };
+      }
+    }
+  }
+  return { previousReading: prev, currentReading: curr, consumption: computed, rolledOver };
+}
+
+// Helper: Resolve the authoritative 5-digit odometer baseline (00000-99999) for a consumer across billed records, approved field readings, and consumer master
 function resolveConsumerBaselineServer(accountNumber?: string, meterNumber?: string, excludeReadingId?: string): number {
   const cleanAcc = String(accountNumber || "").replace(/^#/, "").trim().toUpperCase();
   const cleanMeter = String(meterNumber || "").trim().toUpperCase();
-  let maxBaseline = 0;
+  let latestTimestamp = -1;
+  let latestReadingVal: number | null = null;
+  let consumerFallback = 0;
 
   if (cleanAcc || cleanMeter) {
     const matchedConsumer = syncedConsumers.find(
@@ -2750,8 +2784,8 @@ function resolveConsumerBaselineServer(accountNumber?: string, meterNumber?: str
         (cleanAcc && String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc) ||
         (cleanMeter && String(c.meterNumber || "").trim().toUpperCase() === cleanMeter)
     );
-    if (matchedConsumer && Number(matchedConsumer.previousReading || 0) > maxBaseline) {
-      maxBaseline = Number(matchedConsumer.previousReading || 0);
+    if (matchedConsumer) {
+      consumerFallback = normalizeOdometerServer(matchedConsumer.previousReading || 0);
     }
 
     for (const r of pendingMobileReadings) {
@@ -2760,8 +2794,12 @@ function resolveConsumerBaselineServer(accountNumber?: string, meterNumber?: str
       const rAcc = String(r.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
       const rMeter = String(r.meterNumber || "").trim().toUpperCase();
       if ((cleanAcc && rAcc === cleanAcc) || (cleanMeter && rMeter === cleanMeter)) {
-        const val = Number(r.currentReading ?? r.presentReading ?? 0);
-        if (val > maxBaseline) maxBaseline = val;
+        const ts = new Date(r.readingDate || r.submittedAt || 0).getTime() || 0;
+        const val = normalizeOdometerServer(r.currentReading ?? r.presentReading ?? 0);
+        if (ts > latestTimestamp || (ts === latestTimestamp && (latestReadingVal === null || val > latestReadingVal))) {
+          latestTimestamp = ts;
+          latestReadingVal = val;
+        }
       }
     }
 
@@ -2776,13 +2814,17 @@ function resolveConsumerBaselineServer(accountNumber?: string, meterNumber?: str
       const rAcc = String(r.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
       const rMeter = String(r.meterNumber || "").trim().toUpperCase();
       if ((cleanAcc && rAcc === cleanAcc) || (cleanMeter && rMeter === cleanMeter)) {
-        const val = Number(r.currentReading ?? r.presentReading ?? 0);
-        if (val > maxBaseline) maxBaseline = val;
+        const ts = new Date(r.readingDate || r.billingIssuedAt || r.submittedAt || 0).getTime() || 0;
+        const val = normalizeOdometerServer(r.currentReading ?? r.presentReading ?? 0);
+        if (ts > latestTimestamp || (ts === latestTimestamp && (latestReadingVal === null || val > latestReadingVal))) {
+          latestTimestamp = ts;
+          latestReadingVal = val;
+        }
       }
     }
   }
 
-  return maxBaseline;
+  return latestReadingVal !== null ? latestReadingVal : consumerFallback;
 }
 
 // 5. Mobile Reading Push: Submit Scanned Meter Reading to Approval Queue (POST /api/readings, POST /api/sync/push or POST /api/readings/submit)
@@ -2821,20 +2863,21 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit", "/api/readi
       (cleanMeter && String(c.meterNumber || "").trim().toUpperCase() === cleanMeter)
   );
 
-  const curr = Math.max(0, Number(rawCurr) || 0);
+  const curr = normalizeOdometerServer(rawCurr);
   const resolvedAcc = matchedConsumer ? matchedConsumer.accountNumber : accountNumber;
   const resolvedMeter = meterNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG");
   const baseline = resolveConsumerBaselineServer(resolvedAcc, resolvedMeter, id);
 
-  let prev = previousReading !== undefined ? Math.max(0, Number(previousReading) || 0) : baseline;
+  let prev = previousReading !== undefined ? normalizeOdometerServer(previousReading) : baseline;
   // Never lose baseline when a new reading arrives with previousReading omitted or reset to 0
-  if (prev === 0 && baseline > 0 && curr >= baseline) {
+  if (previousReading === undefined && baseline > 0) {
+    prev = baseline;
+  } else if (prev === 0 && baseline > 0 && curr >= baseline) {
     prev = baseline;
   }
-  if (prev > curr) {
-    prev = baseline <= curr ? baseline : 0;
-  }
-  const consumption = Math.max(0, curr - prev);
+  const odo = computeOdometerServer(prev, curr, req.body?.consumption);
+  prev = odo.previousReading;
+  const consumption = odo.consumption;
 
   // Mint unique cycle ID so prior readings are NEVER overwritten when a new reading arrives
   let finalId = id ? String(id).trim() : "";
@@ -2878,14 +2921,14 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit", "/api/readi
   // Broadcast new reading to Admin Approval Queue on Web via WebSocket
   broadcast("READING_SUBMITTED_FOR_APPROVAL", {
     reading: submission,
-    message: `New reading submitted for Account #${submission.accountNumber} (Prev: ${submission.previousReading} → Pres: ${submission.currentReading} = ${submission.consumption} m³). Awaiting Admin approval.`
+    message: `New reading submitted for Account #${submission.accountNumber} (Prev: ${formatOdometerServer(submission.previousReading)} → Pres: ${formatOdometerServer(submission.currentReading)} = ${submission.consumption} m³). Awaiting Admin approval.`
   });
   broadcast("reading:submitted", {
     reading: submission,
     message: `New reading submitted for Account #${submission.accountNumber} (${submission.consumption} m³). Awaiting Admin verification.`
   });
 
-  console.log(`[Mobile API] Reading Submitted for ${submission.accountNumber} - Prev ${submission.previousReading} -> Pres ${submission.currentReading} (${submission.consumption} m³) by ${submission.readerName}`);
+  console.log(`[Mobile API] Reading Submitted for ${submission.accountNumber} - Prev ${formatOdometerServer(submission.previousReading)} -> Pres ${formatOdometerServer(submission.currentReading)} (${submission.consumption} m³) by ${submission.readerName}`);
 
   res.status(201).json({
     success: true,
@@ -2925,21 +2968,20 @@ app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req,
 
     const resolvedAcc = item.accountNumber || (matchedConsumer ? matchedConsumer.accountNumber : "UNKNOWN");
     const resolvedMeter = item.meterNumber || item.meterSerialNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG");
-    const curr = Math.max(0, Number(item.currentReading ?? item.presentReading ?? 0));
+    const curr = normalizeOdometerServer(item.currentReading ?? item.presentReading ?? 0);
 
     const accKey = String(resolvedAcc).replace(/^#/, "").trim().toUpperCase();
     const storedBaseline = resolveConsumerBaselineServer(resolvedAcc, resolvedMeter, item.id);
-    const baseline = Math.max(storedBaseline, runningBaselineByAccount.get(accKey) || 0);
+    const baseline = runningBaselineByAccount.has(accKey) ? runningBaselineByAccount.get(accKey)! : storedBaseline;
 
-    let prev = item.previousReading !== undefined ? Math.max(0, Number(item.previousReading) || 0) : baseline;
+    let prev = item.previousReading !== undefined ? normalizeOdometerServer(item.previousReading) : baseline;
     if (prev === 0 && baseline > 0 && curr >= baseline) {
       prev = baseline;
     }
-    if (prev > curr) {
-      prev = baseline <= curr ? baseline : 0;
-    }
-    const consumption = Math.max(0, curr - prev);
-    if (accKey && curr > baseline) {
+    const odo = computeOdometerServer(prev, curr, item.consumption);
+    prev = odo.previousReading;
+    const consumption = odo.consumption;
+    if (accKey) {
       runningBaselineByAccount.set(accKey, curr);
     }
 
@@ -3021,7 +3063,7 @@ app.post("/api/readings/:id/approve", (req, res) => {
       c => String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc
     );
     if (targetConsumer) {
-      targetConsumer.previousReading = Math.max(Number(targetConsumer.previousReading || 0), Number(item.currentReading || 0));
+      targetConsumer.previousReading = normalizeOdometerServer(item.currentReading ?? item.presentReading ?? 0);
       targetConsumer.lastReadingDate = item.readingDate;
     }
     broadcast("READING_VERIFIED", {
@@ -3046,15 +3088,62 @@ app.post("/api/readings/:id/approve", (req, res) => {
 const BILLINGS_SYNC_FILE = path.join(process.cwd(), ".twd-billings-sync.json");
 const reconciledBillingRecords = new Map<string, any>();
 
+function normalizeBillingRecordToOfficialBaselineServer(r: any): any {
+  if (!r || typeof r !== "object") return r;
+  if (r.tariffBaselineSchema === "twd_per_m3_v2") return r;
+  if (r.paymentStatus === "paid") {
+    return { ...r, tariffBaselineSchema: "twd_per_m3_v2" };
+  }
+  const hasIssuedBilling = Boolean(
+    r.isBillingIssued ||
+    r.billingIssuedAt ||
+    r.invoiceNumber ||
+    typeof r.billAmount === "number" ||
+    typeof r.totalAmount === "number"
+  );
+  if (!hasIssuedBilling) return r;
+
+  const isComm = String(r.classification || "").toLowerCase().includes("comm");
+  const ratePerM3 = isComm ? 25.0 : 10.0;
+  const usage = Math.max(0, Number(r.consumption || 0));
+  const basic = usage <= 0 ? 0 : Math.round(usage * ratePerM3 * 100) / 100;
+  const fTax = Math.round(basic * 0.02 * 100) / 100;
+  const lPen = Math.round(basic * 0.10 * 100) / 100;
+  const arr = Math.max(0, Number(r.arrears || 0));
+  const totalDue = Math.round((basic + fTax + arr) * 100) / 100;
+  const afterDue = Math.round((totalDue + lPen) * 100) / 100;
+  const paidAmt = Math.max(0, Number(r.paidAmount || 0));
+  const remBal = Math.max(0, Math.round((totalDue - paidAmt) * 100) / 100);
+
+  return {
+    ...r,
+    billAmount: basic,
+    franchiseTax: fTax,
+    penaltyAmount: lPen,
+    totalAmount: totalDue,
+    amountAfterDueDate: afterDue,
+    remainingBalance: remBal,
+    tariffBaselineSchema: "twd_per_m3_v2",
+  };
+}
+
 function loadBillingsSyncStore() {
   try {
     if (fs.existsSync(BILLINGS_SYNC_FILE)) {
       const raw = fs.readFileSync(BILLINGS_SYNC_FILE, "utf8");
       const parsed = JSON.parse(raw);
+      let migrated = false;
       if (Array.isArray(parsed)) {
         parsed.forEach((r) => {
-          if (r && r.id) reconciledBillingRecords.set(r.id, r);
+          if (r && r.id) {
+            const norm = normalizeBillingRecordToOfficialBaselineServer(r);
+            if (norm !== r) migrated = true;
+            reconciledBillingRecords.set(r.id, norm);
+          }
         });
+      }
+      if (migrated) {
+        saveBillingsSyncStore();
       }
     }
   } catch {
@@ -3079,8 +3168,8 @@ loadBillingsSyncStore();
 function compareReadingsServerDesc(a: any, b: any): number {
   return (
     new Date(b?.readingDate || 0).getTime() - new Date(a?.readingDate || 0).getTime() ||
-    Number(b?.currentReading ?? b?.presentReading ?? 0) - Number(a?.currentReading ?? a?.presentReading ?? 0) ||
     new Date(b?.billingIssuedAt || b?.submittedAt || 0).getTime() - new Date(a?.billingIssuedAt || a?.submittedAt || 0).getTime() ||
+    normalizeOdometerServer(b?.currentReading ?? b?.presentReading ?? 0) - normalizeOdometerServer(a?.currentReading ?? a?.presentReading ?? 0) ||
     String(a?.accountNumber || "").localeCompare(String(b?.accountNumber || ""), undefined, { numeric: true, sensitivity: "base" }) ||
     String(a?.id || "").localeCompare(String(b?.id || ""), undefined, { numeric: true, sensitivity: "base" })
   );
@@ -3088,16 +3177,18 @@ function compareReadingsServerDesc(a: any, b: any): number {
 
 function mergeBillingRecordServer(prev: any, incoming: any): any {
   if (!prev) {
-    const currVal = Number(incoming.currentReading ?? incoming.presentReading ?? 0);
-    const prevVal = Math.max(0, Number(incoming.previousReading ?? 0));
-    const safePrev = prevVal <= currVal ? prevVal : 0;
-    return {
+    const odo = computeOdometerServer(
+      incoming.previousReading,
+      incoming.currentReading ?? incoming.presentReading,
+      incoming.consumption
+    );
+    return normalizeBillingRecordToOfficialBaselineServer({
       ...incoming,
-      previousReading: safePrev,
-      presentReading: currVal,
-      currentReading: currVal,
-      consumption: Math.max(0, currVal - safePrev),
-    };
+      previousReading: odo.previousReading,
+      presentReading: odo.currentReading,
+      currentReading: odo.currentReading,
+      consumption: odo.consumption,
+    });
   }
   const isPaid = prev.paymentStatus === "paid" || incoming.paymentStatus === "paid";
   const isPartial = !isPaid && (prev.paymentStatus === "partial" || incoming.paymentStatus === "partial");
@@ -3114,24 +3205,17 @@ function mergeBillingRecordServer(prev: any, incoming: any): any {
   const effBillAmt = Number(billedSrc.billAmount || altSrc.billAmount || 0) || prev.billAmount || incoming.billAmount;
   const effTotalAmt = Number(billedSrc.totalAmount || altSrc.totalAmount || effBillAmt || 0) || prev.totalAmount || incoming.totalAmount;
 
-  const mergedCurr = Number(billedSrc.currentReading ?? billedSrc.presentReading ?? altSrc.currentReading ?? altSrc.presentReading ?? 0);
-  const candPrev = Number(billedSrc.previousReading ?? 0);
-  const altPrev = Number(altSrc.previousReading ?? 0);
-  const mergedPrev =
-    candPrev > 0 && candPrev <= mergedCurr
-      ? candPrev
-      : altPrev > 0 && altPrev <= mergedCurr
-        ? altPrev
-        : Math.max(0, Math.min(candPrev, mergedCurr));
-  const mergedConsumption = Math.max(0, mergedCurr - mergedPrev);
+  const rawCurr = billedSrc.currentReading ?? billedSrc.presentReading ?? altSrc.currentReading ?? altSrc.presentReading ?? 0;
+  const candPrev = billedSrc.previousReading ?? altSrc.previousReading ?? 0;
+  const odoMerged = computeOdometerServer(candPrev, rawCurr, billedSrc.consumption ?? altSrc.consumption);
 
-  return {
+  return normalizeBillingRecordToOfficialBaselineServer({
     ...prev,
     ...incoming,
-    previousReading: mergedPrev,
-    presentReading: mergedCurr,
-    currentReading: mergedCurr,
-    consumption: mergedConsumption,
+    previousReading: odoMerged.previousReading,
+    presentReading: odoMerged.currentReading,
+    currentReading: odoMerged.currentReading,
+    consumption: odoMerged.consumption,
     isBillingIssued: mergedBilled ? true : Boolean(incoming.isBillingIssued ?? prev.isBillingIssued),
     billingIssuedAt: incoming.billingIssuedAt || prev.billingIssuedAt,
     billingIssuedBy: incoming.billingIssuedBy || prev.billingIssuedBy,
@@ -3166,7 +3250,8 @@ function mergeBillingRecordServer(prev: any, incoming: any): any {
     cashierName: incoming.cashierName || prev.cashierName,
     transactionId: incoming.transactionId || prev.transactionId,
     paymentReceiptUrl: incoming.paymentReceiptUrl || prev.paymentReceiptUrl,
-  };
+    tariffBaselineSchema: incoming.tariffBaselineSchema || prev.tariffBaselineSchema,
+  });
 }
 
 app.get("/api/billings", (req, res) => {
@@ -3205,8 +3290,13 @@ app.post("/api/billings/reconcile", (req, res) => {
         const targetConsumer = syncedConsumers.find(
           c => String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc
         );
-        if (targetConsumer && Number(merged.currentReading || 0) >= Number(targetConsumer.previousReading || 0)) {
-          targetConsumer.previousReading = Number(merged.currentReading || 0);
+        if (
+          targetConsumer &&
+          (!targetConsumer.lastReadingDate ||
+            !merged.readingDate ||
+            merged.readingDate >= targetConsumer.lastReadingDate)
+        ) {
+          targetConsumer.previousReading = normalizeOdometerServer(merged.currentReading ?? merged.presentReading ?? 0);
           targetConsumer.lastReadingDate = merged.readingDate || targetConsumer.lastReadingDate;
         }
       }
@@ -4302,7 +4392,12 @@ function loadPortalSyncStore(): void {
     }
 
     if (parsed?.tariffConfig && typeof parsed.tariffConfig === "object") {
-      inMemoryTariffConfig = parsed.tariffConfig;
+      if (parsed.tariffConfig.baselineSchema === "twd_per_m3_v2") {
+        inMemoryTariffConfig = parsed.tariffConfig;
+      } else {
+        inMemoryTariffConfig = null;
+        cleanedStore = true;
+      }
     }
 
     if (Array.isArray(parsed?.installations)) {
@@ -5240,16 +5335,16 @@ const pingInterval = setInterval(() => {
 // Serve barangays, routes, and status
 app.get(["/api/barangays", "/api/routes", "/api/areas"], (req, res) => {
   const barangays = [
-    { id: "BRG-01", name: "Poblacion", code: "PB-01", ratePerM3: 24.50, zone: "Zone 1-4: Poblacion (Main Central)" },
-    { id: "BRG-02", name: "Natumolan", code: "NT-02", ratePerM3: 24.50, zone: "Zone 5-8: Natumolan Coastal & Residential" },
-    { id: "BRG-03", name: "Baluarte", code: "BL-03", ratePerM3: 24.50, zone: "Zone 9-10: Baluarte Agricultural & Commercial" },
-    { id: "BRG-04", name: "Sta. Ana", code: "SA-04", ratePerM3: 24.50, zone: "Zone 4: Sta. Ana Rural" },
-    { id: "BRG-05", name: "Sta. Cruz", code: "SC-05", ratePerM3: 24.50, zone: "Zone 5: Sta. Cruz Sub-Central" },
-    { id: "BRG-06", name: "Mohon", code: "MH-06", ratePerM3: 24.50, zone: "Zone 11-12: Mohon Industrial Corridor" },
-    { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 24.50, zone: "Zone 7: Gracia Uplands" },
-    { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 24.50, zone: "Zone 8: Casinglot Residential" },
-    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 24.50, zone: "Zone 9: Sugbongcogon Valley" },
-    { id: "BRG-10", name: "Rosario", code: "RS-10", ratePerM3: 24.50, zone: "Zone 10: Rosario Uplands" }
+    { id: "BRG-01", name: "Poblacion", code: "PB-01", ratePerM3: 10.00, zone: "Zone 1-4: Poblacion (Main Central)" },
+    { id: "BRG-02", name: "Natumolan", code: "NT-02", ratePerM3: 10.00, zone: "Zone 5-8: Natumolan Coastal & Residential" },
+    { id: "BRG-03", name: "Baluarte", code: "BL-03", ratePerM3: 10.00, zone: "Zone 9-10: Baluarte Agricultural & Commercial" },
+    { id: "BRG-04", name: "Sta. Ana", code: "SA-04", ratePerM3: 10.00, zone: "Zone 4: Sta. Ana Rural" },
+    { id: "BRG-05", name: "Sta. Cruz", code: "SC-05", ratePerM3: 10.00, zone: "Zone 5: Sta. Cruz Sub-Central" },
+    { id: "BRG-06", name: "Mohon", code: "MH-06", ratePerM3: 10.00, zone: "Zone 11-12: Mohon Industrial Corridor" },
+    { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 10.00, zone: "Zone 7: Gracia Uplands" },
+    { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 10.00, zone: "Zone 8: Casinglot Residential" },
+    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 10.00, zone: "Zone 9: Sugbongcogon Valley" },
+    { id: "BRG-10", name: "Rosario", code: "RS-10", ratePerM3: 10.00, zone: "Zone 10: Rosario Uplands" }
   ];
   res.json({ success: true, count: barangays.length, barangays, routes: barangays, areas: barangays, data: barangays });
 });

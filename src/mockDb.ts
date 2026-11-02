@@ -8,7 +8,9 @@ import {
   WaterTariffConfig, 
   getActiveTariffConfig, 
   saveActiveTariffConfig, 
-  DEFAULT_TARIFF_CONFIG 
+  DEFAULT_TARIFF_CONFIG,
+  OFFICIAL_TARIFF_BASELINE_SCHEMA,
+  normalizeReadingToOfficialBaseline
 } from './utils/tariffCalculator';
 import { 
   initializeFirestoreSeed, 
@@ -58,6 +60,7 @@ import {
   compareUsersCanonical,
   ensureMeterSerialNumber,
 } from './utils/canonicalSort';
+import { computeOdometerConsumption } from './utils/odometer';
 
 
 // Purge all legacy storage keys containing old mock data
@@ -185,16 +188,16 @@ const INITIAL_REPORTS: ConsumerReport[] = [
 
 // Initial Clean Seed Data - Tagoloan Municipal Barangays
 const INITIAL_BARANGAYS: Barangay[] = [
-  { id: 'BRG-01', name: 'Poblacion', code: 'PB-01', consumers: 0, activeMeters: 0, schedule: '1st - 5th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
-  { id: 'BRG-02', name: 'Natumolan', code: 'NT-02', consumers: 0, activeMeters: 0, schedule: '6th - 10th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
-  { id: 'BRG-03', name: 'Baluarte', code: 'BL-03', consumers: 0, activeMeters: 0, schedule: '11th - 15th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
-  { id: 'BRG-04', name: 'Sta. Ana', code: 'SA-04', consumers: 0, activeMeters: 0, schedule: '16th - 20th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
-  { id: 'BRG-05', name: 'Sta. Cruz', code: 'SC-05', consumers: 0, activeMeters: 0, schedule: '21st - 25th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
-  { id: 'BRG-06', name: 'Mohon', code: 'MH-06', consumers: 0, activeMeters: 0, schedule: '26th - End of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
-  { id: 'BRG-07', name: 'Gracia', code: 'GR-07', consumers: 0, activeMeters: 0, schedule: '1st - 5th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
-  { id: 'BRG-08', name: 'Casinglot', code: 'CS-08', consumers: 0, activeMeters: 0, schedule: '6th - 10th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
-  { id: 'BRG-09', name: 'Sugbongcogon', code: 'SG-09', consumers: 0, activeMeters: 0, schedule: '11th - 15th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
-  { id: 'BRG-10', name: 'Rosario', code: 'RS-10', consumers: 0, activeMeters: 0, schedule: '16th - 20th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 },
+  { id: 'BRG-01', name: 'Poblacion', code: 'PB-01', consumers: 0, activeMeters: 0, schedule: '1st - 5th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 10.00 },
+  { id: 'BRG-02', name: 'Natumolan', code: 'NT-02', consumers: 0, activeMeters: 0, schedule: '6th - 10th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 10.00 },
+  { id: 'BRG-03', name: 'Baluarte', code: 'BL-03', consumers: 0, activeMeters: 0, schedule: '11th - 15th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 10.00 },
+  { id: 'BRG-04', name: 'Sta. Ana', code: 'SA-04', consumers: 0, activeMeters: 0, schedule: '16th - 20th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 10.00 },
+  { id: 'BRG-05', name: 'Sta. Cruz', code: 'SC-05', consumers: 0, activeMeters: 0, schedule: '21st - 25th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 10.00 },
+  { id: 'BRG-06', name: 'Mohon', code: 'MH-06', consumers: 0, activeMeters: 0, schedule: '26th - End of Month', supervisor: 'District Operations Supervisor', ratePerM3: 10.00 },
+  { id: 'BRG-07', name: 'Gracia', code: 'GR-07', consumers: 0, activeMeters: 0, schedule: '1st - 5th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 10.00 },
+  { id: 'BRG-08', name: 'Casinglot', code: 'CS-08', consumers: 0, activeMeters: 0, schedule: '6th - 10th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 10.00 },
+  { id: 'BRG-09', name: 'Sugbongcogon', code: 'SG-09', consumers: 0, activeMeters: 0, schedule: '11th - 15th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 10.00 },
+  { id: 'BRG-10', name: 'Rosario', code: 'RS-10', consumers: 0, activeMeters: 0, schedule: '16th - 20th of Month', supervisor: 'District Operations Supervisor', ratePerM3: 10.00 },
 ];
 
 const INITIAL_USERS: User[] = [
@@ -889,12 +892,14 @@ const INITIAL_READINGS: MeterReading[] = [
     billingPeriod: 'October 2024',
     dueDate: 'December 12, 2024',
     classification: 'Residential',
-    billAmount: 124.50,
-    franchiseTax: 2.54,
+    billAmount: 160.00,
+    franchiseTax: 3.20,
     arrears: 205.03,
-    totalAmount: 332.07,
-    penaltyAmount: 12.45,
-    amountAfterDueDate: 344.52,
+    totalAmount: 368.23,
+    remainingBalance: 368.23,
+    penaltyAmount: 16.00,
+    amountAfterDueDate: 384.23,
+    tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
     paymentStatus: 'unpaid',
     isBillingIssued: true,
   },
@@ -919,12 +924,14 @@ const INITIAL_READINGS: MeterReading[] = [
     billingPeriod: 'October 2024',
     dueDate: 'December 12, 2024',
     classification: 'Commercial',
-    billAmount: 1387.50,
-    franchiseTax: 28.32,
+    billAmount: 1625.00,
+    franchiseTax: 32.50,
     arrears: 0.00,
-    totalAmount: 1415.82,
-    penaltyAmount: 138.75,
-    amountAfterDueDate: 1554.57,
+    totalAmount: 1657.50,
+    remainingBalance: 1657.50,
+    penaltyAmount: 162.50,
+    amountAfterDueDate: 1820.00,
+    tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
     paymentStatus: 'unpaid',
     isBillingIssued: true,
   },
@@ -949,12 +956,14 @@ const INITIAL_READINGS: MeterReading[] = [
     billingPeriod: 'October 2024',
     dueDate: 'December 12, 2024',
     classification: 'Residential',
-    billAmount: 132.75,
-    franchiseTax: 2.71,
+    billAmount: 170.00,
+    franchiseTax: 3.40,
     arrears: 0.00,
-    totalAmount: 135.46,
-    penaltyAmount: 13.30,
-    amountAfterDueDate: 148.76,
+    totalAmount: 173.40,
+    remainingBalance: 173.40,
+    penaltyAmount: 17.00,
+    amountAfterDueDate: 190.40,
+    tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
     paymentStatus: 'unpaid',
     isBillingIssued: true,
   },
@@ -1277,6 +1286,12 @@ function getStored<T>(key: string, initial: T): T {
       }
       const deletedBarangayIds = getDeletedBarangayIds();
       let brgChanged = false;
+      for (let i = 0; i < brgs.length; i++) {
+        if (brgs[i] && Number(brgs[i].ratePerM3) === 24.5) {
+          brgs[i] = { ...brgs[i], ratePerM3: 10.00 };
+          brgChanged = true;
+        }
+      }
       INITIAL_BARANGAYS.forEach((ib) => {
         if (deletedBarangayIds.has(ib.id)) return;
         const exists = brgs.some(
@@ -1458,7 +1473,7 @@ function getStored<T>(key: string, initial: T): T {
         }
       } catch {}
 
-      reads.sort(compareReadingsCanonical);
+      reads = reads.map(r => normalizeReadingToOfficialBaseline(r)).sort(compareReadingsCanonical);
       const nextReadsJson = JSON.stringify(reads);
       if (data !== nextReadsJson) {
         localStorage.setItem(key, nextReadsJson);
@@ -1996,19 +2011,18 @@ export const mockDb = {
   saveReadings: (readings: MeterReading[]): void => {
     const normalized = readings
       .map(r => {
-        const currVal = Number(r.currentReading ?? r.presentReading ?? 0);
-        const prevVal = Math.max(0, Number(r.previousReading ?? 0));
-        const safePrev = prevVal <= currVal ? prevVal : 0;
-        const usageVal = typeof r.consumption === 'number' && r.consumption >= 0 && safePrev + r.consumption === currVal
-          ? r.consumption
-          : Math.max(0, currVal - safePrev);
-        return {
+        const odo = computeOdometerConsumption(
+          r.previousReading,
+          r.currentReading ?? r.presentReading,
+          r.consumption
+        );
+        return normalizeReadingToOfficialBaseline({
           ...r,
-          previousReading: safePrev,
-          presentReading: currVal,
-          currentReading: currVal,
-          consumption: usageVal,
-        };
+          previousReading: odo.previousReading,
+          presentReading: odo.currentReading,
+          currentReading: odo.currentReading,
+          consumption: odo.consumption,
+        });
       })
       .sort(compareReadingsCanonical);
     const changed = diffChangedItems(KEYS.READINGS, normalized, 'id');
@@ -2034,16 +2048,18 @@ export const mockDb = {
       if (!ir?.id) return;
       const prev = map.get(ir.id);
       if (!prev) {
-        const irCurr = Number(ir.currentReading ?? ir.presentReading ?? 0);
-        const irPrev = Math.max(0, Number(ir.previousReading ?? 0));
-        const safePrev = irPrev <= irCurr ? irPrev : 0;
-        map.set(ir.id, {
+        const odo = computeOdometerConsumption(
+          ir.previousReading,
+          ir.currentReading ?? ir.presentReading,
+          ir.consumption
+        );
+        map.set(ir.id, normalizeReadingToOfficialBaseline({
           ...ir,
-          previousReading: safePrev,
-          presentReading: irCurr,
-          currentReading: irCurr,
-          consumption: Math.max(0, irCurr - safePrev),
-        });
+          previousReading: odo.previousReading,
+          presentReading: odo.currentReading,
+          currentReading: odo.currentReading,
+          consumption: odo.consumption,
+        }));
         changed = true;
         return;
       }
@@ -2067,24 +2083,21 @@ export const mockDb = {
                 ? fallbackBilled.remainingBalance
                 : mergedTotalAmount);
 
-      const mergedCurr = Number(billedSource.currentReading ?? billedSource.presentReading ?? fallbackBilled.currentReading ?? fallbackBilled.presentReading ?? 0);
-      const candPrev = Number(billedSource.previousReading ?? 0);
-      const altPrev = Number(fallbackBilled.previousReading ?? 0);
-      const mergedPrev =
-        candPrev > 0 && candPrev <= mergedCurr
-          ? candPrev
-          : altPrev > 0 && altPrev <= mergedCurr
-            ? altPrev
-            : Math.max(0, Math.min(candPrev, mergedCurr));
-      const mergedConsumption = Math.max(0, mergedCurr - mergedPrev);
+      const rawCurr = billedSource.currentReading ?? billedSource.presentReading ?? fallbackBilled.currentReading ?? fallbackBilled.presentReading ?? 0;
+      const candPrev = billedSource.previousReading ?? fallbackBilled.previousReading ?? 0;
+      const odoMerged = computeOdometerConsumption(
+        candPrev,
+        rawCurr,
+        billedSource.consumption ?? fallbackBilled.consumption
+      );
 
       const next: MeterReading = {
         ...prev,
         ...ir,
-        previousReading: mergedPrev,
-        presentReading: mergedCurr,
-        currentReading: mergedCurr,
-        consumption: mergedConsumption,
+        previousReading: odoMerged.previousReading,
+        presentReading: odoMerged.currentReading,
+        currentReading: odoMerged.currentReading,
+        consumption: odoMerged.consumption,
         submittedAt: ir.submittedAt || prev.submittedAt,
         isBillingIssued: mergedBillingIssued ? true : Boolean(ir.isBillingIssued ?? prev.isBillingIssued),
         billingIssuedAt: ir.billingIssuedAt || prev.billingIssuedAt,
@@ -2113,8 +2126,9 @@ export const mockDb = {
         transactionId: ir.transactionId || prev.transactionId,
         paymentReceiptUrl: ir.paymentReceiptUrl || prev.paymentReceiptUrl,
       };
-      if (JSON.stringify(prev) !== JSON.stringify(next)) {
-        map.set(ir.id, next);
+      const normalizedNext = normalizeReadingToOfficialBaseline(next);
+      if (JSON.stringify(prev) !== JSON.stringify(normalizedNext)) {
+        map.set(ir.id, normalizedNext);
         changed = true;
       }
     });
@@ -2188,7 +2202,7 @@ export const mockDb = {
       activeMeters: 1,
       schedule: '1st - 15th of Month',
       supervisor: 'District Operations Supervisor',
-      ratePerM3: 24.50
+      ratePerM3: 10.00
     };
     
     list.push(newBarangay);

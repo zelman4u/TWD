@@ -756,9 +756,14 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
 
                   {/* Classification Info */}
                   <div className="sm:col-span-2 space-y-2 pt-2 border-t border-slate-800">
-                    <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider text-left">
-                      Connection Classification
-                    </label>
+                    <div className="flex flex-wrap items-center justify-between gap-1">
+                      <label className="block text-[9px] font-black text-slate-300 uppercase tracking-wider text-left">
+                        Connection Classification (Official Tariff Baseline)
+                      </label>
+                      <span className="text-[10px] font-mono text-slate-400">
+                        2% Franchise Tax · 10% Late Penalty
+                      </span>
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
@@ -770,7 +775,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                         }`}
                       >
                         <Waves className="h-3.5 w-3.5 shrink-0" />
-                        <span>Residential</span>
+                        <span>Residential (₱10/m³)</span>
                       </button>
                       <button
                         type="button"
@@ -782,7 +787,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                         }`}
                       >
                         <Briefcase className="h-3.5 w-3.5 shrink-0" />
-                        <span>Commercial</span>
+                        <span>Commercial (₱25/m³)</span>
                       </button>
                     </div>
                   </div>

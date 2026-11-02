@@ -23,9 +23,15 @@ export const DISTRICT_INFO = {
 } as const;
 
 export const BILLING_RULES = {
+  /** Official Residential baseline rate per cubic meter (₱10.00/m³) */
+  RESIDENTIAL_RATE_PER_M3: 10.00,
+  /** Official Commercial baseline rate per cubic meter (₱25.00/m³) */
+  COMMERCIAL_RATE_PER_M3: 25.00,
+  /** Official Local Franchise Tax percentage (2%) */
+  FRANCHISE_TAX_PERCENTAGE: 0.02,
   /** Number of days from bill statement generation until due date */
   DUE_DAYS_STANDARD: 15,
-  /** Standard late payment surcharge percentage (10%) */
+  /** Standard late payment penalty percentage (10%) */
   LATE_SURCHARGE_PERCENTAGE: 0.10,
   /** 3-month payment grace period cutoff in days (90 days) */
   GRACE_PERIOD_DAYS_CUTOFF: 90,
@@ -69,14 +75,14 @@ export const FIRESTORE_COLLECTIONS = {
 } as const;
 
 export const STANDARD_BARANGAYS = [
-  { id: 'BRG-01', name: 'Poblacion', code: 'PB-01', ratePerM3: 24.50, zone: 'Zone 1-4: Poblacion (Main Central)' },
-  { id: 'BRG-02', name: 'Natumolan', code: 'NT-02', ratePerM3: 24.50, zone: 'Zone 5-8: Natumolan Coastal & Residential' },
-  { id: 'BRG-03', name: 'Baluarte', code: 'BL-03', ratePerM3: 24.50, zone: 'Zone 9-10: Baluarte Agricultural & Commercial' },
-  { id: 'BRG-04', name: 'Sta. Ana', code: 'SA-04', ratePerM3: 24.50, zone: 'Zone 4: Sta. Ana Rural' },
-  { id: 'BRG-05', name: 'Sta. Cruz', code: 'SC-05', ratePerM3: 24.50, zone: 'Zone 5: Sta. Cruz Sub-Central' },
-  { id: 'BRG-06', name: 'Mohon', code: 'MH-06', ratePerM3: 24.50, zone: 'Zone 11-12: Mohon Industrial Corridor' },
-  { id: 'BRG-07', name: 'Gracia', code: 'GR-07', ratePerM3: 24.50, zone: 'Zone 7: Gracia Uplands' },
-  { id: 'BRG-08', name: 'Casinglot', code: 'CS-08', ratePerM3: 24.50, zone: 'Zone 8: Casinglot Residential' },
-  { id: 'BRG-09', name: 'Sugbongcogon', code: 'SG-09', ratePerM3: 24.50, zone: 'Zone 9: Sugbongcogon Valley' },
-  { id: 'BRG-10', name: 'Rosario', code: 'RS-10', ratePerM3: 24.50, zone: 'Zone 10: Rosario Uplands' },
+  { id: 'BRG-01', name: 'Poblacion', code: 'PB-01', ratePerM3: 10.00, zone: 'Zone 1-4: Poblacion (Main Central)' },
+  { id: 'BRG-02', name: 'Natumolan', code: 'NT-02', ratePerM3: 10.00, zone: 'Zone 5-8: Natumolan Coastal & Residential' },
+  { id: 'BRG-03', name: 'Baluarte', code: 'BL-03', ratePerM3: 10.00, zone: 'Zone 9-10: Baluarte Agricultural & Commercial' },
+  { id: 'BRG-04', name: 'Sta. Ana', code: 'SA-04', ratePerM3: 10.00, zone: 'Zone 4: Sta. Ana Rural' },
+  { id: 'BRG-05', name: 'Sta. Cruz', code: 'SC-05', ratePerM3: 10.00, zone: 'Zone 5: Sta. Cruz Sub-Central' },
+  { id: 'BRG-06', name: 'Mohon', code: 'MH-06', ratePerM3: 10.00, zone: 'Zone 11-12: Mohon Industrial Corridor' },
+  { id: 'BRG-07', name: 'Gracia', code: 'GR-07', ratePerM3: 10.00, zone: 'Zone 7: Gracia Uplands' },
+  { id: 'BRG-08', name: 'Casinglot', code: 'CS-08', ratePerM3: 10.00, zone: 'Zone 8: Casinglot Residential' },
+  { id: 'BRG-09', name: 'Sugbongcogon', code: 'SG-09', ratePerM3: 10.00, zone: 'Zone 9: Sugbongcogon Valley' },
+  { id: 'BRG-10', name: 'Rosario', code: 'RS-10', ratePerM3: 10.00, zone: 'Zone 10: Rosario Uplands' },
 ] as const;

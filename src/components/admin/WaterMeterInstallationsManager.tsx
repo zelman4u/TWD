@@ -47,6 +47,7 @@ import { smartMatch } from '../../utils/smartSearch';
 import { sendRealtimeMessage } from '../../services/realtimeSocket';
 import { useToast } from '../../context/ToastContext';
 import { compareInstallationsCanonical } from '../../utils/canonicalSort';
+import { formatOdometerReading } from '../../utils/odometer';
 
 export interface WaterMeterInstallationsManagerProps {
   requests: WaterMeterInstallationRequest[];
@@ -1234,6 +1235,10 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                       <span className="text-slate-400 block text-[10px] uppercase font-bold">Responsible Personnel</span>
                       <strong className="text-slate-200">{validatingRequest.responsiblePersonnel || 'N/A'}</strong>
                     </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Initial Odometer Dial</span>
+                      <strong className="text-emerald-300 font-mono tabular-nums">{formatOdometerReading(0)} (00000–99999)</strong>
+                    </div>
                     {validatingRequest.validatedBy && (
                       <div className="sm:col-span-2 pt-2 border-t border-emerald-800/40 text-slate-400">
                         Validated by <strong className="text-white">{validatingRequest.validatedBy}</strong> on{' '}
@@ -1407,7 +1412,8 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
 
                     <div className="bg-slate-950 border border-emerald-900/60 rounded-xl p-3.5 text-xs text-slate-300 leading-relaxed">
                       <strong className="text-emerald-400">Consumer Account Activation:</strong> Completing validation will activate{' '}
-                      <strong className="text-white">{validatingRequest.consumerName}</strong>&apos;s water service account, link Meter Tag{' '}
+                      <strong className="text-white">{validatingRequest.consumerName}</strong>&apos;s water service account with initial 5-digit odometer dial{' '}
+                      <strong className="font-mono tabular-nums text-emerald-300">{formatOdometerReading(0)}</strong>, link Meter Tag{' '}
                       <strong className="font-mono tabular-nums text-white">#{valMeterTagNumber || '—'}</strong> to Account{' '}
                       <strong className="font-mono tabular-nums text-sky-300">#{valAccountNumber || '—'}</strong>, and automatically send the official Account Activated notification to their Consumer Portal (without exposing the physical Meter Serial Number).
                     </div>

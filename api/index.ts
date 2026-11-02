@@ -2898,18 +2898,46 @@ app.get("/api/readings/pending", async (_req, res) => {
   }
 });
 
+const VERCEL_ODOMETER_MODULO = 100000;
+
+function normalizeOdometerVercel(value: unknown): number {
+  if (value === undefined || value === null || value === "") return 0;
+  const parsed = typeof value === "string" ? Number(value.trim()) : Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return ((Math.floor(parsed) % VERCEL_ODOMETER_MODULO) + VERCEL_ODOMETER_MODULO) % VERCEL_ODOMETER_MODULO;
+}
+
+function computeOdometerVercel(previous: unknown, current: unknown, explicitConsumption?: unknown) {
+  const prev = normalizeOdometerVercel(previous);
+  const curr = normalizeOdometerVercel(current);
+  const rolledOver = curr < prev;
+  const computed = rolledOver ? VERCEL_ODOMETER_MODULO - prev + curr : curr - prev;
+  if (explicitConsumption !== undefined && explicitConsumption !== null && explicitConsumption !== "") {
+    const expNum = Number(explicitConsumption);
+    if (Number.isFinite(expNum) && expNum >= 0) {
+      const rounded = Math.round(expNum);
+      if ((prev + rounded) % VERCEL_ODOMETER_MODULO === curr) {
+        return { previousReading: prev, currentReading: curr, consumption: rounded, rolledOver };
+      }
+    }
+  }
+  return { previousReading: prev, currentReading: curr, consumption: computed, rolledOver };
+}
+
 function compareReadingsVercelDesc(a: any, b: any): number {
   return (
     new Date(b?.readingDate || 0).getTime() - new Date(a?.readingDate || 0).getTime() ||
-    Number(b?.currentReading ?? b?.presentReading ?? 0) - Number(a?.currentReading ?? a?.presentReading ?? 0) ||
-    new Date(b?.billingIssuedAt || b?.submittedAt || 0).getTime() - new Date(a?.billingIssuedAt || a?.submittedAt || 0).getTime()
+    new Date(b?.billingIssuedAt || b?.submittedAt || 0).getTime() - new Date(a?.billingIssuedAt || a?.submittedAt || 0).getTime() ||
+    normalizeOdometerVercel(b?.currentReading ?? b?.presentReading ?? 0) - normalizeOdometerVercel(a?.currentReading ?? a?.presentReading ?? 0)
   );
 }
 
 function resolveBaselineFromMemoryVercel(accountNumber?: string, meterNumber?: string, matchedConsumer?: any, excludeId?: string): number {
   const cleanAcc = String(accountNumber || "").replace(/^#/, "").trim().toUpperCase();
   const cleanMeter = String(meterNumber || "").trim().toUpperCase();
-  let baseline = Number(matchedConsumer?.previousReading || 0);
+  const fallback = normalizeOdometerVercel(matchedConsumer?.previousReading || 0);
+  let latestTs = -1;
+  let latestVal: number | null = null;
 
   for (const r of syncedReadings) {
     if (!r || (excludeId && r.id === excludeId) || r.status === "cancelled") continue;
@@ -2921,11 +2949,15 @@ function resolveBaselineFromMemoryVercel(accountNumber?: string, meterNumber?: s
     const rAcc = String(r.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
     const rMeter = String(r.meterNumber || "").trim().toUpperCase();
     if ((cleanAcc && rAcc === cleanAcc) || (cleanMeter && rMeter === cleanMeter)) {
-      const val = Number(r.currentReading ?? r.presentReading ?? 0);
-      if (val > baseline) baseline = val;
+      const ts = new Date(r.readingDate || r.billingIssuedAt || r.submittedAt || 0).getTime() || 0;
+      const val = normalizeOdometerVercel(r.currentReading ?? r.presentReading ?? 0);
+      if (ts > latestTs || (ts === latestTs && (latestVal === null || val > latestVal))) {
+        latestTs = ts;
+        latestVal = val;
+      }
     }
   }
-  return baseline;
+  return latestVal !== null ? latestVal : fallback;
 }
 
 app.post(["/api/readings", "/api/sync/push", "/api/readings/submit"], async (req, res) => {
@@ -2964,19 +2996,18 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit"], async (req
         (cleanMeter && String(c.meterNumber || "").trim().toUpperCase() === cleanMeter)
     );
 
-    const curr = Math.max(0, Number(rawCurr) || 0);
+    const curr = normalizeOdometerVercel(rawCurr);
     const resolvedAcc = matchedConsumer ? matchedConsumer.accountNumber : accountNumber;
     const resolvedMeter = meterNumber || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG");
     const baseline = resolveBaselineFromMemoryVercel(resolvedAcc, resolvedMeter, matchedConsumer, id);
 
-    let prev = previousReading !== undefined ? Math.max(0, Number(previousReading) || 0) : baseline;
+    let prev = previousReading !== undefined ? normalizeOdometerVercel(previousReading) : baseline;
     if (prev === 0 && baseline > 0 && curr >= baseline) {
       prev = baseline;
     }
-    if (prev > curr) {
-      prev = baseline <= curr ? baseline : 0;
-    }
-    const consumption = Math.max(0, curr - prev);
+    const odo = computeOdometerVercel(prev, curr, req.body?.consumption);
+    prev = odo.previousReading;
+    const consumption = odo.consumption;
 
     let finalId = id ? String(id).trim() : "";
     const existingApproved =
@@ -3063,20 +3094,19 @@ app.post("/api/readings/batch", async (req, res) => {
       );
       const resolvedAcc = item.accountNumber || matchedConsumer?.accountNumber || "UNKNOWN";
       const resolvedMeter = item.meterNumber || matchedConsumer?.meterNumber || "MT-TAG";
-      const curr = Math.max(0, Number(item.currentReading ?? item.presentReading ?? 0));
+      const curr = normalizeOdometerVercel(item.currentReading ?? item.presentReading ?? 0);
       const accKey = String(resolvedAcc).replace(/^#/, "").trim().toUpperCase();
       const memBaseline = resolveBaselineFromMemoryVercel(resolvedAcc, resolvedMeter, matchedConsumer, item.id);
-      const baseline = Math.max(memBaseline, runningBaselineByAcc.get(accKey) || 0);
+      const baseline = runningBaselineByAcc.has(accKey) ? runningBaselineByAcc.get(accKey)! : memBaseline;
 
-      let prev = item.previousReading !== undefined ? Math.max(0, Number(item.previousReading) || 0) : baseline;
+      let prev = item.previousReading !== undefined ? normalizeOdometerVercel(item.previousReading) : baseline;
       if (prev === 0 && baseline > 0 && curr >= baseline) {
         prev = baseline;
       }
-      if (prev > curr) {
-        prev = baseline <= curr ? baseline : 0;
-      }
-      const consumption = Math.max(0, curr - prev);
-      if (accKey && curr > baseline) {
+      const odo = computeOdometerVercel(prev, curr, item.consumption);
+      prev = odo.previousReading;
+      const consumption = odo.consumption;
+      if (accKey) {
         runningBaselineByAcc.set(accKey, curr);
       }
 
@@ -3169,15 +3199,17 @@ app.post("/api/readings/:id/approve", async (req, res) => {
 
 function mergeBillingRecordVercel(prev: any, incoming: any): any {
   if (!prev) {
-    const currVal = Number(incoming.currentReading ?? incoming.presentReading ?? 0);
-    const prevVal = Math.max(0, Number(incoming.previousReading ?? 0));
-    const safePrev = prevVal <= currVal ? prevVal : 0;
+    const odo = computeOdometerVercel(
+      incoming.previousReading,
+      incoming.currentReading ?? incoming.presentReading,
+      incoming.consumption
+    );
     return {
       ...incoming,
-      previousReading: safePrev,
-      presentReading: currVal,
-      currentReading: currVal,
-      consumption: Math.max(0, currVal - safePrev),
+      previousReading: odo.previousReading,
+      presentReading: odo.currentReading,
+      currentReading: odo.currentReading,
+      consumption: odo.consumption,
     };
   }
   const isPaid = prev.paymentStatus === "paid" || incoming.paymentStatus === "paid";
@@ -3195,24 +3227,17 @@ function mergeBillingRecordVercel(prev: any, incoming: any): any {
   const effBillAmt = Number(billedSrc.billAmount || altSrc.billAmount || 0) || prev.billAmount || incoming.billAmount;
   const effTotalAmt = Number(billedSrc.totalAmount || altSrc.totalAmount || effBillAmt || 0) || prev.totalAmount || incoming.totalAmount;
 
-  const mergedCurr = Number(billedSrc.currentReading ?? billedSrc.presentReading ?? altSrc.currentReading ?? altSrc.presentReading ?? 0);
-  const candPrev = Number(billedSrc.previousReading ?? 0);
-  const altPrev = Number(altSrc.previousReading ?? 0);
-  const mergedPrev =
-    candPrev > 0 && candPrev <= mergedCurr
-      ? candPrev
-      : altPrev > 0 && altPrev <= mergedCurr
-        ? altPrev
-        : Math.max(0, Math.min(candPrev, mergedCurr));
-  const mergedConsumption = Math.max(0, mergedCurr - mergedPrev);
+  const rawCurr = billedSrc.currentReading ?? billedSrc.presentReading ?? altSrc.currentReading ?? altSrc.presentReading ?? 0;
+  const candPrev = billedSrc.previousReading ?? altSrc.previousReading ?? 0;
+  const odoMerged = computeOdometerVercel(candPrev, rawCurr, billedSrc.consumption ?? altSrc.consumption);
 
   return {
     ...prev,
     ...incoming,
-    previousReading: mergedPrev,
-    presentReading: mergedCurr,
-    currentReading: mergedCurr,
-    consumption: mergedConsumption,
+    previousReading: odoMerged.previousReading,
+    presentReading: odoMerged.currentReading,
+    currentReading: odoMerged.currentReading,
+    consumption: odoMerged.consumption,
     isBillingIssued: mergedBilled ? true : Boolean(incoming.isBillingIssued ?? prev.isBillingIssued),
     billingIssuedAt: incoming.billingIssuedAt || prev.billingIssuedAt,
     billingIssuedBy: incoming.billingIssuedBy || prev.billingIssuedBy,
@@ -3488,16 +3513,16 @@ app.post("/api/tariff-config", async (req, res) => {
 
 app.get("/api/barangays", (_req, res) => {
   const barangays = [
-    { id: "BRG-01", name: "Poblacion", code: "PB-01", ratePerM3: 24.5 },
-    { id: "BRG-02", name: "Natumolan", code: "NT-02", ratePerM3: 24.5 },
-    { id: "BRG-03", name: "Baluarte", code: "BL-03", ratePerM3: 24.5 },
-    { id: "BRG-04", name: "Sta. Ana", code: "SA-04", ratePerM3: 24.5 },
-    { id: "BRG-05", name: "Sta. Cruz", code: "SC-05", ratePerM3: 24.5 },
-    { id: "BRG-06", name: "Mohon", code: "MH-06", ratePerM3: 24.5 },
-    { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 24.5 },
-    { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 24.5 },
-    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 24.5 },
-    { id: "BRG-10", name: "Rosario", code: "RS-10", ratePerM3: 24.5 },
+    { id: "BRG-01", name: "Poblacion", code: "PB-01", ratePerM3: 10.0 },
+    { id: "BRG-02", name: "Natumolan", code: "NT-02", ratePerM3: 10.0 },
+    { id: "BRG-03", name: "Baluarte", code: "BL-03", ratePerM3: 10.0 },
+    { id: "BRG-04", name: "Sta. Ana", code: "SA-04", ratePerM3: 10.0 },
+    { id: "BRG-05", name: "Sta. Cruz", code: "SC-05", ratePerM3: 10.0 },
+    { id: "BRG-06", name: "Mohon", code: "MH-06", ratePerM3: 10.0 },
+    { id: "BRG-07", name: "Gracia", code: "GR-07", ratePerM3: 10.0 },
+    { id: "BRG-08", name: "Casinglot", code: "CS-08", ratePerM3: 10.0 },
+    { id: "BRG-09", name: "Sugbongcogon", code: "SG-09", ratePerM3: 10.0 },
+    { id: "BRG-10", name: "Rosario", code: "RS-10", ratePerM3: 10.0 },
   ];
   res.json({ success: true, count: barangays.length, barangays, data: barangays });
 });

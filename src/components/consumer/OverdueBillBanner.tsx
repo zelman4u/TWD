@@ -18,6 +18,8 @@ import {
   Flame
 } from 'lucide-react';
 import { Consumer, MeterReading } from '../../types';
+import { calculateLatePenalty, getReadingEffectiveBillAmount } from '../../utils/tariffCalculator';
+import { formatOdometerReading } from '../../utils/odometer';
 
 interface OverdueBillBannerProps {
   overdueBills: MeterReading[];
@@ -67,10 +69,14 @@ export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
   // (a) 3 or more unpaid billing cycles OR (b) Overdue for 90+ days OR (c) flagged by system
   const isThreeMonthsOverdue = daysOverdue >= 90 || overdueBills.length >= 3 || primaryBill.isDisconnectionNoticeIssued;
   
-  // Standard Tagoloan Water District 10% Late Surcharge
+  // Standard Tagoloan Water District 10% Late Surcharge on Basic Water Charge
+  const basicForPenalty = getReadingEffectiveBillAmount(
+    primaryBill,
+    consumerRecord.consumerType === 'Commercial' ? 'Commercial' : 'Residential'
+  );
   const latePenalty = primaryBill.penaltyAmount !== undefined 
     ? primaryBill.penaltyAmount 
-    : Math.round(netDue * 0.10 * 100) / 100;
+    : calculateLatePenalty(basicForPenalty);
   
   const totalPayableWithPenalty = netDue + latePenalty;
   const formattedDueDate = primaryBill.dueDate || dueDateObj.toLocaleDateString('en-US', {
@@ -434,8 +440,8 @@ export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
                 <span className="text-base font-black font-mono text-white mt-0.5 block">
                   {primaryBill.consumption} m³
                 </span>
-                <span className="text-[9px] text-rose-400 font-mono">
-                  {primaryBill.previousReading} m³ → {primaryBill.currentReading} m³
+                <span className="text-[9px] text-rose-400 font-mono tabular-nums">
+                  Dial {formatOdometerReading(primaryBill.previousReading)} → {formatOdometerReading(primaryBill.presentReading ?? primaryBill.currentReading)}
                 </span>
               </div>
 

@@ -12,6 +12,7 @@ import type {
   WaterMeter,
   WaterMeterInstallationRequest,
 } from '../types';
+import { normalizeOdometerReading } from './odometer';
 
 function safeTime(val?: string | number | null): number {
   if (val === undefined || val === null || val === '') return 0;
@@ -43,8 +44,9 @@ function isPendingAccountIdentifier(acc?: string, status?: string): boolean {
 export function compareReadingsCanonical(a: Partial<MeterReading>, b: Partial<MeterReading>): number {
   return (
     safeTime(b?.readingDate) - safeTime(a?.readingDate) ||
-    Number(b?.currentReading ?? b?.presentReading ?? 0) - Number(a?.currentReading ?? a?.presentReading ?? 0) ||
     safeTime(b?.billingIssuedAt || b?.submittedAt) - safeTime(a?.billingIssuedAt || a?.submittedAt) ||
+    normalizeOdometerReading(b?.currentReading ?? b?.presentReading ?? 0) -
+      normalizeOdometerReading(a?.currentReading ?? a?.presentReading ?? 0) ||
     String(a?.accountNumber || '').localeCompare(String(b?.accountNumber || ''), undefined, {
       numeric: true,
       sensitivity: 'base',
@@ -93,12 +95,21 @@ export function compareMetersCanonical(a: Partial<WaterMeter>, b: Partial<WaterM
 }
 
 export function ensureMeterSerialNumber(m: WaterMeter): WaterMeter {
+  const normalizedLastReading =
+    m.lastReadingValue !== undefined ? normalizeOdometerReading(m.lastReadingValue) : undefined;
   if (!m.serialNumber && m.meterNumber) {
     const brandPrefix = (m.brand || 'TWD').slice(0, 3).toUpperCase();
     const suffix = String(m.meterNumber).replace(/[^a-zA-Z0-9]/g, '').slice(-5).toUpperCase() || '00001';
     return {
       ...m,
       serialNumber: `SN-${brandPrefix}-2024-${suffix}`,
+      ...(normalizedLastReading !== undefined ? { lastReadingValue: normalizedLastReading } : {}),
+    };
+  }
+  if (normalizedLastReading !== undefined && normalizedLastReading !== m.lastReadingValue) {
+    return {
+      ...m,
+      lastReadingValue: normalizedLastReading,
     };
   }
   return m;

@@ -81,7 +81,23 @@ import { ConsumerReportsSection } from './consumer/ConsumerReportsSection';
 import { ConsumerInstallationSection } from './consumer/ConsumerInstallationSection';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
-import { calculateWaterTariff, getActiveTariffConfig, getReadingEffectiveBillAmount, isOfficialBillIssued, saveActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
+import {
+  calculateWaterTariff,
+  calculateFranchiseTax,
+  getActiveTariffConfig,
+  getEffectiveRatePerM3,
+  getReadingEffectiveBillAmount,
+  getReadingTotalAssessment,
+  isOfficialBaselineSchemaConfig,
+  isOfficialBillIssued,
+  saveActiveTariffConfig,
+  WaterTariffConfig
+} from '../utils/tariffCalculator';
+import {
+  computeOdometerConsumption,
+  formatOdometerReading,
+  normalizeOdometerReading,
+} from '../utils/odometer';
 import { inferNotificationType, isTransactionalPaymentOrReceiptItem, normalizeAdvisoryComparisonTitle, sanitizeAnnouncements } from '../utils/announcementSanitizer';
 import { apiClient, safeBackendFetch } from '../services/apiClient';
 import { initRealtimeSocket, sendRealtimeMessage } from '../services/realtimeSocket';
@@ -858,16 +874,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
   };
 
-  // Tariff calculation helper (honors locked billAmount on existing readings; uses active tariff only for new/un-stamped usage)
+  // Tariff calculation helper (includes 2% Franchise Tax; honors locked historical paid bills and active tariff for new usage)
   const calculateCostOf = (
     usageOrReading: number | MeterReading,
     classification: 'Residential' | 'Commercial' = 'Residential'
   ) => {
     const cls = classification === 'Commercial' ? 'Commercial' : 'Residential';
     if (typeof usageOrReading === 'number') {
-      return calculateWaterTariff(usageOrReading, cls);
+      const basic = calculateWaterTariff(usageOrReading, cls);
+      return Math.round((basic + calculateFranchiseTax(basic)) * 100) / 100;
     }
-    return getReadingEffectiveBillAmount(usageOrReading, cls);
+    return getReadingTotalAssessment(usageOrReading, cls).totalBeforeDue;
   };
 
   // Real-Time Data Loader
@@ -1153,7 +1170,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 const presDial = newR.presentReading ?? newR.currentReading;
                 toast.info(
                   `Water Bill Issued — ${newR.billingPeriod}`,
-                  `Prev: ${newR.previousReading} m³ → Pres: ${presDial} m³ (${newR.consumption} m³ used). Total Due: ₱${calculateCostOf(newR, record.consumerType).toFixed(2)}.`,
+                  `Dial: ${formatOdometerReading(newR.previousReading)} → ${formatOdometerReading(presDial)} (${newR.consumption} m³ used). Total Due: ₱${calculateCostOf(newR, record.consumerType).toFixed(2)}.`,
                   6500
                 );
               }
@@ -1350,7 +1367,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
         apiClient.getTariffConfig({ skipLogging: true })
           .then(res => {
-            if (res?.config && (res.config.version || 0) > (getActiveTariffConfig().version || 0)) {
+            if (
+              res?.config &&
+              isOfficialBaselineSchemaConfig(res.config) &&
+              (res.config.version || 0) > (getActiveTariffConfig().version || 0)
+            ) {
               saveActiveTariffConfig(res.config);
               setActiveTariff(res.config);
             }
@@ -1645,7 +1666,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         }
         loadConsumerInfo(true);
       } else if (data.type === 'tariff:updated') {
-        if (data.payload?.config) {
+        if (data.payload?.config && isOfficialBaselineSchemaConfig(data.payload.config)) {
           saveActiveTariffConfig(data.payload.config);
         }
         setActiveTariff(getActiveTariffConfig());
@@ -1692,7 +1713,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           setSpotlightReading(bill);
           toast.info(
             `Water Bill Issued — ${bill.billingPeriod}`,
-            `Meter reading: ${bill.consumption} m³ (Index: ${bill.currentReading}). Total Due: ₱${calculateCostOf(bill, consumerRecordRef.current?.consumerType).toFixed(2)}.`,
+            `Meter reading: ${bill.consumption} m³ (Dial: ${formatOdometerReading(bill.currentReading)}). Total Due: ₱${calculateCostOf(bill, consumerRecordRef.current?.consumerType).toFixed(2)}.`,
             6500
           );
         }
@@ -1801,18 +1822,24 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     r => r.status === 'pending' || r.status === 'flagged_abnormal'
   ) || null;
 
-  const prevReadingVal = latestRead
-    ? Math.max(0, Number(latestRead.previousReading ?? 0))
-    : Math.max(0, Number(consumerRecord?.previousReading ?? 0));
-  const presReadingVal = latestRead
-    ? Math.max(prevReadingVal, Number(latestRead.presentReading ?? latestRead.currentReading ?? prevReadingVal))
-    : Math.max(prevReadingVal, Number(consumerRecord?.presentReading ?? consumerRecord?.currentReading ?? prevReadingVal));
+  const odoSummary = latestRead
+    ? computeOdometerConsumption(
+        latestRead.previousReading ?? 0,
+        latestRead.presentReading ?? latestRead.currentReading ?? latestRead.previousReading ?? 0,
+        latestRead.consumption
+      )
+    : computeOdometerConsumption(
+        consumerRecord?.previousReading ?? 0,
+        consumerRecord?.presentReading ?? consumerRecord?.currentReading ?? consumerRecord?.previousReading ?? 0,
+        consumerRecord?.lastConsumption
+      );
+  const prevReadingVal = odoSummary.previousReading;
+  const presReadingVal = odoSummary.currentReading;
   const currReadingVal = latestRead
-    ? Math.max(presReadingVal, Number(latestRead.currentReading ?? presReadingVal))
-    : Math.max(presReadingVal, Number(consumerRecord?.currentReading ?? presReadingVal));
-  const currentConsumptionVal = latestRead
-    ? Math.max(0, Number(latestRead.consumption ?? (presReadingVal - prevReadingVal)))
-    : Math.max(0, Number(consumerRecord?.lastConsumption ?? (presReadingVal - prevReadingVal)));
+    ? normalizeOdometerReading(latestRead.currentReading ?? presReadingVal)
+    : normalizeOdometerReading(consumerRecord?.currentReading ?? presReadingVal);
+  const currentConsumptionVal = odoSummary.consumption;
+  const isOdometerRollover = odoSummary.rolledOver;
 
   // Official Billings issued by Administration
   const billedReadings = readings.filter(r => isOfficialBillIssued(r));
@@ -3514,14 +3541,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     </span>
                   </div>
                   <h4 className="text-sm font-black text-white">
-                    Official Notice of Water Tariff Adjustment
+                    Official Tagoloan Water District Tariff Schedule
                   </h4>
                   <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-                    Tagoloan Water District has updated its basic water service rates under Board Resolution {activeTariff.resolutionNumber}. 
-                    {consumerRecord?.consumerType === 'Commercial' ? ' Commercial' : ' Domestic / Residential'} baseline minimum (1 – 10 m³) is set at{' '}
+                    Official baseline water service rates under Board Resolution {activeTariff.resolutionNumber}:{' '}
+                    {consumerRecord?.consumerType === 'Commercial' ? 'Commercial' : 'Domestic / Residential'} rate is set at{' '}
                     <strong className="text-emerald-400 font-mono">
-                      ₱{(consumerRecord?.consumerType === 'Commercial' ? activeTariff.commercial.baseMinCharge : activeTariff.residential.baseMinCharge).toFixed(2)}
-                    </strong>. Applies automatically to new meter readings going forward; previously issued statements retain their original billed rates.
+                      ₱{getEffectiveRatePerM3(consumerRecord?.consumerType === 'Commercial' ? 'Commercial' : 'Residential', activeTariff).toFixed(2)} / m³
+                    </strong>{' '}
+                    plus <strong className="text-indigo-300 font-mono">{(activeTariff.franchiseTaxRate * 100).toFixed(0)}% Franchise Tax</strong> and{' '}
+                    <strong className="text-amber-300 font-mono">{(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}% Late Penalty</strong> after due date.
                   </p>
                 </div>
               </div>
@@ -3563,7 +3592,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       Official Meter Reading for {spotlightReading.billingPeriod}
                     </h3>
                     <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-                      Your meter reading was approved by Administration. Baseline <strong className="text-slate-100 font-mono tabular-nums">{spotlightReading.previousReading} m³</strong> to Present <strong className="text-white font-mono tabular-nums">{spotlightReading.presentReading ?? spotlightReading.currentReading} m³</strong> yielded <strong className="text-sky-300 font-mono tabular-nums">{spotlightReading.consumption} m³</strong> net usage with a calculated bill of <strong className="text-emerald-400 font-mono tabular-nums">₱{calculateCostOf(spotlightReading, consumerRecord?.consumerType).toFixed(2)}</strong>.
+                      Your meter reading was approved by Administration. Baseline Dial <strong className="text-slate-100 font-mono tabular-nums">{formatOdometerReading(spotlightReading.previousReading)}</strong> to Present Dial <strong className="text-white font-mono tabular-nums">{formatOdometerReading(spotlightReading.presentReading ?? spotlightReading.currentReading)}</strong> yielded <strong className="text-sky-300 font-mono tabular-nums">{spotlightReading.consumption} m³</strong> net usage with a calculated bill of <strong className="text-emerald-400 font-mono tabular-nums">₱{calculateCostOf(spotlightReading, consumerRecord?.consumerType).toFixed(2)}</strong>.
                     </p>
                   </div>
 
@@ -3590,9 +3619,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       Previous Reading
                     </span>
                     <span className="text-lg font-black font-mono tabular-nums text-slate-200 block">
-                      {spotlightReading.previousReading} m³
+                      {formatOdometerReading(spotlightReading.previousReading)}
                     </span>
-                    <span className="text-[10px] text-slate-500">Baseline from prior cycle</span>
+                    <span className="text-[10px] text-slate-500">5-digit dial baseline</span>
                   </div>
 
                   <div className="bg-slate-950 border border-blue-500/30 rounded-2xl p-3.5 space-y-1">
@@ -3600,9 +3629,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       Present Reading
                     </span>
                     <span className="text-lg font-black font-mono tabular-nums text-white block">
-                      {spotlightReading.presentReading ?? spotlightReading.currentReading} m³
+                      {formatOdometerReading(spotlightReading.presentReading ?? spotlightReading.currentReading)}
                     </span>
-                    <span className="text-[10px] text-blue-400 font-medium">Recorded at inspection</span>
+                    <span className="text-[10px] text-blue-400 font-medium">5-digit dial at inspection</span>
                   </div>
 
                   <div className="bg-slate-950 border border-sky-500/30 rounded-2xl p-3.5 space-y-1">
@@ -3613,7 +3642,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       {spotlightReading.consumption} m³
                     </span>
                     <span className="text-[10px] text-sky-400/80 font-mono tabular-nums font-medium">
-                      Index {spotlightReading.currentReading} m³ · Net used
+                      Dial {formatOdometerReading(spotlightReading.currentReading)} · Net used
                     </span>
                   </div>
 
@@ -3735,7 +3764,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       Current Consumption
                     </span>
                     <span className="text-[11px] font-mono tabular-nums text-slate-500 block mt-0.5">
-                      Prev {prevReadingVal} → Pres {presReadingVal} m³
+                      Dial {formatOdometerReading(prevReadingVal)} → {formatOdometerReading(presReadingVal)}
                     </span>
                   </div>
                   <div className="p-2 bg-blue-500/15 text-blue-400 border border-blue-500/20 rounded-xl">
@@ -3778,7 +3807,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       Latest Meter Reading
                     </span>
                     <span className="text-[11px] font-mono tabular-nums text-sky-400/90 block mt-0.5">
-                      Baseline: {prevReadingVal} m³
+                      Baseline Dial: {formatOdometerReading(prevReadingVal)}
                     </span>
                   </div>
                   <div className="p-2 bg-sky-500/15 text-sky-400 border border-sky-500/20 rounded-xl">
@@ -3788,9 +3817,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 <div>
                   <div className="flex items-baseline space-x-2">
                     <span className="text-3xl font-black text-white font-mono tabular-nums">
-                      {currReadingVal}
+                      {formatOdometerReading(currReadingVal)}
                     </span>
-                    <span className="text-xs font-semibold text-slate-400">m³ Index</span>
+                    <span className="text-xs font-semibold text-slate-400">5-Digit Dial</span>
                   </div>
                   <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1 font-medium">
                     <span>
@@ -3987,9 +4016,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     </div>
                     <div className="flex items-baseline space-x-2">
                       <span className="text-2xl font-black font-mono tabular-nums text-slate-200">
-                        {prevReadingVal}
+                        {formatOdometerReading(prevReadingVal)}
                       </span>
-                      <span className="text-xs font-semibold text-slate-400">m³</span>
+                      <span className="text-xs font-semibold text-slate-400">Dial (00000–99999)</span>
                     </div>
                     <p className="text-[11px] text-slate-500 leading-snug">
                       {previousMonthRead
@@ -4010,9 +4039,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     </div>
                     <div className="flex items-baseline space-x-2">
                       <span className="text-2xl font-black font-mono tabular-nums text-white">
-                        {presReadingVal}
+                        {formatOdometerReading(presReadingVal)}
                       </span>
-                      <span className="text-xs font-semibold text-slate-400">m³</span>
+                      <span className="text-xs font-semibold text-slate-400">Dial (00000–99999)</span>
                     </div>
                     <p className="text-[11px] text-slate-400 leading-snug">
                       {latestRead
@@ -4028,7 +4057,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         Current Reading & Usage
                       </span>
                       <span className="text-[11px] font-mono tabular-nums font-semibold text-sky-300">
-                        Dial: {currReadingVal} m³
+                        Dial: {formatOdometerReading(currReadingVal)}
                       </span>
                     </div>
                     <div className="flex items-baseline justify-between gap-2">
@@ -4039,7 +4068,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         <span className="text-xs font-semibold text-slate-300">m³ used</span>
                       </div>
                       <span className="text-[11px] font-mono tabular-nums text-slate-400">
-                        {presReadingVal} − {prevReadingVal} = {currentConsumptionVal} m³
+                        {isOdometerRollover
+                          ? `Rollover ${formatOdometerReading(prevReadingVal)} → ${formatOdometerReading(presReadingVal)} = ${currentConsumptionVal} m³`
+                          : `${formatOdometerReading(presReadingVal)} − ${formatOdometerReading(prevReadingVal)} = ${currentConsumptionVal} m³`}
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-400 leading-snug">
@@ -4077,14 +4108,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         : previousMonthRead
                         ? `Compared to ${previousMonthRead.billingPeriod} (${previousMonthRead.consumption} m³), usage changed by ${consumptionDiff > 0 ? `+${consumptionDiff}` : consumptionDiff} m³.`
                         : latestRead
-                        ? `Baseline ${prevReadingVal} m³ → Present ${presReadingVal} m³ verified with normal consumption.`
+                        ? `Baseline Dial ${formatOdometerReading(prevReadingVal)} → Present Dial ${formatOdometerReading(presReadingVal)} verified with normal consumption.`
                         : 'Previous baseline will automatically chain forward when your meter is read.'}
                     </span>
                   </div>
 
                   {pendingInspectionRead && (
                     <div className="text-[11px] font-mono tabular-nums text-amber-300 bg-amber-950/40 border border-amber-700/40 rounded-xl px-3 py-1.5 shrink-0">
-                      New Field Inspection Logged ({pendingInspectionRead.previousReading} → {pendingInspectionRead.presentReading ?? pendingInspectionRead.currentReading} m³ · {pendingInspectionRead.consumption} m³) — Awaiting Admin Approval
+                      New Field Inspection Logged (Dial {formatOdometerReading(pendingInspectionRead.previousReading)} → {formatOdometerReading(pendingInspectionRead.presentReading ?? pendingInspectionRead.currentReading)} · {pendingInspectionRead.consumption} m³) — Awaiting Admin Approval
                     </div>
                   )}
                 </div>
@@ -4642,7 +4673,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           </div>
                           <div className="flex justify-between items-baseline text-xs">
                             <span className="text-slate-400 font-mono tabular-nums text-[11px]">
-                              Prev {r.previousReading} → Pres {presVal} m³
+                              Dial {formatOdometerReading(r.previousReading)} → {formatOdometerReading(presVal)}
                             </span>
                             <span className="font-mono tabular-nums font-black text-sky-400 text-sm">
                               {r.consumption} m³
@@ -4691,6 +4722,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     r.readingDate,
                     r.meterNumber,
                     r.paymentStatus || 'unpaid',
+                    formatOdometerReading(r.previousReading),
+                    formatOdometerReading(r.presentReading ?? r.currentReading),
                     `${r.consumption} m3`,
                     calculateCostOf(r, consumerRecord?.consumerType).toFixed(2)
                   ])
@@ -4859,7 +4892,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <thead className="bg-slate-950 text-slate-300 font-black uppercase text-[11px] tracking-wider border-b border-slate-800 select-none">
                         <tr>
                           <th className="px-4 py-3.5 whitespace-nowrap">Billing Period</th>
-                          <th className="px-3.5 py-3.5 whitespace-nowrap">Index (m³)</th>
+                          <th className="px-3.5 py-3.5 whitespace-nowrap">Odometer Dial</th>
                           <th className="px-3.5 py-3.5 whitespace-nowrap text-right">Usage</th>
                           <th className="px-3.5 py-3.5 whitespace-nowrap text-right">Gross Bill</th>
                           <th className="px-3.5 py-3.5 whitespace-nowrap text-right">Paid / Credit</th>
@@ -4938,10 +4971,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             {/* Meter Readings Index (Previous -> Present) */}
                             <td className="px-3.5 py-3.5 whitespace-nowrap font-mono tabular-nums text-slate-300 font-medium">
                               <div className="truncate">
-                                <span className="text-slate-400">{r.previousReading}</span> → <strong className="text-white font-bold">{r.presentReading ?? r.currentReading}</strong>
+                                <span className="text-slate-400">{formatOdometerReading(r.previousReading)}</span> → <strong className="text-white font-bold">{formatOdometerReading(r.presentReading ?? r.currentReading)}</strong>
                               </div>
                               <span className="text-[10px] text-slate-500 block truncate">
-                                Dial: {r.currentReading} m³
+                                Dial: {formatOdometerReading(r.currentReading)}
                               </span>
                             </td>
 
@@ -5381,7 +5414,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           {totalVol} m³
                         </span>
                         <span className="text-[11px] text-slate-500 mt-0.5 block font-mono tabular-nums">
-                          Latest Index: {currReadingVal} m³
+                          Latest Dial: {formatOdometerReading(currReadingVal)}
                         </span>
                       </div>
                       <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
@@ -5399,7 +5432,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           {peakVol} m³
                         </span>
                         <span className="text-[11px] text-slate-500 mt-0.5 block font-mono tabular-nums">
-                          Baseline Now: {prevReadingVal} → {presReadingVal} m³
+                          Dial Now: {formatOdometerReading(prevReadingVal)} → {formatOdometerReading(presReadingVal)}
                         </span>
                       </div>
                       <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
@@ -5450,7 +5483,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
                                     <span className="font-bold text-white">{cycleRead.billingPeriod || cycleRead.readingDate}</span>
                                     <span className="text-[11px] font-mono tabular-nums text-slate-400">
-                                      Prev {cycleRead.previousReading} → Pres {presIndex} m³
+                                      Dial {formatOdometerReading(cycleRead.previousReading)} → {formatOdometerReading(presIndex)}
                                     </span>
                                     {spikeFlag && (
                                       <span className="text-[11px] font-semibold text-rose-400">
@@ -5500,6 +5533,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   r.previousReading,
                   r.presentReading ?? r.currentReading,
                   r.currentReading,
+                  formatOdometerReading(r.previousReading),
+                  formatOdometerReading(r.presentReading ?? r.currentReading),
+                  formatOdometerReading(r.currentReading),
                   r.status,
                   r.meterReaderName,
                   r.notes
@@ -5574,17 +5610,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   </span>
                                 </td>
                                 <td className="px-5 py-4 font-mono tabular-nums">
-                                  <span className="text-slate-200 font-bold text-sm">{r.previousReading} m³</span>
-                                  <span className="text-[10px] text-slate-500 block">Prior baseline</span>
+                                  <span className="text-slate-200 font-bold text-sm">{formatOdometerReading(r.previousReading)}</span>
+                                  <span className="text-[10px] text-slate-500 block">Prior 5-digit dial</span>
                                 </td>
                                 <td className="px-5 py-4 font-mono tabular-nums">
-                                  <span className="text-white font-bold text-sm">{presIndex} m³</span>
-                                  <span className="text-[10px] text-blue-400/90 block">Inspection index</span>
+                                  <span className="text-white font-bold text-sm">{formatOdometerReading(presIndex)}</span>
+                                  <span className="text-[10px] text-blue-400/90 block">Inspection 5-digit dial</span>
                                 </td>
                                 <td className="px-5 py-4 font-mono tabular-nums">
                                   <div className="flex items-baseline gap-2">
                                     <span className="font-black text-sky-400 text-sm">{r.consumption} m³</span>
-                                    <span className="text-[11px] text-slate-400">(Index {r.currentReading})</span>
+                                    <span className="text-[11px] text-slate-400">(Dial {formatOdometerReading(r.currentReading)})</span>
                                   </div>
                                   {diffVsOlder !== null ? (
                                     <span className={`text-[10px] font-semibold block mt-0.5 ${
@@ -7049,9 +7085,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     {consumerRecord?.consumerType === 'Commercial' ? (
                       <>
                         <tr className="bg-blue-950/40">
-                          <td className="py-2.5 px-4 font-bold text-white">Lifeline Minimum Base</td>
+                          <td className="py-2.5 px-4 font-bold text-white">Official Baseline Rate</td>
                           <td className="py-2.5 px-4 text-slate-400 font-mono">1 – 10 m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono font-bold text-blue-400">₱{activeTariff.commercial.baseMinCharge.toFixed(2)} (Flat)</td>
+                          <td className="py-2.5 px-4 text-right font-mono font-bold text-blue-400">₱{getEffectiveRatePerM3('Commercial', activeTariff).toFixed(2)} / m³</td>
                         </tr>
                         <tr className="hover:bg-slate-850">
                           <td className="py-2.5 px-4">Tier 1: Incremental</td>
@@ -7082,9 +7118,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     ) : (
                       <>
                         <tr className="bg-emerald-950/40">
-                          <td className="py-2.5 px-4 font-bold text-white">Lifeline Minimum Base</td>
+                          <td className="py-2.5 px-4 font-bold text-white">Official Baseline Rate</td>
                           <td className="py-2.5 px-4 text-slate-400 font-mono">1 – 10 m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono font-bold text-emerald-400">₱{activeTariff.residential.baseMinCharge.toFixed(2)} (Flat)</td>
+                          <td className="py-2.5 px-4 text-right font-mono font-bold text-emerald-400">₱{getEffectiveRatePerM3('Residential', activeTariff).toFixed(2)} / m³</td>
                         </tr>
                         <tr className="hover:bg-slate-850">
                           <td className="py-2.5 px-4">Tier 1: Incremental</td>
@@ -7112,9 +7148,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 </table>
               </div>
 
-              <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 font-mono">
-                <span>Statutory Franchise Tax: <strong className="text-slate-200">{(activeTariff.franchiseTaxRate * 100).toFixed(0)}%</strong></span>
-                <span>Late Payment Surcharge: <strong className="text-slate-200">{(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}%</strong></span>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400 pt-1 font-mono">
+                <span>Residential: <strong className="text-emerald-400">₱{getEffectiveRatePerM3('Residential', activeTariff).toFixed(2)}/m³</strong> • Commercial: <strong className="text-blue-400">₱{getEffectiveRatePerM3('Commercial', activeTariff).toFixed(2)}/m³</strong></span>
+                <span>Franchise Tax: <strong className="text-slate-200">{(activeTariff.franchiseTaxRate * 100).toFixed(0)}%</strong> • Late Penalty: <strong className="text-slate-200">{(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}%</strong></span>
               </div>
             </div>
 
@@ -7569,7 +7605,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <span>
                         <span className="text-slate-400">Readings: </span>
                         <strong className="font-mono tabular-nums text-sky-300">
-                          {linkedReading.previousReading} → {linkedReading.presentReading ?? linkedReading.currentReading} m³ ({linkedReading.consumption} m³)
+                          {formatOdometerReading(linkedReading.previousReading)} → {formatOdometerReading(linkedReading.presentReading ?? linkedReading.currentReading)} ({linkedReading.consumption} m³)
                         </strong>
                       </span>
                     )}
@@ -8035,15 +8071,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                 <div className="grid grid-cols-3 gap-3">
                   <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
-                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Previous Index</span>
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Previous Dial</span>
                     <span className="text-base font-mono tabular-nums font-black text-slate-200 mt-0.5 block">
-                      {r.previousReading} m³
+                      {formatOdometerReading(r.previousReading)}
                     </span>
                   </div>
                   <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
-                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Present Index</span>
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Present Dial</span>
                     <span className="text-base font-mono tabular-nums font-black text-white mt-0.5 block">
-                      {presIdx} m³
+                      {formatOdometerReading(presIdx)}
                     </span>
                   </div>
                   <div className="bg-slate-950 border border-sky-800/60 rounded-xl p-3">

@@ -35,9 +35,15 @@ import {
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Consumer, MeterReading, WaterMeter, Barangay, MeterReader, User } from '../../types';
-import { calculateWaterTariff } from '../../utils/tariffCalculator';
+import {
+  calculateWaterTariff,
+  calculateFranchiseTax,
+  getEffectiveRatePerM3,
+  getReadingTotalAssessment
+} from '../../utils/tariffCalculator';
 import { SmartSearchBar } from '../common/SmartSearchBar';
 import { smartMatch } from '../../utils/smartSearch';
+import { computeOdometerConsumption, formatOdometerReading } from '../../utils/odometer';
 
 interface OfficialReportsGeneratorProps {
   consumers: Consumer[];
@@ -366,7 +372,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
 
       const m3 = Math.max(0, Number(r.consumption) || 0);
       const classification = r.classification || 'Residential';
-      const billAmt = calculateWaterTariff(m3, classification);
+      const billAmt = getReadingTotalAssessment(r, classification === 'Commercial' ? 'Commercial' : 'Residential').totalBeforeDue;
       const isPaid = r.paymentStatus === 'paid';
       const paidAmt = isPaid ? (r.paidAmount || billAmt) : (r.paidAmount || 0);
       const pendingAmt = isPaid ? 0 : Math.max(0, billAmt - paidAmt);
@@ -516,7 +522,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
         };
       }
       const m3 = Math.max(0, Number(rdg.consumption) || 0);
-      const bAmt = calculateWaterTariff(m3, rdg.classification || 'Residential');
+      const bAmt = getReadingTotalAssessment(rdg, rdg.classification === 'Commercial' ? 'Commercial' : 'Residential').totalBeforeDue;
       const isPaid = rdg.paymentStatus === 'paid';
       const pAmt = isPaid ? bAmt : (rdg.paidAmount || 0);
       const pend = isPaid ? 0 : Math.max(0, bAmt - pAmt);
@@ -590,7 +596,8 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
         if (selectedReader !== 'All' && reader.toLowerCase() !== selectedReader.toLowerCase()) return;
 
         const estM3 = cType === 'Commercial' ? 38.0 : 19.5;
-        const estBill = calculateWaterTariff(estM3, cType);
+        const estBasic = calculateWaterTariff(estM3, cType === 'Commercial' ? 'Commercial' : 'Residential');
+        const estBill = Math.round((estBasic + calculateFranchiseTax(estBasic)) * 100) / 100;
         const expColl = Math.round(estBill * 0.95);
         const reason = obstacleReasons[(seed * 7) % obstacleReasons.length];
         const days = 3 + (seed % 4);
@@ -677,7 +684,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
       }
 
       const m3 = Math.max(0, Number(r.consumption) || 0);
-      const bAmt = calculateWaterTariff(m3, r.classification || 'Residential');
+      const bAmt = getReadingTotalAssessment(r, r.classification === 'Commercial' ? 'Commercial' : 'Residential').totalBeforeDue;
       const isFlagged = r.status === 'flagged_abnormal' || m3 > 45 || (r.previousReading > 0 && m3 === 0);
 
       dayMap[groupKey].actualRead += 1;
@@ -790,13 +797,20 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
   // 4. BILLING EXPORT & PREPARATION LEDGER COMPUTATION
   const billingPrepData = useMemo(() => {
     const list = aggregatedData.periodReadings.map((r, idx) => {
-      const m3 = Math.max(0, Number(r.consumption) || 0);
+      const odo = computeOdometerConsumption(
+        r.previousReading ?? 0,
+        r.presentReading ?? r.currentReading ?? (r.previousReading || 0) + (Number(r.consumption) || 0),
+        r.consumption
+      );
+      const m3 = odo.consumption;
       const cType = r.classification || 'Residential';
-      const baseCharge = 245.00;
-      const fullTariff = calculateWaterTariff(m3, cType);
-      const commodityCharge = Math.max(0, fullTariff - baseCharge);
-      const franchiseFee = Number((fullTariff * 0.02).toFixed(2));
-      const currentBilled = fullTariff + franchiseFee;
+      const normClass: 'Residential' | 'Commercial' = cType === 'Commercial' ? 'Commercial' : 'Residential';
+      const ratePerM3 = getEffectiveRatePerM3(normClass);
+      const baseCharge = Math.round(Math.min(m3, 10) * ratePerM3 * 100) / 100;
+      const fullTariff = calculateWaterTariff(m3, normClass);
+      const commodityCharge = Math.max(0, Math.round((fullTariff - baseCharge) * 100) / 100);
+      const franchiseFee = calculateFranchiseTax(fullTariff);
+      const currentBilled = Math.round((fullTariff + franchiseFee) * 100) / 100;
       
       const consumer = consumers.find(c => c.accountNumber === r.accountNumber);
       const priorArrears = consumer?.outstandingBalance || 0;
@@ -811,8 +825,8 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
         barangay: getRecordBarangay(r),
         sitio: consumer?.sitioZone || 'Zone 1',
         rateClass: cType,
-        previousReading: r.previousReading || 0,
-        currentReading: r.currentReading || (r.previousReading || 0) + m3,
+        previousReading: odo.previousReading,
+        currentReading: odo.currentReading,
         consumption: m3,
         baseCharge,
         commodityCharge,
@@ -847,12 +861,12 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
       'Item No',
       'Account Number',
       'Consumer Name',
-      'Meter Serial Number',
+      'Meter Tag Number',
       'Barangay',
       'Sitio/Zone',
       'Rate Classification',
-      'Previous Reading (m3)',
-      'Current Reading (m3)',
+      'Previous Dial (00000-99999)',
+      'Current Dial (00000-99999)',
       'Consumption (m3)',
       'Base Charge (PHP)',
       'Commodity Charge (PHP)',
@@ -872,8 +886,8 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
       `"${b.barangay}"`,
       `"${b.sitio}"`,
       `"${b.rateClass}"`,
-      b.previousReading,
-      b.currentReading,
+      `"${formatOdometerReading(b.previousReading)}"`,
+      `"${formatOdometerReading(b.currentReading)}"`,
       b.consumption,
       b.baseCharge.toFixed(2),
       b.commodityCharge.toFixed(2),
@@ -1117,7 +1131,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
         ]);
       } else if (reportCategory === 'unread_meter') {
         tableHeaders = [
-          ['ACCOUNT #', 'CONSUMER NAME', 'METER SERIAL #', 'BARANGAY & ADDRESS', 'CLASS', 'ASSIGNED READER', 'DAYS PENDING', 'FIELD OBSTACLE / REASON', 'EST. m³', 'EST. BILLED (PHP)', 'EXP. COLLECTED (PHP)', 'ACTION REQUIRED']
+          ['ACCOUNT #', 'CONSUMER NAME', 'METER TAG #', 'BARANGAY & ADDRESS', 'CLASS', 'ASSIGNED READER', 'DAYS PENDING', 'FIELD OBSTACLE / REASON', 'EST. m³', 'EST. BILLED (PHP)', 'EXP. COLLECTED (PHP)', 'ACTION REQUIRED']
         ];
         tableRows = unreadMetersData.unreadList.map(u => [
           u.accountNumber,
@@ -1190,8 +1204,8 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
           b.meterNumber,
           b.barangay,
           b.rateClass,
-          b.previousReading.toString(),
-          b.currentReading.toString(),
+          formatOdometerReading(b.previousReading),
+          formatOdometerReading(b.currentReading),
           `${b.consumption} m³`,
           `PHP ${b.baseCharge.toFixed(2)}`,
           `PHP ${b.commodityCharge.toFixed(2)}`,
@@ -2077,7 +2091,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                   <tr>
                     <th className="px-4 py-3.5 border-r border-slate-800">Account #</th>
                     <th className="px-4 py-3.5 border-r border-slate-800">Consumer Name</th>
-                    <th className="px-4 py-3.5 border-r border-slate-800">Meter Serial #</th>
+                    <th className="px-4 py-3.5 border-r border-slate-800">Meter Tag #</th>
                     <th className="px-4 py-3.5 border-r border-slate-800">Barangay & Address</th>
                     <th className="px-4 py-3.5 text-center border-r border-slate-800">Classification</th>
                     <th className="px-4 py-3.5 border-r border-slate-800">Assigned Reader</th>
@@ -2331,7 +2345,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                     <th className="px-3 py-3.5 border-r border-slate-800 text-center">#</th>
                     <th className="px-4 py-3.5 border-r border-slate-800">Account #</th>
                     <th className="px-4 py-3.5 border-r border-slate-800">Consumer Name</th>
-                    <th className="px-4 py-3.5 border-r border-slate-800">Meter Serial #</th>
+                    <th className="px-4 py-3.5 border-r border-slate-800">Meter Tag #</th>
                     <th className="px-4 py-3.5 border-r border-slate-800">Barangay</th>
                     <th className="px-3 py-3.5 text-center border-r border-slate-800">Class</th>
                     <th className="px-3 py-3.5 text-right border-r border-slate-800">Prev Dial</th>
@@ -2356,6 +2370,8 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                         b.barangay,
                         b.sitio,
                         b.rateClass,
+                        formatOdometerReading(b.previousReading),
+                        formatOdometerReading(b.currentReading),
                         b.status
                       ])
                     )
@@ -2373,8 +2389,8 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                             {b.rateClass.slice(0, 3)}
                           </span>
                         </td>
-                        <td className="px-3 py-3 text-right font-mono text-slate-400 border-r border-slate-800">{b.previousReading}</td>
-                        <td className="px-3 py-3 text-right font-mono text-slate-200 border-r border-slate-800">{b.currentReading}</td>
+                        <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-400 border-r border-slate-800">{formatOdometerReading(b.previousReading)}</td>
+                        <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-200 border-r border-slate-800">{formatOdometerReading(b.currentReading)}</td>
                         <td className="px-3 py-3 text-right font-mono font-black text-blue-400 border-r border-slate-800">{b.consumption} m³</td>
                         <td className="px-3 py-3 text-right font-mono text-slate-400 border-r border-slate-800">₱{b.baseCharge.toFixed(2)}</td>
                         <td className="px-3 py-3 text-right font-mono text-slate-400 border-r border-slate-800">₱{b.commodityCharge.toFixed(2)}</td>
@@ -3064,7 +3080,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                         <tr>
                           <th className="px-2 py-2 border border-slate-700 truncate">Account #</th>
                           <th className="px-2 py-2 border border-slate-700 truncate">Consumer Name</th>
-                          <th className="px-2 py-2 border border-slate-700 truncate">Meter Serial</th>
+                          <th className="px-2 py-2 border border-slate-700 truncate">Meter Tag #</th>
                           <th className="px-2 py-2 border border-slate-700 truncate">Barangay Zone</th>
                           <th className="px-2 py-2 border border-slate-700 truncate">Reason Obstacle</th>
                           <th className="px-2 py-2 text-right border border-slate-700 truncate">Est. m³</th>
@@ -3189,7 +3205,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                           <th className="px-1.5 py-2 text-center border border-slate-700">#</th>
                           <th className="px-2 py-2 border border-slate-700 truncate">Account #</th>
                           <th className="px-2 py-2 border border-slate-700 truncate">Consumer Name</th>
-                          <th className="px-2 py-2 border border-slate-700 truncate">Meter Serial</th>
+                          <th className="px-2 py-2 border border-slate-700 truncate">Meter Tag #</th>
                           <th className="px-2 py-2 border border-slate-700 truncate">Barangay</th>
                           <th className="px-2 py-2 text-right border border-slate-700 truncate">Usage</th>
                           <th className="px-2 py-2 text-right border border-slate-700 truncate">Billed (₱)</th>

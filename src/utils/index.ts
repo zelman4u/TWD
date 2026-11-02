@@ -10,7 +10,9 @@
  * and statistical aggregation tools.
  */
 
+export * from './odometer';
 export * from './tariffCalculator';
 export * from './phoneValidation';
 export * from './identifierValidation';
 export * from './analytics';
+

@@ -55,6 +55,7 @@ import {
   compareUsersCanonical,
   ensureMeterSerialNumber,
 } from '../utils/canonicalSort';
+import { computeOdometerConsumption, normalizeOdometerReading } from '../utils/odometer';
 import { STANDARD_BARANGAYS } from '../constants';
 
 export enum OperationType {
@@ -1102,7 +1103,9 @@ export function startRealtimeFirestoreListeners() {
                 completionDate: primary.completionDate || secondary.completionDate,
                 installationRequestId: primary.installationRequestId || secondary.installationRequestId,
                 applicationNumber: primary.applicationNumber || secondary.applicationNumber,
-                lastReadingValue: Math.max(Number(prev.lastReadingValue || 0), Number(cm.lastReadingValue || 0)),
+                lastReadingValue: normalizeOdometerReading(
+                  primary.lastReadingValue ?? secondary.lastReadingValue ?? 0
+                ),
               });
               meterMap.set(key, mergedMeter);
             }
@@ -1168,8 +1171,17 @@ export function startRealtimeFirestoreListeners() {
               const maxPaid = Math.max(Number(lr.paidAmount || 0), Number(cr.paidAmount || 0));
               const effBillAmt = Number(billedSrc.billAmount || altSrc.billAmount || 0) || base.billAmount;
               const effTotalAmt = Number(billedSrc.totalAmount || altSrc.totalAmount || effBillAmt || 0) || base.totalAmount;
+              const odoMerged = computeOdometerConsumption(
+                base.previousReading,
+                base.currentReading ?? base.presentReading,
+                base.consumption
+              );
               mergedMap.set(lr.id, {
                 ...base,
+                previousReading: odoMerged.previousReading,
+                presentReading: odoMerged.currentReading,
+                currentReading: odoMerged.currentReading,
+                consumption: odoMerged.consumption,
                 ...(typeof mergedBillingIssued === 'boolean' ? { isBillingIssued: mergedBillingIssued } : {}),
                 status:
                   lrStatusStr === 'cancelled' || crStatusStr === 'cancelled'
@@ -1458,7 +1470,12 @@ export function startRealtimeFirestoreListeners() {
       (snap) => {
         if (snap.exists()) {
           const cloudCfg = snap.data() as Record<string, any>;
-          if (cloudCfg && cloudCfg.residential && cloudCfg.commercial) {
+          if (
+            cloudCfg &&
+            cloudCfg.baselineSchema === 'twd_per_m3_v2' &&
+            cloudCfg.residential &&
+            cloudCfg.commercial
+          ) {
             try {
               const localRaw = localStorage.getItem(KEYS.TARIFF_CONFIG);
               const localCfg = localRaw ? JSON.parse(localRaw) : null;

@@ -26,7 +26,12 @@ import {
   X
 } from 'lucide-react';
 import { Announcement } from '../types';
-import { calculateWaterTariff } from '../utils/tariffCalculator';
+import {
+  calculateWaterTariff,
+  calculateFranchiseTax,
+  calculateLatePenalty,
+  getEffectiveRatePerM3,
+} from '../utils/tariffCalculator';
 import { sanitizeAnnouncements } from '../utils/announcementSanitizer';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
 import { useToast } from '../context/ToastContext';
@@ -47,7 +52,14 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
   // Local Bill Calculator State
   const [calcType, setCalcType] = useState<'Residential' | 'Commercial'>('Residential');
   const [calcUsage, setCalcUsage] = useState<number>(15);
-  const [calculatedBill, setCalculatedBill] = useState<number | null>(null);
+  const [calculatedBill, setCalculatedBill] = useState<{
+    ratePerM3: number;
+    basicCharge: number;
+    franchiseTax: number;
+    totalBeforeDue: number;
+    latePenalty: number;
+    amountAfterDue: number;
+  } | null>(null);
 
   // Customer Service Contact Form State
   const [contactName, setContactName] = useState('');
@@ -56,7 +68,20 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
   const [contactSent, setContactSent] = useState(false);
 
   const calculateWaterBill = (usage: number, type: 'Residential' | 'Commercial') => {
-    return calculateWaterTariff(usage, type);
+    const ratePerM3 = getEffectiveRatePerM3(type);
+    const basicCharge = calculateWaterTariff(usage, type);
+    const franchiseTax = calculateFranchiseTax(basicCharge);
+    const totalBeforeDue = Math.round((basicCharge + franchiseTax) * 100) / 100;
+    const latePenalty = calculateLatePenalty(basicCharge);
+    const amountAfterDue = Math.round((totalBeforeDue + latePenalty) * 100) / 100;
+    return {
+      ratePerM3,
+      basicCharge,
+      franchiseTax,
+      totalBeforeDue,
+      latePenalty,
+      amountAfterDue,
+    };
   };
 
   const handleCalculate = (e: React.FormEvent) => {
@@ -96,7 +121,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
     },
     {
       q: "How are the water tariff calculations calculated?",
-      a: "0 m³ consumption (initial baseline reading) costs ₱0.00. The first 10 m³ has a fixed price of ₱10.00. For consumption exceeding 10 m³, ₱2.00 is added for every 10 m³ overlap: 11–20 m³ is ₱12.00/m³, 21–30 m³ is ₱14.00/m³, 31–40 m³ is ₱16.00/m³, and so forth."
+      a: "0 m³ consumption (initial baseline reading) costs ₱0.00. Official baseline rates per cubic meter are ₱10.00/m³ for Residential accounts and ₱25.00/m³ for Commercial accounts, plus a mandatory 2% Local Franchise Tax. Accounts paid after the monthly due date incur a 10% late payment penalty on the basic water charge."
     }
   ];
 
@@ -356,18 +381,18 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                 <div className="space-y-4">
                   <div className="bg-slate-950/80 rounded-xl p-4 border border-slate-800">
                     <div className="flex justify-between items-center text-xs text-slate-400 mb-1">
-                      <span>Recent Meter Reading</span>
+                      <span>Recent Meter Reading (5-Digit Dial)</span>
                       <span className="font-semibold text-emerald-400">Verified</span>
                     </div>
                     <div className="flex items-baseline justify-between">
-                      <p className="text-xl font-bold font-mono text-slate-100">244.5 m³</p>
+                      <p className="text-xl font-bold font-mono tabular-nums tracking-wider text-slate-100">00245</p>
                       <span className="text-xs font-bold text-slate-400">MTR: MT-7711</span>
                     </div>
                   </div>
 
                   <div className="p-4 bg-blue-950/40 rounded-xl border border-blue-900/60">
                     <div className="flex justify-between items-center text-xs text-slate-300 mb-1">
-                      <span>June 2026 Estimated Tariff</span>
+                      <span>Official Residential Baseline Estimate</span>
                       <span className="text-blue-400 font-bold hover:underline cursor-pointer flex items-center" onClick={() => {
                         const elem = document.getElementById('calculator');
                         if (elem) elem.scrollIntoView({ behavior: 'smooth' });
@@ -375,7 +400,17 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                         Calculate <ChevronRight className="h-3 w-3 inline" />
                       </span>
                     </div>
-                    <p className="text-2xl font-black text-blue-400">₱280.00 <span className="text-xs font-normal text-slate-400">for 15 m³</span></p>
+                    {(() => {
+                      const heroSample = calculateWaterBill(15, 'Residential');
+                      return (
+                        <p className="text-2xl font-black font-mono tabular-nums text-blue-400">
+                          ₱{heroSample.totalBeforeDue.toFixed(2)}{' '}
+                          <span className="text-xs font-sans font-normal text-slate-400">
+                            for 15 m³ @ ₱{heroSample.ratePerM3.toFixed(0)}/m³ (incl. 2% tax)
+                          </span>
+                        </p>
+                      );
+                    })()}
                   </div>
 
                   {/* Operational Quality Bulletins */}
@@ -403,71 +438,71 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
       {/* Official District Profile, Mission, Vision, Core Values & Org Structure */}
       <DistrictProfileSection id="profile" isDarkTheme={true} />
 
-      {/* Services Information & Live Tariff Table */}
+      {/* Services Information & Official Baseline Tariff Schedule */}
       <section id="services" className="py-20 bg-slate-900/50 border-t border-slate-800">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
             <div className="lg:col-span-5 space-y-6">
-              <h4 className="text-xs font-bold text-blue-400 uppercase tracking-widest">Pricing Structure</h4>
+              <h4 className="text-xs font-bold text-blue-400 uppercase tracking-widest">Official Price Baseline</h4>
               <h3 className="text-3xl font-extrabold text-slate-100 leading-tight">
-                Transparent Tariff Schedules
+                Official Water Tariff Schedule
               </h3>
               <p className="text-slate-300 leading-relaxed text-sm">
-                Tagoloan Water District utilizes a fair progressive water tariff schedule. Initial base readings (0 m³) incur ₱0.00 charge. The first 10 cubic meters are billed at a fixed foundational rate, with tiered increments applied for each 10 m³ overlap block.
+                Tagoloan Water District implements a clear, straightforward per-cubic-meter tariff schedule for all metered connections. Initial baseline readings (0 m³) incur ₱0.00 charge, with statutory Franchise Tax (2%) and Late Payment Penalty (10% after due date) applied uniformly.
               </p>
 
               <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-sm space-y-3">
                 <div className="flex items-start space-x-3 text-xs text-slate-300">
                   <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0" />
-                  <span><strong>Baseline Reading:</strong> 0 m³ net consumption = ₱0.00 assessed billing.</span>
+                  <span><strong>Residential Rate:</strong> ₱10.00 per cubic meter (₱10/m³) • 0 m³ = ₱0.00.</span>
                 </div>
                 <div className="flex items-start space-x-3 text-xs text-slate-300">
                   <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0" />
-                  <span><strong>First 10 m³:</strong> Fixed foundational price of ₱10.00 for residential (₱20.00 commercial).</span>
+                  <span><strong>Commercial Rate:</strong> ₱25.00 per cubic meter (₱25/m³) • 0 m³ = ₱0.00.</span>
                 </div>
                 <div className="flex items-start space-x-3 text-xs text-slate-300">
                   <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0" />
-                  <span><strong>Progressive Overlap:</strong> +₱2.00 rate increase per 10 m³ consumption bracket.</span>
+                  <span><strong>Franchise Tax &amp; Late Penalty:</strong> 2% Local Franchise Tax on basic water charge, and 10% penalty if settled after the monthly due date.</span>
                 </div>
               </div>
             </div>
 
             <div className="lg:col-span-7 bg-slate-900 border border-slate-800 shadow-xl rounded-2xl p-6 sm:p-8 space-y-6">
-              <h4 className="text-base font-extrabold text-slate-100">Current Tariff Rates Table</h4>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-base font-extrabold text-slate-100">Official Price Baseline of Meter Readings</h4>
+                <span className="text-xs font-mono text-slate-400">0 m³ Baseline = ₱0.00</span>
+              </div>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm text-left">
                   <thead className="bg-slate-950 text-slate-400 text-xs font-bold uppercase border-b border-slate-800">
                     <tr>
-                      <th className="px-4 py-3">Classification</th>
-                      <th className="px-4 py-3">0 m³ (Base)</th>
-                      <th className="px-4 py-3">1-10 m³ (Fixed)</th>
-                      <th className="px-4 py-3">11-20 m³</th>
-                      <th className="px-4 py-3">21-30 m³</th>
-                      <th className="px-4 py-3">31-40 m³</th>
+                      <th className="px-4 py-3.5">Customer Type</th>
+                      <th className="px-4 py-3.5">Rate per Cubic Meter</th>
+                      <th className="px-4 py-3.5">Franchise Tax</th>
+                      <th className="px-4 py-3.5">Late Penalty</th>
+                      <th className="px-4 py-3.5 text-right">Sample (10 m³)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800 text-slate-200 text-xs font-medium">
                     <tr>
                       <td className="px-4 py-4 font-bold text-slate-100">Residential</td>
-                      <td className="px-4 py-4 text-emerald-400 font-bold">₱0.00</td>
-                      <td className="px-4 py-4">₱10.00 fixed</td>
-                      <td className="px-4 py-4">₱12.00 / m³</td>
-                      <td className="px-4 py-4">₱14.00 / m³</td>
-                      <td className="px-4 py-4">₱16.00 / m³</td>
+                      <td className="px-4 py-4 font-mono tabular-nums font-black text-emerald-400 text-sm">₱10.00 / m³</td>
+                      <td className="px-4 py-4 font-mono tabular-nums text-slate-200">2%</td>
+                      <td className="px-4 py-4 font-mono tabular-nums text-amber-300">10% (after due)</td>
+                      <td className="px-4 py-4 font-mono tabular-nums font-bold text-right text-slate-100">₱102.00</td>
                     </tr>
                     <tr>
                       <td className="px-4 py-4 font-bold text-slate-100">Commercial</td>
-                      <td className="px-4 py-4 text-emerald-400 font-bold">₱0.00</td>
-                      <td className="px-4 py-4">₱20.00 fixed</td>
-                      <td className="px-4 py-4">₱24.00 / m³</td>
-                      <td className="px-4 py-4">₱28.00 / m³</td>
-                      <td className="px-4 py-4">₱32.00 / m³</td>
+                      <td className="px-4 py-4 font-mono tabular-nums font-black text-sky-400 text-sm">₱25.00 / m³</td>
+                      <td className="px-4 py-4 font-mono tabular-nums text-slate-200">2%</td>
+                      <td className="px-4 py-4 font-mono tabular-nums text-amber-300">10% (after due)</td>
+                      <td className="px-4 py-4 font-mono tabular-nums font-bold text-right text-slate-100">₱255.00</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
-              <p className="text-[11px] text-slate-400 italic">
-                * Beyond 40 m³, rate continues to increase by +₱2.00 (or +₱4.00 for commercial) for every additional 10 m³ block.
+              <p className="text-[11px] text-slate-400">
+                * Sample 10 m³ total includes basic water charge (Usage × Rate/m³) plus 2% Franchise Tax. Accounts paid after the due date incur an additional 10% penalty on the basic water charge.
               </p>
             </div>
           </div>
@@ -481,59 +516,71 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
             <div className="absolute top-0 right-0 h-64 w-64 bg-blue-600/10 rounded-full blur-3xl pointer-events-none"></div>
             
             <div className="relative grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
-              <div className="md:col-span-7 space-y-4">
-                <div className="inline-flex items-center space-x-2 bg-blue-500/20 text-blue-300 border border-blue-500/30 px-3 py-1 rounded-full text-xs font-semibold">
-                  <Calculator className="h-3.5 w-3.5" />
-                  <span>Real-time Estimation Utility</span>
+              <div className="md:col-span-6 space-y-4">
+                <div className="flex items-center space-x-2 text-blue-400 text-xs font-bold uppercase tracking-wider">
+                  <Calculator className="h-4 w-4" />
+                  <span>Real-Time Estimation Utility</span>
                 </div>
                 <h3 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-100 font-sans">
                   Forecast Your Monthly Bill
                 </h3>
                 <p className="text-slate-300 text-sm leading-relaxed">
-                  Enter your expected cubic meter (m³) water consumption index below to review how TWD's tiered pricing gets computed. No account required!
+                  Enter your expected cubic meter (m³) water consumption below to compute your exact monthly bill using the official TWD baseline rates (Residential ₱10/m³ · Commercial ₱25/m³), 2% Franchise Tax, and 10% late payment penalty preview.
                 </p>
               </div>
 
-              <div className="md:col-span-5 bg-slate-950/80 backdrop-blur-md rounded-2xl p-6 border border-slate-800 space-y-4">
+              <div className="md:col-span-6 bg-slate-950/80 backdrop-blur-md rounded-2xl p-6 border border-slate-800 space-y-4">
                 <form onSubmit={handleCalculate} className="space-y-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-widest mb-1.5">Connection Type</label>
+                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-widest mb-1.5">Customer Type</label>
                     <div className="grid grid-cols-2 gap-2">
                       <button 
                         type="button"
-                        onClick={() => setCalcType('Residential')}
-                        className={`py-2 rounded-lg text-xs font-bold transition border cursor-pointer ${
+                        onClick={() => {
+                          setCalcType('Residential');
+                          setCalculatedBill(calculateWaterBill(calcUsage, 'Residential'));
+                        }}
+                        className={`py-2 px-3 rounded-lg text-xs font-bold transition border cursor-pointer ${
                           calcType === 'Residential' 
                             ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
                             : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
                         }`}
                       >
-                        Residential
+                        Residential (₱10/m³)
                       </button>
                       <button 
                         type="button"
-                        onClick={() => setCalcType('Commercial')}
-                        className={`py-2 rounded-lg text-xs font-bold transition border cursor-pointer ${
+                        onClick={() => {
+                          setCalcType('Commercial');
+                          setCalculatedBill(calculateWaterBill(calcUsage, 'Commercial'));
+                        }}
+                        className={`py-2 px-3 rounded-lg text-xs font-bold transition border cursor-pointer ${
                           calcType === 'Commercial' 
                             ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
                             : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
                         }`}
                       >
-                        Commercial
+                        Commercial (₱25/m³)
                       </button>
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-widest mb-1.5">Consumption Index (m³)</label>
+                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-widest mb-1.5">Consumption Reading (m³)</label>
                     <div className="relative">
                       <input 
                         type="number"
                         min="0"
-                        max="500"
+                        max="5000"
                         value={calcUsage}
-                        onChange={(e) => setCalcUsage(Number(e.target.value))}
-                        className="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg py-2 pl-3 pr-12 text-sm text-slate-100 font-mono font-bold focus:outline-none"
+                        onChange={(e) => {
+                          const nextVal = Math.max(0, Number(e.target.value) || 0);
+                          setCalcUsage(nextVal);
+                          if (calculatedBill !== null) {
+                            setCalculatedBill(calculateWaterBill(nextVal, calcType));
+                          }
+                        }}
+                        className="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg py-2 pl-3 pr-12 text-sm text-slate-100 font-mono tabular-nums font-bold focus:outline-none"
                         required
                       />
                       <span className="absolute right-3 top-2 text-xs font-bold text-slate-400">m³</span>
@@ -544,15 +591,28 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                     type="submit"
                     className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs uppercase tracking-widest transition shadow-md cursor-pointer"
                   >
-                    Calculate Estimation
+                    Calculate Official Bill
                   </button>
                 </form>
 
                 {calculatedBill !== null && (
-                  <div className="pt-4 border-t border-slate-800 text-center animate-fade-in">
-                    <p className="text-xs text-slate-300">Estimated Monthly Water Bill</p>
-                    <p className="text-3xl font-black text-amber-400 mt-1">₱{calculatedBill.toFixed(2)}</p>
-                    <p className="text-[10px] text-slate-400 mt-1">Computed with progressive 10 m³ block overlap tariff rates.</p>
+                  <div className="pt-4 border-t border-slate-800 space-y-2 text-xs animate-fade-in">
+                    <div className="flex justify-between text-slate-400">
+                      <span>Basic Charge ({calcUsage} m³ × ₱{calculatedBill.ratePerM3.toFixed(2)}/m³):</span>
+                      <span className="font-mono tabular-nums font-bold text-slate-100">₱{calculatedBill.basicCharge.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-400">
+                      <span>Franchise Tax (2%):</span>
+                      <span className="font-mono tabular-nums font-bold text-slate-100">₱{calculatedBill.franchiseTax.toFixed(2)}</span>
+                    </div>
+                    <div className="pt-2 border-t border-slate-800 flex justify-between items-baseline">
+                      <span className="font-bold text-slate-200">Total Amount Due:</span>
+                      <span className="text-2xl font-black font-mono tabular-nums text-amber-400">₱{calculatedBill.totalBeforeDue.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-[11px] text-rose-400 pt-1">
+                      <span>After Due Date (+10% Penalty: ₱{calculatedBill.latePenalty.toFixed(2)}):</span>
+                      <span className="font-mono tabular-nums font-bold">₱{calculatedBill.amountAfterDue.toFixed(2)}</span>
+                    </div>
                   </div>
                 )}
               </div>

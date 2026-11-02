@@ -33,11 +33,14 @@ import {
   calculateLatePenalty, 
   getTariffBreakdown,
   getActiveTariffConfig,
+  getEffectiveRatePerM3,
   getReadingEffectiveBillAmount,
+  getReadingTotalAssessment,
   isOfficialBillIssued,
   DEFAULT_TARIFF_CONFIG,
   WaterTariffConfig
 } from '../../utils/tariffCalculator';
+import { computeOdometerConsumption, formatOdometerReading } from '../../utils/odometer';
 
 export interface BillDetailsProps {
   reading: MeterReading | null;
@@ -62,6 +65,7 @@ export interface ComputedBillBreakdown {
   meterReaderDate: string;
   addressFull: string;
   addressZone: string;
+  ratePerM3: number;
   baseFixedCharge: number;
   tier1Rate: number;
   billAmount: number;
@@ -83,7 +87,11 @@ function resolveScheduleForReading(reading: MeterReading | null, isComm: boolean
   if (reading.appliedTariffVersion !== undefined && reading.appliedTariffVersion <= 1) {
     return DEFAULT_TARIFF_CONFIG;
   }
-  const usage = Math.max(0, reading.consumption ?? ((reading.currentReading || 0) - (reading.previousReading || 0)));
+  const usage = computeOdometerConsumption(
+    reading.previousReading,
+    reading.presentReading ?? reading.currentReading,
+    reading.consumption
+  ).consumption;
   if (reading.billAmount !== undefined) {
     const baselineAmt = calculateWaterTariff(usage, isComm ? 'Commercial' : 'Residential', DEFAULT_TARIFF_CONFIG);
     const activeAmt = calculateWaterTariff(usage, isComm ? 'Commercial' : 'Residential', activeCfg);
@@ -115,38 +123,45 @@ export function computeBillBreakdown(
   const typeAbbrev = isComm ? 'COMM' : 'RES';
   const schedule = resolveScheduleForReading(reading, isComm);
   
-  const previousReading = reading ? Math.max(0, reading.previousReading || 0) : 0;
-  const presentReading = reading ? Math.max(previousReading, reading.presentReading ?? reading.currentReading ?? 0) : 0;
-  const consumption = reading ? Math.max(0, reading.consumption ?? (presentReading - previousReading)) : 0;
+  const odo = reading
+    ? computeOdometerConsumption(
+        reading.previousReading,
+        reading.presentReading ?? reading.currentReading,
+        reading.consumption
+      )
+    : { previousReading: 0, currentReading: 0, consumption: 0, rolledOver: false };
+  const previousReading = odo.previousReading;
+  const presentReading = odo.currentReading;
+  const consumption = odo.consumption;
 
-  // Basic Water Charge (Bill Amt.) — honors locked billAmount or reading's historical tariff
-  const billAmount = reading
-    ? getReadingEffectiveBillAmount(reading, isComm ? 'Commercial' : 'Residential')
-    : 0;
+  const classification: 'Residential' | 'Commercial' = isComm ? 'Commercial' : 'Residential';
+  const ratePerM3 = getEffectiveRatePerM3(classification, schedule);
+  const assessment = reading ? getReadingTotalAssessment(reading, classification) : null;
+
+  // Basic Water Charge (Bill Amt.) — honors official baseline or locked historical paid bill
+  const billAmount = assessment ? assessment.basicCharge : 0;
 
   // 2% Local Franchise Tax
-  const franchiseTax = reading?.franchiseTax !== undefined
-    ? reading.franchiseTax
-    : calculateFranchiseTax(billAmount, schedule);
+  const franchiseTax = assessment ? assessment.franchiseTax : calculateFranchiseTax(billAmount, schedule);
 
   // Arrears (Previous unpaid balance)
-  const arrears = reading?.arrears !== undefined 
-    ? reading.arrears 
+  const arrears = assessment
+    ? assessment.arrears
     : Math.max(0, consumer.outstandingBalance || 0);
 
   // Total current charges = Bill Amt + Franchise Tax + Arrears
-  const totalAmount = reading?.totalAmount !== undefined
-    ? reading.totalAmount
+  const totalAmount = assessment
+    ? assessment.totalBeforeDue
     : Math.round((billAmount + franchiseTax + arrears) * 100) / 100;
 
   // 10% Late penalty surcharge on basic bill amount
-  const latePenaltyAmount = reading?.penaltyAmount !== undefined
-    ? reading.penaltyAmount
+  const latePenaltyAmount = assessment
+    ? assessment.penaltyAmount
     : calculateLatePenalty(billAmount, schedule);
 
   // Amount after due date
-  const amountAfterDueDate = reading?.amountAfterDueDate !== undefined
-    ? reading.amountAfterDueDate
+  const amountAfterDueDate = assessment
+    ? assessment.amountAfterDueDate
     : Math.round((totalAmount + latePenaltyAmount) * 100) / 100;
 
   const paidAmount = reading?.paidAmount || 0;
@@ -171,6 +186,7 @@ export function computeBillBreakdown(
   const meterReaderName = reading?.meterReaderName || 'Authorized Field Officer';
   const meterReaderDate = reading?.readingDate || '—';
   const addressZone = consumer.sitioZone || consumer.barangay || consumer.address || 'Tagoloan Service Area';
+  const baseFixedCharge = Math.round(Math.min(consumption, 10) * ratePerM3 * 100) / 100;
 
   return {
     consumption,
@@ -185,7 +201,8 @@ export function computeBillBreakdown(
     meterReaderDate,
     addressFull: consumer.address || 'Registered Service Address',
     addressZone,
-    baseFixedCharge: isComm ? schedule.commercial.baseMinCharge : schedule.residential.baseMinCharge,
+    ratePerM3,
+    baseFixedCharge,
     tier1Rate: isComm ? schedule.commercial.tier1_rate : schedule.residential.tier1_rate,
     billAmount,
     franchiseTax,
@@ -331,7 +348,7 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
                 {breakdown.consumption} m³
               </span>
               <span className="text-[10px] text-slate-300 font-mono tabular-nums">
-                Prev {breakdown.previousReading} → Pres {breakdown.presentReading} m³
+                Prev {formatOdometerReading(breakdown.previousReading)} → Pres {formatOdometerReading(breakdown.presentReading)}
               </span>
             </div>
           </div>
@@ -525,9 +542,9 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
                 </thead>
                 <tbody>
                   <tr className="font-mono tabular-nums font-bold text-sm text-white print:text-slate-900">
-                    <td className="py-2 text-left">{breakdown.previousReading.toLocaleString()} m³</td>
-                    <td className="py-2 text-center">{breakdown.presentReading.toLocaleString()} m³</td>
-                    <td className="py-2 text-center">{(reading?.currentReading ?? breakdown.presentReading).toLocaleString()} m³</td>
+                    <td className="py-2 text-left">{formatOdometerReading(breakdown.previousReading)}</td>
+                    <td className="py-2 text-center">{formatOdometerReading(breakdown.presentReading)}</td>
+                    <td className="py-2 text-center">{formatOdometerReading(reading?.currentReading ?? breakdown.presentReading)}</td>
                     <td className="py-2 text-right font-black text-sky-400 print:text-blue-700">{breakdown.consumption} m³</td>
                   </tr>
                 </tbody>
@@ -537,7 +554,7 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
             {/* Itemized Financial Charges */}
             <div className="py-3.5 border-b-2 border-dashed border-slate-800 print:border-slate-300 space-y-2 text-xs">
               <div className="flex justify-between text-slate-300 print:text-slate-700">
-                <span className="font-medium">Bill Amount (Bill Amt. - Basic Water Charge):</span>
+                <span className="font-medium">Bill Amount ({breakdown.consumption} m³ @ ₱{breakdown.ratePerM3.toFixed(2)}/m³ Basic Water Charge):</span>
                 <span className="font-mono font-bold text-white print:text-slate-900">₱{breakdown.billAmount.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-slate-300 print:text-slate-700">
@@ -600,15 +617,15 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
                 <div>
                   <h4 className="text-sm font-black text-white">1. Basic Water Charge</h4>
                   <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-                    Minimum service allowance and volumetric consumption for {breakdown.consumption} m³.
+                    Official {breakdown.consumerType} baseline tariff for {breakdown.consumption} m³ consumed.
                   </p>
                 </div>
               </div>
 
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 space-y-2 text-xs">
                 <div className="flex justify-between font-medium text-slate-300">
-                  <span>Minimum (1-10 m³):</span>
-                  <span className="font-mono font-bold text-white">₱{breakdown.baseFixedCharge.toFixed(2)}</span>
+                  <span>Official Rate ({breakdown.typeAbbrev}):</span>
+                  <span className="font-mono font-bold text-white">₱{breakdown.ratePerM3.toFixed(2)} / m³</span>
                 </div>
                 <div className="flex justify-between text-[11px] text-slate-400">
                   <span>Usage Consumed:</span>
@@ -718,8 +735,8 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
             <div className="space-y-3 text-xs">
               <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800 flex justify-between items-center">
                 <div>
-                  <span className="font-bold text-white block">1. Minimum Lifeline Block (1 – 10 m³)</span>
-                  <span className="text-[11px] text-slate-400">Includes readiness-to-serve & initial 10 cu.m</span>
+                  <span className="font-bold text-white block">1. Baseline Consumption (1 – 10 m³)</span>
+                  <span className="text-[11px] text-slate-400">Official {breakdown.consumerType} baseline billed at ₱{breakdown.ratePerM3.toFixed(2)}/m³</span>
                 </div>
                 <span className="font-mono font-bold text-white">₱{breakdown.baseFixedCharge.toFixed(2)}</span>
               </div>

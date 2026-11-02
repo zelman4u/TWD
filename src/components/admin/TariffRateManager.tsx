@@ -32,6 +32,7 @@ import {
 import { 
   WaterTariffConfig, 
   DEFAULT_TARIFF_CONFIG, 
+  OFFICIAL_TARIFF_BASELINE_SCHEMA,
   getActiveTariffConfig, 
   calculateWaterTariff, 
   calculateFranchiseTax 
@@ -89,7 +90,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
   // Quick hike preset helpers
   const [percentageInput, setPercentageInput] = useState<number>(10);
   const [perM3HikeInput, setPerM3HikeInput] = useState<number>(2.00);
-  const [baseHikeInput, setBaseHikeInput] = useState<number>(10.00);
+  const [baseHikeInput, setBaseHikeInput] = useState<number>(2.00);
 
   // Live impact simulator state
   const [simUsage, setSimUsage] = useState<number>(18);
@@ -120,8 +121,10 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
     setFormConfig(prev => {
       const updated = { ...prev };
       if (targetScope === 'both' || targetScope === 'Residential') {
+        const resBase = Math.round((prev.residential.ratePerM3 ?? prev.residential.baseMinCharge) * multiplier * 100) / 100;
         updated.residential = {
-          baseMinCharge: Math.round(prev.residential.baseMinCharge * multiplier * 100) / 100,
+          ratePerM3: resBase,
+          baseMinCharge: resBase,
           tier1_rate: Math.round(prev.residential.tier1_rate * multiplier * 100) / 100,
           tier2_rate: Math.round(prev.residential.tier2_rate * multiplier * 100) / 100,
           tier3_rate: Math.round(prev.residential.tier3_rate * multiplier * 100) / 100,
@@ -129,8 +132,10 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
         };
       }
       if (targetScope === 'both' || targetScope === 'Commercial') {
+        const commBase = Math.round((prev.commercial.ratePerM3 ?? prev.commercial.baseMinCharge) * multiplier * 100) / 100;
         updated.commercial = {
-          baseMinCharge: Math.round(prev.commercial.baseMinCharge * multiplier * 100) / 100,
+          ratePerM3: commBase,
+          baseMinCharge: commBase,
           tier1_rate: Math.round(prev.commercial.tier1_rate * multiplier * 100) / 100,
           tier2_rate: Math.round(prev.commercial.tier2_rate * multiplier * 100) / 100,
           tier3_rate: Math.round(prev.commercial.tier3_rate * multiplier * 100) / 100,
@@ -155,8 +160,11 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
     setFormConfig(prev => {
       const updated = { ...prev };
       if (targetScope === 'both' || targetScope === 'Residential') {
+        const nextResBase = Math.round(((prev.residential.ratePerM3 ?? prev.residential.baseMinCharge) + hikePerM3) * 100) / 100;
         updated.residential = {
           ...prev.residential,
+          ratePerM3: nextResBase,
+          baseMinCharge: nextResBase,
           tier1_rate: Math.round((prev.residential.tier1_rate + hikePerM3) * 100) / 100,
           tier2_rate: Math.round((prev.residential.tier2_rate + hikePerM3) * 100) / 100,
           tier3_rate: Math.round((prev.residential.tier3_rate + hikePerM3) * 100) / 100,
@@ -165,8 +173,11 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
       }
       if (targetScope === 'both' || targetScope === 'Commercial') {
         const commHike = targetScope === 'Commercial' ? hikePerM3 : Math.round((hikePerM3 * 1.5) * 100) / 100;
+        const nextCommBase = Math.round(((prev.commercial.ratePerM3 ?? prev.commercial.baseMinCharge) + commHike) * 100) / 100;
         updated.commercial = {
           ...prev.commercial,
+          ratePerM3: nextCommBase,
+          baseMinCharge: nextCommBase,
           tier1_rate: Math.round((prev.commercial.tier1_rate + commHike) * 100) / 100,
           tier2_rate: Math.round((prev.commercial.tier2_rate + commHike) * 100) / 100,
           tier3_rate: Math.round((prev.commercial.tier3_rate + commHike) * 100) / 100,
@@ -186,32 +197,36 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
     }
   };
 
-  // Quick baseline minimum charge hike respecting targetScope
+  // Quick baseline per-m³ charge hike respecting targetScope
   const handleApplyBaseHike = (baseHike: number) => {
     setFormConfig(prev => {
       const updated = { ...prev };
       if (targetScope === 'both' || targetScope === 'Residential') {
+        const nextResBase = Math.round(((prev.residential.ratePerM3 ?? prev.residential.baseMinCharge) + baseHike) * 100) / 100;
         updated.residential = {
           ...prev.residential,
-          baseMinCharge: Math.round((prev.residential.baseMinCharge + baseHike) * 100) / 100
+          ratePerM3: nextResBase,
+          baseMinCharge: nextResBase,
         };
       }
       if (targetScope === 'both' || targetScope === 'Commercial') {
         const commBaseHike = targetScope === 'Commercial' ? baseHike : Math.round((baseHike * 1.5) * 100) / 100;
+        const nextCommBase = Math.round(((prev.commercial.ratePerM3 ?? prev.commercial.baseMinCharge) + commBaseHike) * 100) / 100;
         updated.commercial = {
           ...prev.commercial,
-          baseMinCharge: Math.round((prev.commercial.baseMinCharge + commBaseHike) * 100) / 100
+          ratePerM3: nextCommBase,
+          baseMinCharge: nextCommBase,
         };
       }
       return updated;
     });
 
     if (targetScope === 'Residential') {
-      toast.info(`Applied +₱${baseHike.toFixed(2)} lifeline minimum charge hike to Residential community accounts only.`);
+      toast.info(`Applied +₱${baseHike.toFixed(2)}/m³ baseline rate hike to Residential community accounts only.`);
     } else if (targetScope === 'Commercial') {
-      toast.info(`Applied +₱${baseHike.toFixed(2)} lifeline minimum charge hike to Commercial private accounts only.`);
+      toast.info(`Applied +₱${baseHike.toFixed(2)}/m³ baseline rate hike to Commercial private accounts only.`);
     } else {
-      toast.info(`Applied +₱${baseHike.toFixed(2)} lifeline minimum charge hike.`);
+      toast.info(`Applied +₱${baseHike.toFixed(2)}/m³ baseline rate hike.`);
     }
   };
 
@@ -265,6 +280,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
       const previousTariff = activeTariff;
       const finalConfig: WaterTariffConfig = {
         ...formConfig,
+        baselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
         residential: isResTargeted ? formConfig.residential : previousTariff.residential,
         commercial: isCommTargeted ? formConfig.commercial : previousTariff.commercial,
         version: (previousTariff.version || 1) + 1,
@@ -325,17 +341,17 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
           : 'Residential & Commercial';
 
       if (notifyAllConsumers) {
-        const resBase = finalConfig.residential.baseMinCharge;
-        const commBase = finalConfig.commercial.baseMinCharge;
-        const oldResBase = previousTariff.residential.baseMinCharge;
-        const oldCommBase = previousTariff.commercial.baseMinCharge;
+        const resBase = finalConfig.residential.ratePerM3 ?? finalConfig.residential.baseMinCharge;
+        const commBase = finalConfig.commercial.ratePerM3 ?? finalConfig.commercial.baseMinCharge;
+        const oldResBase = previousTariff.residential.ratePerM3 ?? previousTariff.residential.baseMinCharge;
+        const oldCommBase = previousTariff.commercial.ratePerM3 ?? previousTariff.commercial.baseMinCharge;
 
         const summaryMsg =
           targetScope === 'Residential'
-            ? `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Residential water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Lifeline 1-10 m³: ₱${oldResBase.toFixed(2)} → ₱${resBase.toFixed(2)}, Tier 1: ₱${finalConfig.residential.tier1_rate.toFixed(2)}/m³). Previous billed statements remain unchanged.`
+            ? `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Residential water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Baseline: ₱${oldResBase.toFixed(2)}/m³ → ₱${resBase.toFixed(2)}/m³, 2% Franchise Tax, 10% Late Penalty). Previous billed statements remain unchanged.`
             : targetScope === 'Commercial'
-            ? `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Commercial water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Lifeline 1-10 m³: ₱${oldCommBase.toFixed(2)} → ₱${commBase.toFixed(2)}, Tier 1: ₱${finalConfig.commercial.tier1_rate.toFixed(2)}/m³). Previous billed statements remain unchanged.`
-            : `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, updated water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Residential Base: ₱${resBase.toFixed(2)}, Commercial Base: ₱${commBase.toFixed(2)}). Previous billed statements remain unchanged.`;
+            ? `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Commercial water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Baseline: ₱${oldCommBase.toFixed(2)}/m³ → ₱${commBase.toFixed(2)}/m³, 2% Franchise Tax, 10% Late Penalty). Previous billed statements remain unchanged.`
+            : `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, updated water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Residential: ₱${resBase.toFixed(2)}/m³, Commercial: ₱${commBase.toFixed(2)}/m³, 2% Franchise Tax, 10% Late Penalty). Previous billed statements remain unchanged.`;
 
         const createdNotif = mockDb.addNotification({
           accountNumber: 'ALL',
@@ -361,15 +377,19 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
       if (postAnnouncement) {
         let annTitle = `District Advisory: Water Tariff Rate Adjustment (${finalConfig.resolutionNumber})`;
         let annContent = '';
+        const resRateVal = finalConfig.residential.ratePerM3 ?? finalConfig.residential.baseMinCharge;
+        const commRateVal = finalConfig.commercial.ratePerM3 ?? finalConfig.commercial.baseMinCharge;
+        const prevResRateVal = previousTariff.residential.ratePerM3 ?? previousTariff.residential.baseMinCharge;
+        const prevCommRateVal = previousTariff.commercial.ratePerM3 ?? previousTariff.commercial.baseMinCharge;
 
         if (targetScope === 'Residential') {
           annTitle = `District Advisory: Residential Water Tariff Adjustment (${finalConfig.resolutionNumber})`;
-          annContent = `Notice to Tagoloan Residential Community Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for NEW Residential meter readings under Board Resolution ${finalConfig.resolutionNumber}. Residential Lifeline (1-10 m³): ₱${finalConfig.residential.baseMinCharge.toFixed(2)} (adjusted from ₱${previousTariff.residential.baseMinCharge.toFixed(2)}). Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
+          annContent = `Notice to Tagoloan Residential Community Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for NEW Residential meter readings under Board Resolution ${finalConfig.resolutionNumber}. Residential Baseline Rate: ₱${resRateVal.toFixed(2)}/m³ (adjusted from ₱${prevResRateVal.toFixed(2)}/m³), plus ${(finalConfig.franchiseTaxRate * 100).toFixed(0)}% Franchise Tax and ${(finalConfig.latePaymentSurchargeRate * 100).toFixed(0)}% Late Penalty. Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
         } else if (targetScope === 'Commercial') {
           annTitle = `District Advisory: Commercial Private Account Tariff Adjustment (${finalConfig.resolutionNumber})`;
-          annContent = `Notice to Tagoloan Commercial & Private Enterprise Accounts: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for NEW Commercial meter readings under Board Resolution ${finalConfig.resolutionNumber}. Commercial Lifeline (1-10 m³): ₱${finalConfig.commercial.baseMinCharge.toFixed(2)} (adjusted from ₱${previousTariff.commercial.baseMinCharge.toFixed(2)}). Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
+          annContent = `Notice to Tagoloan Commercial & Private Enterprise Accounts: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for NEW Commercial meter readings under Board Resolution ${finalConfig.resolutionNumber}. Commercial Baseline Rate: ₱${commRateVal.toFixed(2)}/m³ (adjusted from ₱${prevCommRateVal.toFixed(2)}/m³), plus ${(finalConfig.franchiseTaxRate * 100).toFixed(0)}% Franchise Tax and ${(finalConfig.latePaymentSurchargeRate * 100).toFixed(0)}% Late Penalty. Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
         } else {
-          annContent = `Notice to all Tagoloan Water District Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff rate adjustment has been implemented for NEW meter readings under ${finalConfig.resolutionNumber}. Residential Lifeline (1-10 m³): ₱${finalConfig.residential.baseMinCharge.toFixed(2)} | Commercial Lifeline (1-10 m³): ₱${finalConfig.commercial.baseMinCharge.toFixed(2)}. Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
+          annContent = `Notice to all Tagoloan Water District Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff rate adjustment has been implemented for NEW meter readings under ${finalConfig.resolutionNumber}. Residential Baseline: ₱${resRateVal.toFixed(2)}/m³ | Commercial Baseline: ₱${commRateVal.toFixed(2)}/m³ | Franchise Tax: ${(finalConfig.franchiseTaxRate * 100).toFixed(0)}% | Late Penalty: ${(finalConfig.latePaymentSurchargeRate * 100).toFixed(0)}%. Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
         }
 
         const newAnn: Announcement = {
@@ -481,18 +501,18 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
 
           <div className="flex flex-col sm:flex-row lg:flex-col gap-2 shrink-0 w-full sm:w-auto">
             <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4 text-center min-w-[200px]">
-              <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400 block">Current Residential Lifeline</span>
+              <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400 block">Current Residential Rate</span>
               <div className="text-2xl font-black text-emerald-400 font-mono mt-0.5">
-                ₱{activeTariff.residential.baseMinCharge.toFixed(2)}
+                ₱{(activeTariff.residential.ratePerM3 ?? activeTariff.residential.baseMinCharge).toFixed(2)} / m³
               </div>
-              <span className="text-[10px] text-slate-400">1 – 10 m³ Baseline</span>
+              <span className="text-[10px] text-slate-400">Official Baseline • {(activeTariff.franchiseTaxRate * 100).toFixed(0)}% Tax • {(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}% Penalty</span>
             </div>
             <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4 text-center min-w-[200px]">
-              <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400 block">Current Commercial Lifeline</span>
+              <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400 block">Current Commercial Rate</span>
               <div className="text-2xl font-black text-blue-400 font-mono mt-0.5">
-                ₱{activeTariff.commercial.baseMinCharge.toFixed(2)}
+                ₱{(activeTariff.commercial.ratePerM3 ?? activeTariff.commercial.baseMinCharge).toFixed(2)} / m³
               </div>
-              <span className="text-[10px] text-slate-400">1 – 10 m³ Baseline</span>
+              <span className="text-[10px] text-slate-400">Official Baseline • {(activeTariff.franchiseTaxRate * 100).toFixed(0)}% Tax • {(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}% Penalty</span>
             </div>
           </div>
         </div>
@@ -576,7 +596,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
               </div>
               <div className="mt-3 pt-2.5 border-t border-emerald-900/60 flex items-center justify-between text-[10px] font-mono text-emerald-200">
                 <span>{residentialConsumersCount} accounts • {residentialUnpaidCount} unbilled</span>
-                <span className="font-bold text-white">₱{formConfig.residential.baseMinCharge.toFixed(2)} Base</span>
+                <span className="font-bold text-white">₱{(formConfig.residential.ratePerM3 ?? formConfig.residential.baseMinCharge).toFixed(2)}/m³ Base</span>
               </div>
             </button>
 
@@ -609,7 +629,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
               </div>
               <div className="mt-3 pt-2.5 border-t border-blue-900/60 flex items-center justify-between text-[10px] font-mono text-blue-200">
                 <span>{commercialConsumersCount} accounts • {commercialUnpaidCount} unbilled</span>
-                <span className="font-bold text-white">₱{formConfig.commercial.baseMinCharge.toFixed(2)} Base</span>
+                <span className="font-bold text-white">₱{(formConfig.commercial.ratePerM3 ?? formConfig.commercial.baseMinCharge).toFixed(2)}/m³ Base</span>
               </div>
             </button>
 
@@ -708,18 +728,18 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
             </div>
           </div>
 
-          {/* B. Lifeline Base Minimum Charge Hike */}
+          {/* B. Baseline 1-10 m³ Per-Cubic-Meter Hike */}
           <div className="p-4 bg-slate-950/80 border border-emerald-900/60 rounded-2xl space-y-3 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between">
                 <span className="text-xs font-black text-emerald-300 flex items-center space-x-1.5">
                   <DollarSign className="h-3.5 w-3.5 text-emerald-400" />
-                  <span>Lifeline Base Price Hike (+₱ Base)</span>
+                  <span>Baseline Rate Hike (+₱/m³)</span>
                 </span>
                 <span className="text-[10px] font-bold uppercase text-emerald-300 bg-emerald-950 border border-emerald-800 px-2 py-0.5 rounded">1-10 m³</span>
               </div>
               <p className="text-[11px] text-slate-300 mt-1">
-                Adjusts minimum readiness charge for initial 10 m³.
+                Adjusts official per-m³ baseline rate for initial 1–10 m³.
               </p>
               <div className="mt-2 text-[10px] font-mono font-bold text-slate-300 bg-slate-900 px-2 py-1 rounded border border-slate-800">
                 Target: <strong className={targetScope === 'Residential' ? 'text-emerald-400' : targetScope === 'Commercial' ? 'text-blue-400' : 'text-purple-400'}>
@@ -730,7 +750,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
 
             <div className="space-y-2">
               <div className="grid grid-cols-4 gap-1.5">
-                {[5.00, 10.00, 15.00, 20.00].map(amt => (
+                {[1.00, 2.00, 3.00, 5.00].map(amt => (
                   <button
                     key={`base-${amt}`}
                     type="button"
@@ -747,14 +767,14 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
                   <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
                   <input
                     type="number"
-                    step="1"
-                    min="1"
+                    step="0.5"
+                    min="0.5"
                     max="100"
                     value={baseHikeInput}
                     onChange={(e) => setBaseHikeInput(Number(e.target.value) || 0)}
                     className="w-full text-xs font-mono font-bold text-white bg-transparent focus:outline-hidden"
                   />
-                  <span className="text-[10px] text-slate-400 font-mono">Base</span>
+                  <span className="text-[10px] text-slate-400 font-mono">/m³</span>
                 </div>
                 <button
                   type="button"
@@ -837,7 +857,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
               <span className="text-[11px] text-slate-300">Live preview of how proposed rates alter bills across typical consumption volumes.</span>
             </div>
             <span className="text-[10px] font-bold text-slate-300 bg-slate-900 px-2.5 py-1 rounded-md border border-slate-700">
-              Includes 2% Franchise Tax
+              Includes 2% Franchise Tax • +10% Late Penalty After Due Date
             </span>
           </div>
 
@@ -854,7 +874,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-800 font-mono text-[11px]">
                 {[
-                  { volume: 10, label: '10 m³ (Lifeline Minimum)', type: 'Residential' as const },
+                  { volume: 10, label: '10 m³ (Baseline Domestic)', type: 'Residential' as const },
                   { volume: 16, label: '16 m³ (Average Domestic)', type: 'Residential' as const },
                   { volume: 25, label: '25 m³ (Standard Household)', type: 'Residential' as const },
                   { volume: 38, label: '38 m³ (High Domestic)', type: 'Residential' as const },
@@ -945,14 +965,14 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
           </div>
 
           <div className="space-y-4">
-            {/* Lifeline Base */}
+            {/* Official Baseline Rate (1 – 10 m³) */}
             <div className="p-3.5 bg-slate-950/80 border border-emerald-900/60 rounded-2xl flex items-center justify-between">
               <div>
-                <span className="text-xs font-black text-white block">Lifeline Base (1 – 10 m³)</span>
-                <span className="text-[10px] text-slate-300">Readiness-to-serve minimum charge</span>
+                <span className="text-xs font-black text-white block">Baseline Rate (1 – 10 m³)</span>
+                <span className="text-[10px] text-slate-300">Official baseline rate per cubic meter</span>
               </div>
               <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">Current: ₱{activeTariff.residential.baseMinCharge.toFixed(2)}</span>
+                <span className="text-xs font-mono font-bold text-slate-400">Current: ₱{(activeTariff.residential.ratePerM3 ?? activeTariff.residential.baseMinCharge).toFixed(2)}/m³</span>
                 <span className="text-slate-400">→</span>
                 <div className="flex items-center bg-slate-900 border border-emerald-700/80 rounded-xl px-2.5 py-1">
                   <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
@@ -960,13 +980,17 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
                     type="number"
                     step="0.25"
                     min="1"
-                    value={formConfig.residential.baseMinCharge}
-                    onChange={(e) => setFormConfig({
-                      ...formConfig,
-                      residential: { ...formConfig.residential, baseMinCharge: Number(e.target.value) || 0 }
-                    })}
-                    className="w-20 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
+                    value={formConfig.residential.ratePerM3 ?? formConfig.residential.baseMinCharge}
+                    onChange={(e) => {
+                      const val = Number(e.target.value) || 0;
+                      setFormConfig({
+                        ...formConfig,
+                        residential: { ...formConfig.residential, ratePerM3: val, baseMinCharge: val }
+                      });
+                    }}
+                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
                   />
+                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
                 </div>
               </div>
             </div>
@@ -1122,14 +1146,14 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
           </div>
 
           <div className="space-y-4">
-            {/* Lifeline Base */}
+            {/* Official Baseline Rate (1 – 10 m³) */}
             <div className="p-3.5 bg-slate-950/80 border border-blue-900/60 rounded-2xl flex items-center justify-between">
               <div>
-                <span className="text-xs font-black text-white block">Lifeline Base (1 – 10 m³)</span>
-                <span className="text-[10px] text-slate-300">Readiness-to-serve minimum charge</span>
+                <span className="text-xs font-black text-white block">Baseline Rate (1 – 10 m³)</span>
+                <span className="text-[10px] text-slate-300">Official baseline rate per cubic meter</span>
               </div>
               <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">Current: ₱{activeTariff.commercial.baseMinCharge.toFixed(2)}</span>
+                <span className="text-xs font-mono font-bold text-slate-400">Current: ₱{(activeTariff.commercial.ratePerM3 ?? activeTariff.commercial.baseMinCharge).toFixed(2)}/m³</span>
                 <span className="text-slate-400">→</span>
                 <div className="flex items-center bg-slate-900 border border-blue-700/80 rounded-xl px-2.5 py-1">
                   <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
@@ -1137,13 +1161,17 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
                     type="number"
                     step="0.50"
                     min="1"
-                    value={formConfig.commercial.baseMinCharge}
-                    onChange={(e) => setFormConfig({
-                      ...formConfig,
-                      commercial: { ...formConfig.commercial, baseMinCharge: Number(e.target.value) || 0 }
-                    })}
-                    className="w-20 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
+                    value={formConfig.commercial.ratePerM3 ?? formConfig.commercial.baseMinCharge}
+                    onChange={(e) => {
+                      const val = Number(e.target.value) || 0;
+                      setFormConfig({
+                        ...formConfig,
+                        commercial: { ...formConfig.commercial, ratePerM3: val, baseMinCharge: val }
+                      });
+                    }}
+                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
                   />
+                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
                 </div>
               </div>
             </div>
@@ -1603,20 +1631,26 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
             <div className="p-4 bg-slate-950 border border-slate-800 rounded-2xl space-y-3 text-xs">
               {(targetScope === 'both' || targetScope === 'Residential') && (
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Residential Lifeline (1-10 m³):</span>
+                  <span className="text-slate-400">Residential Baseline (1-10 m³):</span>
                   <span className="font-mono font-bold text-emerald-400">
-                    ₱{activeTariff.residential.baseMinCharge.toFixed(2)} → ₱{formConfig.residential.baseMinCharge.toFixed(2)}
+                    ₱{(activeTariff.residential.ratePerM3 ?? activeTariff.residential.baseMinCharge).toFixed(2)}/m³ → ₱{(formConfig.residential.ratePerM3 ?? formConfig.residential.baseMinCharge).toFixed(2)}/m³
                   </span>
                 </div>
               )}
               {(targetScope === 'both' || targetScope === 'Commercial') && (
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Commercial Lifeline (1-10 m³):</span>
+                  <span className="text-slate-400">Commercial Baseline (1-10 m³):</span>
                   <span className="font-mono font-bold text-blue-400">
-                    ₱{activeTariff.commercial.baseMinCharge.toFixed(2)} → ₱{formConfig.commercial.baseMinCharge.toFixed(2)}
+                    ₱{(activeTariff.commercial.ratePerM3 ?? activeTariff.commercial.baseMinCharge).toFixed(2)}/m³ → ₱{(formConfig.commercial.ratePerM3 ?? formConfig.commercial.baseMinCharge).toFixed(2)}/m³
                   </span>
                 </div>
               )}
+              <div className="flex justify-between">
+                <span className="text-slate-400">Franchise Tax &amp; Late Penalty:</span>
+                <span className="font-mono font-bold text-slate-200">
+                  {(formConfig.franchiseTaxRate * 100).toFixed(0)}% Tax • {(formConfig.latePaymentSurchargeRate * 100).toFixed(0)}% Penalty
+                </span>
+              </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Effective Date:</span>
                 <span className="font-bold text-white">{formConfig.effectiveDate}</span>

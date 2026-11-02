@@ -26,7 +26,11 @@ import { Consumer, WaterMeter, MeterReading, AuditLog } from '../../types';
 import { TablePagination } from '../common/TablePagination';
 import { SmartSearchBar } from '../common/SmartSearchBar';
 import { smartMatch } from '../../utils/smartSearch';
-import { isOfficialBillIssued } from '../../utils/tariffCalculator';
+import {
+  isOfficialBillIssued,
+  getEffectiveRatePerM3,
+  getReadingTotalAssessment
+} from '../../utils/tariffCalculator';
 import { isPendingConsumerStatus } from '../../utils/installationWorkflow';
 import {
   compareAuditLogsCanonical,
@@ -34,6 +38,7 @@ import {
   compareMetersCanonical,
   compareReadingsCanonical,
 } from '../../utils/canonicalSort';
+import { formatOdometerReading } from '../../utils/odometer';
 
 interface RecordsArchiveViewProps {
   recordsTab: 'consumers' | 'meters' | 'readings' | 'bills' | 'payments' | 'audit';
@@ -160,6 +165,8 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
         r.route,
         r.status,
         r.notes,
+        formatOdometerReading(r.previousReading),
+        formatOdometerReading(r.currentReading),
         `${r.consumption} m3`,
       ]);
     })
@@ -267,13 +274,13 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
       ]);
       exportToCsv(`TWD_Meters_Inventory_${timestamp}.csv`, headers, rows);
     } else if (recordsTab === 'readings') {
-      const headers = ['Reading ID', 'Account #', 'Consumer Name', 'Previous (m³)', 'Current (m³)', 'Consumption (m³)', 'Date', 'Reader', 'Status'];
+      const headers = ['Reading ID', 'Account #', 'Consumer Name', 'Previous Dial (00000-99999)', 'Current Dial (00000-99999)', 'Consumption (m³)', 'Date', 'Reader', 'Status'];
       const rows = filteredReadings.map(r => [
         r.id,
         r.accountNumber,
         r.consumerName,
-        r.previousReading,
-        r.currentReading,
+        formatOdometerReading(r.previousReading),
+        formatOdometerReading(r.currentReading),
         r.consumption,
         r.readingDate,
         r.meterReaderName || 'Field Reader',
@@ -639,7 +646,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                     <tr>
                       <th className="px-4 py-3.5 border-r border-slate-800/80">Reading ID</th>
                       <th className="px-4 py-3.5 border-r border-slate-800/80 min-w-[200px]">Consumer Account</th>
-                      <th className="px-4 py-3.5 border-r border-slate-800/80 text-center">Index (Prev → Curr)</th>
+                      <th className="px-4 py-3.5 border-r border-slate-800/80 text-center">Odometer Dial (Prev → Curr)</th>
                       <th className="px-4 py-3.5 border-r border-slate-800/80 text-right">Volume (m³)</th>
                       <th className="px-4 py-3.5 border-r border-slate-800/80">Reading Timestamp</th>
                       <th className="px-4 py-3.5 border-r border-slate-800/80">Field Reader</th>
@@ -662,8 +669,8 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                           <span className="font-bold font-mono text-sky-400 block text-xs">{r.accountNumber}</span>
                           <span className="text-white font-bold">{r.consumerName}</span>
                         </td>
-                        <td className="px-4 py-3 font-mono text-slate-300 text-center border-r border-slate-800/80">
-                          {r.previousReading} → <strong className="text-white font-bold">{r.currentReading}</strong>
+                        <td className="px-4 py-3 font-mono tabular-nums text-slate-300 text-center border-r border-slate-800/80">
+                          {formatOdometerReading(r.previousReading)} → <strong className="text-white font-bold">{formatOdometerReading(r.currentReading)}</strong>
                         </td>
                         <td className="px-4 py-3 font-mono font-black text-sky-400 text-right border-r border-slate-800/80">
                           {r.consumption} m³
@@ -1077,10 +1084,6 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                       <span className="font-mono tabular-nums font-bold text-white">{data.meterNumber}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Water Meter Serial #</span>
-                      <span className="font-mono tabular-nums font-bold text-indigo-300">{data.serialNumber || '—'}</span>
-                    </div>
-                    <div>
                       <span className="text-[10px] font-bold uppercase text-slate-500 block">Brand / Manufacturer</span>
                       <span className="font-semibold text-slate-200">{data.brand}</span>
                     </div>
@@ -1097,6 +1100,12 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                     <div>
                       <span className="text-[10px] font-bold uppercase text-slate-500 block">Operational Status</span>
                       <span className="font-bold uppercase text-emerald-400">{data.status}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Last Odometer Dial</span>
+                      <span className="font-mono tabular-nums font-bold text-white">
+                        {formatOdometerReading(data.lastReadingValue ?? 0)}
+                      </span>
                     </div>
                     {data.remarks && (
                       <div className="sm:col-span-2">
@@ -1126,19 +1135,37 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                       <span className="font-mono tabular-nums font-bold text-white">{data.meterNumber || 'N/A'}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Meter Indices</span>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Odometer Dial (00000–99999)</span>
                       <span className="font-mono tabular-nums text-slate-200">
-                        Prev {data.previousReading} → Curr {data.currentReading} m³
+                        Prev {formatOdometerReading(data.previousReading)} → Curr {formatOdometerReading(data.currentReading)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Consumption</span>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Consumption ({data.classification || 'Residential'} @ ₱{getEffectiveRatePerM3(data.classification === 'Commercial' ? 'Commercial' : 'Residential').toFixed(2)}/m³)</span>
                       <span className="font-mono tabular-nums font-black text-sky-400">{data.consumption} m³</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Assessed Amount</span>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Basic Water Charge</span>
+                      <span className="font-mono tabular-nums font-bold text-slate-200">
+                        ₱{getReadingTotalAssessment(data, data.classification === 'Commercial' ? 'Commercial' : 'Residential').basicCharge.toFixed(2)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">2% Franchise Tax</span>
+                      <span className="font-mono tabular-nums font-bold text-indigo-300">
+                        ₱{getReadingTotalAssessment(data, data.classification === 'Commercial' ? 'Commercial' : 'Residential').franchiseTax.toFixed(2)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Total Assessed Amount</span>
                       <span className="font-mono tabular-nums font-black text-white">
                         ₱{calculateCostOf(data, data.classification).toFixed(2)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Late Penalty (10% After Due)</span>
+                      <span className="font-mono tabular-nums font-bold text-amber-300">
+                        +₱{getReadingTotalAssessment(data, data.classification === 'Commercial' ? 'Commercial' : 'Residential').penaltyAmount.toFixed(2)}
                       </span>
                     </div>
                     <div>

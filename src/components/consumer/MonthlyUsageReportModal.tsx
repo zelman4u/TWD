@@ -20,9 +20,14 @@ import autoTable from 'jspdf-autotable';
 import { Consumer, MeterReading } from '../../types';
 import {
   calculateWaterTariff,
+  calculateFranchiseTax,
+  calculateLatePenalty,
   getActiveTariffConfig,
-  getReadingEffectiveBillAmount
+  getEffectiveRatePerM3,
+  getReadingEffectiveBillAmount,
+  getReadingTotalAssessment
 } from '../../utils/tariffCalculator';
+import { computeOdometerConsumption, formatOdometerReading } from '../../utils/odometer';
 import { mockDb } from '../../mockDb';
 import { useToast } from '../../context/ToastContext';
 
@@ -103,9 +108,7 @@ function computeReportData(
   const isComm = consumer.consumerType === 'Commercial';
   const classification: 'Residential' | 'Commercial' = isComm ? 'Commercial' : 'Residential';
   const activeTariff = getActiveTariffConfig();
-  const baseRate = isComm
-    ? activeTariff.commercial.baseMinCharge
-    : activeTariff.residential.baseMinCharge;
+  const ratePerM3 = getEffectiveRatePerM3(classification, activeTariff);
   const franchiseRate = activeTariff.franchiseTaxRate ?? 0.02;
 
   const validHistory = allHistoryReadings.filter((r) => r.status !== 'cancelled');
@@ -114,7 +117,7 @@ function computeReportData(
     const basePeriod = r.billingPeriod || r.readingDate || 'Current Cycle';
     const duplicates = list.filter((item) => (item.billingPeriod || item.readingDate || 'Current Cycle') === basePeriod);
     if (duplicates.length <= 1) return basePeriod;
-    return `${basePeriod} (${r.readingDate} · Index ${r.currentReading} m³)`;
+    return `${basePeriod} (${r.readingDate} · Dial ${formatOdometerReading(r.currentReading)})`;
   };
 
   const currentReading =
@@ -171,13 +174,12 @@ function computeReportData(
 
   const billedAmount = currentReading
     ? getReadingEffectiveBillAmount(currentReading, classification)
-    : consumerM3 > 0
-      ? calculateWaterTariff(consumerM3, classification)
-      : baseRate;
+    : calculateWaterTariff(consumerM3, classification);
 
-  const effectiveBase = currentReading && billedAmount < baseRate ? billedAmount : baseRate;
+  const effectiveBase = Math.round(Math.min(consumerM3, 10) * ratePerM3 * 100) / 100;
   const commodityCharge = Math.max(0, Number((billedAmount - effectiveBase).toFixed(2)));
-  const franchiseTax = Number((billedAmount * franchiseRate).toFixed(2));
+  const franchiseTax = calculateFranchiseTax(billedAmount, activeTariff);
+  const latePenalty = calculateLatePenalty(billedAmount, activeTariff);
   const netAssessedBill = Number((billedAmount + franchiseTax).toFixed(2));
 
   let efficiencyTitle = 'Normal Household Baseline';
@@ -205,17 +207,20 @@ function computeReportData(
   }
 
   const historyTimeline = validHistory.slice(0, 8).map((r) => {
-    const m3 = r.consumption || 0;
-    const bAmt = getReadingEffectiveBillAmount(r, classification);
+    const odo = computeOdometerConsumption(
+      r.previousReading,
+      r.presentReading ?? r.currentReading,
+      r.consumption
+    );
+    const m3 = odo.consumption;
+    const bAmt = getReadingTotalAssessment(r, classification).totalBeforeDue;
     const varVsAvg = Number((m3 - districtAvgM3).toFixed(1));
-    const prev = r.previousReading || 0;
-    const pres = r.presentReading ?? r.currentReading ?? prev;
     return {
       period: r.billingPeriod || 'N/A',
       date: r.readingDate || 'N/A',
-      prev,
-      pres,
-      curr: r.currentReading ?? pres,
+      prev: odo.previousReading,
+      pres: odo.currentReading,
+      curr: odo.currentReading,
       m3,
       varVsAvg,
       amount: bAmt,
@@ -233,11 +238,13 @@ function computeReportData(
     diff,
     percentDiff,
     isBelowAverage,
+    ratePerM3,
     billedAmount,
     baseRate: effectiveBase,
     commodityCharge,
     franchiseTax,
     franchiseRate,
+    latePenalty,
     netAssessedBill,
     efficiencyTitle,
     efficiencyBadge,
@@ -348,12 +355,12 @@ export async function downloadConsumerUsageReportPdf(params: {
         [
           { content: `ACCOUNT HOLDER:\n${(consumer.name || 'CONSUMER').toUpperCase()}`, styles: { fontStyle: 'bold' } },
           { content: `ACCOUNT NUMBER:\n#${consumer.accountNumber || 'PENDING'}`, styles: { fontStyle: 'bold' } },
-          { content: `METER SERIAL NUMBER:\n#${consumer.meterNumber || 'PENDING'}`, styles: { fontStyle: 'bold' } }
+          { content: `METER TAG NUMBER:\n#${consumer.meterNumber || 'PENDING'}`, styles: { fontStyle: 'bold' } }
         ],
         [
           { content: `SERVICE ADDRESS:\n${consumer.address || 'Tagoloan, Misamis Oriental'}` },
           { content: `BARANGAY & SITIO:\n${consumer.barangay || 'Poblacion'} (${consumer.sitioZone || 'Zone 1'})` },
-          { content: `CLASSIFICATION / TAG:\n${consumer.consumerType || 'Residential'} • ${consumer.rfidTag || 'NFC-ENABLED'}` }
+          { content: `CLASSIFICATION & RATE:\n${consumer.consumerType || 'Residential'} (PHP ${stats.ratePerM3.toFixed(2)}/m3)` }
         ]
       ],
       didDrawPage: (data) => {
@@ -451,26 +458,26 @@ export async function downloadConsumerUsageReportPdf(params: {
       head: [['TARIFF ITEM', 'CONSUMPTION TIER', 'RATE SCHEDULE (PHP)', 'ASSESSED SUB-TOTAL']],
       body: [
         [
-          'Minimum Base Charge',
-          'First 10 m3 (Baseline)',
-          'Fixed Official Bracket',
+          'Baseline Water Consumption',
+          `${Math.min(stats.consumerM3, 10)} m3 (1-10 m3 Baseline)`,
+          `PHP ${stats.ratePerM3.toFixed(2)} / m3`,
           `PHP ${stats.baseRate.toFixed(2)}`
         ],
         [
-          'Tiered Commodity Charges',
-          `${Math.max(0, stats.consumerM3 - 10)} m3 incremental`,
-          'Progressive Utility Tariff',
+          'Incremental Consumption',
+          `${Math.max(0, stats.consumerM3 - 10)} m3 (11+ m3)`,
+          `PHP ${stats.ratePerM3.toFixed(2)} / m3`,
           `PHP ${stats.commodityCharge.toFixed(2)}`
         ],
         [
-          'Franchise & Watershed Preservation',
-          'Mandatory Regulatory Fee',
-          `${(stats.franchiseRate * 100).toFixed(1)}% Government Mandate`,
+          'Local Franchise Tax',
+          'Mandatory Statutory Levy',
+          `${(stats.franchiseRate * 100).toFixed(0)}% Government Mandate`,
           `PHP ${stats.franchiseTax.toFixed(2)}`
         ],
         [
           {
-            content: 'TOTAL MONTHLY BILLING ASSESSMENT',
+            content: 'TOTAL MONTHLY BILLING ASSESSMENT (+10% Penalty After Due Date)',
             colSpan: 3,
             styles: { fontStyle: 'bold', halign: 'right' }
           },
@@ -500,9 +507,9 @@ export async function downloadConsumerUsageReportPdf(params: {
         ? stats.historyTimeline.map((h) => [
             h.period,
             h.date,
-            `${h.prev} m3`,
-            `${h.pres} m3`,
-            `${h.m3} m3 (Idx ${h.curr})`,
+            formatOdometerReading(h.prev),
+            formatOdometerReading(h.pres),
+            `${h.m3} m3 (Dial ${formatOdometerReading(h.curr)})`,
             h.varVsAvg <= 0
               ? `-${Math.abs(h.varVsAvg)} m3 (Efficient)`
               : `+${h.varVsAvg} m3 (Higher)`,
@@ -610,7 +617,7 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
       const duplicates = valid.filter((item) => (item.billingPeriod || item.readingDate || 'Current Cycle') === basePeriod);
       return duplicates.length <= 1
         ? basePeriod
-        : `${basePeriod} (${r.readingDate} · Index ${r.currentReading} m³)`;
+        : `${basePeriod} (${r.readingDate} · Dial ${formatOdometerReading(r.currentReading)})`;
     });
     const periods = Array.from(new Set(labels.filter(Boolean)));
     if (periods.length === 0) {
@@ -784,13 +791,13 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
             </div>
             <div>
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                Hardware Telemetry
+                Meter &amp; Official Rate
               </span>
               <span className="font-mono font-bold text-sky-400 block mt-0.5">
-                Meter: #{consumer.meterNumber || 'Pending'}
+                Meter Tag: #{consumer.meterNumber || 'Pending'}
               </span>
-              <span className="text-[11px] text-purple-300 font-mono font-bold">
-                RFID: {consumer.rfidTag || 'NFC-TAG'}
+              <span className="text-[11px] text-emerald-300 font-mono font-bold">
+                {consumer.consumerType || 'Residential'} • ₱{usageStats.ratePerM3.toFixed(2)}/m³
               </span>
             </div>
           </div>
@@ -829,8 +836,8 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
                 </div>
                 <span className="text-[10px] text-blue-300 font-semibold block mt-1 font-mono tabular-nums">
                   {usageStats.currentReading
-                    ? `Prev ${usageStats.currentReading.previousReading} → Pres ${usageStats.currentReading.presentReading ?? usageStats.currentReading.currentReading} m³ (Curr ${usageStats.currentReading.currentReading})`
-                    : `Baseline: ${consumer.previousReading ?? 0} m³`}
+                    ? `Prev ${formatOdometerReading(usageStats.currentReading.previousReading)} → Pres ${formatOdometerReading(usageStats.currentReading.presentReading ?? usageStats.currentReading.currentReading)} (Dial ${formatOdometerReading(usageStats.currentReading.currentReading)})`
+                    : `Baseline Dial: ${formatOdometerReading(consumer.previousReading ?? 0)}`}
                 </span>
               </div>
 
@@ -954,7 +961,7 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
             <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
               <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800">
                 <span className="text-[10px] font-bold text-slate-400 uppercase block">
-                  Base Minimum (10 m³)
+                  Baseline (1-10 m³ @ ₱{usageStats.ratePerM3.toFixed(0)}/m³)
                 </span>
                 <span className="font-mono font-bold text-white text-sm mt-1 block">
                   ₱{usageStats.baseRate.toLocaleString('en-US', { minimumFractionDigits: 2 })}
@@ -962,7 +969,7 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
               </div>
               <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800">
                 <span className="text-[10px] font-bold text-slate-400 uppercase block">
-                  Tiered Usage Charge
+                  Incremental Usage (11+ m³)
                 </span>
                 <span className="font-mono font-bold text-white text-sm mt-1 block">
                   ₱{usageStats.commodityCharge.toLocaleString('en-US', { minimumFractionDigits: 2 })}
@@ -982,6 +989,9 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
                 </span>
                 <span className="font-mono font-black text-sky-300 text-sm mt-1 block">
                   ₱{usageStats.netAssessedBill.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </span>
+                <span className="text-[10px] text-amber-300/90 font-mono block mt-0.5">
+                  +10% Penalty After Due: +₱{usageStats.latePenalty.toFixed(2)}
                 </span>
               </div>
             </div>
@@ -1021,10 +1031,10 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
                             <span className="text-[10px] text-slate-400 font-mono block">{h.date}</span>
                           </td>
                           <td className="px-4 py-3 font-mono tabular-nums text-slate-300">
-                            {h.prev} m³ → <strong className="text-white">{h.pres} m³</strong>
+                            {formatOdometerReading(h.prev)} → <strong className="text-white">{formatOdometerReading(h.pres)}</strong>
                           </td>
                           <td className="px-4 py-3 font-mono tabular-nums font-black text-sky-400">
-                            {h.m3} m³ <span className="text-[10px] text-slate-400 font-normal">(Idx {h.curr})</span>
+                            {h.m3} m³ <span className="text-[10px] text-slate-400 font-normal">(Dial {formatOdometerReading(h.curr)})</span>
                           </td>
                           <td className="px-4 py-3">
                             <span

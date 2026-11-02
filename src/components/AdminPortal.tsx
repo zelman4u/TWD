@@ -100,7 +100,21 @@ import {
 } from '../services/firebaseDb';
 import { initRealtimeSocket, sendRealtimeMessage } from '../services/realtimeSocket';
 import { apiClient, safeBackendFetch } from '../services/apiClient';
-import { calculateWaterTariff, calculateFranchiseTax, calculateLatePenalty, computeDefaultDueDate, getActiveTariffConfig, getReadingEffectiveBillAmount, isOfficialBillIssued, saveActiveTariffConfig, WaterTariffConfig } from '../utils/tariffCalculator';
+import {
+  calculateWaterTariff,
+  calculateFranchiseTax,
+  calculateLatePenalty,
+  computeDefaultDueDate,
+  getActiveTariffConfig,
+  getEffectiveRatePerM3,
+  getReadingEffectiveBillAmount,
+  getReadingTotalAssessment,
+  isOfficialBaselineSchemaConfig,
+  isOfficialBillIssued,
+  OFFICIAL_TARIFF_BASELINE_SCHEMA,
+  saveActiveTariffConfig,
+  WaterTariffConfig
+} from '../utils/tariffCalculator';
 import { 
   checkDuplicateAccountNumber, 
   checkDuplicateMeterTag 
@@ -130,6 +144,15 @@ import {
   compareReadersCanonical,
   compareReadingsCanonical,
 } from '../utils/canonicalSort';
+import {
+  computeOdometerConsumption,
+  formatOdometerReading,
+  isImplausibleRollover,
+  isValidOdometerInput,
+  normalizeOdometerReading,
+  padOdometerInput,
+  sanitizeOdometerInput,
+} from '../utils/odometer';
 
 interface AdminPortalProps {
   currentUser: User;
@@ -188,13 +211,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const toast = useToast();
   const { showLoading, hideLoading } = useLoading();
   
-  // Tariff calculation helper (honors locked billAmount on existing readings; uses active tariff only for new/un-stamped usage)
+  // Tariff calculation helper (includes 2% Franchise Tax; honors locked historical paid bills and active tariff for new usage)
   const calculateCostOf = (usageOrReading: number | MeterReading, classification?: string) => {
     const cls = classification === 'Commercial' ? 'Commercial' : 'Residential';
     if (typeof usageOrReading === 'number') {
-      return calculateWaterTariff(usageOrReading, cls);
+      const basic = calculateWaterTariff(usageOrReading, cls);
+      return Math.round((basic + calculateFranchiseTax(basic)) * 100) / 100;
     }
-    return getReadingEffectiveBillAmount(usageOrReading, cls);
+    return getReadingTotalAssessment(usageOrReading, cls).totalBeforeDue;
   };
 
   // Navigation Module Selected - All 15 Admin Portal Modules
@@ -351,8 +375,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     billingPeriod: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
     readingDate: new Date().toISOString().split('T')[0],
     dueDate: computeDefaultDueDate(),
-    previousReading: '0',
-    currentReading: '0',
+    previousReading: '00000',
+    currentReading: '00000',
     notes: '',
     sourceReadingId: '',
   });
@@ -524,7 +548,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   // 11. Barangays Module State
   const [barangayList, setBarangayList] = useState(mockDb.getBarangays());
   const [showAddBarangay, setShowAddBarangay] = useState(false);
-  const [newBarangay, setNewBarangay] = useState({ name: '', code: '', schedule: '', supervisor: 'District Operations Supervisor', ratePerM3: 24.50 });
+  const [newBarangay, setNewBarangay] = useState({ name: '', code: '', schedule: '', supervisor: 'District Operations Supervisor', ratePerM3: 10.00 });
   const [editingBarangayModal, setEditingBarangayModal] = useState<Barangay | null>(null);
   const [selectedBarangayForDetail, setSelectedBarangayForDetail] = useState<Barangay | null>(null);
   const [expandedBarangayConsumerId, setExpandedBarangayConsumerId] = useState<string | null>(null);
@@ -1014,7 +1038,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     apiClient.getTariffConfig({ skipLogging: true })
       .then(res => {
-        if (res?.config && (res.config.version || 0) > (getActiveTariffConfig().version || 0)) {
+        if (
+          res?.config &&
+          isOfficialBaselineSchemaConfig(res.config) &&
+          (res.config.version || 0) > (getActiveTariffConfig().version || 0)
+        ) {
           saveActiveTariffConfig(res.config);
           setActiveTariff(res.config);
         }
@@ -1117,9 +1145,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               const photo = ar.photoUrl || ar.imageUrl || ar.meterImageUrl || '';
               const cls = matchedConsumer?.consumerType === 'Commercial' ? 'Commercial' : 'Residential';
               const activeTariffCfg = getActiveTariffConfig();
-              const computedBill = typeof ar.billAmount === 'number' && ar.billAmount > 0
+              const computedBill = typeof ar.billAmount === 'number' && ar.billAmount > 0 && ar.tariffBaselineSchema === OFFICIAL_TARIFF_BASELINE_SCHEMA
                 ? ar.billAmount
                 : calculateWaterTariff(consumptionVal, cls, activeTariffCfg);
+              const computedTax = calculateFranchiseTax(computedBill, activeTariffCfg);
+              const computedPen = calculateLatePenalty(computedBill, activeTariffCfg);
+              const computedGross = Math.round((computedBill + computedTax) * 100) / 100;
               const newReadingRecord: MeterReading = {
                 id: ar.id,
                 accountNumber: ar.accountNumber || matchedConsumer?.accountNumber || 'UNKNOWN',
@@ -1134,8 +1165,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 currentReading: currVal,
                 consumption: consumptionVal,
                 billAmount: computedBill,
-                totalAmount: computedBill,
+                franchiseTax: computedTax,
+                totalAmount: computedGross,
+                penaltyAmount: computedPen,
+                amountAfterDueDate: Math.round((computedGross + computedPen) * 100) / 100,
                 appliedTariffVersion: ar.appliedTariffVersion || activeTariffCfg.version,
+                tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
                 readingDate: ar.readingDate || new Date().toISOString().split('T')[0],
                 submittedAt: ar.submittedAt || new Date().toISOString(),
                 billingPeriod: ar.billingPeriod || new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
@@ -1973,7 +2008,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         brand: 'Aichi / Actaris Precision',
         installationDate: new Date().toISOString().split('T')[0],
         status: 'active',
-        linkedAccountNumber: newAccNum
+        linkedAccountNumber: newAccNum,
+        lastReadingValue: 0
       };
       const updatedMeters = [...allMeters, newMeterRecord];
       mockDb.saveMeters(updatedMeters);
@@ -2183,7 +2219,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       brand: newMeter.brand || 'Aichi / Actaris Precision',
       installationDate: newMeter.installationDate,
       status: newMeter.status,
-      linkedAccountNumber: newMeter.linkedAccountNumber ? newMeter.linkedAccountNumber.trim().toUpperCase() : undefined
+      linkedAccountNumber: newMeter.linkedAccountNumber ? newMeter.linkedAccountNumber.trim().toUpperCase() : undefined,
+      lastReadingValue: 0
     };
 
     const updated = [...meters, created];
@@ -3086,13 +3123,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const activeCfg = getActiveTariffConfig();
     const updated = readings.map(r => {
       if (r.id === readingId) {
-        const billAmt = calculateCostOf(r, r.classification);
+        const billAmt = getReadingEffectiveBillAmount(r, r.classification);
+        const fTax = calculateFranchiseTax(billAmt, activeCfg);
         return {
           ...r,
           status,
           isBillingIssued: r.isBillingIssued === true ? true : false,
           billAmount: billAmt,
+          franchiseTax: fTax,
+          totalAmount: Math.round((billAmt + fTax + (r.arrears || 0)) * 100) / 100,
           appliedTariffVersion: r.appliedTariffVersion || activeCfg.version,
+          tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
         };
       }
       return r;
@@ -3122,11 +3163,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     if (!readingsToBill || readingsToBill.length === 0) return;
     const activeCfg = getActiveTariffConfig();
 
-    // Process sequential readings in ascending cumulative dial order so multi-cycle approvals chain Previous -> Present -> Current cleanly
+    // Process sequential readings in chronological ascending order so multi-cycle approvals chain 5-digit odometer dials (00000–99999) cleanly
     const orderedTargets = [...readingsToBill].sort(
       (a, b) =>
         new Date(a.readingDate || 0).getTime() - new Date(b.readingDate || 0).getTime() ||
-        Number(a.currentReading ?? a.presentReading ?? 0) - Number(b.currentReading ?? b.presentReading ?? 0)
+        new Date(a.submittedAt || 0).getTime() - new Date(b.submittedAt || 0).getTime() ||
+        normalizeOdometerReading(a.currentReading ?? a.presentReading ?? 0) -
+          normalizeOdometerReading(b.currentReading ?? b.presentReading ?? 0)
     );
     const targetIds = new Set(orderedTargets.map(r => r.id));
     const baseTimestampMs = Date.now();
@@ -3152,27 +3195,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       const cls: 'Residential' | 'Commercial' =
         (r.classification || matchedConsumer?.consumerType) === 'Commercial' ? 'Commercial' : 'Residential';
 
-      const currVal = Math.max(0, Number(r.currentReading ?? r.presentReading ?? 0));
+      const currVal = normalizeOdometerReading(r.currentReading ?? r.presentReading ?? 0);
 
-      // Find highest verified baseline <= currVal so Previous Reading is NEVER lost when new readings arrive
+      // Find most recent verified baseline chronologically (preserving 5-digit odometer 99999 -> 00000 rollover)
       const priorApprovedForConsumer = workingReadings
         .filter(prev => {
           if (!prev || prev.id === r.id || prev.status === 'cancelled') return false;
           if (prev.status !== 'verified' && !isOfficialBillIssued(prev)) return false;
           const pAcc = String(prev.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
           const pMeter = String(prev.meterNumber || '').trim().toUpperCase();
-          const sameOwner = (cleanAcc && pAcc === cleanAcc) || (cleanMeter && pMeter === cleanMeter);
-          if (!sameOwner) return false;
-          const pCurr = Number(prev.currentReading ?? prev.presentReading ?? 0);
-          return pCurr <= currVal;
+          return Boolean((cleanAcc && pAcc === cleanAcc) || (cleanMeter && pMeter === cleanMeter));
         })
-        .sort(
-          (a, b) =>
-            Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
-            new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime()
-        );
+        .sort(compareReadingsCanonical);
 
-      const fallbackBaseline = Number(
+      const fallbackBaseline = normalizeOdometerReading(
         priorApprovedForConsumer[0]?.currentReading ??
           priorApprovedForConsumer[0]?.presentReading ??
           matchedConsumer?.currentReading ??
@@ -3181,14 +3217,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           0
       );
 
-      let prevVal = Math.max(0, Number(r.previousReading ?? 0));
-      if (prevVal === 0 && fallbackBaseline > 0 && currVal >= fallbackBaseline) {
-        prevVal = fallbackBaseline;
+      let rawPrev = normalizeOdometerReading(r.previousReading ?? 0);
+      if (rawPrev === 0 && fallbackBaseline > 0 && (currVal >= fallbackBaseline || !isImplausibleRollover(fallbackBaseline, currVal))) {
+        rawPrev = fallbackBaseline;
       }
-      if (prevVal > currVal) {
-        prevVal = fallbackBaseline <= currVal ? fallbackBaseline : 0;
+      if (rawPrev > currVal && isImplausibleRollover(rawPrev, currVal)) {
+        rawPrev = fallbackBaseline <= currVal || !isImplausibleRollover(fallbackBaseline, currVal) ? fallbackBaseline : 0;
       }
-      const usageVal = Math.max(0, currVal - prevVal);
+      const odoCalc = computeOdometerConsumption(rawPrev, currVal, r.consumption);
+      const prevVal = odoCalc.previousReading;
+      const usageVal = odoCalc.consumption;
 
       const priorUnpaid = workingReadings.filter(
         prev =>
@@ -3233,6 +3271,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         penaltyAmount: lPenalty,
         amountAfterDueDate: afterDue,
         appliedTariffVersion: activeCfg.version,
+        tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
         paymentStatus: r.paymentStatus === 'paid' || r.paymentStatus === 'partial' ? r.paymentStatus : 'unpaid',
         paidAmount: r.paidAmount || 0,
         remainingBalance: Math.max(0, totalDue - (r.paidAmount || 0)),
@@ -3248,12 +3287,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       fetch(`/api/readings/${encodeURIComponent(r.id)}/approve`, { method: 'POST' }).catch(() => {});
     });
 
-    const updatedReadings = workingReadings.map(r => (targetIds.has(r.id) ? issuedMap.get(r.id) || r : r)).sort(
-      (a, b) =>
-        new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
-        Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
-        new Date(b.billingIssuedAt || b.submittedAt || 0).getTime() - new Date(a.billingIssuedAt || a.submittedAt || 0).getTime()
-    );
+    const updatedReadings = workingReadings
+      .map(r => (targetIds.has(r.id) ? issuedMap.get(r.id) || r : r))
+      .sort(compareReadingsCanonical);
 
     mockDb.saveReadings(updatedReadings);
     setReadings(updatedReadings);
@@ -3269,12 +3305,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       if (!affectedAccounts.has(cAcct)) return c;
       const consumerVerified = updatedReadings
         .filter(r => (r.accountNumber || '').replace(/^#/, '').trim().toLowerCase() === cAcct && r.status === 'verified')
-        .sort(
-          (a, b) =>
-            new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
-            Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
-            new Date(b.billingIssuedAt || 0).getTime() - new Date(a.billingIssuedAt || 0).getTime()
-        );
+        .sort(compareReadingsCanonical);
       const latestVerified = consumerVerified[0];
       const consumerUnpaid = consumerVerified.filter(r => isOfficialBillIssued(r) && r.paymentStatus !== 'paid');
       const newArrears = Math.round(
@@ -3309,7 +3340,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         metersChanged = true;
         return {
           ...m,
-          lastReadingValue: Math.max(Number(m.lastReadingValue || 0), matchingCons.currentReading),
+          lastReadingValue: normalizeOdometerReading(matchingCons.currentReading),
           lastReadingDate: matchingCons.lastReadingDate || m.lastReadingDate,
         };
       }
@@ -3333,7 +3364,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         userId: matchedConsumer?.linkedUserId,
         consumerEmail: matchedConsumer?.email,
         title: `Water Bill Issued - ${bill.billingPeriod || 'New Statement'}`,
-        message: `Your meter reading for ${bill.billingPeriod} has been approved by Administration (Previous: ${bill.previousReading} m³ → Present: ${bill.presentReading ?? bill.currentReading} m³ • Usage: ${bill.consumption} m³). Basic Charge: ₱${(bill.billAmount || 0).toFixed(2)} | Total Due: ₱${(bill.totalAmount || 0).toFixed(2)} (Due: ${bill.dueDate}). Your official Water Billing Notice & Receipt is now available on your dashboard.`,
+        message: `Your meter reading for ${bill.billingPeriod} has been approved by Administration (Previous Dial: ${formatOdometerReading(bill.previousReading)} → Present Dial: ${formatOdometerReading(bill.presentReading ?? bill.currentReading)} • Usage: ${bill.consumption} m³). Basic Charge: ₱${(bill.billAmount || 0).toFixed(2)} | Total Due: ₱${(bill.totalAmount || 0).toFixed(2)} (Due: ${bill.dueDate}). Your official Water Billing Notice & Receipt is now available on your dashboard.`,
         type: 'billing',
         readingId: bill.id,
         billingPeriod: bill.billingPeriod,
@@ -3352,7 +3383,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         consumption: bill.consumption,
         reading: bill,
         notification: notif,
-        message: `Official water bill for ${bill.billingPeriod} (Prev ${bill.previousReading} → Pres ${bill.currentReading} m³ = ${bill.consumption} m³ • ₱${(bill.totalAmount || bill.billAmount || 0).toFixed(2)}) has been issued.`,
+        message: `Official water bill for ${bill.billingPeriod} (Dial ${formatOdometerReading(bill.previousReading)} → ${formatOdometerReading(bill.currentReading)} = ${bill.consumption} m³ • ₱${(bill.totalAmount || bill.billAmount || 0).toFixed(2)}) has been issued.`,
       });
       sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
         accountNumber: bill.accountNumber,
@@ -3388,11 +3419,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         currentUser.name,
         'admin',
         'Approved Reading & Issued Official Billing',
-        `Approved reading #${single.id} (Prev ${single.previousReading} → Pres ${single.currentReading} m³ = ${single.consumption} m³) and issued billing ${single.invoiceNumber} for ${single.consumerName} (Account #${single.accountNumber}, ${single.billingPeriod}, Total Due: ₱${(single.totalAmount || 0).toFixed(2)}).`
+        `Approved reading #${single.id} (Dial ${formatOdometerReading(single.previousReading)} → ${formatOdometerReading(single.currentReading)} = ${single.consumption} m³) and issued billing ${single.invoiceNumber} for ${single.consumerName} (Account #${single.accountNumber}, ${single.billingPeriod}, Total Due: ₱${(single.totalAmount || 0).toFixed(2)}).`
       );
       toast.success(
         'Reading Approved & Bill Issued',
-        `${single.consumerName} (#${single.accountNumber}): Prev ${single.previousReading} → Pres ${single.currentReading} m³ (${single.consumption} m³) • ₱${(single.totalAmount || 0).toFixed(2)} sent to Consumer Portal.`,
+        `${single.consumerName} (#${single.accountNumber}): Dial ${formatOdometerReading(single.previousReading)} → ${formatOdometerReading(single.currentReading)} (${single.consumption} m³) • ₱${(single.totalAmount || 0).toFixed(2)} sent to Consumer Portal.`,
         5500
       );
     } else {
@@ -3423,30 +3454,27 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const acc = chosenConsumer?.accountNumber || '';
     const consumerReads = readings
       .filter(r => r.accountNumber === acc && r.status !== 'cancelled')
-      .sort(
-        (a, b) =>
-          new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
-          Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
-          new Date(b.billingIssuedAt || b.submittedAt || 0).getTime() - new Date(a.billingIssuedAt || a.submittedAt || 0).getTime()
-      );
+      .sort(compareReadingsCanonical);
     const unbilledMatch = existingReading || consumerReads.find(r => !isOfficialBillIssued(r));
     const latestIssued = consumerReads.find(r => isOfficialBillIssued(r) && (!unbilledMatch || r.id !== unbilledMatch.id));
     const latestVerified = consumerReads.find(r => r.status === 'verified' && (!unbilledMatch || r.id !== unbilledMatch.id));
-    const fallbackBaseline = Number(
+    const fallbackBaseline = normalizeOdometerReading(
       latestIssued?.currentReading ??
         latestVerified?.currentReading ??
         chosenConsumer?.currentReading ??
         chosenConsumer?.previousReading ??
         0
     );
+    const baseCurr = unbilledMatch
+      ? normalizeOdometerReading(unbilledMatch.currentReading ?? unbilledMatch.presentReading ?? fallbackBaseline)
+      : fallbackBaseline;
     const basePrev = unbilledMatch
-      ? (unbilledMatch.previousReading > 0
-          ? unbilledMatch.previousReading
-          : unbilledMatch.currentReading >= fallbackBaseline
+      ? (Number(unbilledMatch.previousReading) > 0
+          ? normalizeOdometerReading(unbilledMatch.previousReading)
+          : baseCurr >= fallbackBaseline || !isImplausibleRollover(fallbackBaseline, baseCurr)
             ? fallbackBaseline
             : 0)
       : fallbackBaseline;
-    const baseCurr = unbilledMatch ? unbilledMatch.currentReading : basePrev;
     const rDate = unbilledMatch?.readingDate || new Date().toISOString().split('T')[0];
 
     setCreateBillModal({
@@ -3457,8 +3485,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
       readingDate: rDate,
       dueDate: unbilledMatch?.dueDate || computeDefaultDueDate(rDate),
-      previousReading: String(basePrev),
-      currentReading: String(baseCurr),
+      previousReading: formatOdometerReading(basePrev),
+      currentReading: formatOdometerReading(baseCurr),
       notes: unbilledMatch?.notes || '',
       sourceReadingId: unbilledMatch?.id || '',
     });
@@ -3471,13 +3499,24 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       toast.warning('Select Consumer', 'Please choose a valid active consumer account to bill.');
       return;
     }
-    const prevVal = Math.max(0, Number(createBillModal.previousReading) || 0);
-    const currVal = Math.max(0, Number(createBillModal.currentReading) || 0);
-    if (currVal < prevVal) {
-      toast.warning('Invalid Meter Index', 'Present reading cannot be less than previous reading.');
+    if (!isValidOdometerInput(createBillModal.previousReading) || !isValidOdometerInput(createBillModal.currentReading)) {
+      toast.warning(
+        'Invalid 5-Digit Odometer Dial',
+        'Meter readings must be 5-digit odometer numbers between 00000 and 99999.'
+      );
       return;
     }
-    const usage = Math.max(0, currVal - prevVal);
+    const prevVal = normalizeOdometerReading(createBillModal.previousReading);
+    const currVal = normalizeOdometerReading(createBillModal.currentReading);
+    if (isImplausibleRollover(prevVal, currVal)) {
+      toast.warning(
+        'Invalid Odometer Dial Progression',
+        `Present dial (${formatOdometerReading(currVal)}) cannot be lower than Previous dial (${formatOdometerReading(prevVal)}) unless the 5-digit odometer wrapped past 99999 → 00000.`
+      );
+      return;
+    }
+    const odoResult = computeOdometerConsumption(prevVal, currVal);
+    const usage = odoResult.consumption;
     if (usage <= 0) {
       toast.warning('Zero Consumption', 'Consumption must be at least 1 m³ to generate an official water bill.');
       return;
@@ -3586,12 +3625,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       existingIdx >= 0
         ? readings.map((r, i) => (i === existingIdx ? finalizedBill : r))
         : [finalizedBill, ...readings]
-    ).sort(
-      (a, b) =>
-        new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime() ||
-        Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
-        new Date(b.billingIssuedAt || b.submittedAt || 0).getTime() - new Date(a.billingIssuedAt || a.submittedAt || 0).getTime()
-    );
+    ).sort(compareReadingsCanonical);
 
     mockDb.saveReadings(nextReadings);
     setReadings(nextReadings);
@@ -3623,7 +3657,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       m.linkedAccountNumber === targetConsumer.accountNumber || m.meterNumber === targetConsumer.meterNumber
         ? {
             ...m,
-            lastReadingValue: Math.max(Number(m.lastReadingValue || 0), currVal),
+            lastReadingValue: currVal,
             lastReadingDate: readDate,
           }
         : m
@@ -3637,7 +3671,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       userId: targetConsumer.linkedUserId,
       consumerEmail: targetConsumer.email,
       title: `Water Bill Issued - ${periodLabel}`,
-      message: `Your official water billing statement for ${periodLabel} (${usage} m³) has been generated and issued by Tagoloan Water District Administration. Total Basic Charge: ₱${waterCharge.toFixed(2)} (Total Due: ₱${totalDue.toFixed(2)}). Due Date: ${dueLabel}. Your Water Billing Notice & Receipt is now available on your dashboard.`,
+      message: `Your official water billing statement for ${periodLabel} (Dial ${formatOdometerReading(prevVal)} → ${formatOdometerReading(currVal)} • ${usage} m³) has been generated and issued by Tagoloan Water District Administration. Total Basic Charge: ₱${waterCharge.toFixed(2)} (Total Due: ₱${totalDue.toFixed(2)}). Due Date: ${dueLabel}. Your Water Billing Notice & Receipt is now available on your dashboard.`,
       type: 'billing',
       readingId: finalizedBill.id,
       billingPeriod: periodLabel,
@@ -3682,7 +3716,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       currentUser.name,
       'admin',
       'Created & Issued Official Consumer Billing',
-      `Created and issued billing ${finalizedBill.invoiceNumber} for ${targetConsumer.name} (Account #${targetConsumer.accountNumber}, ${periodLabel}, ${prevVal} → ${currVal} m³ = ${usage} m³, Total Due: ₱${totalDue.toFixed(2)}).`
+      `Created and issued billing ${finalizedBill.invoiceNumber} for ${targetConsumer.name} (Account #${targetConsumer.accountNumber}, ${periodLabel}, Dial ${formatOdometerReading(prevVal)} → ${formatOdometerReading(currVal)} = ${usage} m³, Total Due: ₱${totalDue.toFixed(2)}).`
     );
 
     window.dispatchEvent(new Event('twd_database_updated'));
@@ -4777,7 +4811,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     r.meterNumber,
                                     r.billingPeriod,
                                     r.route,
-                                    r.notes
+                                    r.notes,
+                                    formatOdometerReading(r.previousReading),
+                                    formatOdometerReading(r.presentReading ?? r.currentReading)
                                   ]);
                                 });
                                 if (filtered.length > 0) {
@@ -4816,7 +4852,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         r.meterNumber,
                         r.billingPeriod,
                         r.route,
-                        r.notes
+                        r.notes,
+                        formatOdometerReading(r.previousReading),
+                        formatOdometerReading(r.presentReading ?? r.currentReading)
                       ]);
                     });
 
@@ -5015,18 +5053,18 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                         {/* Reading Metrics: Previous (Baseline), Present (Inspection), Current Consumption, Bill */}
                                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950 border border-slate-800/90 rounded-xl p-3.5 shadow-inner">
                                           <div>
-                                            <span className="text-[11px] font-medium text-slate-400 block">Previous Reading (Baseline)</span>
-                                            <div className="mt-0.5 flex items-baseline space-x-1">
-                                              <span className="text-base font-mono tabular-nums font-bold text-slate-300">{reading.previousReading}</span>
-                                              <span className="text-xs text-slate-500">m³</span>
+                                            <span className="text-[11px] font-medium text-slate-400 block">Previous Dial (Baseline)</span>
+                                            <div className="mt-0.5 flex items-baseline space-x-1.5">
+                                              <span className="text-base font-mono tabular-nums font-bold text-slate-200">{formatOdometerReading(reading.previousReading)}</span>
+                                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Dial</span>
                                             </div>
                                           </div>
 
                                           <div>
-                                            <span className="text-[11px] font-medium text-slate-400 block">Present Reading (Inspection)</span>
-                                            <div className="mt-0.5 flex items-baseline space-x-1">
-                                              <span className="text-base font-mono tabular-nums font-bold text-blue-400">{reading.presentReading ?? reading.currentReading}</span>
-                                              <span className="text-xs text-blue-500">m³</span>
+                                            <span className="text-[11px] font-medium text-slate-400 block">Present Dial (Inspection)</span>
+                                            <div className="mt-0.5 flex items-baseline space-x-1.5">
+                                              <span className="text-base font-mono tabular-nums font-bold text-blue-400">{formatOdometerReading(reading.presentReading ?? reading.currentReading)}</span>
+                                              <span className="text-[10px] font-bold uppercase tracking-wider text-blue-500">Dial</span>
                                             </div>
                                           </div>
 
@@ -5131,7 +5169,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         r.readingDate,
                         r.meterReaderName,
                         r.status,
-                        r.notes
+                        r.notes,
+                        formatOdometerReading(r.previousReading),
+                        formatOdometerReading(r.presentReading ?? r.currentReading)
                       ])
                     );
                     const safeApprovalHistoryPage = Math.min(approvalHistoryPage, Math.max(1, Math.ceil(filteredHistory.length / 10)));
@@ -5147,16 +5187,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               onChange={setApprovalHistorySearch}
                               resultCount={filteredHistory.length}
                               totalCount={allHistoryItems.length}
-                              placeholder="Smart search history by Tx ID, account #, consumer name, meter #, reader, or notes..."
+                              placeholder="Smart search history by Tx ID, account #, consumer name, meter #, 5-digit dial, reader, or notes..."
                               id="admin-approvals-history-smart-search"
                             />
                           </div>
 
                           <button
                             onClick={() => {
-                              const headers = ['Tx ID', 'Billing Period', 'Account Number', 'Consumer Name', 'Meter Number', 'Prev Index', 'Curr Index', 'Consumption', 'Status', 'Reader Staff', 'Notes'];
+                              const headers = ['Tx ID', 'Billing Period', 'Account Number', 'Consumer Name', 'Meter Tag #', 'Prev Dial (00000-99999)', 'Curr Dial (00000-99999)', 'Consumption (m3)', 'Status', 'Reader Staff', 'Notes'];
                               const rows = filteredHistory.map(r => [
-                                r.id, r.billingPeriod, r.accountNumber, r.consumerName, r.meterNumber, r.previousReading, r.currentReading, r.consumption, r.status.toUpperCase(), r.meterReaderName, r.notes || ''
+                                r.id, r.billingPeriod, r.accountNumber, r.consumerName, r.meterNumber, formatOdometerReading(r.previousReading), formatOdometerReading(r.presentReading ?? r.currentReading), r.consumption, r.status.toUpperCase(), r.meterReaderName, r.notes || ''
                               ]);
                               exportToCsv('twd_approval_history_audit_export.csv', headers, rows);
                             }}
@@ -5176,8 +5216,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 <th className="px-3.5 py-3 whitespace-nowrap">Read Date</th>
                                 <th className="px-3.5 py-3 whitespace-nowrap">Billing Period</th>
                                 <th className="px-3.5 py-3 min-w-[140px]">Account & Consumer</th>
-                                <th className="px-3.5 py-3 whitespace-nowrap">Meter No.</th>
-                                <th className="px-3.5 py-3 whitespace-nowrap">Indices (Prev → Curr)</th>
+                                <th className="px-3.5 py-3 whitespace-nowrap">Meter Tag #</th>
+                                <th className="px-3.5 py-3 whitespace-nowrap">Odometer Dial (Prev → Curr)</th>
                                 <th className="px-3.5 py-3 whitespace-nowrap">Usage & Bill</th>
                                 <th className="px-3.5 py-3 whitespace-nowrap">Status</th>
                                 <th className="px-3.5 py-3 min-w-[160px]">Audit Notes & Reader</th>
@@ -5239,10 +5279,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                   <td className="px-3.5 py-3 font-mono text-slate-200 font-bold whitespace-nowrap">
                                     {r.meterNumber}
                                   </td>
-                                  <td className="px-3.5 py-3 font-mono whitespace-nowrap">
-                                    <span className="text-slate-400">{r.previousReading}</span>
+                                  <td className="px-3.5 py-3 font-mono tabular-nums whitespace-nowrap">
+                                    <span className="text-slate-400">{formatOdometerReading(r.previousReading)}</span>
                                     <span className="text-slate-500 mx-1">→</span>
-                                    <span className="font-bold text-white">{r.currentReading} m³</span>
+                                    <span className="font-bold text-white">{formatOdometerReading(r.presentReading ?? r.currentReading)}</span>
                                   </td>
                                   <td className="px-3.5 py-3 space-y-0.5 whitespace-nowrap">
                                     <span className="font-mono font-bold text-emerald-400 block">{r.consumption} m³</span>
@@ -6832,7 +6872,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           m.remarks,
                           linkedConsumer?.name,
                           linkedConsumer?.barangay,
-                          linkedConsumer?.consumerType
+                          linkedConsumer?.consumerType,
+                          formatOdometerReading(m.lastReadingValue ?? linkedConsumer?.currentReading ?? linkedConsumer?.previousReading ?? 0)
                         ]);
                       })
                       .sort(compareMetersCanonical);
@@ -7161,7 +7202,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       r.route,
                       r.status,
                       r.notes,
-                      `${r.consumption} m3`
+                      `${r.consumption} m3`,
+                      formatOdometerReading(r.previousReading),
+                      formatOdometerReading(r.presentReading ?? r.currentReading)
                     ]);
                   })
                   .sort(compareReadingsCanonical);
@@ -7218,7 +7261,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <th className="px-4 py-3.5 whitespace-nowrap">Tx ID</th>
                             <th className="px-4 py-3.5 min-w-[200px]">Consumer & Account</th>
                             <th className="px-4 py-3.5 whitespace-nowrap">Period</th>
-                            <th className="px-4 py-3.5 whitespace-nowrap">Index (Prev → Curr)</th>
+                            <th className="px-4 py-3.5 whitespace-nowrap">Odometer Dial (Prev → Curr)</th>
                             <th className="px-4 py-3.5 min-w-[170px]">Telemetry & Verification</th>
                             <th className="px-4 py-3.5 whitespace-nowrap">Consumption</th>
                             <th className="px-4 py-3.5 whitespace-nowrap text-center">Status</th>
@@ -7278,11 +7321,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     {r.billingPeriod}
                                   </td>
 
-                                  {/* Indices */}
-                                  <td className="px-4 py-3.5 font-mono whitespace-nowrap">
-                                    <span className="text-slate-400 text-xs">{r.previousReading} m³</span>
+                                  {/* 5-Digit Odometer Dial Readings */}
+                                  <td className="px-4 py-3.5 font-mono tabular-nums whitespace-nowrap">
+                                    <span className="text-slate-400 text-xs">{formatOdometerReading(r.previousReading)}</span>
                                     <span className="text-slate-500 mx-1 font-sans">→</span>
-                                    <span className="font-black text-white text-xs">{r.currentReading} m³</span>
+                                    <span className="font-black text-white text-xs">{formatOdometerReading(r.presentReading ?? r.currentReading)}</span>
                                   </td>
 
                                   {/* Telemetry (GPS / Photo) */}
@@ -7783,7 +7826,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 <th className="py-2.5 pr-3.5 whitespace-nowrap">Period</th>
                                 <th className="py-2.5 px-3.5 whitespace-nowrap">Account #</th>
                                 <th className="py-2.5 px-3.5 whitespace-nowrap">Consumer</th>
-                                <th className="py-2.5 px-3.5 whitespace-nowrap">Index (Prev → Curr)</th>
+                                <th className="py-2.5 px-3.5 whitespace-nowrap">Odometer Dial (Prev → Curr)</th>
                                 <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Usage</th>
                                 <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Est. Charge</th>
                                 <th className="py-2.5 pl-3.5 text-right whitespace-nowrap">Action</th>
@@ -7791,7 +7834,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             </thead>
                             <tbody className="divide-y divide-slate-800/70">
                               {unbilledVerified.map((ur, uIdx) => {
-                                const estAmt = calculateWaterTariff(ur.consumption, ur.classification || 'Residential');
+                                const estAmt = calculateCostOf(ur.consumption, ur.classification || 'Residential');
                                 return (
                                   <tr
                                     key={`unbilled-row-${ur.id || uIdx}`}
@@ -7802,7 +7845,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     <td className="py-3 pr-3.5 font-bold text-white truncate" title={ur.billingPeriod}>{ur.billingPeriod}</td>
                                     <td className="py-3 px-3.5 font-mono tabular-nums font-bold text-sky-400 truncate">{ur.accountNumber}</td>
                                     <td className="py-3 px-3.5 font-bold text-slate-200 truncate" title={ur.consumerName}>{ur.consumerName}</td>
-                                    <td className="py-3 px-3.5 font-mono tabular-nums text-slate-300 whitespace-nowrap">{ur.previousReading} → {ur.currentReading} m³</td>
+                                    <td className="py-3 px-3.5 font-mono tabular-nums text-slate-300 whitespace-nowrap">{formatOdometerReading(ur.previousReading)} → {formatOdometerReading(ur.presentReading ?? ur.currentReading)}</td>
                                     <td className="py-3 px-3.5 text-right font-mono tabular-nums font-black text-cyan-300 whitespace-nowrap">{ur.consumption} m³</td>
                                     <td className="py-3 px-3.5 text-right font-mono tabular-nums font-black text-white whitespace-nowrap">₱{estAmt.toFixed(2)}</td>
                                     <td className="py-3 pl-3.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
@@ -7893,7 +7936,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       r.paymentStatus || 'unpaid',
                       r.classification,
                       `${r.consumption} m3`,
-                      calculateCostOf(r, r.classification).toFixed(2)
+                      calculateCostOf(r, r.classification).toFixed(2),
+                      formatOdometerReading(r.previousReading),
+                      formatOdometerReading(r.presentReading ?? r.currentReading)
                     ])
                   )
                   .sort(compareReadingsCanonical);
@@ -8787,6 +8832,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           const updatedReadings = readings.map(r => {
                             if (selectedBillIds.includes(r.id)) {
                               const alloc = allocations[r.id];
+                              const basicBillAmt = r.billAmount ?? getReadingEffectiveBillAmount(r, r.classification || selectedPaymentAccount.consumerType);
+                              const fTaxAmt = r.franchiseTax ?? calculateFranchiseTax(basicBillAmt);
                               const updatedRecord: MeterReading = {
                                 ...r,
                                 status: 'verified',
@@ -8795,8 +8842,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 billingIssuedBy: r.billingIssuedBy || currentUser.name,
                                 invoiceNumber: r.invoiceNumber || `INV-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`,
                                 dueDate: r.dueDate || computeDefaultDueDate(r.readingDate),
-                                billAmount: r.billAmount || alloc.grossTotal,
+                                billAmount: basicBillAmt,
+                                franchiseTax: fTaxAmt,
                                 totalAmount: r.totalAmount || alloc.grossTotal,
+                                tariffBaselineSchema: r.tariffBaselineSchema || OFFICIAL_TARIFF_BASELINE_SCHEMA,
                                 paymentStatus: alloc.newStatus,
                                 paidAmount: alloc.newPaid,
                                 remainingBalance: alloc.newRem,
@@ -9133,7 +9182,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           </span>
                         </div>
                         <p className="text-xs text-slate-200 mt-1 font-medium">
-                          Residential Lifeline (1-10 m³): <strong className="text-emerald-400 font-mono">₱{activeTariff.residential.baseMinCharge.toFixed(2)}</strong> • Commercial Lifeline (1-10 m³): <strong className="text-blue-400 font-mono">₱{activeTariff.commercial.baseMinCharge.toFixed(2)}</strong>
+                          Residential: <strong className="text-emerald-400 font-mono">₱{(activeTariff.residential.ratePerM3 ?? activeTariff.residential.baseMinCharge).toFixed(2)}/m³</strong> • Commercial: <strong className="text-blue-400 font-mono">₱{(activeTariff.commercial.ratePerM3 ?? activeTariff.commercial.baseMinCharge).toFixed(2)}/m³</strong> • Franchise Tax: <strong className="text-indigo-300 font-mono">{(activeTariff.franchiseTaxRate * 100).toFixed(0)}%</strong> • Late Penalty: <strong className="text-amber-300 font-mono">{(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}%</strong>
                         </p>
                       </div>
                     </div>
@@ -10421,9 +10470,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     </div>
 
                     <div className="bg-slate-800 p-3.5 rounded-xl border border-slate-700 space-y-1">
-                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Web Portal</span>
-                      <span className="font-black text-slate-200 text-xs block">
-                        {selectedConsumerModal.isRegistered ? '✅ Registered' : '❌ Offline'}
+                      <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider block">Current Odometer Dial</span>
+                      <span className="font-mono tabular-nums font-black text-emerald-300 text-xs block">
+                        {formatOdometerReading(selectedConsumerModal.currentReading ?? selectedConsumerModal.previousReading ?? 0)}
                       </span>
                     </div>
                   </div>
@@ -11674,12 +11723,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         );
         const selectedCons = activeConsumers.find(c => c.accountNumber === createBillModal.accountNumber);
         const cls: 'Residential' | 'Commercial' = selectedCons?.consumerType === 'Commercial' ? 'Commercial' : 'Residential';
-        const prevIdx = Math.max(0, Number(createBillModal.previousReading) || 0);
-        const currIdx = Math.max(0, Number(createBillModal.currentReading) || 0);
-        const previewUsage = Math.max(0, currIdx - prevIdx);
+        const odoPreview = computeOdometerConsumption(createBillModal.previousReading, createBillModal.currentReading);
+        const prevIdx = odoPreview.previousReading;
+        const currIdx = odoPreview.currentReading;
+        const implausibleWrap = isImplausibleRollover(prevIdx, currIdx);
+        const previewUsage = implausibleWrap ? 0 : odoPreview.consumption;
         const previewCfg = getActiveTariffConfig();
+        const previewRatePerM3 = getEffectiveRatePerM3(cls, previewCfg);
         const previewWaterAmt = calculateWaterTariff(previewUsage, cls, previewCfg);
         const previewTax = calculateFranchiseTax(previewWaterAmt, previewCfg);
+        const previewPenalty = calculateLatePenalty(previewWaterAmt, previewCfg);
         const previewArrears = selectedCons
           ? Math.round(
               readings
@@ -11694,6 +11747,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             ) / 100
           : 0;
         const previewTotal = Math.round((previewWaterAmt + previewTax + previewArrears) * 100) / 100;
+        const previewAfterDue = Math.round((previewTotal + previewPenalty) * 100) / 100;
 
         return (
           <div
@@ -11736,7 +11790,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       const nextAcc = e.target.value;
                       const cReads = readings
                         .filter(r => r.accountNumber === nextAcc && r.status !== 'cancelled')
-                        .sort((a, b) => new Date(b.readingDate).getTime() - new Date(a.readingDate).getTime());
+                        .sort(compareReadingsCanonical);
                       const unbilled = cReads.find(r => !isOfficialBillIssued(r));
                       const lastBilled = cReads.find(r => isOfficialBillIssued(r));
                       const p = unbilled ? unbilled.previousReading : lastBilled ? lastBilled.currentReading : 0;
@@ -11748,8 +11802,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         billingPeriod: unbilled?.billingPeriod || prev.billingPeriod,
                         readingDate: unbilled?.readingDate || prev.readingDate,
                         dueDate: unbilled?.dueDate || computeDefaultDueDate(unbilled?.readingDate || prev.readingDate),
-                        previousReading: String(p),
-                        currentReading: String(c),
+                        previousReading: formatOdometerReading(p),
+                        currentReading: formatOdometerReading(c),
                       }));
                     }}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-bold text-white focus:outline-none focus:border-blue-500 cursor-pointer"
@@ -11802,31 +11856,88 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">Previous Reading (m³)</label>
+                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">
+                      Previous Dial (00000–99999)
+                    </label>
                     <input
-                      type="number"
-                      min={0}
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={5}
+                      pattern="[0-9]{1,5}"
+                      placeholder="00000"
                       value={createBillModal.previousReading}
-                      onChange={e => setCreateBillModal(prev => ({ ...prev, previousReading: e.target.value }))}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm font-mono font-black text-white focus:outline-none focus:border-blue-500"
+                      onChange={e =>
+                        setCreateBillModal(prev => ({
+                          ...prev,
+                          previousReading: sanitizeOdometerInput(e.target.value),
+                        }))
+                      }
+                      onBlur={() =>
+                        setCreateBillModal(prev => ({
+                          ...prev,
+                          previousReading: padOdometerInput(prev.previousReading),
+                        }))
+                      }
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm font-mono tabular-nums tracking-widest font-black text-white focus:outline-none focus:border-blue-500"
                     />
                   </div>
                   <div>
-                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">Present Reading (m³)</label>
+                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">
+                      Present Dial (00000–99999)
+                    </label>
                     <input
-                      type="number"
-                      min={0}
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={5}
+                      pattern="[0-9]{1,5}"
+                      placeholder="00000"
                       value={createBillModal.currentReading}
-                      onChange={e => setCreateBillModal(prev => ({ ...prev, currentReading: e.target.value }))}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm font-mono font-black text-sky-400 focus:outline-none focus:border-blue-500"
+                      onChange={e =>
+                        setCreateBillModal(prev => ({
+                          ...prev,
+                          currentReading: sanitizeOdometerInput(e.target.value),
+                        }))
+                      }
+                      onBlur={() =>
+                        setCreateBillModal(prev => ({
+                          ...prev,
+                          currentReading: padOdometerInput(prev.currentReading),
+                        }))
+                      }
+                      className={`w-full bg-slate-950 border rounded-xl px-3 py-2.5 text-sm font-mono tabular-nums tracking-widest font-black focus:outline-none ${
+                        implausibleWrap
+                          ? 'border-rose-500 text-rose-300 focus:border-rose-400'
+                          : 'border-slate-800 text-sky-400 focus:border-blue-500'
+                      }`}
                     />
                   </div>
                 </div>
 
+                {odoPreview.rolledOver && !implausibleWrap && (
+                  <div className="bg-sky-950/50 border border-sky-700/60 rounded-xl px-3.5 py-2 text-[11px] text-sky-200 font-medium flex items-center justify-between gap-2">
+                    <span>5-Digit Odometer Rollover Detected (99999 → 00000)</span>
+                    <span className="font-mono tabular-nums font-bold text-sky-300">
+                      {formatOdometerReading(prevIdx)} → {formatOdometerReading(currIdx)} (+{odoPreview.consumption} m³)
+                    </span>
+                  </div>
+                )}
+
+                {implausibleWrap && (
+                  <div className="bg-rose-950/60 border border-rose-700/60 rounded-xl px-3.5 py-2 text-[11px] text-rose-200 font-medium">
+                    Present dial ({formatOdometerReading(currIdx)}) is lower than Previous dial ({formatOdometerReading(prevIdx)}). Enter a reading ≥ {formatOdometerReading(prevIdx)} unless the 5-digit odometer wrapped past 99999 → 00000.
+                  </div>
+                )}
+
                 {/* Live 3-Pillar Preview */}
                 <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
                   <div className="flex justify-between text-slate-400">
-                    <span>Net Consumption ({cls}):</span>
+                    <span>Odometer Dial Span:</span>
+                    <span className="font-mono tabular-nums font-bold text-slate-200">
+                      {formatOdometerReading(prevIdx)} → {formatOdometerReading(currIdx)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Net Consumption ({cls} @ ₱{previewRatePerM3.toFixed(2)}/m³):</span>
                     <span className="font-mono font-black text-cyan-300">{previewUsage} m³</span>
                   </div>
                   <div className="flex justify-between text-slate-300">
@@ -11844,6 +11955,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   <div className="pt-2 border-t border-slate-800 flex justify-between items-baseline">
                     <span className="font-black text-white uppercase">Total Amount Due:</span>
                     <span className="font-mono font-black text-lg text-emerald-400">₱{previewTotal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-[11px] text-rose-300 pt-1">
+                    <span>Amount After Due Date (+10% Penalty: +₱{previewPenalty.toFixed(2)}):</span>
+                    <span className="font-mono font-bold">₱{previewAfterDue.toFixed(2)}</span>
                   </div>
                 </div>
               </div>
@@ -11955,6 +12070,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Installation Date</span>
                     <span className="font-mono tabular-nums text-slate-200 mt-0.5 block">
                       {viewingMeterDetailModal.installationDate || 'N/A'}
+                    </span>
+                  </div>
+                  <div className="sm:col-span-2 pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Current 5-Digit Odometer Dial (00000–99999)
+                    </span>
+                    <span className="font-mono tabular-nums font-black text-emerald-400 text-base tracking-widest">
+                      {formatOdometerReading(
+                        viewingMeterDetailModal.lastReadingValue ??
+                          linkedConsumer?.currentReading ??
+                          linkedConsumer?.previousReading ??
+                          0
+                      )}
                     </span>
                   </div>
                 </div>
@@ -12091,15 +12219,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               <div className="p-6 space-y-4 overflow-y-auto text-xs">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
                   <div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Previous Index</span>
-                    <span className="font-mono tabular-nums font-bold text-slate-200 text-base mt-0.5 block">
-                      {rd.previousReading} m³
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Previous Dial</span>
+                    <span className="font-mono tabular-nums font-bold text-slate-200 text-base tracking-wider mt-0.5 block">
+                      {formatOdometerReading(rd.previousReading)}
                     </span>
                   </div>
                   <div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Present Index</span>
-                    <span className="font-mono tabular-nums font-bold text-sky-400 text-base mt-0.5 block">
-                      {rd.presentReading ?? rd.currentReading} m³
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Present Dial</span>
+                    <span className="font-mono tabular-nums font-bold text-sky-400 text-base tracking-wider mt-0.5 block">
+                      {formatOdometerReading(rd.presentReading ?? rd.currentReading)}
                     </span>
                   </div>
                   <div>
