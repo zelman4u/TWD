@@ -18,7 +18,8 @@ import "dotenv/config";
 const app = express();
 app.set("trust proxy", 1);
 const httpServer = createHttpServer(app);
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const seenOwnHosts = new Set<string>();
 
 // Lazy initialization for Gemini AI SDK
 let genAIClient: GoogleGenAI | null = null;
@@ -98,15 +99,19 @@ app.get(["/ws", "/api/ws"], (req, res) => {
 app.use(express.json({ limit: "25mb" }));
 app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
-// Enable CORS for Mobile App and External API clients
+// Enable CORS for Mobile App, System Site, and External API clients
 app.use((req, res, next) => {
+  const reqHost = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim().toLowerCase();
+  if (reqHost) {
+    seenOwnHosts.add(reqHost);
+  }
   // Normalize accidental double /api prefixes from client base URL joins (e.g. /api/api/consumers)
   if (req.url.startsWith("/api/api/")) {
     req.url = req.url.replace(/^\/api\/api\//, "/api/");
   }
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-client-version, x-app-id, x-reader-id, x-employee-id, x-user-id, Cache-Control, Pragma");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-client-version, x-app-id, x-reader-id, x-employee-id, x-user-id, x-admin-portal, x-portal, x-role, x-bridge-origin, Cache-Control, Pragma");
   res.header("Access-Control-Max-Age", "86400");
   if (req.method === "OPTIONS") {
     return res.status(200).end();
@@ -144,8 +149,14 @@ app.use((req, res, next) => {
     return next();
   }
 
-  // Exempt survival and health check probes
-  if (req.path === "/api/health" || req.path === "/api/status" || req.path === "/api/ping" || req.path === "/api/survival") {
+  // Exempt survival, bridge telemetry, and health check probes
+  if (
+    req.path === "/api/health" ||
+    req.path === "/api/status" ||
+    req.path === "/api/ping" ||
+    req.path === "/api/survival" ||
+    req.path === "/api/mobile-bridge/status"
+  ) {
     return next();
   }
 
@@ -192,7 +203,9 @@ app.use((req, res, next) => {
 // In-Memory Mobile Staff & Sync Store
 interface MobileReader {
   id: string;
+  employeeId?: string;
   username: string;
+  email?: string;
   name: string;
   password?: string;
   pin?: string;
@@ -204,6 +217,8 @@ interface MobileReader {
   registeredAt: string;
   approvedAt?: string;
   assignedRoutes: string[];
+  deviceInfo?: string;
+  mobileSynced?: boolean;
 }
 
 let registeredStaff: MobileReader[] = [];
@@ -767,11 +782,34 @@ interface MobileReadingSubmission {
   status: "pending_approval" | "approved" | "rejected";
   photoUrl?: string;
   coordinates?: { latitude: number; longitude: number };
+  gpsAccuracy?: number;
+  meterCondition?: string;
+  ocrConfidence?: number;
+  isAnomaly?: boolean;
+  anomalyReason?: string;
+  mobileSyncSource?: "live_ws" | "batch_sync" | "rest_pull" | "direct_push";
+  rejectionReason?: string;
+  approvedBy?: string;
   notes?: string;
   submittedAt: string;
 }
 
 let pendingMobileReadings: MobileReadingSubmission[] = [];
+
+// In-Memory Water Meter Status Registry for Mobile Handheld Field Alerts
+interface SyncedWaterMeter {
+  meterNumber: string;
+  brand?: string;
+  size?: string;
+  status: "active" | "damaged" | "maintenance" | "inactive" | "unassigned";
+  remarks?: string;
+  linkedAccountNumber?: string;
+  lastReadingValue?: number;
+  statusUpdatedAt?: string;
+  statusUpdatedBy?: string;
+}
+
+let syncedMeters: SyncedWaterMeter[] = [];
 
 // ==========================================
 // IN-MEMORY CONSUMER CONCERNS & REPORTS STORE
@@ -1012,6 +1050,7 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
   } else {
     registeredStaff.push(newReader);
   }
+  savePortalSyncStore();
 
   // Broadcast new active reader event to Admin Web Portal via WebSocket
   broadcast("READER_REGISTERED_ACTIVE", {
@@ -1211,14 +1250,35 @@ app.get(["/api/readers/check-status/:id", "/api/auth/check-status/:id", "/api/re
   });
 });
 
-// 3. Admin Terminates / Deletes Meter Reader (DELETE /api/staff/:id, /api/readers/:id)
-app.delete(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
-  const { id } = req.params;
-  const { employeeId, email, username, name } = req.body || {};
+// 3. Admin Terminates / Deletes Meter Reader (DELETE /api/staff/:id, /api/readers/:id, ALL /api/readers/:id/terminate)
+function performReaderTerminationServer(
+  id: string,
+  extra: { employeeId?: string; email?: string; username?: string; name?: string; reason?: string; terminatedBy?: string }
+): boolean {
   const cleanId = decodeURIComponent(id || "").trim().toLowerCase();
+  const matchedExisting = registeredStaff.find(
+    s =>
+      s.id?.toLowerCase() === cleanId ||
+      s.employeeId?.toLowerCase() === cleanId ||
+      s.username?.toLowerCase() === cleanId ||
+      (extra.employeeId && s.id?.toLowerCase() === extra.employeeId.toLowerCase()) ||
+      (extra.username && s.username?.toLowerCase() === extra.username.toLowerCase()) ||
+      (extra.name && s.name?.toLowerCase() === extra.name.toLowerCase())
+  );
 
-  // Add all identifiers to the permanent termination blacklist
-  [id, cleanId, employeeId, email, username, name].forEach(ident => {
+  const allIdents = [
+    id,
+    cleanId,
+    extra.employeeId,
+    extra.email,
+    extra.username,
+    extra.name,
+    matchedExisting?.id,
+    matchedExisting?.employeeId,
+    matchedExisting?.username,
+    matchedExisting?.name,
+  ];
+  allIdents.forEach(ident => {
     if (ident && typeof ident === "string" && ident.trim()) {
       terminatedStaffIdentifiers.add(ident.trim().toLowerCase());
     }
@@ -1226,53 +1286,122 @@ app.delete(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
 
   const prevLen = registeredStaff.length;
   registeredStaff = registeredStaff.filter(
-    s => s.id?.toLowerCase() !== cleanId &&
-         s.username?.toLowerCase() !== cleanId &&
-         (!id || s.id?.toLowerCase() !== id.toLowerCase()) &&
-         (!employeeId || s.id?.toLowerCase() !== employeeId.toLowerCase()) &&
-         (!username || s.username?.toLowerCase() !== username.toLowerCase()) &&
-         (!name || s.name?.toLowerCase() !== name.toLowerCase()) &&
-         !isStaffTerminated(s.id) &&
-         !isStaffTerminated(s.username)
+    s =>
+      s.id?.toLowerCase() !== cleanId &&
+      s.username?.toLowerCase() !== cleanId &&
+      (!id || s.id?.toLowerCase() !== id.toLowerCase()) &&
+      (!extra.employeeId || s.id?.toLowerCase() !== extra.employeeId.toLowerCase()) &&
+      (!extra.username || s.username?.toLowerCase() !== extra.username.toLowerCase()) &&
+      (!extra.name || s.name?.toLowerCase() !== extra.name.toLowerCase()) &&
+      !isStaffTerminated(s.id) &&
+      !isStaffTerminated(s.username)
   );
+  savePortalSyncStore();
 
+  const remoteCandidates = Array.from(
+    new Set(
+      [id, extra.employeeId, matchedExisting?.id, matchedExisting?.employeeId, extra.username, matchedExisting?.username]
+        .filter((x): x is string => Boolean(x && String(x).trim()))
+        .map(x => String(x).trim())
+    )
+  );
+  forwardTerminateReaderToMobile(remoteCandidates, extra.reason, extra.terminatedBy).catch(() => {});
+
+  const effectiveName = extra.name || matchedExisting?.name || id;
   broadcast("READER_TERMINATED", {
     readerId: id,
-    employeeId,
-    email,
-    username,
-    name,
-    message: `Meter reader account (${id || name}) has been permanently terminated and erased.`
+    employeeId: extra.employeeId || matchedExisting?.employeeId || id,
+    email: extra.email,
+    username: extra.username || matchedExisting?.username,
+    name: effectiveName,
+    reason: extra.reason,
+    message: `Meter reader account (${effectiveName}) has been permanently terminated and credentials revoked.`
+  });
+  broadcast("READER_ACCOUNT_TERMINATED", {
+    readerId: id,
+    employeeId: extra.employeeId || matchedExisting?.employeeId || id,
+    username: extra.username || matchedExisting?.username,
+    name: effectiveName,
+    reason: extra.reason || "Terminated by TWD Central Administration"
   });
   broadcast("staff:terminated", {
     readerId: id,
-    employeeId,
-    email,
-    username,
-    name,
-    message: `Meter reader account (${id || name}) has been permanently terminated.`
+    employeeId: extra.employeeId || matchedExisting?.employeeId || id,
+    email: extra.email,
+    username: extra.username || matchedExisting?.username,
+    name: effectiveName,
+    message: `Meter reader account (${effectiveName}) has been permanently terminated.`
   });
+
+  return prevLen > registeredStaff.length;
+}
+
+app.delete(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
+  const { id } = req.params;
+  const { employeeId, email, username, name, reason, terminatedBy } = req.body || {};
+  const removed = performReaderTerminationServer(id, { employeeId, email, username, name, reason, terminatedBy });
 
   res.json({
     success: true,
     message: `Meter reader account permanently terminated and erased.`,
-    removed: prevLen > registeredStaff.length
+    removed
+  });
+});
+
+app.all(["/api/readers/:id/terminate", "/api/staff/:id/terminate"], (req, res) => {
+  const { id } = req.params;
+  const { employeeId, email, username, name, reason, terminatedBy } = req.body || {};
+  const removed = performReaderTerminationServer(id, { employeeId, email, username, name, reason, terminatedBy });
+
+  res.json({
+    success: true,
+    status: "terminated",
+    message: `Meter reader account (${id}) permanently terminated across Central Web and Mobile Field Terminal.`,
+    removed
+  });
+});
+
+app.all(["/api/readers/:id/reactivate", "/api/staff/:id/reactivate"], (req, res) => {
+  const { id } = req.params;
+  const cleanId = decodeURIComponent(id || "").trim().toLowerCase();
+  terminatedStaffIdentifiers.delete(cleanId);
+
+  const idx = registeredStaff.findIndex(
+    s => s.id?.toLowerCase() === cleanId || s.employeeId?.toLowerCase() === cleanId || s.username?.toLowerCase() === cleanId
+  );
+  if (idx >= 0) {
+    registeredStaff[idx].employmentStatus = "active";
+    registeredStaff[idx].status = "active";
+    [registeredStaff[idx].id, registeredStaff[idx].employeeId, registeredStaff[idx].username, registeredStaff[idx].name].forEach(ident => {
+      if (ident) terminatedStaffIdentifiers.delete(ident.trim().toLowerCase());
+    });
+  }
+  savePortalSyncStore();
+  forwardReactivateOrUpdateReaderToMobile(id, { employmentStatus: "active", status: "active" }).catch(() => {});
+
+  res.json({
+    success: true,
+    status: "active",
+    reader: idx >= 0 ? registeredStaff[idx] : undefined,
+    message: `Meter reader (${id}) reactivated.`
   });
 });
 
 // 3.05 Admin Updates Meter Reader (PATCH / PUT /api/staff/:id, /api/readers/:id)
-app.patch(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
+app.patch(["/api/staff/:id", "/api/readers/:id", "/api/readers/:id/status"], (req, res) => {
   const { id } = req.params;
   const cleanId = decodeURIComponent(id || "").trim().toLowerCase();
   const updates = req.body || {};
 
   const readerIndex = registeredStaff.findIndex(
     s => s.id?.toLowerCase() === cleanId ||
+         s.employeeId?.toLowerCase() === cleanId ||
          s.username?.toLowerCase() === cleanId ||
          (updates.employeeId && s.id?.toLowerCase() === updates.employeeId.toLowerCase())
   );
 
   if (readerIndex === -1) {
+    forwardReactivateOrUpdateReaderToMobile(id, updates).catch(() => {});
     return res.status(404).json({ success: false, message: "Meter reader not found." });
   }
 
@@ -1286,6 +1415,8 @@ app.patch(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
   };
 
   registeredStaff[readerIndex] = updatedReader;
+  savePortalSyncStore();
+  forwardReactivateOrUpdateReaderToMobile(updatedReader.id || id, updatedReader).catch(() => {});
 
   broadcast("staff:status_updated", {
     readerId: id,
@@ -1309,11 +1440,13 @@ app.put(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
 
   const readerIndex = registeredStaff.findIndex(
     s => s.id?.toLowerCase() === cleanId ||
+         s.employeeId?.toLowerCase() === cleanId ||
          s.username?.toLowerCase() === cleanId ||
          (updates.employeeId && s.id?.toLowerCase() === updates.employeeId.toLowerCase())
   );
 
   if (readerIndex === -1) {
+    forwardReactivateOrUpdateReaderToMobile(id, updates).catch(() => {});
     return res.status(404).json({ success: false, message: "Meter reader not found." });
   }
 
@@ -1327,6 +1460,8 @@ app.put(["/api/staff/:id", "/api/readers/:id"], (req, res) => {
   };
 
   registeredStaff[readerIndex] = updatedReader;
+  savePortalSyncStore();
+  forwardReactivateOrUpdateReaderToMobile(updatedReader.id || id, updatedReader).catch(() => {});
 
   broadcast("staff:status_updated", {
     readerId: id,
@@ -1896,6 +2031,7 @@ app.post("/api/consumers", (req, res) => {
     // Sync linked portal user status & accountNumber on server
     if (isNowValidated) {
       syncConsumerToServerPortalUser(savedConsumer);
+      forwardConsumerToMobileTerminal(savedConsumer, !wasPreviouslyValidated).catch(() => {});
     }
 
     savePortalSyncStore();
@@ -2002,6 +2138,7 @@ app.patch("/api/consumers/:identifier", (req, res) => {
 
     if (isValidatedConsumerForReader(updatedConsumer)) {
       syncConsumerToServerPortalUser(updatedConsumer);
+      forwardConsumerToMobileTerminal(updatedConsumer, !isValidatedConsumerForReader(currentConsumer)).catch(() => {});
     }
     savePortalSyncStore();
 
@@ -2175,6 +2312,7 @@ app.post(["/api/consumers/:identifier/issue-id", "/api/consumers/:identifier/app
       type: "account_issue"
     });
     savePortalSyncStore();
+    forwardConsumerToMobileTerminal(validatedConsumer, true).catch(() => {});
 
     // Broadcast ID activation event to Consumer Portal, Admin consoles, and mobile reader route streams
     broadcast("CONSUMER_IDS_ISSUED", {
@@ -2436,9 +2574,11 @@ app.post("/api/consumers/reconcile", (req, res) => {
     // 4. Deduplicate stale pending twins on server & align all issued consumers with their portal users + notifications
     reconcileAllServerConsumersAndUsers();
     savePortalSyncStore();
+    pushValidatedConsumersAndMetersToMobile(false).catch(() => {});
 
     // 5. Broadcast newly reconciled ID confirmations so open Consumer Portals update immediately
     newlyConfirmedBroadcasts.forEach(({ consumer, notification }) => {
+      forwardConsumerToMobileTerminal(consumer, true).catch(() => {});
       broadcast("CONSUMER_IDS_ISSUED", {
         consumer,
         notification,
@@ -2889,6 +3029,15 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit", "/api/readi
     finalId = `READ-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
   }
 
+  const rawCoords = coordinates || req.body?.gpsCoordinates || req.body?.gps;
+  const parsedCoords =
+    rawCoords && typeof rawCoords === "object"
+      ? {
+          latitude: Number(rawCoords.latitude ?? rawCoords.lat ?? 8.5372),
+          longitude: Number(rawCoords.longitude ?? rawCoords.lng ?? 124.7523),
+        }
+      : { latitude: 8.5372, longitude: 124.7523 };
+
   const defaultPeriod = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" });
   const submission: MobileReadingSubmission = {
     id: finalId,
@@ -2903,11 +3052,17 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit", "/api/readi
     consumption,
     readerId: readerId || "WDT-FIELD",
     readerName: readerName || "Field Meter Officer",
-    route: route || (matchedConsumer ? matchedConsumer.barangay : "Poblacion"),
+    route: route || req.body?.barangay || (matchedConsumer ? matchedConsumer.barangay : "Poblacion"),
     status: "pending_approval",
     photoUrl: photoUrl || "",
-    coordinates: coordinates || { latitude: 8.5372, longitude: 124.7523 },
-    notes: notes || "Scanned and submitted via Tagoloan Mobile Field App",
+    coordinates: parsedCoords,
+    gpsAccuracy: typeof rawCoords?.accuracy === "number" ? rawCoords.accuracy : undefined,
+    meterCondition: req.body?.meterCondition || undefined,
+    ocrConfidence: typeof req.body?.ocrConfidence === "number" ? req.body.ocrConfidence : undefined,
+    isAnomaly: typeof req.body?.isAnomaly === "boolean" ? req.body.isAnomaly : undefined,
+    anomalyReason: req.body?.anomalyReason || undefined,
+    mobileSyncSource: "direct_push",
+    notes: notes || req.body?.remarks || "Scanned and submitted via Tagoloan Mobile Field App",
     submittedAt: new Date().toISOString()
   };
 
@@ -2917,6 +3072,7 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit", "/api/readi
   } else {
     pendingMobileReadings.unshift(submission);
   }
+  savePortalSyncStore();
 
   // Broadcast new reading to Admin Approval Queue on Web via WebSocket
   broadcast("READING_SUBMITTED_FOR_APPROVAL", {
@@ -2994,6 +3150,15 @@ app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req,
       finalId = `READ-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
     }
 
+    const rawCoords = item.coordinates || item.gpsCoordinates || item.gps;
+    const parsedCoords =
+      rawCoords && typeof rawCoords === "object"
+        ? {
+            latitude: Number(rawCoords.latitude ?? rawCoords.lat ?? 8.5372),
+            longitude: Number(rawCoords.longitude ?? rawCoords.lng ?? 124.7523),
+          }
+        : { latitude: 8.5372, longitude: 124.7523 };
+
     const defaultPeriod = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" });
     const submission: MobileReadingSubmission = {
       id: finalId,
@@ -3011,8 +3176,14 @@ app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req,
       route: item.route || item.barangay || (matchedConsumer ? matchedConsumer.barangay : "Poblacion"),
       status: "pending_approval",
       photoUrl: item.photoUrl || item.dialPhotoUrl || "",
-      coordinates: item.coordinates || item.gps || { latitude: 8.5372, longitude: 124.7523 },
-      notes: item.notes || "Batch synced from Mobile Offline Queue",
+      coordinates: parsedCoords,
+      gpsAccuracy: typeof rawCoords?.accuracy === "number" ? rawCoords.accuracy : undefined,
+      meterCondition: item.meterCondition || undefined,
+      ocrConfidence: typeof item.ocrConfidence === "number" ? item.ocrConfidence : undefined,
+      isAnomaly: typeof item.isAnomaly === "boolean" ? item.isAnomaly : undefined,
+      anomalyReason: item.anomalyReason || undefined,
+      mobileSyncSource: "batch_sync",
+      notes: item.notes || item.remarks || "Batch synced from Mobile Offline Queue",
       submittedAt: new Date().toISOString()
     };
 
@@ -3024,6 +3195,7 @@ app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req,
     }
     processed.push(submission);
   }
+  savePortalSyncStore();
 
   // Broadcast batch submission event to Admin
   broadcast("READINGS_BATCH_SYNCED", {
@@ -3043,21 +3215,27 @@ app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req,
 
 // 6. Admin Approval Queue Listing & Readings Feed (GET /api/readings, GET /api/readings/pending, GET /api/sync/readings)
 app.get(["/api/readings", "/api/readings/pending", "/api/sync/readings"], (req, res) => {
+  const onlyPending = req.path.endsWith("/pending");
+  const list = onlyPending
+    ? pendingMobileReadings.filter(r => r.status === "pending_approval")
+    : pendingMobileReadings;
   res.json({
     success: true,
-    count: pendingMobileReadings.length,
-    readings: pendingMobileReadings,
-    data: pendingMobileReadings
+    count: list.length,
+    readings: list,
+    data: list
   });
 });
 
 // 7. Admin Approves Reading -> Verifies Meter Reading Telemetry & Rolls Forward Consumer Baseline (POST /api/readings/:id/approve)
 app.post("/api/readings/:id/approve", (req, res) => {
   const { id } = req.params;
+  const approvedBy = req.body?.approvedBy || "TWD Admin";
   const item = pendingMobileReadings.find(r => r.id === id);
 
   if (item) {
     item.status = "approved";
+    item.approvedBy = approvedBy;
     const cleanAcc = String(item.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
     const targetConsumer = syncedConsumers.find(
       c => String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc
@@ -3065,7 +3243,9 @@ app.post("/api/readings/:id/approve", (req, res) => {
     if (targetConsumer) {
       targetConsumer.previousReading = normalizeOdometerServer(item.currentReading ?? item.presentReading ?? 0);
       targetConsumer.lastReadingDate = item.readingDate;
+      forwardConsumerToMobileTerminal(targetConsumer, false).catch(() => {});
     }
+    savePortalSyncStore();
     broadcast("READING_VERIFIED", {
       accountNumber: item.accountNumber,
       billingPeriod: item.billingPeriod,
@@ -3077,9 +3257,42 @@ app.post("/api/readings/:id/approve", (req, res) => {
     });
   }
 
+  forwardReadingDecisionToMobileTerminal(id, "approve", approvedBy).catch(() => {});
+
   res.json({
     success: true,
     message: `Reading #${id} verified.`,
+    reading: item || null
+  });
+});
+
+// 7.05 Admin Rejects / Flags Reading for Field Re-inspection (POST / PATCH /api/readings/:id/reject)
+app.all("/api/readings/:id/reject", (req, res) => {
+  const { id } = req.params;
+  const reason = req.body?.reason || "Flagged by Administrator for field re-inspection";
+  const rejectedBy = req.body?.rejectedBy || "TWD Admin";
+  const item = pendingMobileReadings.find(r => r.id === id);
+
+  if (item) {
+    item.status = "rejected";
+    item.rejectionReason = reason;
+    savePortalSyncStore();
+  }
+
+  forwardReadingDecisionToMobileTerminal(id, "reject", rejectedBy, reason).catch(() => {});
+  broadcast("READING_REJECTED_REINSPECT", {
+    readingId: id,
+    accountNumber: item?.accountNumber,
+    meterNumber: item?.meterNumber,
+    readerId: item?.readerId,
+    reason,
+    rejectedBy,
+    message: `Reading #${id} flagged for field re-inspection: ${reason}`
+  });
+
+  res.json({
+    success: true,
+    message: `Reading #${id} flagged for field re-inspection and dispatched to Mobile Field Terminal.`,
     reading: item || null
   });
 });
@@ -3320,9 +3533,19 @@ app.post("/api/billings/reconcile", (req, res) => {
 
   if (storeChanged) {
     saveBillingsSyncStore();
+    savePortalSyncStore();
   }
 
   for (const bill of newlyBilled) {
+    forwardReadingDecisionToMobileTerminal(bill.id, "approve", bill.billingIssuedBy || "TWD Admin").catch(() => {});
+    const billedAcc = String(bill.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const billedConsumer = syncedConsumers.find(
+      c => String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === billedAcc
+    );
+    if (billedConsumer && isValidatedConsumerForReader(billedConsumer)) {
+      forwardConsumerToMobileTerminal(billedConsumer, false).catch(() => {});
+    }
+
     broadcast("READING_APPROVED_BILL_ISSUED", {
       accountNumber: bill.accountNumber,
       billingPeriod: bill.billingPeriod,
@@ -4030,6 +4253,10 @@ function savePortalSyncStore(): void {
       updatedAt: new Date().toISOString(),
       consumers: syncedConsumers,
       users: syncedPortalUsers,
+      staff: registeredStaff,
+      terminatedStaff: Array.from(terminatedStaffIdentifiers),
+      mobileReadings: pendingMobileReadings,
+      meters: syncedMeters,
       notifications: inMemoryNotifications,
       reports: inMemoryReports,
       announcements: inMemoryAnnouncements,
@@ -4402,6 +4629,59 @@ function loadPortalSyncStore(): void {
 
     if (Array.isArray(parsed?.installations)) {
       inMemoryInstallations = parsed.installations.filter((r: any) => r && r.id);
+    }
+
+    if (Array.isArray(parsed?.terminatedStaff)) {
+      parsed.terminatedStaff.forEach((ident: unknown) => {
+        if (typeof ident === "string" && ident.trim()) {
+          terminatedStaffIdentifiers.add(ident.trim().toLowerCase());
+        }
+      });
+    }
+
+    if (Array.isArray(parsed?.staff)) {
+      parsed.staff.forEach((sr: MobileReader) => {
+        if (!sr || (!sr.id && !sr.username && !sr.name)) return;
+        if (isStaffTerminated(sr.id) || isStaffTerminated(sr.employeeId) || isStaffTerminated(sr.username) || isStaffTerminated(sr.name)) {
+          return;
+        }
+        const existsIdx = registeredStaff.findIndex(
+          x =>
+            (sr.id && x.id?.toLowerCase() === sr.id.toLowerCase()) ||
+            (sr.username && x.username?.toLowerCase() === sr.username.toLowerCase()) ||
+            (sr.name && x.name?.toLowerCase() === sr.name.toLowerCase())
+        );
+        if (existsIdx >= 0) {
+          registeredStaff[existsIdx] = { ...registeredStaff[existsIdx], ...sr };
+        } else {
+          registeredStaff.push(sr);
+        }
+      });
+    }
+
+    if (Array.isArray(parsed?.mobileReadings)) {
+      parsed.mobileReadings.forEach((mr: MobileReadingSubmission) => {
+        if (!mr || !mr.id) return;
+        const idx = pendingMobileReadings.findIndex(x => x.id === mr.id);
+        if (idx >= 0) {
+          pendingMobileReadings[idx] = { ...pendingMobileReadings[idx], ...mr };
+        } else {
+          pendingMobileReadings.push(mr);
+        }
+      });
+    }
+
+    if (Array.isArray(parsed?.meters)) {
+      parsed.meters.forEach((m: SyncedWaterMeter) => {
+        if (!m || !m.meterNumber) return;
+        const cleanNum = String(m.meterNumber).trim().toUpperCase();
+        const idx = syncedMeters.findIndex(x => x.meterNumber.toUpperCase() === cleanNum);
+        if (idx >= 0) {
+          syncedMeters[idx] = { ...syncedMeters[idx], ...m, meterNumber: cleanNum };
+        } else {
+          syncedMeters.push({ ...m, meterNumber: cleanNum });
+        }
+      });
     }
 
     if (Array.isArray(parsed?.consumers) && parsed.consumers.length > 0) {
@@ -5004,6 +5284,12 @@ app.post("/api/installations/:id/validate", (req, res) => {
       savedNotif = pushServerNotification(activationNotif, false);
     }
     savePortalSyncStore();
+    const persistedValidatedConsumer = syncedConsumers.find(
+      c => c.accountNumber && c.accountNumber.toUpperCase() === cleanAcc
+    );
+    if (persistedValidatedConsumer && isValidatedConsumerForReader(persistedValidatedConsumer)) {
+      forwardConsumerToMobileTerminal(persistedValidatedConsumer, true).catch(() => {});
+    }
 
     broadcast("INSTALLATION_REQUEST_UPDATED", {
       request: validatedReq,
@@ -5349,18 +5635,1438 @@ app.get(["/api/barangays", "/api/routes", "/api/areas"], (req, res) => {
   res.json({ success: true, count: barangays.length, barangays, routes: barangays, areas: barangays, data: barangays });
 });
 
+// ============================================================================
+// 10. WATER METERS REGISTRY & STATUS SYNC APIS (/api/meters)
+// Strictly uses public Meter Tag # (meterNumber) — hardware serials remain private to Admin Water Meters UI
+// ============================================================================
+function getEffectivePublicMeters(): SyncedWaterMeter[] {
+  const byTag = new Map<string, SyncedWaterMeter>();
+  syncedMeters.forEach(m => {
+    if (!m || !m.meterNumber) return;
+    const tag = String(m.meterNumber).trim().toUpperCase();
+    byTag.set(tag, {
+      meterNumber: tag,
+      brand: m.brand || "EVER",
+      size: m.size || "1/2 inch",
+      status: m.status || "active",
+      remarks: m.remarks,
+      linkedAccountNumber: m.linkedAccountNumber,
+      lastReadingValue: normalizeOdometerServer(m.lastReadingValue ?? 0),
+      statusUpdatedAt: m.statusUpdatedAt,
+      statusUpdatedBy: m.statusUpdatedBy,
+    });
+  });
+
+  syncedConsumers.filter(isValidatedConsumerForReader).forEach(c => {
+    const tag = String(c.meterNumber || "").trim().toUpperCase();
+    if (!tag) return;
+    const baseline = resolveConsumerBaselineServer(c.accountNumber, tag);
+    const existing = byTag.get(tag);
+    if (!existing) {
+      byTag.set(tag, {
+        meterNumber: tag,
+        brand: "EVER",
+        size: c.meterSize || "1/2 inch",
+        status: c.status === "maintenance" ? "maintenance" : c.status === "inactive" ? "inactive" : "active",
+        linkedAccountNumber: c.accountNumber,
+        lastReadingValue: baseline,
+      });
+    } else {
+      existing.linkedAccountNumber = existing.linkedAccountNumber || c.accountNumber;
+      existing.lastReadingValue = baseline;
+    }
+  });
+
+  return Array.from(byTag.values());
+}
+
+app.get("/api/meters", (_req, res) => {
+  const meters = getEffectivePublicMeters();
+  res.json({
+    success: true,
+    count: meters.length,
+    meters,
+    data: meters,
+  });
+});
+
+app.post(["/api/meters/:meterNumber/status", "/api/meters/update-status"], (req, res) => {
+  try {
+    const rawMeterNumber = req.params.meterNumber || req.body?.meterNumber || "";
+    const cleanMeterNumber = decodeURIComponent(String(rawMeterNumber)).trim().toUpperCase();
+    if (!cleanMeterNumber) {
+      return res.status(400).json({ success: false, message: "meterNumber is required." });
+    }
+
+    const rawStatus = String(req.body?.status || "active").trim().toLowerCase();
+    const validStatus: SyncedWaterMeter["status"] =
+      rawStatus === "damaged" || rawStatus === "maintenance" || rawStatus === "inactive" || rawStatus === "unassigned"
+        ? rawStatus
+        : "active";
+    const remarks = typeof req.body?.remarks === "string" ? req.body.remarks.trim() : "";
+    const updatedBy = typeof req.body?.updatedBy === "string" ? req.body.updatedBy.trim() : "TWD Administrator";
+    const linkedAccountNumber = typeof req.body?.linkedAccountNumber === "string" ? req.body.linkedAccountNumber.trim().toUpperCase() : undefined;
+    const nowIso = new Date().toISOString();
+
+    const idx = syncedMeters.findIndex(m => m.meterNumber.toUpperCase() === cleanMeterNumber);
+    const updatedMeter: SyncedWaterMeter = {
+      ...(idx >= 0 ? syncedMeters[idx] : { meterNumber: cleanMeterNumber }),
+      meterNumber: cleanMeterNumber,
+      status: validStatus,
+      remarks: remarks || undefined,
+      linkedAccountNumber: linkedAccountNumber || (idx >= 0 ? syncedMeters[idx].linkedAccountNumber : undefined),
+      statusUpdatedAt: nowIso,
+      statusUpdatedBy: updatedBy,
+    };
+
+    if (idx >= 0) {
+      syncedMeters[idx] = updatedMeter;
+    } else {
+      syncedMeters.unshift(updatedMeter);
+    }
+    savePortalSyncStore();
+
+    forwardMeterStatusToMobileTerminal(cleanMeterNumber, validStatus, remarks, updatedBy).catch(() => {});
+
+    broadcast("METER_STATUS_UPDATED", {
+      meterNumber: cleanMeterNumber,
+      status: validStatus,
+      newStatus: validStatus,
+      remarks,
+      updatedByAdmin: updatedBy,
+      accountNumber: updatedMeter.linkedAccountNumber,
+      timestamp: nowIso,
+      message: `Water Meter #${cleanMeterNumber} status updated to ${validStatus.toUpperCase()}.`,
+    });
+
+    res.json({
+      success: true,
+      meter: updatedMeter,
+      message: `Water Meter #${cleanMeterNumber} status updated to ${validStatus} and dispatched to Mobile Field Terminal.`,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to update water meter status." });
+  }
+});
+
+app.post("/api/meters/reconcile", (req, res) => {
+  try {
+    const incoming: any[] = Array.isArray(req.body?.meters) ? req.body.meters : [];
+    let changed = false;
+
+    for (const im of incoming) {
+      if (!im || !im.meterNumber) continue;
+      const cleanNum = String(im.meterNumber).trim().toUpperCase();
+      const rawStatus = String(im.status || "active").trim().toLowerCase();
+      const validStatus: SyncedWaterMeter["status"] =
+        rawStatus === "damaged" || rawStatus === "maintenance" || rawStatus === "inactive" || rawStatus === "unassigned"
+          ? rawStatus
+          : "active";
+
+      // Strip private manufacturer serialNumber before storing in shared sync cache
+      const sanitized: SyncedWaterMeter = {
+        meterNumber: cleanNum,
+        brand: im.brand || "EVER",
+        size: im.size || "1/2 inch",
+        status: validStatus,
+        remarks: im.remarks || undefined,
+        linkedAccountNumber: im.linkedAccountNumber ? String(im.linkedAccountNumber).replace(/^#/, "").trim().toUpperCase() : undefined,
+        lastReadingValue: normalizeOdometerServer(im.lastReadingValue ?? 0),
+        statusUpdatedAt: im.statusUpdatedAt,
+        statusUpdatedBy: im.statusUpdatedBy,
+      };
+
+      const idx = syncedMeters.findIndex(x => x.meterNumber.toUpperCase() === cleanNum);
+      if (idx === -1) {
+        syncedMeters.push(sanitized);
+        changed = true;
+      } else {
+        const prev = syncedMeters[idx];
+        const prevTs = new Date(prev.statusUpdatedAt || 0).getTime() || 0;
+        const incTs = new Date(sanitized.statusUpdatedAt || 0).getTime() || 0;
+        if (incTs >= prevTs && (prev.status !== sanitized.status || prev.remarks !== sanitized.remarks)) {
+          syncedMeters[idx] = { ...prev, ...sanitized };
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      savePortalSyncStore();
+      pushValidatedConsumersAndMetersToMobile(false).catch(() => {});
+    }
+
+    const meters = getEffectivePublicMeters();
+    res.json({ success: true, count: meters.length, meters });
+  } catch {
+    res.json({ success: true, count: syncedMeters.length, meters: syncedMeters });
+  }
+});
+
+// ============================================================================
+// 11. BIDIRECTIONAL LIVE BRIDGE TO SYSTEM SITE & MOBILE FIELD TERMINAL
+// Connects Central Node <-> https://twd-427m.onrender.com <-> https://mobile-li9q.onrender.com
+// ============================================================================
+const SYSTEM_SITE_URL = (
+  process.env.SYSTEM_SITE_URL ||
+  process.env.VITE_SYSTEM_SITE_URL ||
+  "https://twd-427m.onrender.com"
+).replace(/\/+$/, "");
+
+const SYSTEM_SITE_WS_URL =
+  SYSTEM_SITE_URL.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:") + "/ws";
+
+const SYSTEM_SITE_HOST = (() => {
+  try {
+    return new URL(SYSTEM_SITE_URL).host.toLowerCase();
+  } catch {
+    return "twd-427m.onrender.com";
+  }
+})();
+
+function isSelfSystemSite(): boolean {
+  const envCandidates = [
+    process.env.RENDER_EXTERNAL_URL,
+    process.env.RENDER_EXTERNAL_HOSTNAME,
+    process.env.APP_URL,
+  ]
+    .filter(Boolean)
+    .map(v => String(v).trim().toLowerCase());
+
+  for (const cand of envCandidates) {
+    if (cand.includes(SYSTEM_SITE_HOST)) {
+      return true;
+    }
+  }
+  if (seenOwnHosts.has(SYSTEM_SITE_HOST)) {
+    return true;
+  }
+  return false;
+}
+
+const rawMobileEnvUrl = (
+  process.env.MOBILE_TERMINAL_URL ||
+  process.env.VITE_MOBILE_TERMINAL_URL ||
+  ""
+).replace(/\/+$/, "");
+
+const MOBILE_TERMINAL_URL =
+  rawMobileEnvUrl && !rawMobileEnvUrl.toLowerCase().includes(SYSTEM_SITE_HOST)
+    ? rawMobileEnvUrl
+    : "https://mobile-li9q.onrender.com";
+
+const MOBILE_TERMINAL_WS_URL =
+  MOBILE_TERMINAL_URL.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:") + "/ws";
+
+const mobileBridgeState = {
+  targetUrl: MOBILE_TERMINAL_URL,
+  wsUrl: MOBILE_TERMINAL_WS_URL,
+  wsConnected: false,
+  httpReachable: false,
+  lastSyncAt: null as string | null,
+  lastWsEventAt: null as string | null,
+  lastError: null as string | null,
+  latencyMs: null as number | null,
+  systemSiteUrl: SYSTEM_SITE_URL,
+  systemSiteConnected: false,
+  systemSiteWsConnected: false,
+  systemSiteIsSelf: false,
+  syncedReadersCount: 0,
+  syncedConsumersCount: 0,
+  syncedReadingsCount: 0,
+  syncedMetersCount: 0,
+};
+
+const pushedConsumerSignatures = new Map<string, string>();
+const pushedMeterSignatures = new Map<string, string>();
+const pushedSystemReaderSignatures = new Map<string, string>();
+const pushedSystemReadingIds = new Set<string>();
+let isMobileSyncInFlight = false;
+let mobileWsClient: WebSocket | null = null;
+let mobileWsPingTimer: NodeJS.Timeout | null = null;
+let mobileWsReconnectTimer: NodeJS.Timeout | null = null;
+let mobileWsReconnectAttempts = 0;
+
+let systemWsClient: WebSocket | null = null;
+let systemWsPingTimer: NodeJS.Timeout | null = null;
+let systemWsReconnectTimer: NodeJS.Timeout | null = null;
+let systemWsReconnectAttempts = 0;
+
+async function fetchSystemSite(
+  endpointPath: string,
+  init: RequestInit = {},
+  timeoutMs = 22000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const url = `${SYSTEM_SITE_URL}${endpointPath.startsWith("/") ? endpointPath : `/${endpointPath}`}`;
+  try {
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "x-admin-portal": "true",
+      "x-portal": "admin",
+      "x-role": "admin",
+      "x-bridge-origin": "tagoloan-central-web",
+      ...((init.headers as Record<string, string>) || {}),
+    };
+    const response = await fetch(url, {
+      ...init,
+      headers,
+      signal: controller.signal,
+    });
+    if (response.ok || response.status < 500) {
+      mobileBridgeState.systemSiteConnected = true;
+    }
+    return response;
+  } catch (err) {
+    mobileBridgeState.systemSiteConnected = false;
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchMobileTerminal(
+  endpointPath: string,
+  init: RequestInit = {},
+  timeoutMs = 25000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const startMs = Date.now();
+  const url = `${MOBILE_TERMINAL_URL}${endpointPath.startsWith("/") ? endpointPath : `/${endpointPath}`}`;
+
+  try {
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "x-admin-portal": "true",
+      "x-portal": "admin",
+      "x-role": "admin",
+      "x-bridge-origin": "tagoloan-central-web",
+      ...((init.headers as Record<string, string>) || {}),
+    };
+    const response = await fetch(url, {
+      ...init,
+      headers,
+      signal: controller.signal,
+    });
+    mobileBridgeState.latencyMs = Date.now() - startMs;
+    if (response.ok || response.status < 500) {
+      mobileBridgeState.httpReachable = true;
+      mobileBridgeState.lastError = null;
+    }
+    return response;
+  } catch (err: any) {
+    mobileBridgeState.httpReachable = false;
+    mobileBridgeState.lastError = err?.name === "AbortError" ? "Mobile terminal wake timeout" : (err?.message || "Connection error");
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function forwardTerminateReaderToMobile(
+  identifiers: string[],
+  reason?: string,
+  terminatedBy?: string,
+  skipSystemSite = false
+): Promise<void> {
+  if (!identifiers || identifiers.length === 0) return;
+  for (const ident of identifiers) {
+    if (!ident) continue;
+    try {
+      const resp = await fetchMobileTerminal(`/api/readers/${encodeURIComponent(ident)}/terminate`, {
+        method: "POST",
+        body: JSON.stringify({
+          reason: reason || "Account permanently terminated by Tagoloan Water District Central Administration.",
+          terminatedBy: terminatedBy || "TWD Central Admin",
+        }),
+      });
+      if (resp.ok) break;
+    } catch {
+      // Retry next candidate identifier or enforce on next periodic sync
+    }
+  }
+
+  if (!skipSystemSite && !isSelfSystemSite()) {
+    for (const ident of identifiers) {
+      if (!ident) continue;
+      try {
+        const resp = await fetchSystemSite(`/api/readers/${encodeURIComponent(ident)}`, {
+          method: "DELETE",
+          body: JSON.stringify({
+            employeeId: ident,
+            username: ident,
+            reason: reason || "Terminated by Central Administration",
+            terminatedBy: terminatedBy || "TWD Central Admin",
+          }),
+        });
+        if (resp.ok) break;
+      } catch {
+        // Reconciled on next sync cycle
+      }
+    }
+  }
+}
+
+async function forwardReactivateOrUpdateReaderToMobile(
+  readerId: string,
+  updates: Record<string, any>
+): Promise<void> {
+  if (!readerId) return;
+  try {
+    const nextStatus = updates.employmentStatus || updates.status;
+    if (nextStatus === "active") {
+      await fetchMobileTerminal(`/api/readers/${encodeURIComponent(readerId)}/reactivate`, {
+        method: "POST",
+        body: JSON.stringify({ updatedBy: "TWD Central Admin" }),
+      }).catch(() => {});
+    }
+    await fetchMobileTerminal(`/api/readers/${encodeURIComponent(readerId)}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: nextStatus || "active",
+        employmentStatus: nextStatus || "active",
+        assignedRoutes: updates.assignedRoutes,
+        zone: updates.zone,
+      }),
+    });
+  } catch {
+    // Will reconcile on next cycle
+  }
+}
+
+async function forwardConsumerToMobileTerminal(
+  consumer: MobileConsumerSync,
+  isNewIssuance = false
+): Promise<void> {
+  if (!consumer || !isValidatedConsumerForReader(consumer)) return;
+  const cleanAcc = consumer.accountNumber.trim().toUpperCase();
+  const cleanTag = consumer.meterNumber.trim().toUpperCase();
+  const baseline = resolveConsumerBaselineServer(cleanAcc, cleanTag);
+  const mobileStatus =
+    consumer.status === "Disconnection Notice" || consumer.status === "disconnected"
+      ? "disconnected"
+      : consumer.status === "maintenance"
+        ? "maintenance"
+        : consumer.status === "inactive"
+          ? "inactive"
+          : "active";
+
+  const payload = {
+    accountNumber: cleanAcc,
+    name: consumer.name,
+    address: consumer.address || `${consumer.sitioZone || "Zone 1"}, ${consumer.barangay || "Poblacion"}`,
+    barangay: consumer.barangay || "Poblacion",
+    barangayId: consumer.barangayId || "BRG-01",
+    sitioZone: consumer.sitioZone || "Zone 1",
+    meterNumber: cleanTag,
+    meterSerial: cleanTag, // Strictly pass public Tag #, never hardware serial
+    category: consumer.consumerType === "Commercial" ? "Commercial" : "Residential",
+    consumerType: consumer.consumerType === "Commercial" ? "Commercial" : "Residential",
+    status: mobileStatus,
+    previousReading: baseline,
+    lastReadingDate: consumer.lastReadingDate || new Date().toISOString().split("T")[0],
+    contactNumber: consumer.contactNumber || "",
+    email: consumer.email || "",
+  };
+
+  const sig = JSON.stringify([
+    payload.accountNumber,
+    payload.meterNumber,
+    payload.status,
+    payload.previousReading,
+    payload.barangay,
+    payload.sitioZone,
+    payload.name,
+    payload.category,
+  ]);
+
+  try {
+    if (isNewIssuance) {
+      await fetchMobileTerminal("/api/consumers/issue-id", {
+        method: "POST",
+        body: JSON.stringify({
+          ...payload,
+          approvedBy: "TWD Central Administration",
+        }),
+      }).catch(() => {});
+    }
+    const res = await fetchMobileTerminal("/api/consumers", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      pushedConsumerSignatures.set(cleanAcc, sig);
+    }
+  } catch {
+    // Handled on next periodic bridge reconciliation
+  }
+}
+
+async function forwardMeterStatusToMobileTerminal(
+  meterNumber: string,
+  status: string,
+  remarks?: string,
+  updatedBy?: string
+): Promise<void> {
+  const cleanTag = String(meterNumber || "").trim().toUpperCase();
+  if (!cleanTag) return;
+  const sig = `${status}::${remarks || ""}`;
+  try {
+    const res = await fetchMobileTerminal(`/api/meters/${encodeURIComponent(cleanTag)}/status`, {
+      method: "POST",
+      body: JSON.stringify({
+        status,
+        remarks: remarks || "",
+        updatedBy: updatedBy || "TWD Central Administration",
+      }),
+    });
+    if (res.ok) {
+      pushedMeterSignatures.set(cleanTag, sig);
+    }
+  } catch {
+    // Handled on next periodic bridge reconciliation
+  }
+}
+
+async function forwardReadingDecisionToMobileTerminal(
+  readingId: string,
+  decision: "approve" | "reject",
+  actor?: string,
+  reason?: string
+): Promise<void> {
+  if (!readingId) return;
+  try {
+    await fetchMobileTerminal(`/api/readings/${encodeURIComponent(readingId)}/${decision}`, {
+      method: "POST",
+      body: JSON.stringify(
+        decision === "approve"
+          ? { approvedBy: actor || "TWD Central Admin" }
+          : { rejectedBy: actor || "TWD Central Admin", reason: reason || "Flagged by Administrator for field re-inspection" }
+      ),
+    });
+  } catch {
+    // Handled on next periodic bridge reconciliation
+  }
+}
+
+async function pullReadersFromMobileTerminal(): Promise<number> {
+  try {
+    const resp = await fetchMobileTerminal("/api/readers", { method: "GET" });
+    if (!resp.ok) return registeredStaff.length;
+    const data = await resp.json();
+    const remoteReaders: any[] = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.readers)
+        ? data.readers
+        : Array.isArray(data?.staff)
+          ? data.staff
+          : Array.isArray(data?.data)
+            ? data.data
+            : [];
+
+    let storeChanged = false;
+    const newlyDiscovered: MobileReader[] = [];
+
+    for (const rr of remoteReaders) {
+      if (!rr || (!rr.id && !rr.employeeId && !rr.username && !rr.name)) continue;
+      const rId = String(rr.id || rr.employeeId || rr.username).trim();
+      const rEmp = String(rr.employeeId || rr.id || "").trim();
+      const rUser = String(rr.username || rr.employeeId || rr.id || "").trim();
+      const rName = String(rr.name || rUser).trim();
+      const rStatusRaw = String(rr.status || rr.employmentStatus || "active").trim().toLowerCase();
+
+      // Enforce Central Admin termination if Render cold-booted with seed/cached reader
+      if (
+        isStaffTerminated(rId) ||
+        isStaffTerminated(rEmp) ||
+        isStaffTerminated(rUser) ||
+        isStaffTerminated(rName)
+      ) {
+        if (rStatusRaw !== "terminated") {
+          forwardTerminateReaderToMobile(
+            [rId, rEmp, rUser].filter(Boolean),
+            "Enforced Central Web Administration termination",
+            "TWD Central Sync"
+          ).catch(() => {});
+        }
+        continue;
+      }
+
+      // If terminated on Mobile server, mirror termination locally
+      if (rStatusRaw === "terminated") {
+        [rId, rEmp, rUser, rName].forEach(ident => {
+          if (ident) terminatedStaffIdentifiers.add(ident.toLowerCase());
+        });
+        const before = registeredStaff.length;
+        registeredStaff = registeredStaff.filter(
+          s =>
+            s.id?.toLowerCase() !== rId.toLowerCase() &&
+            s.username?.toLowerCase() !== rUser.toLowerCase() &&
+            s.name?.toLowerCase() !== rName.toLowerCase()
+        );
+        if (registeredStaff.length !== before) storeChanged = true;
+        continue;
+      }
+
+      const routesFromRemote: string[] = Array.isArray(rr.assignedRoutes) && rr.assignedRoutes.length > 0
+        ? rr.assignedRoutes.map(String)
+        : Array.isArray(rr.assignedZones) && rr.assignedZones.length > 0
+          ? rr.assignedZones.map(String)
+          : rr.assignedBarangay
+            ? [String(rr.assignedBarangay)]
+            : rr.zone
+              ? [String(rr.zone)]
+              : ["Poblacion"];
+
+      const mappedStatus: "active" | "inactive" = rStatusRaw === "inactive" ? "inactive" : "active";
+
+      const existingIdx = registeredStaff.findIndex(
+        s =>
+          (rId && (s.id?.toLowerCase() === rId.toLowerCase() || s.employeeId?.toLowerCase() === rId.toLowerCase())) ||
+          (rEmp && (s.id?.toLowerCase() === rEmp.toLowerCase() || s.employeeId?.toLowerCase() === rEmp.toLowerCase())) ||
+          (rUser && s.username?.toLowerCase() === rUser.toLowerCase()) ||
+          (rName && s.name?.toLowerCase() === rName.toLowerCase())
+      );
+
+      if (existingIdx === -1) {
+        const mapped: MobileReader = {
+          id: rId,
+          employeeId: rEmp || rId,
+          username: rUser,
+          email: rr.email || `${rUser.toLowerCase().replace(/[^a-z0-9_.-]/g, "_")}@tagoloanwater.gov.ph`,
+          name: rName,
+          pin: rr.pin || "1234",
+          role: rr.role || "Field Meter Reader",
+          zone: rr.zone || routesFromRemote[0] || "Poblacion",
+          contactNumber: rr.phone || rr.contactNumber || "",
+          employmentStatus: mappedStatus,
+          status: mappedStatus,
+          registeredAt: rr.registeredAt || rr.createdAt || new Date().toISOString(),
+          assignedRoutes: routesFromRemote,
+          deviceInfo: rr.deviceInfo || "Tagoloan Mobile Field Terminal",
+          mobileSynced: true,
+        };
+        registeredStaff.push(mapped);
+        newlyDiscovered.push(mapped);
+        storeChanged = true;
+      } else {
+        const curr = registeredStaff[existingIdx];
+        if (!curr.mobileSynced || (!curr.deviceInfo && rr.deviceInfo) || (!curr.employeeId && rEmp)) {
+          registeredStaff[existingIdx] = {
+            ...curr,
+            employeeId: curr.employeeId || rEmp || curr.id,
+            contactNumber: curr.contactNumber && curr.contactNumber !== "N/A" ? curr.contactNumber : (rr.phone || rr.contactNumber || curr.contactNumber),
+            deviceInfo: rr.deviceInfo || curr.deviceInfo || "Tagoloan Mobile Field Terminal",
+            mobileSynced: true,
+          };
+          storeChanged = true;
+        }
+      }
+    }
+
+    if (storeChanged) {
+      savePortalSyncStore();
+    }
+    for (const nr of newlyDiscovered) {
+      broadcast("READER_REGISTERED_ACTIVE", {
+        reader: nr,
+        id: nr.id,
+        employeeId: nr.employeeId || nr.id,
+        username: nr.username,
+        name: nr.name,
+        status: nr.employmentStatus,
+        employmentStatus: nr.employmentStatus,
+        assignedRoutes: nr.assignedRoutes,
+        message: `Mobile Field Reader ${nr.name} (${nr.employeeId || nr.id}) synced from Field Terminal.`,
+      });
+    }
+
+    const activeCount = registeredStaff.filter(
+      s => !isStaffTerminated(s.id) && !isStaffTerminated(s.username) && !isStaffTerminated(s.name)
+    ).length;
+    mobileBridgeState.syncedReadersCount = activeCount;
+    return activeCount;
+  } catch {
+    return registeredStaff.length;
+  }
+}
+
+async function pullReadingsFromMobileTerminal(): Promise<number> {
+  try {
+    const resp = await fetchMobileTerminal("/api/readings", { method: "GET" });
+    if (!resp.ok) return pendingMobileReadings.length;
+    const data = await resp.json();
+    const remoteReadings: any[] = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.readings)
+        ? data.readings
+        : Array.isArray(data?.data)
+          ? data.data
+          : [];
+
+    let storeChanged = false;
+    const newlyIngested: MobileReadingSubmission[] = [];
+
+    for (const rr of remoteReadings) {
+      if (!rr || (!rr.accountNumber && !rr.meterNumber)) continue;
+      const rId = String(rr.id || `MOB-${rr.accountNumber}-${rr.readingDate || Date.now()}`).trim();
+      const cleanAcc = String(rr.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+      const cleanMeter = String(rr.meterNumber || rr.meterSerial || "").trim().toUpperCase();
+
+      const matchedConsumer = syncedConsumers.find(
+        c =>
+          (cleanAcc && String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc) ||
+          (cleanMeter && String(c.meterNumber || "").trim().toUpperCase() === cleanMeter)
+      );
+
+      const resolvedAcc = matchedConsumer ? matchedConsumer.accountNumber : (cleanAcc || "UNKNOWN");
+      const resolvedMeter = cleanMeter || (matchedConsumer ? matchedConsumer.meterNumber : "MT-TAG");
+
+      const alreadyBilledInCentral = reconciledBillingRecords.has(rId);
+      const existingIdx = pendingMobileReadings.findIndex(x => x.id === rId);
+      const alreadyApprovedInCentral =
+        alreadyBilledInCentral || (existingIdx >= 0 && pendingMobileReadings[existingIdx].status === "approved");
+      const alreadyRejectedInCentral =
+        existingIdx >= 0 && pendingMobileReadings[existingIdx].status === "rejected";
+
+      const remoteStatusRaw = String(rr.status || rr.syncStatus || "pending_approval").trim().toLowerCase();
+      if (alreadyApprovedInCentral && remoteStatusRaw !== "approved" && remoteStatusRaw !== "verified") {
+        forwardReadingDecisionToMobileTerminal(rId, "approve", "TWD Central Sync").catch(() => {});
+      }
+      if (alreadyRejectedInCentral && remoteStatusRaw !== "rejected") {
+        forwardReadingDecisionToMobileTerminal(
+          rId,
+          "reject",
+          "TWD Central Sync",
+          pendingMobileReadings[existingIdx]?.rejectionReason
+        ).catch(() => {});
+      }
+
+      if (existingIdx >= 0) {
+        continue;
+      }
+
+      // Normalize 5-digit odometer (00000-99999) with rollover continuity
+      const curr = normalizeOdometerServer(rr.currentReading ?? rr.presentReading ?? 0);
+      const baseline = resolveConsumerBaselineServer(resolvedAcc, resolvedMeter, rId);
+      let prev = rr.previousReading !== undefined ? normalizeOdometerServer(rr.previousReading) : baseline;
+      if (prev === 0 && baseline > 0 && curr >= baseline) {
+        prev = baseline;
+      }
+      const odo = computeOdometerServer(prev, curr, rr.consumption);
+
+      const rawGps = rr.gpsCoordinates || rr.coordinates || rr.gps;
+      const coords =
+        rawGps && typeof rawGps === "object"
+          ? {
+              latitude: Number(rawGps.latitude ?? rawGps.lat ?? 8.5372),
+              longitude: Number(rawGps.longitude ?? rawGps.lng ?? 124.7523),
+            }
+          : undefined;
+
+      const defaultPeriod = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" });
+      const mappedStatus: MobileReadingSubmission["status"] =
+        alreadyApprovedInCentral || remoteStatusRaw === "approved" || remoteStatusRaw === "verified"
+          ? "approved"
+          : remoteStatusRaw === "rejected"
+            ? "rejected"
+            : "pending_approval";
+
+      const submission: MobileReadingSubmission = {
+        id: rId,
+        accountNumber: resolvedAcc,
+        consumerName: rr.consumerName || (matchedConsumer ? matchedConsumer.name : "Consumer Account"),
+        meterNumber: resolvedMeter,
+        billingPeriod: rr.billingPeriod || defaultPeriod,
+        readingDate: rr.readingDate
+          ? String(rr.readingDate).split("T")[0]
+          : new Date().toISOString().split("T")[0],
+        previousReading: odo.previousReading,
+        presentReading: odo.currentReading,
+        currentReading: odo.currentReading,
+        consumption: odo.consumption,
+        readerId: rr.readerId || "WDT-FIELD",
+        readerName: rr.readerName || "Field Meter Officer",
+        route: rr.barangay || rr.route || (matchedConsumer ? matchedConsumer.barangay : "Poblacion"),
+        status: mappedStatus,
+        photoUrl: rr.photoUrl || rr.dialPhotoUrl || "",
+        coordinates: coords,
+        gpsAccuracy: typeof rawGps?.accuracy === "number" ? rawGps.accuracy : undefined,
+        meterCondition: rr.meterCondition || undefined,
+        ocrConfidence: typeof rr.ocrConfidence === "number" ? rr.ocrConfidence : undefined,
+        isAnomaly: typeof rr.isAnomaly === "boolean" ? rr.isAnomaly : undefined,
+        anomalyReason: rr.anomalyReason || undefined,
+        mobileSyncSource: "rest_pull",
+        notes:
+          rr.remarks ||
+          rr.notes ||
+          (rr.meterCondition && String(rr.meterCondition).toUpperCase() !== "NORMAL"
+            ? `Field Meter Condition: ${rr.meterCondition}`
+            : "Synced from Tagoloan Mobile Field Terminal"),
+        submittedAt: rr.submittedAt || rr.timestamp || new Date().toISOString(),
+      };
+
+      pendingMobileReadings.unshift(submission);
+      newlyIngested.push(submission);
+      storeChanged = true;
+    }
+
+    if (storeChanged) {
+      savePortalSyncStore();
+    }
+
+    for (const sub of newlyIngested) {
+      if (sub.status === "pending_approval") {
+        broadcast("READING_SUBMITTED_FOR_APPROVAL", {
+          reading: sub,
+          message: `Mobile Field Reading received for Account #${sub.accountNumber} (${formatOdometerServer(sub.previousReading)} → ${formatOdometerServer(sub.currentReading)} = ${sub.consumption} m³).`,
+        });
+        broadcast("reading:submitted", {
+          reading: sub,
+          message: `Mobile Field Reading received for Account #${sub.accountNumber} (${sub.consumption} m³).`,
+        });
+      }
+    }
+
+    mobileBridgeState.syncedReadingsCount = pendingMobileReadings.length;
+    return pendingMobileReadings.length;
+  } catch {
+    return pendingMobileReadings.length;
+  }
+}
+
+async function pushValidatedConsumersAndMetersToMobile(forceAll = false): Promise<void> {
+  const validatedConsumers = syncedConsumers.filter(isValidatedConsumerForReader);
+  mobileBridgeState.syncedConsumersCount = validatedConsumers.length;
+
+  // Always check remote consumers on Mobile Terminal so we only push missing or changed records (rate-limit safe)
+  const remoteConsumerMap = new Map<string, any>();
+  try {
+    const checkResp = await fetchMobileTerminal("/api/consumers?includePending=true", { method: "GET" });
+    if (checkResp.status === 429) return;
+    if (checkResp.ok) {
+      const cData = await checkResp.json();
+      const cList: any[] = Array.isArray(cData) ? cData : (cData?.consumers || cData?.data || []);
+      for (const rc of cList) {
+        const key = String(rc?.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+        if (key) remoteConsumerMap.set(key, rc);
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  let pushedThisPass = 0;
+  for (const c of validatedConsumers) {
+    if (pushedThisPass >= 45) break; // Stay well below 200 req/min rate limit
+    const cleanAcc = c.accountNumber.trim().toUpperCase();
+    const cleanTag = c.meterNumber.trim().toUpperCase();
+    const baseline = resolveConsumerBaselineServer(cleanAcc, cleanTag);
+    const mobileStatus =
+      c.status === "Disconnection Notice" || c.status === "disconnected"
+        ? "disconnected"
+        : c.status === "maintenance"
+          ? "maintenance"
+          : c.status === "inactive"
+            ? "inactive"
+            : "active";
+    const sig = JSON.stringify([
+      cleanAcc,
+      cleanTag,
+      mobileStatus,
+      baseline,
+      c.barangay || "Poblacion",
+      c.sitioZone || "Zone 1",
+      c.name,
+      c.consumerType === "Commercial" ? "Commercial" : "Residential",
+    ]);
+
+    const remoteExisting = remoteConsumerMap.get(cleanAcc);
+    const alreadyMatchesRemote = Boolean(
+      remoteExisting &&
+        String(remoteExisting.meterSerial || remoteExisting.meterNumber || "").trim().toUpperCase() === cleanTag &&
+        Number(remoteExisting.previousReading ?? 0) === baseline &&
+        String(remoteExisting.status || "active").toLowerCase() === mobileStatus
+    );
+
+    if (alreadyMatchesRemote) {
+      pushedConsumerSignatures.set(cleanAcc, sig);
+      continue;
+    }
+
+    if (forceAll || !remoteExisting || pushedConsumerSignatures.get(cleanAcc) !== sig) {
+      await forwardConsumerToMobileTerminal(c, false);
+      pushedThisPass++;
+    }
+  }
+
+  const publicMeters = getEffectivePublicMeters();
+  mobileBridgeState.syncedMetersCount = publicMeters.length;
+  for (const m of publicMeters) {
+    if (!m.meterNumber) continue;
+    const cleanTag = m.meterNumber.toUpperCase();
+    const sig = `${m.status}::${m.remarks || ""}`;
+    if (pushedMeterSignatures.get(cleanTag) !== sig && (m.status !== "active" || m.remarks)) {
+      await forwardMeterStatusToMobileTerminal(cleanTag, m.status, m.remarks, m.statusUpdatedBy);
+    }
+  }
+}
+
+async function syncWithSystemSitePeer(forceAll = false): Promise<void> {
+  const isSelf = isSelfSystemSite();
+  mobileBridgeState.systemSiteIsSelf = isSelf;
+  if (isSelf) {
+    mobileBridgeState.systemSiteConnected = true;
+    return;
+  }
+
+  let storeChanged = false;
+  let billingsChanged = false;
+
+  // 1. Pull official billings from https://twd-427m.onrender.com/api/billings so consumer odometer baselines stay current
+  try {
+    const bResp = await fetchSystemSite("/api/billings", { method: "GET" });
+    if (bResp.ok) {
+      const bData = await bResp.json();
+      const bList: any[] = Array.isArray(bData?.readings) ? bData.readings : [];
+      for (const br of bList) {
+        if (!br || !br.id) continue;
+        const prev = reconciledBillingRecords.get(br.id);
+        const merged = mergeBillingRecordServer(prev, br);
+        if (!prev || JSON.stringify(prev) !== JSON.stringify(merged)) {
+          reconciledBillingRecords.set(br.id, merged);
+          billingsChanged = true;
+        }
+        // If a pending mobile reading was billed on System Site, mark it approved & notify Mobile Terminal
+        const mIdx = pendingMobileReadings.findIndex(r => r.id === br.id && r.status !== "approved");
+        if (mIdx >= 0 && (br.isBillingIssued || br.status === "verified")) {
+          pendingMobileReadings[mIdx].status = "approved";
+          pendingMobileReadings[mIdx].approvedBy = br.billingIssuedBy || "TWD System Admin";
+          storeChanged = true;
+          forwardReadingDecisionToMobileTerminal(br.id, "approve", br.billingIssuedBy || "TWD System Admin").catch(() => {});
+        }
+      }
+    }
+  } catch {
+    // Non-fatal if System Site is waking up
+  }
+
+  if (billingsChanged) {
+    saveBillingsSyncStore();
+  }
+
+  // 2. Pull live consumers (including newly validated accounts like BRG-03-2114) from https://twd-427m.onrender.com
+  try {
+    const cResp = await fetchSystemSite("/api/consumers?includePending=true", { method: "GET" });
+    if (cResp.ok) {
+      const cData = await cResp.json();
+      const remoteConsumers: any[] = Array.isArray(cData?.consumers) ? cData.consumers : [];
+      for (const rc of remoteConsumers) {
+        if (!rc || (!rc.accountNumber && !rc.email && !rc.name)) continue;
+        const rcAcc = String(rc.accountNumber || "").trim().toUpperCase();
+        const rcEmail = String(rc.email || "").trim().toLowerCase();
+        const rcUid = String(rc.linkedUserId || "").trim();
+
+        const idx = syncedConsumers.findIndex(lc => {
+          const lcAcc = String(lc.accountNumber || "").trim().toUpperCase();
+          const lcEmail = String(lc.email || "").trim().toLowerCase();
+          if (isIssuedAccountNumberServer(rcAcc) && isIssuedAccountNumberServer(lcAcc) && rcAcc === lcAcc) return true;
+          if (rcEmail && lcEmail && rcEmail === lcEmail) return true;
+          if (rcUid && lc.linkedUserId && rcUid === lc.linkedUserId) return true;
+          return false;
+        });
+
+        const incomingValid = isValidatedConsumerForReader(rc as MobileConsumerSync);
+        if (idx === -1) {
+          const mapped: MobileConsumerSync = {
+            accountNumber: rc.accountNumber || "",
+            name: rc.name || "Consumer",
+            address: rc.address || `${rc.sitioZone || "Zone 1"}, ${rc.barangay || "Poblacion"}`,
+            barangay: rc.barangay || "Poblacion",
+            barangayId: rc.barangayId || "BRG-01",
+            sitioZone: rc.sitioZone || "Zone 1",
+            meterNumber: rc.meterNumber || rc.meterSerial || "",
+            previousReading: normalizeOdometerServer(rc.previousReading ?? 0),
+            lastReadingDate: rc.lastReadingDate || new Date().toISOString().split("T")[0],
+            consumerType: rc.consumerType === "Commercial" ? "Commercial" : "Residential",
+            status: rc.status || (incomingValid ? "active" : "pending_approval"),
+            contactNumber: rc.contactNumber || "",
+            email: rc.email || "",
+            rfidTag: rc.rfidTag || "",
+            registrationDate: rc.registrationDate,
+            linkedUserId: rc.linkedUserId,
+            applicationNumber: rc.applicationNumber,
+            installationRequestId: rc.installationRequestId,
+            installationStatus: rc.installationStatus,
+            accountValidationStatus: rc.accountValidationStatus,
+            isRegistered: true,
+          };
+          syncedConsumers.push(mapped);
+          if (incomingValid) {
+            syncConsumerToServerPortalUser(mapped);
+          }
+          storeChanged = true;
+        } else {
+          const existing = syncedConsumers[idx];
+          const existingValid = isValidatedConsumerForReader(existing);
+          if (incomingValid && !existingValid) {
+            syncedConsumers[idx] = {
+              ...existing,
+              accountNumber: rc.accountNumber,
+              meterNumber: rc.meterNumber || rc.meterSerial || existing.meterNumber,
+              status: rc.status || "active",
+              barangay: rc.barangay || existing.barangay,
+              sitioZone: rc.sitioZone || existing.sitioZone,
+              previousReading: normalizeOdometerServer(rc.previousReading ?? existing.previousReading),
+            };
+            syncConsumerToServerPortalUser(syncedConsumers[idx]);
+            storeChanged = true;
+          } else if (incomingValid && existingValid) {
+            const remotePrev = normalizeOdometerServer(rc.previousReading ?? 0);
+            if (remotePrev > existing.previousReading) {
+              syncedConsumers[idx].previousReading = remotePrev;
+              storeChanged = true;
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // 3. Push active Mobile Field Readers -> https://twd-427m.onrender.com/api/readers/register
+  try {
+    let remoteReaderIds = new Set<string>();
+    const rCheck = await fetchSystemSite("/api/readers", { method: "GET" });
+    if (rCheck.ok) {
+      const rData = await rCheck.json();
+      const rList: any[] = Array.isArray(rData?.readers) ? rData.readers : (rData?.staff || []);
+      remoteReaderIds = new Set(
+        rList
+          .flatMap((r: any) => [r?.id, r?.employeeId, r?.username])
+          .filter(Boolean)
+          .map((x: any) => String(x).trim().toLowerCase())
+      );
+    }
+
+    if (rCheck.status !== 429) {
+      const activeLocalReaders = registeredStaff.filter(
+        s => !isStaffTerminated(s.id) && !isStaffTerminated(s.username) && !isStaffTerminated(s.name)
+      );
+
+      for (const reader of activeLocalReaders) {
+        const rKey = (reader.id || reader.username).toLowerCase();
+        const sig = JSON.stringify([reader.id, reader.username, reader.name, reader.employmentStatus, reader.assignedRoutes]);
+        const missingOnSystem =
+          !remoteReaderIds.has((reader.id || "").toLowerCase()) &&
+          !remoteReaderIds.has((reader.username || "").toLowerCase());
+
+        if (!missingOnSystem && pushedSystemReaderSignatures.get(rKey) === sig) {
+          continue;
+        }
+        if (!missingOnSystem && !pushedSystemReaderSignatures.has(rKey)) {
+          pushedSystemReaderSignatures.set(rKey, sig);
+          continue;
+        }
+
+        const regRes = await fetchSystemSite("/api/readers/register", {
+          method: "POST",
+          body: JSON.stringify({
+            id: reader.id,
+            employeeId: reader.employeeId || reader.id,
+            username: reader.username,
+            email: reader.email,
+            name: reader.name,
+            pin: reader.pin || "1234",
+            role: reader.role || "Field Meter Reader",
+            zone: reader.zone || "Poblacion",
+            contactNumber: reader.contactNumber || "",
+            assignedRoutes: reader.assignedRoutes || [reader.zone || "Poblacion"],
+            registeredAt: reader.registeredAt,
+          }),
+        });
+        if (regRes.status === 429) break;
+        if (regRes.ok) {
+          pushedSystemReaderSignatures.set(rKey, sig);
+        }
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // 4. Sync Pending & Approved Readings <-> https://twd-427m.onrender.com/api/readings
+  try {
+    let systemReadingMap = new Map<string, any>();
+    const rdCheck = await fetchSystemSite("/api/readings", { method: "GET" });
+    if (rdCheck.ok) {
+      const rdData = await rdCheck.json();
+      const rdList: any[] = Array.isArray(rdData?.readings) ? rdData.readings : [];
+      for (const item of rdList) {
+        if (item?.id) {
+          systemReadingMap.set(String(item.id), item);
+          if (item.status === "approved") {
+            const localItem = pendingMobileReadings.find(r => r.id === item.id);
+            if (localItem && localItem.status !== "approved") {
+              localItem.status = "approved";
+              localItem.approvedBy = item.approvedBy || "TWD System Admin";
+              storeChanged = true;
+              forwardReadingDecisionToMobileTerminal(item.id, "approve", localItem.approvedBy).catch(() => {});
+            }
+          }
+        }
+      }
+    }
+
+    for (const sub of pendingMobileReadings) {
+      if (sub.status !== "pending_approval") continue;
+      if (systemReadingMap.has(sub.id) || (!forceAll && pushedSystemReadingIds.has(sub.id))) {
+        continue;
+      }
+      const subRes = await fetchSystemSite("/api/readings/submit", {
+        method: "POST",
+        body: JSON.stringify({
+          id: sub.id,
+          accountNumber: sub.accountNumber,
+          consumerName: sub.consumerName,
+          meterNumber: sub.meterNumber,
+          billingPeriod: sub.billingPeriod,
+          readingDate: sub.readingDate,
+          previousReading: sub.previousReading,
+          presentReading: sub.presentReading ?? sub.currentReading,
+          currentReading: sub.currentReading,
+          consumption: sub.consumption,
+          readerId: sub.readerId,
+          readerName: sub.readerName,
+          route: sub.route,
+          photoUrl: sub.photoUrl,
+          coordinates: sub.coordinates,
+          meterCondition: sub.meterCondition,
+          ocrConfidence: sub.ocrConfidence,
+          isAnomaly: sub.isAnomaly,
+          anomalyReason: sub.anomalyReason,
+          notes: sub.notes,
+        }),
+      });
+      if (subRes.ok) {
+        pushedSystemReadingIds.add(sub.id);
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  if (storeChanged) {
+    savePortalSyncStore();
+  }
+}
+
+async function runFullMobileBridgeSync(forceAllPush = false): Promise<typeof mobileBridgeState> {
+  if (isMobileSyncInFlight) {
+    return mobileBridgeState;
+  }
+  isMobileSyncInFlight = true;
+  try {
+    await pullReadersFromMobileTerminal();
+    await pullReadingsFromMobileTerminal();
+    await syncWithSystemSitePeer(forceAllPush);
+    await pushValidatedConsumersAndMetersToMobile(forceAllPush);
+    mobileBridgeState.lastSyncAt = new Date().toISOString();
+  } catch (err: any) {
+    mobileBridgeState.lastError = err?.message || "Bridge sync failed";
+  } finally {
+    isMobileSyncInFlight = false;
+  }
+  return mobileBridgeState;
+}
+
+function connectSystemSiteWebSocket(): void {
+  const isSelf = isSelfSystemSite();
+  mobileBridgeState.systemSiteIsSelf = isSelf;
+  if (isSelf) {
+    mobileBridgeState.systemSiteConnected = true;
+    mobileBridgeState.systemSiteWsConnected = true;
+    return;
+  }
+  if (systemWsClient && (systemWsClient.readyState === WebSocket.OPEN || systemWsClient.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  try {
+    const ws = new WebSocket(SYSTEM_SITE_WS_URL, {
+      headers: {
+        "x-bridge-origin": "tagoloan-central-web",
+        "x-admin-portal": "true",
+      },
+    });
+    systemWsClient = ws;
+
+    ws.on("open", () => {
+      mobileBridgeState.systemSiteConnected = true;
+      mobileBridgeState.systemSiteWsConnected = true;
+      systemWsReconnectAttempts = 0;
+      console.log(`[System Bridge] Connected outbound WebSocket -> ${SYSTEM_SITE_WS_URL}`);
+
+      if (systemWsPingTimer) clearInterval(systemWsPingTimer);
+      systemWsPingTimer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: "PING", payload: { source: "twd-peer-bridge", ts: Date.now() } }));
+          } catch {}
+        }
+      }, 25000);
+
+      syncWithSystemSitePeer(false)
+        .then(() => pushValidatedConsumersAndMetersToMobile(false))
+        .catch(() => {});
+    });
+
+    ws.on("message", (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        const eventType = String(msg?.type || "");
+        const payload = msg?.payload || {};
+
+        if (
+          eventType === "READER_TERMINATED" ||
+          eventType === "READER_ACCOUNT_TERMINATED" ||
+          eventType === "staff:terminated"
+        ) {
+          const targetId = payload.readerId || payload.employeeId || payload.username || payload.id;
+          if (targetId) {
+            const idents = [payload.readerId, payload.employeeId, payload.username, payload.name]
+              .filter(Boolean)
+              .map(String);
+            idents.forEach(i => terminatedStaffIdentifiers.add(i.trim().toLowerCase()));
+            registeredStaff = registeredStaff.filter(
+              s => !isStaffTerminated(s.id) && !isStaffTerminated(s.username) && !isStaffTerminated(s.name)
+            );
+            savePortalSyncStore();
+            forwardTerminateReaderToMobile(idents, payload.reason || "Terminated on System Site", "TWD System Site Admin", true).catch(() => {});
+          }
+        } else if (
+          eventType === "READING_VERIFIED" ||
+          eventType === "BILLINGS_RECONCILED" ||
+          eventType === "CONSUMER_IDS_ISSUED" ||
+          eventType === "CONSUMER_UPDATED" ||
+          eventType === "CONSUMER_REGISTERED"
+        ) {
+          syncWithSystemSitePeer(false)
+            .then(() => pushValidatedConsumersAndMetersToMobile(false))
+            .catch(() => {});
+        }
+      } catch {
+        // Ignore non-JSON frames
+      }
+    });
+
+    ws.on("error", () => {
+      mobileBridgeState.systemSiteWsConnected = false;
+    });
+
+    ws.on("close", () => {
+      mobileBridgeState.systemSiteWsConnected = false;
+      if (systemWsPingTimer) {
+        clearInterval(systemWsPingTimer);
+        systemWsPingTimer = null;
+      }
+      systemWsClient = null;
+      if (!isSelfSystemSite()) {
+        const delay = Math.min(30000, 3500 * Math.pow(1.6, systemWsReconnectAttempts++));
+        if (systemWsReconnectTimer) clearTimeout(systemWsReconnectTimer);
+        systemWsReconnectTimer = setTimeout(() => {
+          connectSystemSiteWebSocket();
+        }, delay);
+      }
+    });
+  } catch {
+    mobileBridgeState.systemSiteWsConnected = false;
+  }
+}
+
+function connectMobileTerminalWebSocket(): void {
+  if (mobileWsClient && (mobileWsClient.readyState === WebSocket.OPEN || mobileWsClient.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  try {
+    const ws = new WebSocket(MOBILE_TERMINAL_WS_URL, {
+      headers: {
+        "x-bridge-origin": "tagoloan-central-web",
+        "x-admin-portal": "true",
+      },
+    });
+    mobileWsClient = ws;
+
+    ws.on("open", () => {
+      mobileBridgeState.wsConnected = true;
+      mobileBridgeState.httpReachable = true;
+      mobileBridgeState.lastError = null;
+      mobileBridgeState.lastWsEventAt = new Date().toISOString();
+      mobileWsReconnectAttempts = 0;
+      console.log(`[Mobile Bridge] Connected outbound WebSocket -> ${MOBILE_TERMINAL_WS_URL}`);
+
+      if (mobileWsPingTimer) clearInterval(mobileWsPingTimer);
+      mobileWsPingTimer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: "PING", payload: { source: "twd-central-web", ts: Date.now() } }));
+          } catch {}
+        }
+      }, 25000);
+
+      runFullMobileBridgeSync(false).catch(() => {});
+    });
+
+    ws.on("message", (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        const eventType = String(msg?.type || "");
+        mobileBridgeState.lastWsEventAt = new Date().toISOString();
+
+        if (
+          eventType === "READING_SUBMITTED_FOR_APPROVAL" ||
+          eventType === "LIVE_READING_UPDATE" ||
+          eventType === "BATCH_SYNC_PROCESSED"
+        ) {
+          pullReadingsFromMobileTerminal()
+            .then(() => syncWithSystemSitePeer(false))
+            .catch(() => {});
+        } else if (
+          eventType === "READER_REGISTERED_ACTIVE" ||
+          eventType === "READER_ACCOUNT_TERMINATED" ||
+          eventType === "READER_STATUS_CHANGED"
+        ) {
+          pullReadersFromMobileTerminal()
+            .then(() => syncWithSystemSitePeer(false))
+            .catch(() => {});
+        }
+      } catch {
+        // Ignore non-JSON frames
+      }
+    });
+
+    ws.on("error", (err) => {
+      mobileBridgeState.wsConnected = false;
+      mobileBridgeState.lastError = err.message || "WebSocket bridge error";
+    });
+
+    ws.on("close", () => {
+      mobileBridgeState.wsConnected = false;
+      if (mobileWsPingTimer) {
+        clearInterval(mobileWsPingTimer);
+        mobileWsPingTimer = null;
+      }
+      mobileWsClient = null;
+      const delay = Math.min(30000, 3000 * Math.pow(1.6, mobileWsReconnectAttempts++));
+      if (mobileWsReconnectTimer) clearTimeout(mobileWsReconnectTimer);
+      mobileWsReconnectTimer = setTimeout(() => {
+        connectMobileTerminalWebSocket();
+      }, delay);
+    });
+  } catch (err: any) {
+    mobileBridgeState.wsConnected = false;
+    mobileBridgeState.lastError = err?.message || "Failed to initialize Mobile WS";
+  }
+}
+
+app.get("/api/mobile-bridge/status", (_req, res) => {
+  const activeReaders = registeredStaff.filter(
+    s => !isStaffTerminated(s.id) && !isStaffTerminated(s.username) && !isStaffTerminated(s.name)
+  ).length;
+  mobileBridgeState.systemSiteIsSelf = isSelfSystemSite();
+  if (mobileBridgeState.systemSiteIsSelf) {
+    mobileBridgeState.systemSiteConnected = true;
+    mobileBridgeState.systemSiteWsConnected = true;
+  }
+  mobileBridgeState.syncedReadersCount = activeReaders;
+  mobileBridgeState.syncedConsumersCount = syncedConsumers.filter(isValidatedConsumerForReader).length;
+  mobileBridgeState.syncedReadingsCount = pendingMobileReadings.length;
+  mobileBridgeState.syncedMetersCount = getEffectivePublicMeters().length;
+
+  res.json({
+    success: true,
+    bridge: {
+      ...mobileBridgeState,
+      connected: mobileBridgeState.wsConnected || mobileBridgeState.httpReachable,
+    },
+  });
+});
+
+app.post("/api/mobile-bridge/sync", async (_req, res) => {
+  try {
+    if (!mobileBridgeState.wsConnected) {
+      connectMobileTerminalWebSocket();
+    }
+    if (!mobileBridgeState.systemSiteWsConnected && !isSelfSystemSite()) {
+      connectSystemSiteWebSocket();
+    }
+    const state = await runFullMobileBridgeSync(true);
+    res.json({
+      success: true,
+      bridge: {
+        ...state,
+        connected: state.wsConnected || state.httpReachable,
+      },
+      message: `Synchronized System (${SYSTEM_SITE_URL}) & Mobile Terminal (${MOBILE_TERMINAL_URL}): ${state.syncedReadersCount} readers, ${state.syncedConsumersCount} validated consumers, ${state.syncedReadingsCount} field readings.`,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      bridge: {
+        ...mobileBridgeState,
+        connected: false,
+      },
+      message: err?.message || "Failed to synchronize with System & Mobile Field Terminal.",
+    });
+  }
+});
+
+// Boot live outbound System Site + Mobile Field Terminal WebSockets & periodic 45s reconciliation
+setTimeout(() => {
+  connectMobileTerminalWebSocket();
+  connectSystemSiteWebSocket();
+  runFullMobileBridgeSync(true).catch(() => {});
+}, 1500);
+
+setInterval(() => {
+  if (!mobileBridgeState.wsConnected) {
+    connectMobileTerminalWebSocket();
+  }
+  if (!mobileBridgeState.systemSiteWsConnected && !isSelfSystemSite()) {
+    connectSystemSiteWebSocket();
+  }
+  runFullMobileBridgeSync(false).catch(() => {});
+}, 45000);
+
 app.get(["/api/health", "/api/status", "/api/ping", "/api/survival"], (req, res) => {
   const mem = process.memoryUsage();
+  const selfHost = isSelfSystemSite();
   res.json({
     status: "online",
     state: "ONLINE",
     healthy: true,
     online: true,
     system: "Tagoloan Water District Real-Time Cloud Service",
+    systemSiteUrl: SYSTEM_SITE_URL,
     uptimeSeconds: Math.floor(process.uptime()),
     activeWebSocketClients: clients.size,
     consumersCount: syncedConsumers.length,
     staffCount: registeredStaff.length,
+    mobileBridge: {
+      targetUrl: mobileBridgeState.targetUrl,
+      connected: mobileBridgeState.wsConnected || mobileBridgeState.httpReachable,
+      wsConnected: mobileBridgeState.wsConnected,
+      systemSiteUrl: SYSTEM_SITE_URL,
+      systemSiteConnected: selfHost ? true : (mobileBridgeState.systemSiteConnected || mobileBridgeState.systemSiteWsConnected),
+      systemSiteIsSelf: selfHost,
+      lastSyncAt: mobileBridgeState.lastSyncAt,
+    },
     botDefense: {
       totalRequestsServed: totalServedRequests,
       totalRequestsThrottled: totalThrottledRequests,

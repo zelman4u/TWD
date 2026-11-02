@@ -93,6 +93,8 @@ export interface MeterReader {
   approvedBy?: string;
   approvalDate?: string;
   linkedUserId?: string;
+  deviceInfo?: string;
+  mobileSynced?: boolean;
 }
 
 export type InstallationStatus =
@@ -230,6 +232,42 @@ export interface MeterReading {
   billingIssuedAt?: string;
   billingIssuedBy?: string;
   invoiceNumber?: string;
+  readerId?: string;
+  meterCondition?: 'NORMAL' | 'GLASS_FOGGED' | 'STUCK_DIAL' | 'DAMAGED' | 'LEAK_SUSPECTED' | string;
+  ocrConfidence?: number;
+  isAnomaly?: boolean;
+  anomalyReason?: string;
+  gpsAccuracy?: number;
+  mobileSyncSource?: boolean;
+}
+
+export interface MobileBridgeStatus {
+  connected: boolean;
+  wsConnected?: boolean;
+  wsState?: 'CONNECTED' | 'CONNECTING' | 'DISCONNECTED';
+  targetUrl?: string;
+  mobileUrl?: string;
+  httpReachable: boolean;
+  latencyMs: number | null;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  systemSiteUrl?: string;
+  systemSiteConnected?: boolean;
+  systemSiteWsConnected?: boolean;
+  systemSiteIsSelf?: boolean;
+  syncedReadersCount?: number;
+  syncedConsumersCount?: number;
+  syncedReadingsCount?: number;
+  syncedMetersCount?: number;
+  remoteStats?: {
+    totalConsumers: number;
+    totalReadingsLogged: number;
+    activeReaders: number;
+    wsActiveConnections: number;
+  } | null;
+  pushedConsumersCount?: number;
+  pulledReadersCount?: number;
+  pulledReadingsCount?: number;
 }
 
 export interface ConsumerReportReply {

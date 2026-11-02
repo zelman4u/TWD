@@ -23,7 +23,9 @@ import {
   Calendar,
   Waves,
   Menu,
-  X
+  X,
+  Smartphone,
+  ExternalLink
 } from 'lucide-react';
 import { Announcement } from '../types';
 import {
@@ -305,6 +307,17 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
               >
                 Register New Account
               </button>
+              <a
+                href="https://mobile-li9q.onrender.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setMobileMenuOpen(false)}
+                className="w-full py-2.5 rounded-lg text-xs font-bold text-sky-300 bg-slate-950 hover:bg-slate-800 border border-slate-800 transition flex items-center justify-center gap-1.5"
+              >
+                <Smartphone className="h-3.5 w-3.5 text-sky-400" />
+                <span>Field Meter Reader App</span>
+                <ExternalLink className="h-3 w-3 opacity-80" />
+              </a>
             </div>
           </div>
         )}
@@ -873,6 +886,29 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
           <p className="text-xs max-w-xl mx-auto leading-relaxed text-slate-400">
             Tagoloan Water District is committed to preserving environmental integrity while delivering continuous municipal services conforming to standard water quality guidelines.
           </p>
+          <div className="pt-2 flex flex-wrap items-center justify-center gap-2.5">
+            {typeof window !== 'undefined' && window.location.hostname.toLowerCase() !== 'twd-427m.onrender.com' && (
+              <a
+                href="https://twd-427m.onrender.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-bold text-blue-300 transition"
+              >
+                <span>Official Live System Portal (twd-427m.onrender.com)</span>
+                <ExternalLink className="h-3 w-3 opacity-80" />
+              </a>
+            )}
+            <a
+              href="https://mobile-li9q.onrender.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-bold text-sky-300 transition"
+            >
+              <Smartphone className="h-3.5 w-3.5 text-sky-400" />
+              <span>Authorized Field Personnel: Open Mobile Meter Reader Terminal</span>
+              <ExternalLink className="h-3 w-3 opacity-80" />
+            </a>
+          </div>
           <div className="text-[10px] text-slate-500">
             &copy; 2026 Tagoloan Water District. All Rights Reserved. Province of Misamis Oriental.
           </div>

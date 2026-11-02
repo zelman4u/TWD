@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Mail, Lock, LogIn, AlertCircle, RefreshCw, ArrowLeft, Eye, EyeOff } from 'lucide-react';
+import { Mail, Lock, LogIn, AlertCircle, RefreshCw, ArrowLeft, Eye, EyeOff, Smartphone, ExternalLink } from 'lucide-react';
 import { User } from '../types';
 import { mockDb } from '../mockDb';
 import { apiClient } from '../services/apiClient';
@@ -560,8 +560,8 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
             </button>
           </form>
 
-          {/* Registration Navigation */}
-          <div className="text-center pt-2 border-t border-slate-700/60">
+          {/* Registration & Field Reader Terminal Navigation */}
+          <div className="text-center pt-2 border-t border-slate-700/60 space-y-1.5">
             <p className="text-[11px] text-slate-300">
               Not yet registered online?{' '}
               <button 
@@ -571,6 +571,29 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
                 Register Your Account
               </button>
             </p>
+            <div className="pt-0.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+              <a
+                href="https://mobile-li9q.onrender.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-400 hover:text-sky-300 transition"
+              >
+                <Smartphone className="h-3 w-3 shrink-0" />
+                <span>Handheld Reader Terminal</span>
+                <ExternalLink className="h-2.5 w-2.5 opacity-80 shrink-0" />
+              </a>
+              {typeof window !== 'undefined' && window.location.hostname.toLowerCase() !== 'twd-427m.onrender.com' && (
+                <a
+                  href="https://twd-427m.onrender.com/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-400 hover:text-blue-300 transition"
+                >
+                  <span>Live System Site</span>
+                  <ExternalLink className="h-2.5 w-2.5 opacity-80 shrink-0" />
+                </a>
+              )}
+            </div>
           </div>
         </div>
       </div>

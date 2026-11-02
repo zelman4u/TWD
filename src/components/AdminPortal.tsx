@@ -29,6 +29,7 @@ import {
   Building,
   AlertTriangle,
   ExternalLink,
+  Globe,
   ChevronRight,
   ChevronDown,
   ChevronUp,
@@ -73,7 +74,7 @@ import {
   Wrench
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
-import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerReport, WaterMeterInstallationRequest } from '../types';
+import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerReport, WaterMeterInstallationRequest, MobileBridgeStatus } from '../types';
 import { 
   scanAndUpdateAccounts, 
   getScannerStatus, 
@@ -153,6 +154,23 @@ import {
   padOdometerInput,
   sanitizeOdometerInput,
 } from '../utils/odometer';
+
+const SYSTEM_SITE_URL = (
+  (import.meta as any).env?.VITE_SYSTEM_SITE_URL || 'https://twd-427m.onrender.com'
+).replace(/\/+$/, '');
+
+const rawViteMobileTerminalUrl = (
+  (import.meta as any).env?.VITE_MOBILE_TERMINAL_URL || ''
+).replace(/\/+$/, '');
+
+const MOBILE_FIELD_TERMINAL_URL =
+  rawViteMobileTerminalUrl && !rawViteMobileTerminalUrl.toLowerCase().includes('twd-427m.onrender.com')
+    ? rawViteMobileTerminalUrl
+    : 'https://mobile-li9q.onrender.com';
+
+const IS_HOSTED_ON_SYSTEM_SITE =
+  typeof window !== 'undefined' &&
+  window.location.hostname.toLowerCase() === 'twd-427m.onrender.com';
 
 interface AdminPortalProps {
   currentUser: User;
@@ -581,6 +599,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [editingAnnouncementModal, setEditingAnnouncementModal] = useState<Announcement | null>(null);
   const [editingReaderModal, setEditingReaderModal] = useState<MeterReader | null>(null);
 
+  // Mobile Field Terminal Bridge Telemetry & Sync State
+  const [mobileBridgeStatus, setMobileBridgeStatus] = useState<MobileBridgeStatus | null>(null);
+  const [isSyncingMobileBridge, setIsSyncingMobileBridge] = useState<boolean>(false);
+
   // Interactive Row-Click Read-Only Detail Modals
   const [viewingMeterDetailModal, setViewingMeterDetailModal] = useState<WaterMeter | null>(null);
   const [viewingReadingDetailModal, setViewingReadingDetailModal] = useState<MeterReading | null>(null);
@@ -765,7 +787,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     }
     lastAdminRemoteSyncRef.current = nowMs;
 
-    // 2. Fetch from Backend / Serverless API for any Mobile App Submissions
+    // 2. Fetch Mobile Bridge Status, Reconcile Water Meters, and Pull Field Readers
+    apiClient
+      .getMobileBridgeStatus({ skipLogging: true })
+      .then(res => {
+        if (res?.bridge) {
+          setMobileBridgeStatus(res.bridge);
+        }
+      })
+      .catch(() => {});
+
+    apiClient
+      .reconcileMeters(mockDb.getMeters(), { skipLogging: true })
+      .catch(() => {});
+
     safeBackendFetch('/api/readers')
       .then(res => (res ? res.json() : null))
       .then(data => {
@@ -798,6 +833,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               );
             });
             const rawStatus = (ar.employmentStatus || ar.status || 'active').toLowerCase();
+            if (rawStatus === 'terminated') {
+              return;
+            }
             const normalizedStatus: 'active' | 'inactive' = 
               rawStatus === 'inactive' ? 'inactive' : 'active';
 
@@ -809,14 +847,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 username: ar.username || ar.name.toLowerCase().replace(/\s+/g, '_'),
                 email: ar.email || `${(ar.username || ar.name).toLowerCase().replace(/\s+/g, '_')}@tagoloanwater.gov.ph`,
                 employeeId: ar.employeeId || ar.id,
-                contactNumber: ar.contactNumber || 'N/A',
+                contactNumber: ar.contactNumber || ar.phone || 'N/A',
                 assignedRoutes: (ar.assignedRoutes && ar.assignedRoutes.length > 0) ? ar.assignedRoutes : [ar.zone || 'Zone 1-4: Poblacion (Main Central)'],
                 targetRoute: (ar.assignedRoutes && ar.assignedRoutes.length > 0) ? ar.assignedRoutes[0] : (ar.zone || 'Zone 1-4: Poblacion (Main Central)'),
                 zone: ar.zone || 'Zone 1-4: Poblacion (Main Central)',
                 employmentStatus: normalizedStatus,
                 completedReadings: 0,
                 pendingReadings: 0,
-                performanceRating: 5.0
+                performanceRating: 5.0,
+                deviceInfo: ar.deviceInfo,
+                mobileSynced: Boolean(ar.mobileSynced)
               };
               currentLocal.push(newReaderObj);
               hasChanges = true;
@@ -827,6 +867,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               }
               if (ar.assignedRoutes && Array.isArray(ar.assignedRoutes) && ar.assignedRoutes.length > 0) {
                 exists.assignedRoutes = ar.assignedRoutes;
+                hasChanges = true;
+              }
+              if (ar.deviceInfo && !exists.deviceInfo) {
+                exists.deviceInfo = ar.deviceInfo;
+                hasChanges = true;
+              }
+              if (ar.mobileSynced && !exists.mobileSynced) {
+                exists.mobileSynced = true;
                 hasChanges = true;
               }
             }
@@ -1097,6 +1145,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
           apiReadings.forEach(ar => {
             if (!ar || !ar.id) return;
+            if (ar.status === 'rejected') return;
             const cleanArAcc = String(ar.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
             const cleanArMeter = String(ar.meterNumber || '').trim().toUpperCase();
             const matchedConsumer = currentConsumers.find(c =>
@@ -1104,7 +1153,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               (cleanArMeter && String(c.meterNumber || '').trim().toUpperCase() === cleanArMeter)
             );
 
-            // Resolve consumer's latest verified cumulative dial index so Previous Reading is NEVER lost
+            // Resolve consumer's latest verified 5-digit odometer baseline (00000-99999)
             const priorVerifiedForConsumer = currentLocal
               .filter(lr => {
                 if (!lr || lr.id === ar.id || lr.status === 'cancelled') return false;
@@ -1113,30 +1162,33 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 const lrMeter = String(lr.meterNumber || '').trim().toUpperCase();
                 return (cleanArAcc && lrAcc === cleanArAcc) || (cleanArMeter && lrMeter === cleanArMeter);
               })
-              .sort(
-                (a, b) =>
-                  Number(b.currentReading ?? b.presentReading ?? 0) - Number(a.currentReading ?? a.presentReading ?? 0) ||
-                  new Date(b.readingDate || 0).getTime() - new Date(a.readingDate || 0).getTime()
-              );
+              .sort(compareReadingsCanonical);
 
             const verifiedBaseline = priorVerifiedForConsumer.length > 0
-              ? Number(priorVerifiedForConsumer[0].currentReading ?? priorVerifiedForConsumer[0].presentReading ?? 0)
-              : Number(matchedConsumer?.currentReading ?? matchedConsumer?.presentReading ?? matchedConsumer?.previousReading ?? 0);
+              ? normalizeOdometerReading(priorVerifiedForConsumer[0].currentReading ?? priorVerifiedForConsumer[0].presentReading ?? 0)
+              : normalizeOdometerReading(matchedConsumer?.currentReading ?? matchedConsumer?.presentReading ?? matchedConsumer?.previousReading ?? 0);
 
-            const currVal = Math.max(0, Number(ar.currentReading ?? ar.presentReading ?? 0));
-            let prevVal = ar.previousReading !== undefined ? Math.max(0, Number(ar.previousReading) || 0) : verifiedBaseline;
-            if (prevVal === 0 && verifiedBaseline > 0 && currVal >= verifiedBaseline) {
-              prevVal = verifiedBaseline;
+            const currVal = normalizeOdometerReading(ar.currentReading ?? ar.presentReading ?? 0);
+            let rawPrev = ar.previousReading !== undefined ? normalizeOdometerReading(ar.previousReading) : verifiedBaseline;
+            if (rawPrev === 0 && verifiedBaseline > 0 && (currVal >= verifiedBaseline || !isImplausibleRollover(verifiedBaseline, currVal))) {
+              rawPrev = verifiedBaseline;
             }
-            if (prevVal > currVal) {
-              prevVal = verifiedBaseline <= currVal ? verifiedBaseline : 0;
+            if (rawPrev > currVal && isImplausibleRollover(rawPrev, currVal)) {
+              rawPrev = verifiedBaseline <= currVal || !isImplausibleRollover(verifiedBaseline, currVal) ? verifiedBaseline : 0;
             }
-            const consumptionVal = Math.max(0, currVal - prevVal);
+            const odoIngest = computeOdometerConsumption(rawPrev, currVal, ar.consumption);
+            const prevVal = odoIngest.previousReading;
+            const consumptionVal = odoIngest.consumption;
+
+            const hasFieldConditionAlert = Boolean(
+              ar.isAnomaly ||
+              (ar.meterCondition && String(ar.meterCondition).trim().toUpperCase() !== 'NORMAL')
+            );
 
             const mappedStatus: MeterReading['status'] =
               ar.status === 'approved' || ar.status === 'verified'
                 ? 'verified'
-                : consumptionVal >= 50
+                : consumptionVal >= 50 || hasFieldConditionAlert
                   ? 'flagged_abnormal'
                   : 'pending';
 
@@ -1175,6 +1227,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 submittedAt: ar.submittedAt || new Date().toISOString(),
                 billingPeriod: ar.billingPeriod || new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
                 meterReaderName: ar.readerName || ar.meterReaderName || 'Field Meter Officer',
+                readerId: ar.readerId,
                 route: ar.route || matchedConsumer?.barangay || 'Poblacion',
                 status: mappedStatus,
                 isBillingIssued: Boolean(
@@ -1202,6 +1255,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 gpsLocation: ar.coordinates
                   ? `${ar.coordinates.latitude}, ${ar.coordinates.longitude}`
                   : (ar.gpsLocation || ''),
+                gpsAccuracy: typeof ar.gpsAccuracy === 'number' ? ar.gpsAccuracy : undefined,
+                meterCondition: ar.meterCondition || undefined,
+                ocrConfidence: typeof ar.ocrConfidence === 'number' ? ar.ocrConfidence : undefined,
+                isAnomaly: typeof ar.isAnomaly === 'boolean' ? ar.isAnomaly : undefined,
+                anomalyReason: ar.anomalyReason || undefined,
+                mobileSyncSource: ar.mobileSyncSource || undefined,
                 notes: ar.notes || ''
               };
               currentLocal.unshift(newReadingRecord);
@@ -1307,7 +1366,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       if (data.type === 'READER_REGISTERED_ACTIVE' || data.type === 'READER_REGISTERED_PENDING' || data.type === 'staff:registered') {
         toast.info('Meter Reader Registered', data.payload?.message || 'New field staff registered via mobile app.');
         loadAllDataFromStore(false);
-      } else if (data.type === 'READER_TERMINATED' || data.type === 'staff:terminated') {
+      } else if (data.type === 'READER_TERMINATED' || data.type === 'READER_ACCOUNT_TERMINATED' || data.type === 'staff:terminated') {
+        if (data.payload?.readerId || data.payload?.username) {
+          mockDb.deleteReader(data.payload.readerId || '', data.payload.employeeId, data.payload.email, data.payload.username, data.payload.name);
+        }
         loadAllDataFromStore(false);
       } else if (
         data.type === 'READING_SUBMITTED_FOR_APPROVAL' ||
@@ -1323,7 +1385,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         data.type === 'consumer:registered' ||
         data.type === 'CONSUMER_UPDATED' ||
         data.type === 'READER_APPROVED_ACTIVE' ||
-        data.type === 'staff:status_updated'
+        data.type === 'staff:status_updated' ||
+        data.type === 'METER_STATUS_UPDATED' ||
+        data.type === 'READING_REJECTED_REINSPECT'
       ) {
         loadAllDataFromStore(false);
       } else if (data.type === 'service:grace_period_scan_complete') {
@@ -2255,13 +2319,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // Permanently erase across all keys, users, readers, route assignments, and Firestore
     mockDb.deleteReader(reader.id, reader.employeeId, reader.email, reader.username, reader.name);
     
-    // Attempt backend API termination call
+    // Propagate termination to Central Web & Mobile Field Terminal (https://mobile-li9q.onrender.com)
     try {
       await apiClient.delete(`/api/staff/${encodeURIComponent(reader.id)}`, { 
         employeeId: reader.employeeId, 
         email: reader.email,
         username: reader.username,
-        name: reader.name
+        name: reader.name,
+        reason: 'Account permanently terminated by Tagoloan Water District Central Administration.',
+        terminatedBy: currentUser.name
       });
       sendRealtimeMessage('staff:terminated', {
         readerId: reader.id,
@@ -2445,6 +2511,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       // 1. Persist the water meter status update FIRST before sending any consumer notification
       const savedMeters = await mockDb.saveMeterAsync(updatedMeterObj, lookupSerial || updatedMeterObj.meterNumber);
       setMeters(savedMeters);
+
+      // 1b. Dispatch real-time meter status update to Central Backend & Mobile Field Terminal (https://mobile-li9q.onrender.com)
+      apiClient
+        .syncMeterStatus(updatedMeterObj.meterNumber, {
+          status: newStatus,
+          remarks: trimmedRemarks || undefined,
+          updatedBy: responsibleAdminName,
+          linkedAccountNumber: effectiveLinkedAcc || undefined
+        })
+        .catch(() => {});
 
       // 2. Record Activity Log & Trigger Targeted Consumer Notification ONLY if status changed
       const formattedUpdateDate = formatMeterStatusUpdateDate(updateTimestampIso);
@@ -3142,14 +3218,41 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveReadings(updated);
     setReadings(updated);
 
+    apiClient
+      .rejectReading(readingId, 'Flagged by Administrator for field re-inspection', currentUser.name)
+      .catch(() => {});
+
     mockDb.addAuditLog(
       currentUser.id,
       currentUser.name,
       'admin',
       'Flagged Meter Recording',
-      `Verification flag updated on reading #${readingId} to ${status.toUpperCase()}.`
+      `Verification flag updated on reading #${readingId} to ${status.toUpperCase()} and dispatched to Mobile Field Terminal for re-inspection.`
     );
+    toast.warning('Flagged for Field Re-inspection', `Reading #${readingId} flagged and dispatched to the Mobile Field Terminal.`);
     loadAllDataFromStore();
+  };
+
+  // Action: Manual Two-Way Sync with Live Mobile Field Terminal (https://mobile-li9q.onrender.com)
+  const handleSyncMobileTerminalNow = async () => {
+    if (isSyncingMobileBridge) return;
+    setIsSyncingMobileBridge(true);
+    try {
+      const res = await apiClient.syncMobileBridgeNow();
+      if (res?.bridge) {
+        setMobileBridgeStatus(res.bridge);
+      }
+      lastAdminRemoteSyncRef.current = 0;
+      loadAllDataFromStore(true);
+      toast.success(
+        'Mobile Terminal Synchronized',
+        res?.message || `Synchronized readers, validated consumers, meters, and field readings with ${MOBILE_FIELD_TERMINAL_URL}.`
+      );
+    } catch {
+      toast.error('Mobile Terminal Unreachable', 'Could not reach the Mobile Field Terminal right now. Automatic background retry is active.');
+    } finally {
+      setIsSyncingMobileBridge(false);
+    }
   };
 
   // Action: Approve Single Reading or Entire Reader Submission Batch -> Immediately Triggers Official Billing & Consumer Sync
@@ -3284,7 +3387,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         workingReadings.unshift(billedRecord);
       }
 
-      fetch(`/api/readings/${encodeURIComponent(r.id)}/approve`, { method: 'POST' }).catch(() => {});
+      apiClient.approveReading(r.id, currentUser.name).catch(() => {});
     });
 
     const updatedReadings = workingReadings
@@ -4685,19 +4788,79 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {activeTab === 'approvals' && (
             <div className="space-y-6 animate-fade-in" id="approvals-tab">
               {/* Dark, Eye-Friendly Header */}
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
-                <div>
-                  <h3 className="text-base sm:text-lg font-black text-white tracking-tight font-sans">Meter Reading Approvals & Automatic Billing</h3>
-                  <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
-                    Review field meter inspections (Previous Baseline → Present Inspection → Current Usage). Approving a reading automatically triggers official consumer billing, preserves baseline continuity for future cycles, and sends the Water Billing Notice to the consumer.
-                  </p>
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col gap-4 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-base sm:text-lg font-black text-white tracking-tight font-sans">Meter Reading Approvals & Automatic Billing</h3>
+                    <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                      Review field meter inspections (Previous Baseline → Present Inspection → Current Usage). Approving a reading automatically triggers official consumer billing, preserves 5-digit odometer continuity (00000–99999), and updates both Consumer Portal and Mobile Field Terminal.
+                    </p>
+                  </div>
+                  <div className="flex items-center space-x-3 shrink-0">
+                    <div className="bg-slate-950 border border-slate-800 px-4 py-2.5 rounded-xl text-center shadow-inner">
+                      <span className="text-xl sm:text-2xl font-black text-amber-400 block leading-tight font-mono">
+                        {readings.filter(r => r.status === 'pending' || r.status === 'flagged_abnormal').length}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Pending Approvals</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center space-x-3 shrink-0">
-                  <div className="bg-slate-950 border border-slate-800 px-4 py-2.5 rounded-xl text-center shadow-inner">
-                    <span className="text-xl sm:text-2xl font-black text-amber-400 block leading-tight font-mono">
-                      {readings.filter(r => r.status === 'pending' || r.status === 'flagged_abnormal').length}
+
+                {/* Live System Site & Mobile Field Terminal Connection Bar */}
+                <div className="pt-3 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md font-bold border ${
+                      IS_HOSTED_ON_SYSTEM_SITE || mobileBridgeStatus?.systemSiteConnected
+                        ? 'bg-blue-950/70 text-blue-300 border-blue-800/70'
+                        : 'bg-slate-800/80 text-slate-300 border-slate-700'
+                    }`}>
+                      <span className={`h-2 w-2 rounded-full ${IS_HOSTED_ON_SYSTEM_SITE || mobileBridgeStatus?.systemSiteConnected ? 'bg-blue-400' : 'bg-amber-400'}`} />
+                      <span className="font-mono text-[11px]">{SYSTEM_SITE_URL.replace(/^https?:\/\//, '')}</span>
                     </span>
-                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Pending Approvals</span>
+                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md font-bold border ${
+                      mobileBridgeStatus?.connected
+                        ? 'bg-emerald-950/70 text-emerald-300 border-emerald-800/70'
+                        : 'bg-amber-950/70 text-amber-300 border-amber-800/70'
+                    }`}>
+                      <span className={`h-2 w-2 rounded-full ${mobileBridgeStatus?.connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                      <span className="font-mono text-[11px]">{MOBILE_FIELD_TERMINAL_URL.replace(/^https?:\/\//, '')}</span>
+                    </span>
+                    {typeof mobileBridgeStatus?.latencyMs === 'number' && (
+                      <span className="text-slate-500 font-mono text-[11px]">• {mobileBridgeStatus.latencyMs}ms</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleSyncMobileTerminalNow}
+                      disabled={isSyncingMobileBridge}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-slate-200 font-bold text-xs border border-slate-700 transition inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 text-sky-400 ${isSyncingMobileBridge ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingMobileBridge ? 'Syncing...' : 'Sync Live Nodes'}</span>
+                    </button>
+                    {!IS_HOSTED_ON_SYSTEM_SITE && (
+                      <a
+                        href={`${SYSTEM_SITE_URL}/`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700 transition inline-flex items-center gap-1.5"
+                      >
+                        <Globe className="h-3.5 w-3.5 text-blue-400" />
+                        <span>System Site</span>
+                        <ExternalLink className="h-3 w-3 opacity-80" />
+                      </a>
+                    )}
+                    <a
+                      href={`${MOBILE_FIELD_TERMINAL_URL}/`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 font-bold text-xs border border-blue-500/40 transition inline-flex items-center gap-1.5"
+                    >
+                      <Smartphone className="h-3.5 w-3.5" />
+                      <span>Open Mobile App</span>
+                      <ExternalLink className="h-3 w-3 opacity-80" />
+                    </a>
                   </div>
                 </div>
               </div>
@@ -5025,10 +5188,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                                 </span>
                                               )}
 
+                                              {reading.meterCondition && (
+                                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold border ${
+                                                  reading.meterCondition.toUpperCase() === 'NORMAL'
+                                                    ? 'bg-slate-950 text-slate-300 border-slate-700'
+                                                    : 'bg-amber-950/80 text-amber-300 border-amber-700/80'
+                                                }`}>
+                                                  <Wrench className="h-3 w-3 shrink-0" />
+                                                  <span>Meter: {reading.meterCondition}</span>
+                                                </span>
+                                              )}
+
                                               {isFlaggedHigh && (
                                                 <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-300">
                                                   <AlertTriangle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
-                                                  <span>High Usage — Verify Baseline</span>
+                                                  <span>{reading.anomalyReason || 'High Usage / Condition Alert — Verify'}</span>
                                                 </span>
                                               )}
                                             </div>
@@ -5114,6 +5288,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           </div>
 
                                           <div className="flex items-center space-x-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                                            {reading.status !== 'flagged_abnormal' && (
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleVerifyReading(reading.id, 'flagged_abnormal');
+                                                }}
+                                                className="px-3 py-2 bg-amber-950/70 hover:bg-amber-900/70 text-amber-300 font-bold rounded-lg text-xs transition border border-amber-800/70 cursor-pointer"
+                                                title="Flag reading and notify Mobile Field Officer for re-inspection"
+                                              >
+                                                Re-inspect
+                                              </button>
+                                            )}
                                             <button
                                               type="button"
                                               onClick={(e) => {
@@ -6246,19 +6433,56 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 {readersSubTab === 'officers' && (
                   <>
                     {/* Header & Main Controls */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                       <div>
                         <h3 className="text-base sm:text-lg font-black text-white uppercase tracking-wider font-sans">
                           Meter Reading Staff Registry
                         </h3>
                         <p className="text-xs text-slate-400 font-medium mt-0.5">
-                          Manage municipal field inspectors, view active mobile terminals, and maintain assigned inspection zones.
+                          Manage municipal field inspectors, monitor connected handheld terminals, and synchronize route rosters with the Mobile Field App.
                         </p>
                       </div>
                       
-                      <div className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 border border-sky-800/60 rounded-xl text-xs text-sky-300 font-bold shrink-0">
-                        <Smartphone className="h-4 w-4 text-sky-400" />
-                        <span>Mobile Self-Registration Only</span>
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <span className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border ${
+                          mobileBridgeStatus?.connected
+                            ? 'bg-emerald-950/60 border-emerald-800/70 text-emerald-300'
+                            : 'bg-slate-900 border-slate-800 text-slate-300'
+                        }`}>
+                          <span className={`h-2 w-2 rounded-full ${mobileBridgeStatus?.connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                          <span>{mobileBridgeStatus?.connected ? 'Live Cloud Sync' : 'Bridge Standby'}</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleSyncMobileTerminalNow}
+                          disabled={isSyncingMobileBridge}
+                          className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-60 border border-slate-700 rounded-xl text-xs text-slate-200 font-bold inline-flex items-center gap-1.5 transition cursor-pointer"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 text-sky-400 ${isSyncingMobileBridge ? 'animate-spin' : ''}`} />
+                          <span>{isSyncingMobileBridge ? 'Syncing...' : 'Sync Live Nodes'}</span>
+                        </button>
+                        {!IS_HOSTED_ON_SYSTEM_SITE && (
+                          <a
+                            href={`${SYSTEM_SITE_URL}/`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-xl text-xs text-slate-200 font-bold inline-flex items-center gap-1.5 transition"
+                          >
+                            <Globe className="h-4 w-4 text-blue-400" />
+                            <span>System Site</span>
+                            <ExternalLink className="h-3.5 w-3.5 opacity-80" />
+                          </a>
+                        )}
+                        <a
+                          href={`${MOBILE_FIELD_TERMINAL_URL}/`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3.5 py-2 bg-sky-950/80 hover:bg-sky-900/80 border border-sky-700/70 rounded-xl text-xs text-sky-200 font-bold inline-flex items-center gap-1.5 transition"
+                        >
+                          <Smartphone className="h-4 w-4 text-sky-400" />
+                          <span>Open Mobile Terminal</span>
+                          <ExternalLink className="h-3.5 w-3.5 opacity-80" />
+                        </a>
                       </div>
                     </div>
 
@@ -12269,10 +12493,37 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       {rd.meterReaderName || 'Field Staff'} · {rd.route || linkedCon?.barangay || 'Assigned Route'}
                     </span>
                   </div>
+                  {rd.meterCondition && (
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Field Meter Condition</span>
+                      <span className={`font-bold block mt-0.5 ${
+                        rd.meterCondition.toUpperCase() === 'NORMAL' ? 'text-emerald-400' : 'text-amber-300'
+                      }`}>
+                        {rd.meterCondition}
+                      </span>
+                    </div>
+                  )}
+                  {typeof rd.ocrConfidence === 'number' && (
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Handheld Camera OCR Confidence</span>
+                      <span className="font-mono tabular-nums text-sky-300 font-bold block mt-0.5">
+                        {rd.ocrConfidence <= 1 ? `${Math.round(rd.ocrConfidence * 100)}%` : `${Math.round(rd.ocrConfidence)}%`}
+                      </span>
+                    </div>
+                  )}
+                  {rd.anomalyReason && (
+                    <div className="sm:col-span-2 bg-rose-950/40 border border-rose-800/60 rounded-lg p-2.5">
+                      <span className="text-[10px] text-rose-300 uppercase font-bold block">Handheld Anomaly Alert</span>
+                      <span className="text-rose-200 font-semibold block mt-0.5">{rd.anomalyReason}</span>
+                    </div>
+                  )}
                   {rd.gpsLocation && (
                     <div className="sm:col-span-2">
                       <span className="text-[10px] text-slate-400 uppercase font-bold block">GPS Telemetry Coordinates</span>
-                      <span className="font-mono tabular-nums text-slate-300 block mt-0.5">{rd.gpsLocation}</span>
+                      <span className="font-mono tabular-nums text-slate-300 block mt-0.5">
+                        {rd.gpsLocation}
+                        {typeof rd.gpsAccuracy === 'number' ? ` (±${Math.round(rd.gpsAccuracy)}m)` : ''}
+                      </span>
                     </div>
                   )}
                   {rd.notes && (
@@ -12305,6 +12556,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               </div>
 
               <div className="px-6 py-4 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-end gap-2 shrink-0">
+                {rd.status === 'pending' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetId = rd.id;
+                      setViewingReadingDetailModal(null);
+                      handleVerifyReading(targetId, 'flagged_abnormal');
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-amber-950/80 hover:bg-amber-900/80 text-amber-300 border border-amber-800/80 font-bold text-xs transition cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    <span>Flag for Re-inspection</span>
+                  </button>
+                )}
                 {(rd.status === 'pending' || rd.status === 'flagged_abnormal') && (
                   <button
                     type="button"

@@ -404,8 +404,18 @@ export const apiClient = {
     return apiClient.get<{ success?: boolean; readings?: any[]; data?: any[]; count?: number }>('/api/readings');
   },
 
-  approveReading: async (id: string) => {
-    return apiClient.post<{ success: boolean; message?: string }>(`/api/readings/${encodeURIComponent(id)}/approve`);
+  approveReading: async (id: string, approvedBy?: string) => {
+    return apiClient.post<{ success: boolean; message?: string }>(
+      `/api/readings/${encodeURIComponent(id)}/approve`,
+      approvedBy ? { approvedBy } : undefined
+    );
+  },
+
+  rejectReading: async (id: string, reason?: string, rejectedBy?: string) => {
+    return apiClient.post<{ success: boolean; message?: string }>(
+      `/api/readings/${encodeURIComponent(id)}/reject`,
+      { reason: reason || 'Requires field re-inspection', rejectedBy }
+    );
   },
 
   submitReading: async (reading: any) => {
@@ -581,6 +591,47 @@ export const apiClient = {
     return apiClient.post<{ success: boolean; request: any; consumer?: any }>(
       `/api/installations/${encodeURIComponent(id)}/validate`,
       payload
+    );
+  },
+
+  // Physical Water Meters & Mobile Terminal Bridge
+  syncMeterStatus: async (
+    meterNumber: string,
+    payload: { status: string; remarks?: string; updatedBy?: string; linkedAccountNumber?: string }
+  ) => {
+    return apiClient.post<{ success: boolean; meter?: any }>(
+      `/api/meters/${encodeURIComponent(meterNumber)}/status`,
+      payload,
+      { retries: 0, timeoutMs: 8000, skipLogging: true }
+    );
+  },
+
+  reconcileMeters: async (meters: any[], options?: RequestOptions) => {
+    return apiClient.post<{ success: boolean; count?: number; meters?: any[] }>(
+      '/api/meters/reconcile',
+      { meters },
+      { retries: 0, timeoutMs: 6000, skipLogging: true, ...options }
+    );
+  },
+
+  getMobileBridgeStatus: async (options?: RequestOptions) => {
+    return apiClient.get<{ success: boolean; bridge: any }>('/api/mobile-bridge/status', {
+      retries: 0,
+      timeoutMs: 6000,
+      skipLogging: true,
+      ...options,
+    });
+  },
+
+  syncMobileBridgeNow: async () => {
+    return apiClient.post<{
+      success: boolean;
+      message?: string;
+      bridge: any;
+    }>(
+      '/api/mobile-bridge/sync',
+      {},
+      { retries: 0, timeoutMs: 35000 }
     );
   },
 };
