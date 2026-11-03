@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   FolderLock, 
   Users, 
@@ -10742,18 +10743,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         />
       )}
 
-      {/* CONSUMER VIEW / EDIT / ISSUE IDS MODAL (FIXED VIEWPORT-CENTERED ROOT OVERLAY) */}
-      {selectedConsumerModal && (
-        <div 
-          className="fixed inset-0 z-[130] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-hidden animate-fade-in select-none"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setSelectedConsumerModal(null);
-          }}
-        >
-          <div 
-            className="bg-slate-900 rounded-2xl sm:rounded-3xl max-w-2xl lg:max-w-3xl w-full border border-slate-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh] sm:max-h-[85vh] my-auto select-text"
-            onClick={(e) => e.stopPropagation()}
-          >
+      {/* CONSUMER VIEW / EDIT / ISSUE IDS MODAL (TOP-ALIGNED VIEWPORT PORTAL) */}
+      {selectedConsumerModal &&
+        (typeof document !== 'undefined'
+          ? createPortal(
+              <div 
+                className="fixed inset-0 z-[155] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-2 sm:pt-3 px-3 sm:px-6 pb-6 overflow-y-auto select-none"
+                onClick={(e) => {
+                  if (e.target === e.currentTarget) setSelectedConsumerModal(null);
+                }}
+                role="dialog"
+                aria-modal="true"
+              >
+                <div 
+                  className="mt-0 self-start bg-slate-900 rounded-2xl sm:rounded-3xl max-w-2xl lg:max-w-3xl w-full border border-slate-700 shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-1.25rem)] sm:max-h-[calc(100vh-1.75rem)] select-text"
+                  onClick={(e) => e.stopPropagation()}
+                >
             {/* Modal Header (Non-scrolling) */}
             <div className="shrink-0 bg-slate-950 text-white p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between shadow-xs">
               <div>
@@ -11442,8 +11447,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+              document.body
+            )
+          : null)}
 
       {/* EDIT STAFF MODAL */}
       {editingStaffModal && (
@@ -11639,9 +11646,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         const modalLinkedConsumer = resolveLinkedConsumerForMeter(editingMeterModal, consumers);
         const modalAccountNum = (editingMeterModal.linkedAccountNumber || modalLinkedConsumer?.accountNumber || '').replace(/^#/, '').trim();
 
-        return (
-          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-7 max-w-xl w-full text-white shadow-2xl space-y-5 animate-fade-in max-h-[92vh] overflow-y-auto">
+        return typeof document !== 'undefined'
+          ? createPortal(
+              <div
+                className="fixed inset-0 z-[155] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-2 sm:pt-3 px-3 sm:px-4 pb-6 overflow-y-auto"
+                onClick={() => {
+                  setEditingMeterModal(null);
+                  setEditingMeterOriginalNumber('');
+                  setMeterStatusRemarks('');
+                }}
+                role="dialog"
+                aria-modal="true"
+              >
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="mt-0 self-start bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-7 max-w-xl w-full text-white shadow-2xl space-y-5 max-h-[calc(100vh-1.25rem)] sm:max-h-[calc(100vh-1.75rem)] overflow-y-auto"
+                >
               <div className="flex justify-between items-start border-b border-slate-800 pb-4 gap-3">
                 <div>
                   <h3 className="text-base font-extrabold text-white flex items-center gap-2">
@@ -11846,8 +11866,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 </div>
               </form>
             </div>
-          </div>
-        );
+          </div>,
+              document.body
+            )
+          : null;
       })()}
 
       {/* EDIT ANNOUNCEMENT MODAL */}
@@ -12599,15 +12621,18 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         const statusNorm = normalizeMeterStatus(viewingMeterDetailModal.status);
         const statusLabel = formatMeterStatusLabel(statusNorm);
 
-        return (
-          <div
-            className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
-            onClick={() => setViewingMeterDetailModal(null)}
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 max-h-[88vh] flex flex-col"
-            >
+        return typeof document !== 'undefined'
+          ? createPortal(
+              <div
+                className="fixed inset-0 z-[155] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-2 sm:pt-3 px-3 sm:px-4 pb-6 overflow-y-auto"
+                onClick={() => setViewingMeterDetailModal(null)}
+                role="dialog"
+                aria-modal="true"
+              >
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="mt-0 self-start w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 max-h-[calc(100vh-1.25rem)] sm:max-h-[calc(100vh-1.75rem)] flex flex-col"
+                >
               <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="p-2 bg-sky-500/15 border border-sky-500/30 rounded-xl text-sky-400 shrink-0">
@@ -12758,8 +12783,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 </button>
               </div>
             </div>
-          </div>
-        );
+          </div>,
+              document.body
+            )
+          : null;
       })()}
 
       {/* INTERACTIVE ROW-CLICK DETAIL MODAL 2: METER READING & TELEMETRY COMPLETE DETAILS */}

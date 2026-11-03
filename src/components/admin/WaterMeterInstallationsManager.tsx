@@ -116,7 +116,6 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
   const [editStatus, setEditStatus] = useState<InstallationStatus>('Pending Review');
   const [editConfirmedDate, setEditConfirmedDate] = useState('');
   const [editCompletionDate, setEditCompletionDate] = useState('');
-  const [editPersonnel, setEditPersonnel] = useState('');
   const [editAdminRemarks, setEditAdminRemarks] = useState('');
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
 
@@ -128,7 +127,6 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
   const [valMeterTagNumber, setValMeterTagNumber] = useState('');
   const [valAccountNumber, setValAccountNumber] = useState('');
   const [valCompletionDate, setValCompletionDate] = useState('');
-  const [valPersonnel, setValPersonnel] = useState('');
   const [valError, setValError] = useState<string | null>(null);
   const [isValidatingAccount, setIsValidatingAccount] = useState(false);
 
@@ -147,7 +145,6 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
     setEditStatus(req.status === 'Pending Review' ? 'Approved' : req.status);
     setEditConfirmedDate(req.confirmedInstallationDate || req.preferredInstallationDate || '');
     setEditCompletionDate(req.completionDate || new Date().toISOString().split('T')[0]);
-    setEditPersonnel(req.responsiblePersonnel || '');
     setEditAdminRemarks(req.adminRemarks || '');
   };
 
@@ -216,7 +213,6 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
     setValMeterTagNumber(suggestedTag);
     setValAccountNumber(suggestedAcc);
     setValCompletionDate(req.completionDate || new Date().toISOString().split('T')[0]);
-    setValPersonnel(req.responsiblePersonnel || '');
     setValError(null);
   };
 
@@ -330,7 +326,6 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
         status: editStatus,
         confirmedInstallationDate: editConfirmedDate.trim() || undefined,
         completionDate: editStatus === 'Installed' ? editCompletionDate.trim() || undefined : undefined,
-        responsiblePersonnel: editPersonnel.trim() || undefined,
         adminRemarks: editAdminRemarks.trim(),
         adminId: adminUser.id,
         adminName: adminUser.name || 'TWD Administrator',
@@ -412,10 +407,6 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
       setValError('Please record the Installation Completion Date.');
       return;
     }
-    if (!valPersonnel.trim()) {
-      setValError('Please record the Responsible Field Personnel who completed the installation.');
-      return;
-    }
 
     setIsValidatingAccount(true);
     try {
@@ -427,7 +418,6 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
         meterSize: valMeterSize,
         accountNumber: valAccountNumber.trim(),
         completionDate: valCompletionDate.trim(),
-        responsiblePersonnel: valPersonnel.trim(),
         adminId: adminUser.id,
         adminName: adminUser.name || 'TWD Administrator',
       });
@@ -1017,13 +1007,13 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
         (typeof document !== 'undefined'
           ? createPortal(
               <div
-                className="fixed inset-0 z-[150] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-3 sm:pt-5 px-3 sm:px-4 pb-6 overflow-y-auto animate-fade-in"
+                className="fixed inset-0 z-[160] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-2 sm:pt-3 px-3 sm:px-4 pb-6 overflow-y-auto"
                 onClick={() => setReviewingRequest(null)}
                 role="dialog"
                 aria-modal="true"
               >
                 <div
-                  className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] shadow-2xl overflow-hidden flex flex-col text-slate-100 animate-scale-up"
+                  className="mt-0 self-start bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[calc(100vh-1.25rem)] sm:max-h-[calc(100vh-1.75rem)] shadow-2xl overflow-hidden flex flex-col text-slate-100"
                   onClick={(e) => e.stopPropagation()}
                 >
             {/* Header */}
@@ -1228,31 +1218,17 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                 </div>
 
                 {editStatus === 'Installed' && (
-                  <>
-                    <div>
-                      <label className="block text-xs font-bold text-emerald-300 mb-1.5">
-                        Physical Installation Completion Date
-                      </label>
-                      <input
-                        type="date"
-                        value={editCompletionDate}
-                        onChange={(e) => setEditCompletionDate(e.target.value)}
-                        className="w-full bg-slate-950 border border-emerald-700/60 rounded-xl px-3.5 py-2.5 text-xs font-mono tabular-nums text-white focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-emerald-300 mb-1.5">
-                        Responsible Field Personnel / Crew
-                      </label>
-                      <input
-                        type="text"
-                        value={editPersonnel}
-                        onChange={(e) => setEditPersonnel(e.target.value)}
-                        placeholder="e.g., TWD Field Crew A / Engr. R. Dalisay"
-                        className="w-full bg-slate-950 border border-emerald-700/60 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-                  </>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-bold text-emerald-300 mb-1.5">
+                      Physical Installation Completion Date
+                    </label>
+                    <input
+                      type="date"
+                      value={editCompletionDate}
+                      onChange={(e) => setEditCompletionDate(e.target.value)}
+                      className="w-full bg-slate-950 border border-emerald-700/60 rounded-xl px-3.5 py-2.5 text-xs font-mono tabular-nums text-white focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
                 )}
               </div>
 
@@ -1377,14 +1353,14 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
         (typeof document !== 'undefined'
           ? createPortal(
               <div
-                className="fixed inset-0 z-[155] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-3 sm:pt-5 px-3 sm:px-4 pb-6 overflow-y-auto animate-fade-in"
+                className="fixed inset-0 z-[165] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-2 sm:pt-3 px-3 sm:px-4 pb-6 overflow-y-auto"
                 onClick={() => setValidatingRequest(null)}
                 role="dialog"
                 aria-modal="true"
               >
                 <form
                   onSubmit={handleValidateAndActivateSubmit}
-                  className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] shadow-2xl overflow-hidden flex flex-col text-slate-100 animate-scale-up"
+                  className="mt-0 self-start bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[calc(100vh-1.25rem)] sm:max-h-[calc(100vh-1.75rem)] shadow-2xl overflow-hidden flex flex-col text-slate-100"
                   onClick={(e) => e.stopPropagation()}
                 >
             {/* Header */}
@@ -1485,8 +1461,10 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                       </strong>
                     </div>
                     <div>
-                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Responsible Personnel</span>
-                      <strong className="text-slate-200">{validatingRequest.responsiblePersonnel || 'N/A'}</strong>
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Field Route Assignment</span>
+                      <strong className="text-slate-200">
+                        {validatingRequest.responsiblePersonnel || 'Auto-Assigned via Mobile Field Terminal'}
+                      </strong>
                     </div>
                     <div>
                       <span className="text-slate-400 block text-[10px] uppercase font-bold">Initial Odometer Dial</span>
@@ -1508,18 +1486,18 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                 <>
                   {/* Physical Water Meter Registration Fields (Serial Number restricted to Water Meters module!) */}
                   <div className="space-y-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
                       <h4 className="text-xs font-extrabold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
                         <Gauge className="h-4 w-4 shrink-0" />
                         <span>1. Physical Water Meter Registration</span>
                       </h4>
-                      <span className="text-[10px] font-bold text-amber-300/90 bg-amber-950/60 border border-amber-800/60 px-2 py-0.5 rounded">
-                        Serial # Visible Only in Admin Water Meters
+                      <span className="text-[11px] text-amber-300/90">
+                        Serial # visible only in Admin Water Meters
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="sm:col-span-2">
+                    <div className="space-y-4">
+                      <div>
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="text-xs font-bold text-slate-200">
                             Water Meter Serial Number <span className="text-rose-400">*</span>
@@ -1545,65 +1523,53 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                         </p>
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                          Meter Brand / Model
-                        </label>
-                        <select
-                          value={valMeterBrand}
-                          onChange={(e) => setValMeterBrand(e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-bold text-white focus:outline-none focus:border-blue-500 cursor-pointer"
-                        >
-                          {METER_BRANDS.map((b) => (
-                            <option key={b} value={b}>
-                              {b}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                            Meter Brand / Model
+                          </label>
+                          <select
+                            value={valMeterBrand}
+                            onChange={(e) => setValMeterBrand(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-bold text-white focus:outline-none focus:border-blue-500 cursor-pointer"
+                          >
+                            {METER_BRANDS.map((b) => (
+                              <option key={b} value={b}>
+                                {b}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
 
-                      <div>
-                        <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                          Meter Pipe Size
-                        </label>
-                        <select
-                          value={valMeterSize}
-                          onChange={(e) => setValMeterSize(e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-bold text-white focus:outline-none focus:border-blue-500 cursor-pointer"
-                        >
-                          {METER_SIZES.map((s) => (
-                            <option key={s} value={s}>
-                              {s}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                            Meter Pipe Size
+                          </label>
+                          <select
+                            value={valMeterSize}
+                            onChange={(e) => setValMeterSize(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-bold text-white focus:outline-none focus:border-blue-500 cursor-pointer"
+                          >
+                            {METER_SIZES.map((s) => (
+                              <option key={s} value={s}>
+                                {s}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
 
-                      <div>
-                        <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                          Installation Completion Date <span className="text-rose-400">*</span>
-                        </label>
-                        <input
-                          type="date"
-                          required
-                          value={valCompletionDate}
-                          onChange={(e) => setValCompletionDate(e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-mono tabular-nums text-white focus:outline-none focus:border-blue-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                          Responsible Field Personnel <span className="text-rose-400">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={valPersonnel}
-                          onChange={(e) => setValPersonnel(e.target.value)}
-                          placeholder="e.g., Engr. R. Dalisay / Field Team A"
-                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-                        />
+                        <div>
+                          <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                            Installation Completion Date <span className="text-rose-400">*</span>
+                          </label>
+                          <input
+                            type="date"
+                            required
+                            value={valCompletionDate}
+                            onChange={(e) => setValCompletionDate(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-mono tabular-nums text-white focus:outline-none focus:border-blue-500"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1663,12 +1629,17 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                       </div>
                     </div>
 
-                    <div className="bg-slate-950 border border-emerald-900/60 rounded-xl p-3.5 text-xs text-slate-300 leading-relaxed">
-                      <strong className="text-emerald-400">Consumer Account Activation:</strong> Completing validation will activate{' '}
-                      <strong className="text-white">{validatingRequest.consumerName}</strong>&apos;s water service account with initial 5-digit odometer dial{' '}
-                      <strong className="font-mono tabular-nums text-emerald-300">{formatOdometerReading(0)}</strong>, link Meter Tag{' '}
-                      <strong className="font-mono tabular-nums text-white">#{valMeterTagNumber || '—'}</strong> to Account{' '}
-                      <strong className="font-mono tabular-nums text-sky-300">#{valAccountNumber || '—'}</strong>, and automatically send the official Account Activated notification to their Consumer Portal (without exposing the physical Meter Serial Number).
+                    <div className="bg-slate-950 border border-emerald-900/60 rounded-xl p-3.5 text-xs text-slate-300 leading-relaxed space-y-1.5">
+                      <div>
+                        <strong className="text-emerald-400">Consumer Account Activation:</strong> Completing validation will activate{' '}
+                        <strong className="text-white">{validatingRequest.consumerName}</strong>&apos;s water service account with initial 5-digit odometer dial{' '}
+                        <strong className="font-mono tabular-nums text-emerald-300">{formatOdometerReading(0)}</strong>, link Meter Tag{' '}
+                        <strong className="font-mono tabular-nums text-white">#{valMeterTagNumber || '—'}</strong> to Account{' '}
+                        <strong className="font-mono tabular-nums text-sky-300">#{valAccountNumber || '—'}</strong>, and automatically send the official Account Activated notification to their Consumer Portal (without exposing the physical Meter Serial Number).
+                      </div>
+                      <div className="text-[11px] text-sky-300/90 pt-1.5 border-t border-slate-800/80">
+                        Field meter reader assignment for <strong className="text-white">Brgy. {validatingRequest.barangay}</strong> is handled automatically by the Mobile Field Terminal.
+                      </div>
                     </div>
                   </div>
                 </>
@@ -1711,14 +1682,14 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
         (typeof document !== 'undefined'
           ? createPortal(
               <div
-                className="fixed inset-0 z-[150] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-3 sm:pt-5 px-3 sm:px-4 pb-6 overflow-y-auto animate-fade-in"
+                className="fixed inset-0 z-[160] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-2 sm:pt-3 px-3 sm:px-4 pb-6 overflow-y-auto"
                 onClick={() => setViewingRequestDetail(null)}
                 role="dialog"
                 aria-modal="true"
               >
                 <div
                   onClick={(e) => e.stopPropagation()}
-                  className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] flex flex-col animate-scale-up"
+                  className="mt-0 self-start w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 max-h-[calc(100vh-1.25rem)] sm:max-h-[calc(100vh-1.75rem)] flex flex-col"
                 >
             <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-3 min-w-0">
@@ -1828,7 +1799,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
                   {viewingRequestDetail.responsiblePersonnel && (
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Responsible Personnel</span>
+                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Field Route Assignment</span>
                       <span className="text-slate-200 font-semibold">{viewingRequestDetail.responsiblePersonnel}</span>
                     </div>
                   )}

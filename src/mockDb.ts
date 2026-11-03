@@ -3535,7 +3535,7 @@ export const mockDb = {
     meterSize: string;
     accountNumber: string;
     completionDate: string;
-    responsiblePersonnel: string;
+    responsiblePersonnel?: string;
     adminId: string;
     adminName: string;
   }): Promise<{
@@ -3563,15 +3563,31 @@ export const mockDb = {
     const cleanTag = params.meterTagNumber.trim().toUpperCase();
     const cleanAcc = params.accountNumber.replace(/^#/, '').trim().toUpperCase();
     const cleanRfid = params.rfidTag?.trim() ? params.rfidTag.trim().toUpperCase() : undefined;
-    const cleanPersonnel = params.responsiblePersonnel.trim();
     const cleanCompletionDate = params.completionDate.trim() || new Date().toISOString().split('T')[0];
 
-    if (!cleanSerial || !cleanTag || !cleanAcc || !cleanPersonnel) {
+    if (!cleanSerial || !cleanTag || !cleanAcc) {
       return {
         success: false,
-        error: 'Meter Serial Number, Meter Tag Number, Account Number, and Responsible Personnel are all required.',
+        error: 'Meter Serial Number, Meter Tag Number, and Account Number are all required.',
       };
     }
+
+    const matchedMobileReader = mockDb.getReaders().find((mr) => {
+      if (mr.employmentStatus === 'inactive') return false;
+      const routes =
+        Array.isArray(mr.assignedRoutes) && mr.assignedRoutes.length > 0
+          ? mr.assignedRoutes
+          : ([mr.targetRoute, mr.zone].filter(Boolean) as string[]);
+      const brgyLower = (reqRecord.barangay || '').trim().toLowerCase();
+      return brgyLower ? routes.some((rt) => rt.toLowerCase().includes(brgyLower)) : false;
+    });
+
+    const cleanPersonnel =
+      params.responsiblePersonnel?.trim() ||
+      reqRecord.responsiblePersonnel?.trim() ||
+      (matchedMobileReader?.name
+        ? `${matchedMobileReader.name} (Auto-Routed via Mobile Terminal)`
+        : 'Auto-Assigned via Mobile Field Terminal');
 
     // Check duplicate Account Number, Meter Tag Number, and Meter Serial Number
     const allConsumers = mockDb.getConsumers();
@@ -3713,7 +3729,7 @@ export const mockDb = {
       actorRole: 'admin',
       action: 'Validated Meter Installation & Activated Service Account',
       scheduledDate: cleanCompletionDate,
-      remarks: `Installation verified & account activated. Issued Account #${cleanAcc} and Meter Tag #${cleanTag}. Installed by ${cleanPersonnel}.`,
+      remarks: `Installation verified & account activated. Issued Account #${cleanAcc} and Meter Tag #${cleanTag} (Field route assignment handled automatically via Mobile Field Terminal).`,
     };
 
     const validatedReq: WaterMeterInstallationRequest = {
@@ -3777,7 +3793,7 @@ export const mockDb = {
       params.adminName,
       'admin',
       'Validated Meter Installation & Activated Account',
-      `Verified installation for ${reqRecord.consumerName} (App #${reqRecord.applicationNumber}). Issued Account #${cleanAcc} and Meter Tag #${cleanTag} (Completed ${cleanCompletionDate} by ${cleanPersonnel}).`
+      `Verified installation for ${reqRecord.consumerName} (App #${reqRecord.applicationNumber}). Issued Account #${cleanAcc} and Meter Tag #${cleanTag} (Completed ${cleanCompletionDate} · Field routing handled automatically via Mobile Field Terminal).`
     );
 
     return {
