@@ -469,6 +469,22 @@ export const ConsumerInstallationSection: React.FC<ConsumerInstallationSectionPr
               </div>
             )}
 
+            {/* Clear Status Notice When Physical Meter Is Installed & Waiting for Account Validation */}
+            {latestRequest.status === 'Installed' && latestRequest.accountValidationStatus !== 'validated' && (
+              <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/35 border border-emerald-200 dark:border-emerald-800/70 p-4 flex items-start gap-3 text-xs text-emerald-900 dark:text-emerald-200">
+                <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-black text-emerald-950 dark:text-emerald-100">
+                    Your Water Meter Has Been Installed — Waiting for Account Validation
+                  </p>
+                  <p className="leading-relaxed">
+                    Physical water meter installation at your premises has been completed. Please wait while Tagoloan Water District Administration validates and updates your account to issue your official{' '}
+                    <strong>Account Number</strong> and <strong>Meter Tag Number</strong>. You will receive an automatic notification as soon as your account is active.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Required 8 Tracking Details Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800">

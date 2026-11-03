@@ -386,6 +386,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [selectedAdminReportId, setSelectedAdminReportId] = useState<string | null>(null);
   const [activeAdminBellReportId, setActiveAdminBellReportId] = useState<string | null>(null);
   const adminBellRef = useRef<HTMLDivElement | null>(null);
+  const mainScrollRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!showAdminBellDropdown) return;
@@ -1234,10 +1235,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               (ar.meterCondition && String(ar.meterCondition).trim().toUpperCase() !== 'NORMAL')
             );
 
+            const hasHighUsageOrConditionAlert = consumptionVal >= 20 || hasFieldConditionAlert;
+
             const mappedStatus: MeterReading['status'] =
               ar.status === 'approved' || ar.status === 'verified'
                 ? 'verified'
-                : consumptionVal >= 50 || hasFieldConditionAlert
+                : hasHighUsageOrConditionAlert
                   ? 'flagged_abnormal'
                   : 'pending';
 
@@ -1307,8 +1310,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 gpsAccuracy: typeof ar.gpsAccuracy === 'number' ? ar.gpsAccuracy : undefined,
                 meterCondition: ar.meterCondition || undefined,
                 ocrConfidence: typeof ar.ocrConfidence === 'number' ? ar.ocrConfidence : undefined,
-                isAnomaly: typeof ar.isAnomaly === 'boolean' ? ar.isAnomaly : undefined,
-                anomalyReason: ar.anomalyReason || undefined,
+                isAnomaly:
+                  typeof ar.isAnomaly === 'boolean'
+                    ? ar.isAnomaly || hasHighUsageOrConditionAlert
+                    : hasHighUsageOrConditionAlert || undefined,
+                anomalyReason:
+                  ar.anomalyReason ||
+                  (hasHighUsageOrConditionAlert ? 'High Usage / Condition Alert — Verify' : undefined),
                 mobileSyncSource: ar.mobileSyncSource || undefined,
                 notes: ar.notes || ''
               };
@@ -4045,8 +4053,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const totalConsumersWeight = consumers.length;
   const registeredWebUsers = consumers.filter(c => c.isRegistered).length;
   const completedReadingsCount = readings.filter(r => r.status === 'verified').length;
-  const pendingReadingsCount = readings.filter(r => r.status === 'pending').length;
-  const flaggedAbnormalCount = readings.filter(r => r.status === 'flagged_abnormal').length;
+  const pendingReadingsCount = readings.filter(
+    r => r.status === 'pending' && Number(r.consumption || 0) < 20
+  ).length;
+  const flaggedAbnormalCount = readings.filter(
+    r => r.status === 'flagged_abnormal' || (r.status === 'pending' && Number(r.consumption || 0) >= 20)
+  ).length;
   const pendingReportsCount = reports.filter(r => r.status === 'pending' || r.hasUnreadConsumerUpdate).length;
   const pendingInstallationsCount = installationRequests.filter(
     r => r.hasUnreadAdminAlert || r.status === 'Pending Review' || (r.status === 'Installed' && r.accountValidationStatus !== 'validated')
@@ -4325,9 +4337,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       )}
 
       {/* Main Administrative Workplace Area */}
-      <main className="flex-grow flex flex-col h-screen overflow-y-auto min-w-0">
-        {/* Upper Action Bar */}
-        <header className="h-20 bg-white border-b border-slate-200/85 px-4 sm:px-8 flex items-center justify-between shadow-sm shrink-0">
+      <main ref={mainScrollRef} className="flex-grow flex flex-col h-screen overflow-y-auto min-w-0">
+        {/* Upper Action Bar (Sticky at Top) */}
+        <header className="sticky top-0 z-40 h-20 bg-white border-b border-slate-200/85 px-4 sm:px-8 flex items-center justify-between shadow-sm shrink-0">
           <div className="flex items-center space-x-3 min-w-0">
             {/* Mobile Hamburger Menu Button */}
             <button
@@ -4378,14 +4390,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               const installationAlertItems: CombinedAdminAlert[] = installationRequests.map(req => ({
                 kind: 'installation',
                 timestamp: new Date(req.updatedAt || req.submissionDate || 0).getTime(),
-                isUnread: Boolean(req.hasUnreadAdminAlert || req.status === 'Pending Review' || (req.status === 'Installed' && req.accountValidationStatus !== 'validated')),
+                isUnread: mockDb.isInstallationUnreadForAdmin(req),
                 req,
               }));
 
               const reportAlertItems: CombinedAdminAlert[] = reports.map(rep => ({
                 kind: 'report',
                 timestamp: new Date(rep.updatedAt || rep.createdAt || 0).getTime(),
-                isUnread: Boolean(rep.hasUnreadConsumerUpdate || rep.status === 'pending'),
+                isUnread: mockDb.isReportUnreadForAdmin(rep),
                 rep,
               }));
 
@@ -4393,6 +4405,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 (a, b) => b.timestamp - a.timestamp
               );
               const unreadAdminCount = combinedAlerts.filter(item => item.isUnread).length;
+
+              const handleMarkAllAdminNotificationsRead = () => {
+                const res = mockDb.markAllAdminNotificationsRead(installationRequests, reports);
+                setInstallationRequests(res.installations);
+                setReports(res.reports);
+              };
 
               return (
                 <div ref={adminBellRef} className="relative">
@@ -4413,7 +4431,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   </button>
 
                   {showAdminBellDropdown && (
-                    <div className="fixed inset-x-3 top-16 sm:inset-x-auto sm:top-auto sm:absolute sm:right-0 sm:mt-2 sm:w-96 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl z-[120] overflow-hidden text-slate-100">
+                    <div className="fixed inset-x-3 top-16 sm:inset-x-auto sm:top-auto sm:absolute sm:right-0 sm:mt-2 sm:w-[410px] bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl z-[120] overflow-hidden text-slate-100">
                       <div className="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2 min-w-0">
                           <Bell className="h-4 w-4 text-sky-400 shrink-0" />
@@ -4422,9 +4440,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           </h4>
                         </div>
                         {unreadAdminCount > 0 && (
-                          <span className="text-[11px] font-mono tabular-nums font-bold text-rose-400 shrink-0">
-                            {unreadAdminCount} unread
-                          </span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[11px] font-mono tabular-nums font-bold text-rose-400">
+                              {unreadAdminCount} unread
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleMarkAllAdminNotificationsRead}
+                              className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] font-bold text-sky-300 hover:text-white transition cursor-pointer whitespace-nowrap"
+                              title="Mark all notifications as read"
+                            >
+                              Mark all read
+                            </button>
+                          </div>
                         )}
                       </div>
 
@@ -4438,17 +4466,32 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             if (item.kind === 'installation') {
                               const { req, isUnread } = item;
                               const schedDate = req.confirmedInstallationDate || req.preferredInstallationDate;
+                              const openInstallationNotification = () => {
+                                setShowAdminBellDropdown(false);
+                                setIsTabLoading(false);
+                                const nextList = mockDb.markInstallationReadByAdmin(req.id, req);
+                                setInstallationRequests(
+                                  Array.isArray(nextList) && nextList.length > 0
+                                    ? nextList
+                                    : mockDb.getInstallationRequests()
+                                );
+                                setActiveTab('meters');
+                                setMetersSubTab('installations');
+                                mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+                                setSelectedInstallationRequestId(`${req.id}::${Date.now()}`);
+                              };
+
                               return (
-                                <button
+                                <div
                                   key={`admin-bell-inst-${req.id}`}
-                                  type="button"
-                                  onClick={() => {
-                                    setShowAdminBellDropdown(false);
-                                    const nextList = mockDb.markInstallationReadByAdmin(req.id);
-                                    setInstallationRequests(nextList);
-                                    setActiveTab('meters');
-                                    setMetersSubTab('installations');
-                                    setSelectedInstallationRequestId(req.id);
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={openInstallationNotification}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                      e.preventDefault();
+                                      openInstallationNotification();
+                                    }
                                   }}
                                   className={`w-full text-left px-3.5 py-3 hover:bg-slate-800/80 transition cursor-pointer space-y-1 group ${
                                     isUnread ? 'bg-sky-950/35' : ''
@@ -4472,7 +4515,25 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                         })}
                                       </span>
                                       {isUnread && (
-                                        <span className="h-2 w-2 rounded-full bg-sky-400 shrink-0" />
+                                        <>
+                                          <span className="h-2 w-2 rounded-full bg-sky-400 shrink-0" />
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              const nextList = mockDb.markInstallationReadByAdmin(req.id, req);
+                                              setInstallationRequests(
+                                                Array.isArray(nextList) && nextList.length > 0
+                                                  ? nextList
+                                                  : mockDb.getInstallationRequests()
+                                              );
+                                            }}
+                                            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[9px] font-bold text-sky-300 hover:text-white transition cursor-pointer whitespace-nowrap"
+                                            title="Mark this notification as read"
+                                          >
+                                            Mark read
+                                          </button>
+                                        </>
                                       )}
                                     </div>
                                   </div>
@@ -4490,11 +4551,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                   <div className="flex items-center justify-between pt-0.5 text-[10px] text-slate-400">
                                     <span className="font-mono tabular-nums">{req.contactNumber}</span>
                                     <span className="font-bold text-sky-400 group-hover:text-sky-300 inline-flex items-center gap-0.5">
-                                      <span>Review Schedule</span>
+                                      <span>
+                                        {req.status === 'Pending Review'
+                                          ? 'Accept / Update Status'
+                                          : req.status === 'Installed' && req.accountValidationStatus !== 'validated'
+                                          ? 'Validate & Issue IDs'
+                                          : 'Update Status'}
+                                      </span>
                                       <ChevronRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
                                     </span>
                                   </div>
-                                </button>
+                                </div>
                               );
                             }
 
@@ -4508,16 +4575,28 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 : rep.description;
                             const cleanPreview = normalizeSingleLinePreview(rawPreview);
                             const ref = rep.referencedNotice;
+                            const openReportNotification = () => {
+                              setShowAdminBellDropdown(false);
+                              const nextReports = mockDb.markReportReadByAdmin(rep.id, rep);
+                              setReports(
+                                Array.isArray(nextReports) && nextReports.length > 0
+                                  ? nextReports
+                                  : mockDb.getReports()
+                              );
+                              setActiveAdminBellReportId(rep.id);
+                            };
 
                             return (
-                              <button
+                              <div
                                 key={`admin-bell-${rep.id}`}
-                                type="button"
-                                onClick={() => {
-                                  setShowAdminBellDropdown(false);
-                                  mockDb.markReportReadByAdmin(rep.id);
-                                  setReports(mockDb.getReports());
-                                  setActiveAdminBellReportId(rep.id);
+                                role="button"
+                                tabIndex={0}
+                                onClick={openReportNotification}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    openReportNotification();
+                                  }
                                 }}
                                 className={`w-full text-left px-3.5 py-3 hover:bg-slate-800/80 transition cursor-pointer space-y-1 group ${
                                   isUnread ? 'bg-blue-950/30' : ''
@@ -4541,7 +4620,25 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                       })}
                                     </span>
                                     {isUnread && (
-                                      <span className="h-2 w-2 rounded-full bg-rose-400 shrink-0" />
+                                      <>
+                                        <span className="h-2 w-2 rounded-full bg-rose-400 shrink-0" />
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            const nextReports = mockDb.markReportReadByAdmin(rep.id, rep);
+                                            setReports(
+                                              Array.isArray(nextReports) && nextReports.length > 0
+                                                ? nextReports
+                                                : mockDb.getReports()
+                                            );
+                                          }}
+                                          className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[9px] font-bold text-sky-300 hover:text-white transition cursor-pointer whitespace-nowrap"
+                                          title="Mark this notification as read"
+                                        >
+                                          Mark read
+                                        </button>
+                                      </>
                                     )}
                                   </div>
                                 </div>
@@ -4565,7 +4662,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     <ChevronRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
                                   </span>
                                 </div>
-                              </button>
+                              </div>
                             );
                           })
                         )}
@@ -4578,6 +4675,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             setShowAdminBellDropdown(false);
                             setActiveTab('meters');
                             setMetersSubTab('installations');
+                            mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
                           }}
                           className="text-xs font-bold text-sky-400 hover:text-sky-300 hover:underline cursor-pointer whitespace-nowrap"
                         >
@@ -4589,6 +4687,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             setShowAdminBellDropdown(false);
                             setActiveTab('announcements');
                             setAnnouncementsSubTab('customer_service');
+                            mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
                           }}
                           className="text-xs font-bold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer whitespace-nowrap"
                         >
@@ -5208,6 +5307,27 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                       <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider bg-blue-950/80 text-blue-300 px-2.5 py-0.5 rounded-md border border-blue-800/80">
                                         Field Officer Batch
                                       </span>
+                                      {group.readings.some(
+                                        (r) =>
+                                          r.status === 'flagged_abnormal' ||
+                                          Number(r.consumption || 0) >= 20 ||
+                                          Boolean(r.meterCondition && r.meterCondition.trim().toUpperCase() !== 'NORMAL')
+                                      ) && (
+                                        <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider bg-rose-950/90 text-rose-300 px-2.5 py-0.5 rounded-md border border-rose-700/80">
+                                          <AlertTriangle className="h-3 w-3 text-rose-400 shrink-0" />
+                                          <span>
+                                            {
+                                              group.readings.filter(
+                                                (r) =>
+                                                  r.status === 'flagged_abnormal' ||
+                                                  Number(r.consumption || 0) >= 20 ||
+                                                  Boolean(r.meterCondition && r.meterCondition.trim().toUpperCase() !== 'NORMAL')
+                                              ).length
+                                            }{' '}
+                                            High Usage / Condition Alert
+                                          </span>
+                                        </span>
+                                      )}
                                     </div>
                                     <div className="flex items-center gap-2 text-xs text-slate-400 mt-1 flex-wrap">
                                       <span className="flex items-center gap-1">
@@ -5273,14 +5393,24 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 <div className="p-4 sm:p-5 space-y-3.5 bg-slate-950/40">
                                   {group.readings.map((reading, pIdx) => {
                                     const totalCalculatedBill = calculateCostOf(reading, reading.classification);
-                                    const isFlaggedHigh = reading.status === 'flagged_abnormal' || Number(reading.consumption || 0) >= 50;
+                                    const isFlaggedHigh =
+                                      reading.status === 'flagged_abnormal' ||
+                                      Number(reading.consumption || 0) >= 20 ||
+                                      Boolean(
+                                        reading.meterCondition &&
+                                          reading.meterCondition.trim().toUpperCase() !== 'NORMAL'
+                                      );
 
                                     return (
                                       <div 
                                         key={`reader-${group.readerName}-read-${reading.id || ''}-${reading.accountNumber || ''}-${pIdx}`} 
                                         onClick={() => setViewingReadingDetailModal(reading)}
                                         title="Click to view complete meter reading & account details"
-                                        className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-md hover:border-blue-500/60 transition space-y-4 cursor-pointer"
+                                        className={`bg-slate-900/90 border rounded-xl p-4 sm:p-5 shadow-md transition space-y-4 cursor-pointer ${
+                                          isFlaggedHigh
+                                            ? 'border-rose-700/75 hover:border-rose-500'
+                                            : 'border-slate-800 hover:border-blue-500/60'
+                                        }`}
                                       >
                                         {/* Header: Account Number, Consumer Info, Route, and Coverage */}
                                         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-slate-800/80">
@@ -5322,7 +5452,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                               )}
 
                                               {isFlaggedHigh && (
-                                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-300">
+                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-black bg-rose-950/90 text-rose-300 border border-rose-700/80 shadow-2xs">
                                                   <AlertTriangle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
                                                   <span>{reading.anomalyReason || 'High Usage / Condition Alert — Verify'}</span>
                                                 </span>
@@ -7576,8 +7706,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       : 'bg-white border-slate-200 hover:bg-slate-50'
                   }`}
                 >
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700 block">High Usage Alerts</span>
-                  <span className="text-xl sm:text-2xl font-black text-rose-900">{readings.filter(r => r.status === 'flagged_abnormal' || r.consumption >= 50).length}</span>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700 block">High Usage Alerts (20+ m³)</span>
+                  <span className="text-xl sm:text-2xl font-black text-rose-900">{readings.filter(r => r.status === 'flagged_abnormal' || r.consumption >= 20).length}</span>
                 </button>
               </div>
 
@@ -7587,7 +7717,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   .filter((r) => {
                     if (readingsStatusFilter === 'verified' && r.status !== 'verified') return false;
                     if (readingsStatusFilter === 'pending' && r.status !== 'pending') return false;
-                    if (readingsStatusFilter === 'flagged_abnormal' && r.status !== 'flagged_abnormal' && r.consumption < 50) return false;
+                    if (readingsStatusFilter === 'flagged_abnormal' && r.status !== 'flagged_abnormal' && r.consumption < 20) return false;
 
                     return smartMatch(readingsSearch, [
                       r.id,
@@ -7675,7 +7805,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             </tr>
                           ) : (
                             paginatedReadings.map((r, rIdx) => {
-                              const isAbnormal = r.consumption >= 50;
+                              const isAbnormal = r.consumption >= 20 || r.status === 'flagged_abnormal';
                               const resolvedClassification = r.classification || 'Residential';
                               return (
                                 <tr
@@ -7683,7 +7813,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                   onClick={() => setViewingReadingDetailModal(r)}
                                   title="Click row to view complete meter reading & telemetry details"
                                   className={`hover:bg-slate-800/70 transition-colors cursor-pointer ${
-                                    isAbnormal && r.status === 'flagged_abnormal' ? 'bg-rose-950/25' : ''
+                                    isAbnormal && r.status !== 'verified' ? 'bg-rose-950/25' : ''
                                   }`}
                                 >
                                   {/* Tx ID */}

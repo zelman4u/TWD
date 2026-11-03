@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Wrench,
   Calendar,
@@ -136,12 +137,14 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
   }, [searchQuery, statusFilter]);
 
   const openReviewModal = (req: WaterMeterInstallationRequest) => {
-    if (req.hasUnreadAdminAlert) {
-      mockDb.markInstallationReadByAdmin(req.id);
+    const wasUnread = mockDb.isInstallationUnreadForAdmin(req);
+    mockDb.markInstallationReadByAdmin(req.id, req);
+    if (wasUnread) {
       onRefreshData();
     }
-    setReviewingRequest(req);
-    setEditStatus(req.status);
+    setReviewingRequest({ ...req, hasUnreadAdminAlert: false });
+    // When opening a Pending Review request, pre-select 'Approved' so the next action is immediately clear
+    setEditStatus(req.status === 'Pending Review' ? 'Approved' : req.status);
     setEditConfirmedDate(req.confirmedInstallationDate || req.preferredInstallationDate || '');
     setEditCompletionDate(req.completionDate || new Date().toISOString().split('T')[0]);
     setEditPersonnel(req.responsiblePersonnel || '');
@@ -198,14 +201,15 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
       );
       return;
     }
-    if (req.hasUnreadAdminAlert) {
-      mockDb.markInstallationReadByAdmin(req.id);
+    const wasUnread = mockDb.isInstallationUnreadForAdmin(req);
+    mockDb.markInstallationReadByAdmin(req.id, req);
+    if (wasUnread) {
       onRefreshData();
     }
     const suggestedTag = req.assignedMeterTagNumber || generateSuggestedMeterTag();
     const suggestedAcc = req.assignedAccountNumber || generateSuggestedAccountNumber(req);
 
-    setValidatingRequest(req);
+    setValidatingRequest({ ...req, hasUnreadAdminAlert: false });
     setValSerialNumber(req.meterSerialNumber || '');
     setValMeterBrand(req.meterBrand || 'EVER');
     setValMeterSize(req.meterSize || (req.consumerType === 'Commercial' ? '3/4"' : '1/2"'));
@@ -219,10 +223,20 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
   // Handle deep-link selection from Admin Notification Bell or Consumers tab
   useEffect(() => {
     if (!initialSelectedRequestId) return;
-    const found = requests.find(
-      (r) => r.id === initialSelectedRequestId || r.applicationNumber === initialSelectedRequestId
+    const cleanTargetId = String(initialSelectedRequestId).split('::')[0].trim();
+    if (!cleanTargetId) return;
+
+    const candidatePool =
+      Array.isArray(requests) && requests.length > 0
+        ? requests
+        : mockDb.getInstallationRequests();
+    const found = candidatePool.find(
+      (r) => r.id === cleanTargetId || r.applicationNumber === cleanTargetId
     );
     if (found) {
+      setStatusFilter('All');
+      setSearchQuery('');
+      setViewingRequestDetail(null);
       if (found.status === 'Installed' && found.accountValidationStatus !== 'validated') {
         openValidationModal(found);
       } else {
@@ -292,6 +306,18 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
   const handleSaveScheduleAndStatus = (proceedToValidation = false) => {
     if (!reviewingRequest) return;
 
+    if (
+      reviewingRequest.status === 'Pending Review' &&
+      editStatus === 'Pending Review' &&
+      editAdminRemarks.trim() === (reviewingRequest.adminRemarks || '').trim()
+    ) {
+      toast.warning(
+        'Select Next Status Action',
+        'Please update the status (for example "Approved" to accept the schedule, or "Installed" once the water meter is mounted) so the consumer receives an official update.'
+      );
+      return;
+    }
+
     const needsScheduleDate = ['Approved', 'Scheduled', 'Rescheduled'].includes(editStatus);
     if (needsScheduleDate && !editConfirmedDate.trim()) {
       toast.error('Schedule Date Required', 'Please select a confirmed or revised installation schedule date.');
@@ -311,17 +337,45 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
       });
 
       if (updated) {
+        const matchedDispatchedNotif = mockDb
+          .getAllNotifications()
+          .find(
+            (n) =>
+              n.installationRequestId === updated.id &&
+              n.installationStatus === updated.status
+          );
+
         sendRealtimeMessage('INSTALLATION_REQUEST_UPDATED', {
+          request: updated,
+          notification: matchedDispatchedNotif || undefined,
           requestId: updated.id,
           applicationNumber: updated.applicationNumber,
           status: updated.status,
           consumerEmail: updated.consumerEmail,
+          userId: updated.linkedUserId,
         });
+
+        if (matchedDispatchedNotif) {
+          sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
+            notification: matchedDispatchedNotif,
+            accountNumber: matchedDispatchedNotif.accountNumber,
+            consumerEmail: updated.consumerEmail,
+            userId: updated.linkedUserId,
+          });
+        }
+
         onRefreshData();
-        toast.success(
-          'Installation Updated',
-          `Installation request ${updated.applicationNumber} updated to "${updated.status}". Automatic consumer notification dispatched.`
-        );
+        if (updated.status === 'Installed') {
+          toast.success(
+            'Water Meter Marked Installed · Consumer Notified',
+            `${updated.consumerName} has been notified that their water meter is installed and to wait while their account is validated. You may now validate & issue IDs.`
+          );
+        } else {
+          toast.success(
+            'Installation Status Updated',
+            `Application ${updated.applicationNumber} updated to "${updated.status}". Official notification sent to ${updated.consumerName}.`
+          );
+        }
         setReviewingRequest(null);
         if (proceedToValidation && updated.status === 'Installed') {
           openValidationModal(updated);
@@ -427,54 +481,60 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
 
   return (
     <div className="space-y-6">
-      {/* KPI SUMMARY STRIP */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-bold uppercase tracking-wider">Total Requests</span>
+      {/* KPI SUMMARY STRIP — Locked 3-row CSS Grid guarantees pixel-exact horizontal number alignment */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 items-stretch">
+        <div className="h-full bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md grid grid-rows-[20px_36px_auto] content-start gap-1.5 text-left">
+          <div className="h-5 flex items-center justify-between gap-2 text-slate-400">
+            <span className="text-[10px] font-bold uppercase tracking-wider truncate">Total Requests</span>
             <Wrench className="h-4 w-4 text-sky-400 shrink-0" />
           </div>
-          <div className="mt-2">
-            <div className="text-2xl font-black text-white font-mono tabular-nums">{stats.total}</div>
-            <div className="text-[11px] text-slate-400 mt-0.5">
-              {unscheduledApplicantsCount > 0
-                ? `${unscheduledApplicantsCount} applicant(s) yet to schedule`
-                : 'All active meter applications'}
-            </div>
+          <div className="h-9 flex items-center">
+            <span className="text-2xl leading-none font-black text-white font-mono tabular-nums">
+              {stats.total}
+            </span>
+          </div>
+          <div className="text-[11px] leading-snug text-slate-400 self-start">
+            {unscheduledApplicantsCount > 0
+              ? `${unscheduledApplicantsCount} applicant(s) yet to schedule`
+              : 'All active meter applications'}
           </div>
         </div>
 
         <button
           type="button"
           onClick={() => setStatusFilter(statusFilter === 'Pending Review' ? 'All' : 'Pending Review')}
-          className={`text-left bg-slate-900 border rounded-2xl p-4 shadow-md flex flex-col justify-between transition cursor-pointer ${
+          className={`h-full text-left bg-slate-900 border rounded-2xl p-4 shadow-md grid grid-rows-[20px_36px_auto] content-start gap-1.5 transition cursor-pointer ${
             statusFilter === 'Pending Review'
               ? 'border-amber-500 ring-1 ring-amber-500/30'
               : 'border-slate-800 hover:border-slate-700'
           }`}
         >
-          <div className="flex items-center justify-between text-amber-300">
-            <span className="text-[10px] font-bold uppercase tracking-wider">Pending Review</span>
+          <div className="h-5 flex items-center justify-between gap-2 text-amber-300">
+            <span className="text-[10px] font-bold uppercase tracking-wider truncate">Pending Review</span>
             <Clock className="h-4 w-4 text-amber-400 shrink-0" />
           </div>
-          <div className="mt-2">
-            <div className="text-2xl font-black text-amber-400 font-mono tabular-nums">
+          <div className="h-9 flex items-center">
+            <span className="text-2xl leading-none font-black text-amber-400 font-mono tabular-nums">
               {stats.pendingReview}
-            </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">Awaiting schedule confirmation</div>
+            </span>
+          </div>
+          <div className="text-[11px] leading-snug text-slate-400 self-start">
+            Awaiting schedule confirmation
           </div>
         </button>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md flex flex-col justify-between">
-          <div className="flex items-center justify-between text-blue-300">
-            <span className="text-[10px] font-bold uppercase tracking-wider">Scheduled / Field</span>
+        <div className="h-full bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md grid grid-rows-[20px_36px_auto] content-start gap-1.5 text-left">
+          <div className="h-5 flex items-center justify-between gap-2 text-blue-300">
+            <span className="text-[10px] font-bold uppercase tracking-wider truncate">Scheduled / Field</span>
             <Calendar className="h-4 w-4 text-blue-400 shrink-0" />
           </div>
-          <div className="mt-2">
-            <div className="text-2xl font-black text-blue-400 font-mono tabular-nums">
+          <div className="h-9 flex items-center">
+            <span className="text-2xl leading-none font-black text-blue-400 font-mono tabular-nums">
               {stats.scheduledActive}
-            </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">Approved, Scheduled & In Progress</div>
+            </span>
+          </div>
+          <div className="text-[11px] leading-snug text-slate-400 self-start">
+            Approved, Scheduled &amp; In Progress
           </div>
         </div>
 
@@ -483,7 +543,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
           onClick={() =>
             setStatusFilter(statusFilter === 'Awaiting Validation' ? 'All' : 'Awaiting Validation')
           }
-          className={`text-left bg-slate-900 border rounded-2xl p-4 shadow-md flex flex-col justify-between transition cursor-pointer ${
+          className={`h-full text-left bg-slate-900 border rounded-2xl p-4 shadow-md grid grid-rows-[20px_36px_auto] content-start gap-1.5 transition cursor-pointer ${
             statusFilter === 'Awaiting Validation'
               ? 'border-cyan-500 ring-1 ring-cyan-500/30'
               : stats.awaitingValidation > 0
@@ -491,28 +551,83 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               : 'border-slate-800 hover:border-slate-700'
           }`}
         >
-          <div className="flex items-center justify-between text-cyan-300">
-            <span className="text-[10px] font-bold uppercase tracking-wider">Awaiting Validation</span>
+          <div className="h-5 flex items-center justify-between gap-2 text-cyan-300">
+            <span className="text-[10px] font-bold uppercase tracking-wider truncate">Awaiting Validation</span>
             <ShieldCheck className="h-4 w-4 text-cyan-400 shrink-0" />
           </div>
-          <div className="mt-2">
-            <div className="text-2xl font-black text-cyan-400 font-mono tabular-nums">
+          <div className="h-9 flex items-center">
+            <span className="text-2xl leading-none font-black text-cyan-400 font-mono tabular-nums">
               {stats.awaitingValidation}
-            </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">Installed · Ready to issue IDs</div>
+            </span>
+          </div>
+          <div className="text-[11px] leading-snug text-slate-400 self-start">
+            Installed · Ready to issue IDs
           </div>
         </button>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md flex flex-col justify-between col-span-2 sm:col-span-1">
-          <div className="flex items-center justify-between text-emerald-300">
-            <span className="text-[10px] font-bold uppercase tracking-wider">Validated & Active</span>
+        <div className="h-full bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md grid grid-rows-[20px_36px_auto] content-start gap-1.5 text-left col-span-2 sm:col-span-1">
+          <div className="h-5 flex items-center justify-between gap-2 text-emerald-300">
+            <span className="text-[10px] font-bold uppercase tracking-wider truncate">Validated &amp; Active</span>
             <UserCheck className="h-4 w-4 text-emerald-400 shrink-0" />
           </div>
-          <div className="mt-2">
-            <div className="text-2xl font-black text-emerald-400 font-mono tabular-nums">
+          <div className="h-9 flex items-center">
+            <span className="text-2xl leading-none font-black text-emerald-400 font-mono tabular-nums">
               {stats.validated}
+            </span>
+          </div>
+          <div className="text-[11px] leading-snug text-slate-400 self-start">
+            Account &amp; Meter Tag issued
+          </div>
+        </div>
+      </div>
+
+      {/* CLEAR 3-STEP ADMINISTRATIVE WORKFLOW GUIDE */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <span className="text-[11px] font-extrabold uppercase tracking-wider text-sky-300 flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+            <span>Administrative Installation &amp; Account Validation Workflow</span>
+          </span>
+          <span className="text-[11px] text-slate-400 hidden sm:inline">
+            Consumers are notified automatically at every step
+          </span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          <div className="bg-slate-950 border border-amber-500/30 rounded-xl p-3 flex items-start gap-2.5">
+            <span className="w-6 h-6 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono font-black text-xs flex items-center justify-center shrink-0">
+              1
+            </span>
+            <div>
+              <div className="font-bold text-amber-300">Accept &amp; Confirm Schedule</div>
+              <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">
+                When <strong className="text-slate-200">Pending Review</strong>, click{' '}
+                <strong className="text-amber-300">Accept / Update Status</strong> to approve &amp; confirm the installation date.
+              </p>
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">Account & Meter Tag issued</div>
+          </div>
+
+          <div className="bg-slate-950 border border-emerald-500/30 rounded-xl p-3 flex items-start gap-2.5">
+            <span className="w-6 h-6 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono font-black text-xs flex items-center justify-center shrink-0">
+              2
+            </span>
+            <div>
+              <div className="font-bold text-emerald-300">Mark Water Meter Installed</div>
+              <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">
+                Update status to <strong className="text-emerald-300">Installed</strong>. This automatically notifies the Consumer that their water meter is installed and to wait for account validation.
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-slate-950 border border-cyan-500/30 rounded-xl p-3 flex items-start gap-2.5">
+            <span className="w-6 h-6 rounded-lg bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-mono font-black text-xs flex items-center justify-center shrink-0">
+              3
+            </span>
+            <div>
+              <div className="font-bold text-cyan-300">Validate Account &amp; Issue IDs</div>
+              <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">
+                Click <strong className="text-cyan-300">Validate &amp; Issue IDs</strong> to record the Meter Serial # and issue the Consumer&apos;s official Account # &amp; Meter Tag #.
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -602,21 +717,23 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               {paginatedRequests.map((req) => {
                 const isInstalled = req.status === 'Installed';
                 const isValidated = req.accountValidationStatus === 'validated';
+                const isUnreadAlert = mockDb.isInstallationUnreadForAdmin(req);
                 const submittedDisplay = formatInstallationDateDisplay(req.submissionDate);
 
                 return (
                   <tr
                     key={req.id}
                     onClick={() => {
-                      if (req.hasUnreadAdminAlert) {
-                        mockDb.markInstallationReadByAdmin(req.id);
+                      const wasUnread = mockDb.isInstallationUnreadForAdmin(req);
+                      mockDb.markInstallationReadByAdmin(req.id, req);
+                      if (wasUnread) {
                         onRefreshData();
                       }
-                      setViewingRequestDetail(req);
+                      setViewingRequestDetail({ ...req, hasUnreadAdminAlert: false });
                     }}
                     title="Click row to open complete installation & applicant details"
                     className={`transition cursor-pointer ${
-                      req.hasUnreadAdminAlert
+                      isUnreadAlert
                         ? 'bg-sky-950/25 hover:bg-sky-950/40'
                         : isInstalled && !isValidated
                         ? 'bg-cyan-950/15 hover:bg-cyan-950/30'
@@ -626,7 +743,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                     {/* Application # & Submission Date */}
                     <td className="px-4 py-3.5 border-r border-slate-800/80 align-top">
                       <div className="flex items-center gap-1.5">
-                        {req.hasUnreadAdminAlert && (
+                        {isUnreadAlert && (
                           <span
                             className="w-2 h-2 rounded-full bg-sky-400 animate-pulse shrink-0"
                             title="New / Unread Installation Request"
@@ -707,13 +824,30 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
 
                     {/* Installation Status */}
                     <td className="px-4 py-3.5 border-r border-slate-800/80 align-top text-center">
-                      <span
-                        className={`inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wider border whitespace-nowrap ${getStatusBadgeClasses(
-                          req.status
-                        )}`}
-                      >
-                        {req.status}
-                      </span>
+                      <div className="inline-flex flex-col items-center gap-1">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wider border whitespace-nowrap ${getStatusBadgeClasses(
+                            req.status
+                          )}`}
+                        >
+                          {req.status}
+                        </span>
+                        {req.status === 'Pending Review' && (
+                          <span className="text-[10px] font-bold text-amber-300/90 whitespace-nowrap">
+                            Step 1: Accept / Update Status
+                          </span>
+                        )}
+                        {['Approved', 'Scheduled', 'Rescheduled', 'Installation in Progress'].includes(req.status) && (
+                          <span className="text-[10px] font-bold text-emerald-300/90 whitespace-nowrap">
+                            Step 2: Mark Installed
+                          </span>
+                        )}
+                        {isInstalled && !isValidated && (
+                          <span className="text-[10px] font-bold text-cyan-300 whitespace-nowrap">
+                            Consumer Notified · Validate IDs
+                          </span>
+                        )}
+                      </div>
                     </td>
 
                     {/* Account Validation & Meter Details (Serial Number visible ONLY inside Admin Water Meters module) */}
@@ -742,8 +876,8 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                             <Sparkles className="h-3 w-3 shrink-0" />
                             <span>Awaiting Validation</span>
                           </span>
-                          <p className="text-[11px] text-slate-400 leading-snug">
-                            Ready to record Meter Serial # and issue Account # &amp; Meter Tag #.
+                          <p className="text-[11px] text-slate-300 leading-snug">
+                            Consumer notified &amp; waiting. Issue Account # &amp; Meter Tag # now.
                           </p>
                         </div>
                       ) : (
@@ -753,7 +887,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                             <span>Locked until Installed</span>
                           </span>
                           <p className="text-[10px] text-slate-500 leading-snug">
-                            Confirm physical installation first before issuing IDs.
+                            Update status to &ldquo;Installed&rdquo; first to notify consumer &amp; unlock IDs.
                           </p>
                         </div>
                       )}
@@ -783,9 +917,26 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                             e.stopPropagation();
                             openReviewModal(req);
                           }}
-                          className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer"
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer flex items-center gap-1.5 ${
+                            req.status === 'Pending Review'
+                              ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-sm'
+                              : ['Approved', 'Scheduled', 'Rescheduled', 'Installation in Progress'].includes(
+                                  req.status
+                                )
+                              ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-sm'
+                              : 'bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100'
+                          }`}
                         >
-                          Manage Schedule
+                          <RefreshCw className="h-3 w-3 shrink-0" />
+                          <span>
+                            {req.status === 'Pending Review'
+                              ? 'Accept / Update Status'
+                              : ['Approved', 'Scheduled', 'Rescheduled', 'Installation in Progress'].includes(
+                                  req.status
+                                )
+                              ? 'Update Status / Mark Installed'
+                              : 'Update Status'}
+                          </span>
                         </button>
 
                         {isValidated ? (
@@ -862,17 +1013,19 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
       {/* =====================================================================
           MODAL 1: REVIEW & UPDATE INSTALLATION STATUS / SCHEDULE
       ====================================================================== */}
-      {reviewingRequest && (
-        <div
-          className="fixed inset-0 z-[140] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
-          onClick={() => setReviewingRequest(null)}
-          role="dialog"
-          aria-modal="true"
-        >
-          <div
-            className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[88vh] shadow-2xl overflow-hidden flex flex-col text-slate-100"
-            onClick={(e) => e.stopPropagation()}
-          >
+      {reviewingRequest &&
+        (typeof document !== 'undefined'
+          ? createPortal(
+              <div
+                className="fixed inset-0 z-[150] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-3 sm:pt-5 px-3 sm:px-4 pb-6 overflow-y-auto animate-fade-in"
+                onClick={() => setReviewingRequest(null)}
+                role="dialog"
+                aria-modal="true"
+              >
+                <div
+                  className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] shadow-2xl overflow-hidden flex flex-col text-slate-100 animate-scale-up"
+                  onClick={(e) => e.stopPropagation()}
+                >
             {/* Header */}
             <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-3 shrink-0">
               <div className="flex items-center gap-3">
@@ -960,6 +1113,87 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                 )}
               </div>
 
+              {/* Guided Quick-Action Status Selection Cards */}
+              <div className="space-y-2">
+                <label className="block text-[11px] font-extrabold uppercase tracking-wider text-sky-300">
+                  Choose What To Do Next (Updates Status &amp; Notifies Consumer)
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-left">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditStatus('Approved');
+                      if (!editConfirmedDate) {
+                        setEditConfirmedDate(
+                          reviewingRequest.preferredInstallationDate ||
+                            new Date().toISOString().split('T')[0]
+                        );
+                      }
+                    }}
+                    className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                      editStatus === 'Approved' || editStatus === 'Scheduled'
+                        ? 'bg-sky-950/60 border-sky-400 ring-1 ring-sky-400/30'
+                        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs font-black text-sky-300 flex items-center justify-between">
+                      <span>1. Accept Schedule</span>
+                      {(editStatus === 'Approved' || editStatus === 'Scheduled') && (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+                      Approve request &amp; notify consumer of confirmed installation date.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setEditStatus('Installation in Progress')}
+                    className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                      editStatus === 'Installation in Progress'
+                        ? 'bg-cyan-950/60 border-cyan-400 ring-1 ring-cyan-400/30'
+                        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs font-black text-cyan-300 flex items-center justify-between">
+                      <span>2. In Progress</span>
+                      {editStatus === 'Installation in Progress' && (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+                      Field crew is on-site installing the physical water meter.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditStatus('Installed');
+                      if (!editCompletionDate) {
+                        setEditCompletionDate(new Date().toISOString().split('T')[0]);
+                      }
+                    }}
+                    className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                      editStatus === 'Installed'
+                        ? 'bg-emerald-950/60 border-emerald-400 ring-1 ring-emerald-400/30'
+                        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs font-black text-emerald-300 flex items-center justify-between">
+                      <span>3. Meter Installed</span>
+                      {editStatus === 'Installed' && (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+                      Notifies consumer meter is installed &amp; waiting for account validation.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
               {/* Status & Schedule Controls */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -1034,21 +1268,36 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                     editStatus === 'Rescheduled'
                       ? 'Provide the reason for rescheduling and any instructions for the consumer...'
                       : editStatus === 'Installed'
-                      ? 'Optional installation completion remarks (Consumer will be notified that account validation is underway)...'
+                      ? 'Optional installation completion remarks (Consumer will be notified that their water meter is installed and to wait for account validation)...'
                       : 'Provide schedule confirmation notes, site preparation instructions, or remarks...'
                   }
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
                 />
               </div>
 
-              {/* Automatic Notification Notice */}
-              <div className="bg-slate-950 border border-sky-900/60 rounded-xl p-3.5 text-xs text-slate-300 leading-relaxed">
-                <strong className="text-sky-300">Automatic Consumer Notification:</strong> Saving changes to the installation status or confirmed schedule will automatically dispatch an official Tagoloan Water District notice to{' '}
-                <strong className="text-white">{reviewingRequest.consumerName}</strong> in their Consumer Portal Notification Center.
-                {editStatus === 'Installed' && (
-                  <span className="block mt-1 text-emerald-300 font-semibold">
-                    Note: Marking as &ldquo;Installed&rdquo; notifies the consumer that physical installation is complete and unlocks Step 2 (Meter Serial Registration &amp; Official Account/Meter Tag Issuance).
-                  </span>
+              {/* Automatic Notification Live Outcome Preview */}
+              <div
+                className={`bg-slate-950 border rounded-xl p-3.5 text-xs leading-relaxed ${
+                  editStatus === 'Installed'
+                    ? 'border-emerald-700/70 text-emerald-100'
+                    : 'border-sky-900/60 text-slate-300'
+                }`}
+              >
+                <strong className={editStatus === 'Installed' ? 'text-emerald-300' : 'text-sky-300'}>
+                  Automatic Consumer Notification ({editStatus}):
+                </strong>{' '}
+                {editStatus === 'Installed' ? (
+                  <>
+                    Saving will immediately notify <strong className="text-white">{reviewingRequest.consumerName}</strong> that{' '}
+                    <strong className="text-emerald-300">their physical water meter has been installed</strong> and instruct them to{' '}
+                    <strong className="text-emerald-300">wait while Administration validates and updates their account</strong> to issue their official Account Number and Meter Tag Number.
+                  </>
+                ) : (
+                  <>
+                    Saving changes will automatically dispatch an official Tagoloan Water District{' '}
+                    <strong className="text-white">&ldquo;{editStatus}&rdquo;</strong> notice to{' '}
+                    <strong className="text-white">{reviewingRequest.consumerName}</strong> in their Consumer Portal Notification Center.
+                  </>
                 )}
               </div>
 
@@ -1115,25 +1364,29 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+              document.body
+            )
+          : null)}
 
       {/* =====================================================================
           MODAL 2: POST-INSTALLATION METER REGISTRATION & ACCOUNT VALIDATION
           (Strictly unlocked ONLY when status === 'Installed')
       ====================================================================== */}
-      {validatingRequest && (
-        <div
-          className="fixed inset-0 z-[145] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
-          onClick={() => setValidatingRequest(null)}
-          role="dialog"
-          aria-modal="true"
-        >
-          <form
-            onSubmit={handleValidateAndActivateSubmit}
-            className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[90vh] shadow-2xl overflow-hidden flex flex-col text-slate-100"
-            onClick={(e) => e.stopPropagation()}
-          >
+      {validatingRequest &&
+        (typeof document !== 'undefined'
+          ? createPortal(
+              <div
+                className="fixed inset-0 z-[155] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-3 sm:pt-5 px-3 sm:px-4 pb-6 overflow-y-auto animate-fade-in"
+                onClick={() => setValidatingRequest(null)}
+                role="dialog"
+                aria-modal="true"
+              >
+                <form
+                  onSubmit={handleValidateAndActivateSubmit}
+                  className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] shadow-2xl overflow-hidden flex flex-col text-slate-100 animate-scale-up"
+                  onClick={(e) => e.stopPropagation()}
+                >
             {/* Header */}
             <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-3 shrink-0">
               <div className="flex items-center gap-3">
@@ -1448,19 +1701,25 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               )}
             </div>
           </form>
-        </div>
-      )}
+        </div>,
+              document.body
+            )
+          : null)}
 
       {/* Complete Read-Only Installation Request & Applicant Details Modal (Row Click) */}
-      {viewingRequestDetail && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
-          onClick={() => setViewingRequestDetail(null)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 max-h-[88vh] flex flex-col"
-          >
+      {viewingRequestDetail &&
+        (typeof document !== 'undefined'
+          ? createPortal(
+              <div
+                className="fixed inset-0 z-[150] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-3 sm:pt-5 px-3 sm:px-4 pb-6 overflow-y-auto animate-fade-in"
+                onClick={() => setViewingRequestDetail(null)}
+                role="dialog"
+                aria-modal="true"
+              >
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] flex flex-col animate-scale-up"
+                >
             <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="p-2 bg-cyan-500/15 border border-cyan-500/30 rounded-xl text-cyan-400 shrink-0">
@@ -1624,9 +1883,11 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                     setViewingRequestDetail(null);
                     openReviewModal(target);
                   }}
-                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold transition cursor-pointer"
+                  className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition cursor-pointer"
                 >
-                  Manage Schedule
+                  {viewingRequestDetail.status === 'Pending Review'
+                    ? 'Accept / Update Status'
+                    : 'Update Status & Schedule'}
                 </button>
                 {viewingRequestDetail.status === 'Installed' && (
                   <button
@@ -1657,8 +1918,10 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+              document.body
+            )
+          : null)}
     </div>
   );
 };

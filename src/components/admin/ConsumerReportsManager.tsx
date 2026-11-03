@@ -171,11 +171,12 @@ export function ConsumerReportsManager({
       r => r.id === selectedReportId || r.ticketNumber === selectedReportId
     );
     if (found) {
-      setActiveReport(found);
+      setActiveReport({ ...found, hasUnreadConsumerUpdate: false });
       setReplyStatus(found.status === 'pending' ? 'in_progress' : found.status);
       setAssignedCrew(found.assignedStaff || '');
       setReplyText('');
-      mockDb.markReportReadByAdmin(found.id);
+      mockDb.markReportReadByAdmin(found.id, found);
+      onRefreshReports();
       if (onClearSelectedReport) {
         onClearSelectedReport();
       }
@@ -256,11 +257,15 @@ export function ConsumerReportsManager({
   const emergencyCount = reports.filter(r => r.urgency === 'emergency').length;
 
   const handleOpenReport = (report: ConsumerReport) => {
-    setActiveReport(report);
+    const wasUnread = mockDb.isReportUnreadForAdmin(report);
+    mockDb.markReportReadByAdmin(report.id, report);
+    setActiveReport({ ...report, hasUnreadConsumerUpdate: false });
     setReplyStatus(report.status === 'pending' ? 'in_progress' : report.status);
     setAssignedCrew(report.assignedStaff || '');
     setReplyText('');
-    mockDb.markReportReadByAdmin(report.id);
+    if (wasUnread) {
+      onRefreshReports();
+    }
   };
 
   const handleApplyQuickReply = (snippet: typeof QUICK_REPLIES[0]) => {
@@ -576,7 +581,7 @@ export function ConsumerReportsManager({
                                 <span className="font-mono font-bold text-sky-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 shadow-2xs">
                                   {report.ticketNumber}
                                 </span>
-                                {report.hasUnreadConsumerUpdate && (
+                                {mockDb.isReportUnreadForAdmin(report) && (
                                   <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping" title="New update from consumer"></span>
                                 )}
                               </div>

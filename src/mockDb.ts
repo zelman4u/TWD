@@ -95,7 +95,47 @@ const KEYS = {
   TARIFF_CONFIG: `${STORAGE_PREFIX}tariff_config`,
   REPORTS: `${STORAGE_PREFIX}consumer_reports`,
   INSTALLATIONS: `${STORAGE_PREFIX}installations`,
+  ADMIN_READ_ALERTS: `${STORAGE_PREFIX}admin_read_alerts`,
 };
+
+function getAdminReadAlertTokens(): Set<string> {
+  try {
+    const raw = localStorage.getItem(KEYS.ADMIN_READ_ALERTS);
+    if (!raw) return new Set<string>();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set<string>(parsed.map(String)) : new Set<string>();
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function addAdminReadAlertTokens(tokens: string[]): void {
+  if (!tokens || tokens.length === 0) return;
+  try {
+    const current = getAdminReadAlertTokens();
+    tokens.forEach((t) => {
+      if (t) current.add(t);
+    });
+    const list = Array.from(current).slice(-600);
+    localStorage.setItem(KEYS.ADMIN_READ_ALERTS, JSON.stringify(list));
+  } catch {
+    // Safe failover
+  }
+}
+
+function getAdminInstallationAlertToken(req: WaterMeterInstallationRequest): string {
+  const consumerEvents = Array.isArray(req.history)
+    ? req.history.filter((h) => h && h.actorRole === 'consumer').length
+    : 0;
+  return `inst::${req.id || req.applicationNumber}::${req.status}::${req.accountValidationStatus || 'pending'}::${consumerEvents}`;
+}
+
+function getAdminReportAlertToken(rep: ConsumerReport): string {
+  const consumerReplies = Array.isArray(rep.replies)
+    ? rep.replies.filter((m) => m && m.senderRole === 'consumer').length
+    : 0;
+  return `rep::${rep.id || rep.ticketNumber}::${consumerReplies}`;
+}
 
 // Initial Sample Consumer Reports
 const INITIAL_REPORTS: ConsumerReport[] = [
@@ -1004,7 +1044,9 @@ const INITIAL_READINGS: MeterReading[] = [
     consumption: 24,
     readingDate: '2024-11-05',
     meterReaderDate: '2024-11-05',
-    status: 'pending',
+    status: 'flagged_abnormal',
+    isAnomaly: true,
+    anomalyReason: 'High Usage / Condition Alert — Verify',
     meterReaderName: 'MARCO POLO',
     imageUrl: 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop',
     billingPeriod: 'November 2024',
@@ -1048,7 +1090,9 @@ const INITIAL_READINGS: MeterReading[] = [
     consumption: 32,
     readingDate: '2024-11-05',
     meterReaderDate: '2024-11-05',
-    status: 'pending',
+    status: 'flagged_abnormal',
+    isAnomaly: true,
+    anomalyReason: 'High Usage / Condition Alert — Verify',
     meterReaderName: 'JUAN DELA CRUZ',
     imageUrl: 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?q=80&w=300&auto=format&fit=crop',
     billingPeriod: 'November 2024',
@@ -2621,9 +2665,16 @@ export const mockDb = {
 
   mergeExternalReports: (incoming: ConsumerReport[]): ConsumerReport[] => {
     const localList = getStored<ConsumerReport[]>(KEYS.REPORTS, INITIAL_REPORTS);
+    const readTokens = getAdminReadAlertTokens();
     if (!Array.isArray(incoming) || incoming.length === 0) {
       return localList
-        .map((r) => ({ ...r, replies: mockDb.dedupeReplies(r.replies) }))
+        .map((r) => {
+          const cleanReplies = mockDb.dedupeReplies(r.replies);
+          const candidate = { ...r, replies: cleanReplies };
+          return readTokens.has(getAdminReportAlertToken(candidate))
+            ? { ...candidate, hasUnreadConsumerUpdate: false }
+            : candidate;
+        })
         .sort(compareReportsCanonical);
     }
     const map = new Map<string, ConsumerReport>();
@@ -2639,23 +2690,42 @@ export const mockDb = {
       }
       if (!existingKey) {
         const key = ir.id || ir.ticketNumber;
-        map.set(key, { ...ir, id: key, replies: mockDb.dedupeReplies(ir.replies) });
+        const candidate: ConsumerReport = { ...ir, id: key, replies: mockDb.dedupeReplies(ir.replies) };
+        if (readTokens.has(getAdminReportAlertToken(candidate))) {
+          candidate.hasUnreadConsumerUpdate = false;
+        }
+        map.set(key, candidate);
       } else {
         const prev = map.get(existingKey)!;
         const prevReplies = Array.isArray(prev.replies) ? prev.replies : [];
         const irReplies = Array.isArray(ir.replies) ? ir.replies : [];
         const mergedReplies = mockDb.dedupeReplies([...prevReplies, ...irReplies]);
-        const irNewer = new Date(ir.updatedAt || 0).getTime() >= new Date(prev.updatedAt || 0).getTime();
+        const prevTime = new Date(prev.updatedAt || 0).getTime();
+        const irTime = new Date(ir.updatedAt || 0).getTime();
+        const irNewer = irTime > prevTime || (irTime === prevTime && irReplies.length > prevReplies.length);
         const primary = irNewer ? ir : prev;
         const secondary = irNewer ? prev : ir;
-        map.set(existingKey, {
+
+        const prevConsumerCount = prevReplies.filter(m => m && m.senderRole === 'consumer').length;
+        const mergedConsumerCount = mergedReplies.filter(m => m && m.senderRole === 'consumer').length;
+
+        const mergedItem: ConsumerReport = {
           ...secondary,
           ...primary,
           id: existingKey,
           sourceNotificationId: primary.sourceNotificationId || secondary.sourceNotificationId,
           referencedNotice: primary.referencedNotice || secondary.referencedNotice,
           replies: mergedReplies,
-        });
+        };
+
+        if (
+          readTokens.has(getAdminReportAlertToken(mergedItem)) ||
+          (prev.hasUnreadConsumerUpdate === false && mergedConsumerCount <= prevConsumerCount)
+        ) {
+          mergedItem.hasUnreadConsumerUpdate = false;
+        }
+
+        map.set(existingKey, mergedItem);
       }
     });
     const merged = Array.from(map.values()).sort(compareReportsCanonical);
@@ -2881,16 +2951,80 @@ export const mockDb = {
     return updated;
   },
 
+  isReportUnreadForAdmin: (rep?: ConsumerReport | null): boolean => {
+    if (!rep) return false;
+    const readTokens = getAdminReadAlertTokens();
+    if (readTokens.has(getAdminReportAlertToken(rep))) return false;
+    if (rep.hasUnreadConsumerUpdate === false) return false;
+    return Boolean(
+      rep.hasUnreadConsumerUpdate === true ||
+        (rep.hasUnreadConsumerUpdate === undefined && rep.status === 'pending')
+    );
+  },
+
+  isInstallationUnreadForAdmin: (req?: WaterMeterInstallationRequest | null): boolean => {
+    if (!req) return false;
+    if (req.status === 'Cancelled' || req.accountValidationStatus === 'validated') return false;
+    const readTokens = getAdminReadAlertTokens();
+    if (readTokens.has(getAdminInstallationAlertToken(req))) return false;
+    if (req.hasUnreadAdminAlert === false) return false;
+    return Boolean(
+      req.hasUnreadAdminAlert === true ||
+        (req.hasUnreadAdminAlert === undefined && req.status === 'Pending Review')
+    );
+  },
+
   markReportReadByConsumer: (reportId: string): void => {
     const list = getStored<ConsumerReport[]>(KEYS.REPORTS, INITIAL_REPORTS);
     const updated = list.map(r => (r.id === reportId || r.ticketNumber === reportId) ? { ...r, hasUnreadAdminReply: false } : r);
     setStored(KEYS.REPORTS, updated);
+    const target = updated.find(r => r.id === reportId || r.ticketNumber === reportId);
+    if (target) {
+      syncDocToFirestore(COLLECTIONS.REPORTS, target.id, target as unknown as Record<string, unknown>);
+      safeBackendFetch(`/api/reports/${encodeURIComponent(target.id)}/read`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'consumer' }),
+      }).catch(() => {});
+    }
   },
 
-  markReportReadByAdmin: (reportId: string): void => {
+  markReportReadByAdmin: (reportId: string, fallbackRep?: ConsumerReport): ConsumerReport[] => {
     const list = getStored<ConsumerReport[]>(KEYS.REPORTS, INITIAL_REPORTS);
-    const updated = list.map(r => (r.id === reportId || r.ticketNumber === reportId) ? { ...r, hasUnreadConsumerUpdate: false } : r);
+    const existsInList = list.some(r => r.id === reportId || r.ticketNumber === reportId);
+    const baseList =
+      !existsInList && fallbackRep
+        ? [{ ...fallbackRep, hasUnreadConsumerUpdate: false }, ...list]
+        : list;
+
+    const tokensToAdd: string[] = [];
+    if (fallbackRep) {
+      tokensToAdd.push(getAdminReportAlertToken(fallbackRep));
+    }
+
+    const updated = baseList
+      .map(r => {
+        if (r.id === reportId || r.ticketNumber === reportId) {
+          tokensToAdd.push(getAdminReportAlertToken(r));
+          return { ...r, hasUnreadConsumerUpdate: false };
+        }
+        return r;
+      })
+      .sort(compareReportsCanonical);
+
+    addAdminReadAlertTokens(tokensToAdd);
     setStored(KEYS.REPORTS, updated);
+
+    const target = updated.find(r => r.id === reportId || r.ticketNumber === reportId);
+    if (target) {
+      syncDocToFirestore(COLLECTIONS.REPORTS, target.id, target as unknown as Record<string, unknown>);
+      safeBackendFetch(`/api/reports/${encodeURIComponent(target.id)}/read`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'admin' }),
+      }).catch(() => {});
+    }
+    return updated;
   },
 
   // =========================================================================
@@ -2899,7 +3033,14 @@ export const mockDb = {
 
   getInstallationRequests: (): WaterMeterInstallationRequest[] => {
     const list = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
-    return [...list].sort(compareInstallationsCanonical);
+    const readTokens = getAdminReadAlertTokens();
+    return [...list]
+      .map((r) =>
+        readTokens.has(getAdminInstallationAlertToken(r))
+          ? { ...r, hasUnreadAdminAlert: false }
+          : r
+      )
+      .sort(compareInstallationsCanonical);
   },
 
   saveInstallationRequests: (requests: WaterMeterInstallationRequest[]): void => {
@@ -2911,8 +3052,15 @@ export const mockDb = {
 
   mergeExternalInstallations: (incoming: WaterMeterInstallationRequest[]): WaterMeterInstallationRequest[] => {
     const localList = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
+    const readTokens = getAdminReadAlertTokens();
     if (!Array.isArray(incoming) || incoming.length === 0) {
-      return [...localList].sort(compareInstallationsCanonical);
+      return [...localList]
+        .map((r) =>
+          readTokens.has(getAdminInstallationAlertToken(r))
+            ? { ...r, hasUnreadAdminAlert: false }
+            : r
+        )
+        .sort(compareInstallationsCanonical);
     }
     const map = new Map<string, WaterMeterInstallationRequest>();
     localList.forEach((lr) => {
@@ -2927,10 +3075,20 @@ export const mockDb = {
       }
       if (!existingKey) {
         const k = ir.id || ir.applicationNumber;
-        map.set(k, { ...ir, id: k, history: Array.isArray(ir.history) ? ir.history : [] });
+        const candidate: WaterMeterInstallationRequest = {
+          ...ir,
+          id: k,
+          history: Array.isArray(ir.history) ? ir.history : [],
+        };
+        if (readTokens.has(getAdminInstallationAlertToken(candidate))) {
+          candidate.hasUnreadAdminAlert = false;
+        }
+        map.set(k, candidate);
       } else {
         const prev = map.get(existingKey)!;
-        const irNewer = new Date(ir.updatedAt || 0).getTime() >= new Date(prev.updatedAt || 0).getTime();
+        const prevTime = new Date(prev.updatedAt || 0).getTime();
+        const irTime = new Date(ir.updatedAt || 0).getTime();
+        const irNewer = irTime > prevTime;
         const primary = irNewer ? ir : prev;
         const secondary = irNewer ? prev : ir;
         const histMap = new Map<string, InstallationHistoryEntry>();
@@ -2940,7 +3098,12 @@ export const mockDb = {
         const mergedHist = Array.from(histMap.values()).sort(
           (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
         );
-        map.set(existingKey, {
+        const prevConsumerEvents = Array.isArray(prev.history)
+          ? prev.history.filter(h => h && h.actorRole === 'consumer').length
+          : 0;
+        const mergedConsumerEvents = mergedHist.filter(h => h && h.actorRole === 'consumer').length;
+
+        const mergedItem: WaterMeterInstallationRequest = {
           ...secondary,
           ...primary,
           id: existingKey,
@@ -2948,7 +3111,16 @@ export const mockDb = {
           assignedAccountNumber: primary.assignedAccountNumber || secondary.assignedAccountNumber,
           assignedMeterTagNumber: primary.assignedMeterTagNumber || secondary.assignedMeterTagNumber,
           history: mergedHist,
-        });
+        };
+
+        if (
+          readTokens.has(getAdminInstallationAlertToken(mergedItem)) ||
+          (prev.hasUnreadAdminAlert === false && mergedConsumerEvents <= prevConsumerEvents)
+        ) {
+          mergedItem.hasUnreadAdminAlert = false;
+        }
+
+        map.set(existingKey, mergedItem);
       }
     });
     const merged = Array.from(map.values()).sort(compareInstallationsCanonical);
@@ -2958,11 +3130,35 @@ export const mockDb = {
     return merged;
   },
 
-  markInstallationReadByAdmin: (requestId: string): void => {
+  markInstallationReadByAdmin: (
+    requestId: string,
+    fallbackReq?: WaterMeterInstallationRequest
+  ): WaterMeterInstallationRequest[] => {
     const list = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
-    const updated = list.map((r) =>
-      r.id === requestId || r.applicationNumber === requestId ? { ...r, hasUnreadAdminAlert: false } : r
+    const existsInList = list.some(
+      (r) => r.id === requestId || r.applicationNumber === requestId
     );
+    const baseList =
+      !existsInList && fallbackReq
+        ? [{ ...fallbackReq, hasUnreadAdminAlert: false }, ...list]
+        : list;
+
+    const tokensToAdd: string[] = [];
+    if (fallbackReq) {
+      tokensToAdd.push(getAdminInstallationAlertToken(fallbackReq));
+    }
+
+    const updated = baseList
+      .map((r) => {
+        if (r.id === requestId || r.applicationNumber === requestId) {
+          tokensToAdd.push(getAdminInstallationAlertToken(r));
+          return { ...r, hasUnreadAdminAlert: false };
+        }
+        return r;
+      })
+      .sort(compareInstallationsCanonical);
+
+    addAdminReadAlertTokens(tokensToAdd);
     setStored(KEYS.INSTALLATIONS, updated);
     const target = updated.find((r) => r.id === requestId || r.applicationNumber === requestId);
     if (target) {
@@ -2970,9 +3166,80 @@ export const mockDb = {
       safeBackendFetch(`/api/installations/${encodeURIComponent(target.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hasUnreadAdminAlert: false }),
+        body: JSON.stringify({ request: target, hasUnreadAdminAlert: false, markReadOnly: true }),
       }).catch(() => {});
     }
+    return updated;
+  },
+
+  markAllAdminNotificationsRead: (
+    extraInstallations?: WaterMeterInstallationRequest[],
+    extraReports?: ConsumerReport[]
+  ): { installations: WaterMeterInstallationRequest[]; reports: ConsumerReport[] } => {
+    const tokensToAdd: string[] = [];
+
+    // 1. Mark all Installation Requests read
+    const storedInst = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
+    const instMap = new Map<string, WaterMeterInstallationRequest>();
+    [...storedInst, ...(Array.isArray(extraInstallations) ? extraInstallations : [])].forEach((r) => {
+      if (r && r.id) instMap.set(r.id, r);
+    });
+    const changedInst: WaterMeterInstallationRequest[] = [];
+    const updatedInst = Array.from(instMap.values())
+      .map((r) => {
+        tokensToAdd.push(getAdminInstallationAlertToken(r));
+        if (r.hasUnreadAdminAlert !== false) {
+          const next = { ...r, hasUnreadAdminAlert: false };
+          changedInst.push(next);
+          return next;
+        }
+        return r;
+      })
+      .sort(compareInstallationsCanonical);
+
+    // 2. Mark all Consumer Reports read
+    const storedRep = getStored<ConsumerReport[]>(KEYS.REPORTS, INITIAL_REPORTS);
+    const repMap = new Map<string, ConsumerReport>();
+    [...storedRep, ...(Array.isArray(extraReports) ? extraReports : [])].forEach((r) => {
+      if (r && r.id) repMap.set(r.id, r);
+    });
+    const changedRep: ConsumerReport[] = [];
+    const updatedRep = Array.from(repMap.values())
+      .map((r) => {
+        tokensToAdd.push(getAdminReportAlertToken(r));
+        if (r.hasUnreadConsumerUpdate !== false) {
+          const next = { ...r, hasUnreadConsumerUpdate: false };
+          changedRep.push(next);
+          return next;
+        }
+        return r;
+      })
+      .sort(compareReportsCanonical);
+
+    addAdminReadAlertTokens(tokensToAdd);
+    setStored(KEYS.INSTALLATIONS, updatedInst);
+    setStored(KEYS.REPORTS, updatedRep);
+
+    if (changedInst.length > 0) {
+      syncBatchToFirestore(COLLECTIONS.INSTALLATIONS, changedInst, 'id');
+    }
+    if (changedRep.length > 0) {
+      syncBatchToFirestore(COLLECTIONS.REPORTS, changedRep, 'id');
+    }
+
+    safeBackendFetch('/api/installations/mark-all-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: updatedInst.map((i) => i.id) }),
+    }).catch(() => {});
+
+    safeBackendFetch('/api/reports/mark-all-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: updatedRep.map((r) => r.id) }),
+    }).catch(() => {});
+
+    return { installations: updatedInst, reports: updatedRep };
   },
 
   createInstallationRequest: (payload: {
@@ -3205,17 +3472,17 @@ export const mockDb = {
       mockDb.saveConsumers(nextConsumers);
     }
 
-    // Automatic Notifications B, C, D (only when status or confirmed schedule actually changed)
-    let autoNotif: Omit<ConsumerNotification, 'timestamp' | 'read'> | null = null;
+    // Automatic Notifications B, C, D (dispatched whenever status or schedule changes)
+    let savedAutoNotif: ConsumerNotification | null = null;
     if (didStatusChange || didScheduleChange) {
-      autoNotif = buildInstallationStatusUpdateNotification(
+      const autoNotif = buildInstallationStatusUpdateNotification(
         updatedReq,
         updates.status,
         updates.adminName,
         nextRemarks
       );
       if (autoNotif) {
-        mockDb.addNotification(autoNotif);
+        savedAutoNotif = mockDb.addNotification(autoNotif);
       }
     }
 
@@ -3232,9 +3499,17 @@ export const mockDb = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         request: updatedReq,
-        notification: autoNotif,
+        notification: savedAutoNotif,
       }),
     }).catch(() => {});
+
+    if (savedAutoNotif) {
+      safeBackendFetch('/api/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(savedAutoNotif),
+      }).catch(() => {});
+    }
 
     return updatedReq;
   },

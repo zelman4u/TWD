@@ -297,13 +297,13 @@ export function buildInstallationStatusUpdateNotification(
       `Tagoloan Water District`,
     ];
   } else if (newStatus === 'Installed') {
-    subject = 'Water Meter Installation Completed';
+    subject = 'Your Water Meter Has Been Installed — Awaiting Account Validation';
     lines = [
       `Dear ${req.consumerName},`,
-      `We are pleased to inform you that the installation of your water meter has been completed by the Tagoloan Water District.`,
-      `Your application (${req.applicationNumber}) is now awaiting administrative validation and account updating. Once the installation details have been reviewed and verified, your official Account Number and Meter Tag Number will be issued and displayed in your Consumer Portal.`,
-      ...(cleanRemarks ? [`Installation Remarks: ${cleanRemarks}`] : []),
-      `Please wait for another notification regarding the activation and completion of your water service account.`,
+      `Good news! Your physical water meter has been installed by the Tagoloan Water District at ${req.address}${req.barangay ? `, Brgy. ${req.barangay}` : ''} under Application #${req.applicationNumber}.`,
+      `Please wait while our Administration validates your installation details and updates your water service account. Once account validation is completed, your official Account Number and Meter Tag Number will be issued and displayed automatically in your Consumer Portal.`,
+      ...(cleanRemarks ? [`Installation Remarks from Administration: ${cleanRemarks}`] : []),
+      `You will receive an automatic confirmation notice as soon as your account validation is complete and your water service account is active.`,
       `Thank you for your patience and cooperation.`,
       `Tagoloan Water District`,
     ];

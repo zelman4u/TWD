@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Check,
   ExternalLink,
@@ -90,8 +91,15 @@ export function AdminInquiryReplyModal({
     setReplyStatus(report.status === 'pending' ? 'in_progress' : report.status);
     setAssignedCrew(report.assignedStaff || '');
     setReplyText('');
-    if (report.hasUnreadConsumerUpdate) {
-      mockDb.markReportReadByAdmin(report.id);
+    const wasUnread = mockDb.isReportUnreadForAdmin(report);
+    const updatedList = mockDb.markReportReadByAdmin(report.id, report);
+    if (wasUnread) {
+      const updatedItem = updatedList.find(
+        r => r.id === report.id || r.ticketNumber === report.ticketNumber
+      );
+      if (updatedItem) {
+        onReportUpdated(updatedItem);
+      }
     }
   }, [report?.id]);
 
@@ -274,17 +282,17 @@ export function AdminInquiryReplyModal({
   const meterNorm = ref?.meterStatus ? normalizeMeterStatus(ref.meterStatus) : null;
   const meterLabel = meterNorm ? formatMeterStatusLabel(meterNorm) : null;
 
-  return (
+  const modalContent = (
     <>
       <div
-        className="fixed inset-0 z-[130] flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-sm animate-fade-in"
+        className="fixed inset-0 z-[150] flex items-start justify-center pt-3 sm:pt-5 px-3 sm:px-4 pb-6 overflow-y-auto bg-slate-950/85 backdrop-blur-sm animate-fade-in"
         onClick={onClose}
         role="dialog"
         aria-modal="true"
         aria-labelledby="admin-inquiry-modal-title"
       >
         <div
-          className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[85vh] shadow-2xl overflow-hidden flex flex-col animate-scale-up text-slate-100"
+          className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] shadow-2xl overflow-hidden flex flex-col animate-scale-up text-slate-100"
           onClick={e => e.stopPropagation()}
         >
           {/* Zone 1: Compact Unified Header */}
@@ -655,7 +663,7 @@ export function AdminInquiryReplyModal({
       {/* Photo Lightbox */}
       {selectedPhotoPreview && (
         <div
-          className="fixed inset-0 z-[140] bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-fade-in"
+          className="fixed inset-0 z-[160] bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-start pt-4 sm:pt-6 p-4 overflow-y-auto animate-fade-in"
           onClick={() => setSelectedPhotoPreview(null)}
         >
           <div
@@ -688,4 +696,6 @@ export function AdminInquiryReplyModal({
       )}
     </>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 }

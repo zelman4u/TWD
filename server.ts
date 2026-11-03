@@ -3095,8 +3095,19 @@ app.post(["/api/readings", "/api/sync/push", "/api/readings/submit", "/api/readi
     gpsAccuracy: typeof rawCoords?.accuracy === "number" ? rawCoords.accuracy : undefined,
     meterCondition: req.body?.meterCondition || undefined,
     ocrConfidence: typeof req.body?.ocrConfidence === "number" ? req.body.ocrConfidence : undefined,
-    isAnomaly: typeof req.body?.isAnomaly === "boolean" ? req.body.isAnomaly : undefined,
-    anomalyReason: req.body?.anomalyReason || undefined,
+    isAnomaly:
+      typeof req.body?.isAnomaly === "boolean"
+        ? req.body.isAnomaly ||
+          consumption >= 20 ||
+          Boolean(req.body?.meterCondition && String(req.body.meterCondition).trim().toUpperCase() !== "NORMAL")
+        : consumption >= 20 ||
+          Boolean(req.body?.meterCondition && String(req.body.meterCondition).trim().toUpperCase() !== "NORMAL"),
+    anomalyReason:
+      req.body?.anomalyReason ||
+      (consumption >= 20 ||
+      Boolean(req.body?.meterCondition && String(req.body.meterCondition).trim().toUpperCase() !== "NORMAL")
+        ? "High Usage / Condition Alert — Verify"
+        : undefined),
     mobileSyncSource: "direct_push",
     notes: notes || req.body?.remarks || "Scanned and submitted via Tagoloan Mobile Field App",
     submittedAt: new Date().toISOString()
@@ -3216,8 +3227,19 @@ app.post(["/api/readings/batch", "/api/sync/batch", "/api/readings/bulk"], (req,
       gpsAccuracy: typeof rawCoords?.accuracy === "number" ? rawCoords.accuracy : undefined,
       meterCondition: item.meterCondition || undefined,
       ocrConfidence: typeof item.ocrConfidence === "number" ? item.ocrConfidence : undefined,
-      isAnomaly: typeof item.isAnomaly === "boolean" ? item.isAnomaly : undefined,
-      anomalyReason: item.anomalyReason || undefined,
+      isAnomaly:
+        typeof item.isAnomaly === "boolean"
+          ? item.isAnomaly ||
+            consumption >= 20 ||
+            Boolean(item.meterCondition && String(item.meterCondition).trim().toUpperCase() !== "NORMAL")
+          : consumption >= 20 ||
+            Boolean(item.meterCondition && String(item.meterCondition).trim().toUpperCase() !== "NORMAL"),
+      anomalyReason:
+        item.anomalyReason ||
+        (consumption >= 20 ||
+        Boolean(item.meterCondition && String(item.meterCondition).trim().toUpperCase() !== "NORMAL")
+          ? "High Usage / Condition Alert — Verify"
+          : undefined),
       mobileSyncSource: "batch_sync",
       notes: item.notes || item.remarks || "Batch synced from Mobile Offline Queue",
       submittedAt: new Date().toISOString()
@@ -3695,9 +3717,19 @@ function mergeInMemoryReportPair(existing: ServerConsumerReport, incoming: Serve
   const mergedReplies = dedupeInMemoryReplies([...exReplies, ...inReplies]);
   const inTime = new Date(incoming.updatedAt || incoming.createdAt || 0).getTime();
   const exTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
-  const incomingNewer = inTime > exTime || (inTime === exTime && inReplies.length >= exReplies.length);
+  const incomingNewer = inTime > exTime || (inTime === exTime && inReplies.length > exReplies.length);
   const primary = incomingNewer ? incoming : existing;
   const secondary = incomingNewer ? existing : incoming;
+  const exConsumerCount = exReplies.filter(m => m && m.senderRole === "consumer").length;
+  const inConsumerCount = inReplies.filter(m => m && m.senderRole === "consumer").length;
+  const resolvedUnreadConsumer =
+    inConsumerCount > exConsumerCount
+      ? Boolean(incoming.hasUnreadConsumerUpdate)
+      : exConsumerCount > inConsumerCount
+        ? Boolean(existing.hasUnreadConsumerUpdate)
+        : inTime === exTime
+          ? Boolean(existing.hasUnreadConsumerUpdate && incoming.hasUnreadConsumerUpdate)
+          : Boolean(primary.hasUnreadConsumerUpdate);
   return {
     ...secondary,
     ...primary,
@@ -3705,7 +3737,8 @@ function mergeInMemoryReportPair(existing: ServerConsumerReport, incoming: Serve
     ticketNumber: primary.ticketNumber || secondary.ticketNumber,
     sourceNotificationId: primary.sourceNotificationId || secondary.sourceNotificationId,
     referencedNotice: primary.referencedNotice || secondary.referencedNotice,
-    replies: mergedReplies
+    replies: mergedReplies,
+    hasUnreadConsumerUpdate: resolvedUnreadConsumer,
   };
 }
 
@@ -4223,6 +4256,49 @@ app.all(["/api/reports/:id/status"], (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to update report status." });
+  }
+});
+
+// PATCH / POST /api/reports/:id/read - Persist Admin or Consumer read state
+app.all(["/api/reports/:id/read"], (req, res) => {
+  try {
+    const { id } = req.params;
+    const role = String(req.body?.role || "admin").trim().toLowerCase();
+    const idx = inMemoryReports.findIndex(r => r.id === id || r.ticketNumber === id);
+    if (idx >= 0) {
+      if (role === "consumer") {
+        inMemoryReports[idx] = { ...inMemoryReports[idx], hasUnreadAdminReply: false };
+      } else {
+        inMemoryReports[idx] = { ...inMemoryReports[idx], hasUnreadConsumerUpdate: false };
+      }
+      savePortalSyncStore();
+      return res.json({ success: true, report: inMemoryReports[idx] });
+    }
+    res.json({ success: true });
+  } catch {
+    res.json({ success: true });
+  }
+});
+
+// POST /api/reports/mark-all-read - Mark all consumer report alerts read for Admin
+app.post("/api/reports/mark-all-read", (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? new Set(req.body.ids.map(String)) : null;
+    let updatedCount = 0;
+    inMemoryReports = inMemoryReports.map(r => {
+      const shouldMark = !ids || ids.has(r.id) || (r.ticketNumber && ids.has(r.ticketNumber));
+      if (shouldMark && r.hasUnreadConsumerUpdate) {
+        updatedCount++;
+        return { ...r, hasUnreadConsumerUpdate: false };
+      }
+      return r;
+    });
+    if (updatedCount > 0) {
+      savePortalSyncStore();
+    }
+    res.json({ success: true, updatedCount });
+  } catch {
+    res.json({ success: true, updatedCount: 0 });
   }
 });
 
@@ -5185,7 +5261,7 @@ app.get("/api/installations", (req, res) => {
       list = list.filter((r) => {
         if (!r) return false;
         const rEmail = String(r.consumerEmail || "").trim().toLowerCase();
-        const rUid = String(r.userId || "").trim();
+        const rUid = String(r.linkedUserId || r.userId || r.consumerId || "").trim();
         const rApp = String(r.applicationNumber || "").trim().toUpperCase();
         if (cleanEmail && rEmail && cleanEmail === rEmail) return true;
         if (cleanUid && rUid && cleanUid === rUid) return true;
@@ -5235,26 +5311,82 @@ app.post("/api/installations", (req, res) => {
   }
 });
 
+app.post("/api/installations/mark-all-read", (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? new Set(req.body.ids.map(String)) : null;
+    let updatedCount = 0;
+    inMemoryInstallations = inMemoryInstallations.map((r) => {
+      if (!r) return r;
+      const shouldMark = !ids || ids.has(r.id) || (r.applicationNumber && ids.has(r.applicationNumber));
+      if (shouldMark && r.hasUnreadAdminAlert) {
+        updatedCount++;
+        return { ...r, hasUnreadAdminAlert: false };
+      }
+      return r;
+    });
+    if (updatedCount > 0) {
+      savePortalSyncStore();
+    }
+    res.json({ success: true, updatedCount });
+  } catch {
+    res.json({ success: true, updatedCount: 0 });
+  }
+});
+
 app.patch("/api/installations/:id", (req, res) => {
   try {
     const { id } = req.params;
     const incomingReq = req.body?.request;
     const incomingNotif = req.body?.notification;
     const idx = inMemoryInstallations.findIndex((r) => r.id === id || r.applicationNumber === id);
+    const prevRecord = idx >= 0 ? inMemoryInstallations[idx] : undefined;
 
     let updated: any;
     if (incomingReq && typeof incomingReq === "object") {
-      updated = { ...(idx >= 0 ? inMemoryInstallations[idx] : {}), ...incomingReq, id: incomingReq.id || id };
-    } else if (idx >= 0) {
-      updated = { ...inMemoryInstallations[idx], ...(req.body || {}) };
+      updated = { ...(prevRecord || {}), ...incomingReq, id: incomingReq.id || id };
+    } else if (prevRecord) {
+      updated = { ...prevRecord, ...(req.body || {}) };
     } else {
       return res.status(404).json({ success: false, message: "Installation request not found." });
     }
+
+    const isReadOnlyAck =
+      !incomingNotif &&
+      Boolean(
+        req.body?.markReadOnly ||
+          (req.body?.hasUnreadAdminAlert === false &&
+            prevRecord &&
+            updated.status === prevRecord.status &&
+            updated.confirmedInstallationDate === prevRecord.confirmedInstallationDate &&
+            updated.adminRemarks === prevRecord.adminRemarks)
+      );
 
     if (idx >= 0) {
       inMemoryInstallations[idx] = updated;
     } else {
       inMemoryInstallations.unshift(updated);
+    }
+
+    // Keep syncedConsumers aligned with installation status & account validation stage
+    if (updated && (updated.consumerEmail || updated.applicationNumber || updated.id)) {
+      const targetEmail = String(updated.consumerEmail || "").trim().toLowerCase();
+      const targetApp = String(updated.applicationNumber || "").trim().toUpperCase();
+      const cIdx = syncedConsumers.findIndex(
+        (c) =>
+          (c.installationRequestId && c.installationRequestId === updated.id) ||
+          (targetApp && c.applicationNumber && c.applicationNumber.trim().toUpperCase() === targetApp) ||
+          (targetEmail && c.email && c.email.trim().toLowerCase() === targetEmail)
+      );
+      if (cIdx >= 0) {
+        syncedConsumers[cIdx] = {
+          ...syncedConsumers[cIdx],
+          installationRequestId: updated.id,
+          installationStatus: updated.status || syncedConsumers[cIdx].installationStatus,
+          accountValidationStatus:
+            updated.accountValidationStatus ||
+            (updated.status === "Installed" ? "awaiting_validation" : syncedConsumers[cIdx].accountValidationStatus),
+        };
+      }
     }
 
     let savedNotif: ServerConsumerNotification | undefined;
@@ -5263,18 +5395,37 @@ app.patch("/api/installations/:id", (req, res) => {
     }
     savePortalSyncStore();
 
-    broadcast("INSTALLATION_REQUEST_UPDATED", {
-      request: updated,
-      notification: savedNotif,
-      message: `Installation Request #${updated.applicationNumber} updated to "${updated.status}".`,
-    });
-    if (savedNotif) {
-      broadcast("CONSUMER_NOTIFICATION_CREATED", {
+    // Forward installation status update & consumer notification to System Site peer if configured
+    if (!isSelfSystemSite() && req.headers["x-bridge-origin"] !== "tagoloan-central-web") {
+      fetchSystemSite(`/api/installations/${encodeURIComponent(updated.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          request: updated,
+          notification: savedNotif,
+          ...(isReadOnlyAck ? { markReadOnly: true, hasUnreadAdminAlert: false } : {}),
+        }),
+      }).catch(() => {});
+    }
+
+    if (!isReadOnlyAck) {
+      broadcast("INSTALLATION_REQUEST_UPDATED", {
+        request: updated,
         notification: savedNotif,
-        accountNumber: savedNotif.accountNumber,
-        consumerEmail: savedNotif.consumerEmail,
-        userId: savedNotif.userId,
+        requestId: updated.id,
+        applicationNumber: updated.applicationNumber,
+        status: updated.status,
+        consumerEmail: updated.consumerEmail,
+        userId: updated.linkedUserId || updated.userId,
+        message: `Installation Request #${updated.applicationNumber} updated to "${updated.status}".`,
       });
+      if (savedNotif) {
+        broadcast("CONSUMER_NOTIFICATION_CREATED", {
+          notification: savedNotif,
+          accountNumber: savedNotif.accountNumber,
+          consumerEmail: savedNotif.consumerEmail,
+          userId: savedNotif.userId,
+        });
+      }
     }
 
     res.json({ success: true, request: updated, notification: savedNotif });
@@ -6441,8 +6592,19 @@ async function pullReadingsFromMobileTerminal(): Promise<number> {
         gpsAccuracy: typeof rawGps?.accuracy === "number" ? rawGps.accuracy : undefined,
         meterCondition: rr.meterCondition || undefined,
         ocrConfidence: typeof rr.ocrConfidence === "number" ? rr.ocrConfidence : undefined,
-        isAnomaly: typeof rr.isAnomaly === "boolean" ? rr.isAnomaly : undefined,
-        anomalyReason: rr.anomalyReason || undefined,
+        isAnomaly:
+          typeof rr.isAnomaly === "boolean"
+            ? rr.isAnomaly ||
+              odo.consumption >= 20 ||
+              Boolean(rr.meterCondition && String(rr.meterCondition).trim().toUpperCase() !== "NORMAL")
+            : odo.consumption >= 20 ||
+              Boolean(rr.meterCondition && String(rr.meterCondition).trim().toUpperCase() !== "NORMAL"),
+        anomalyReason:
+          rr.anomalyReason ||
+          (odo.consumption >= 20 ||
+          Boolean(rr.meterCondition && String(rr.meterCondition).trim().toUpperCase() !== "NORMAL")
+            ? "High Usage / Condition Alert — Verify"
+            : undefined),
         mobileSyncSource: "rest_pull",
         notes:
           rr.remarks ||
@@ -6804,6 +6966,69 @@ async function syncWithSystemSitePeer(forceAll = false): Promise<void> {
     // Non-fatal
   }
 
+  // 5. Bidirectional Sync of Water Meter Installation Requests <-> https://twd-427m.onrender.com/api/installations
+  try {
+    const instResp = await fetchSystemSite("/api/installations", { method: "GET" });
+    if (instResp.ok) {
+      const instData = await instResp.json();
+      const remoteInstList: any[] = Array.isArray(instData?.installations) ? instData.installations : [];
+      const remoteById = new Map<string, any>();
+
+      for (const ri of remoteInstList) {
+        if (!ri || !ri.id) continue;
+        remoteById.set(String(ri.id), ri);
+        const localIdx = inMemoryInstallations.findIndex(
+          (li) => li.id === ri.id || (ri.applicationNumber && li.applicationNumber === ri.applicationNumber)
+        );
+        if (localIdx === -1) {
+          inMemoryInstallations.unshift(ri);
+          storeChanged = true;
+          broadcast("INSTALLATION_REQUEST_SUBMITTED", {
+            request: ri,
+            message: `Synced Water Meter Installation Request (#${ri.applicationNumber}) from System Site.`,
+          });
+        } else {
+          const localItem = inMemoryInstallations[localIdx];
+          const remoteTs = new Date(ri.updatedAt || ri.submissionDate || 0).getTime() || 0;
+          const localTs = new Date(localItem.updatedAt || localItem.submissionDate || 0).getTime() || 0;
+          if (remoteTs > localTs) {
+            inMemoryInstallations[localIdx] = { ...localItem, ...ri };
+            storeChanged = true;
+            broadcast("INSTALLATION_REQUEST_UPDATED", {
+              request: inMemoryInstallations[localIdx],
+              requestId: ri.id,
+              applicationNumber: ri.applicationNumber,
+              status: ri.status,
+              consumerEmail: ri.consumerEmail,
+            });
+          }
+        }
+      }
+
+      for (const localInst of inMemoryInstallations) {
+        if (!localInst?.id) continue;
+        const remoteMatch = remoteById.get(String(localInst.id));
+        if (!remoteMatch) {
+          await fetchSystemSite("/api/installations", {
+            method: "POST",
+            body: JSON.stringify({ request: localInst }),
+          }).catch(() => {});
+        } else {
+          const localTs = new Date(localInst.updatedAt || localInst.submissionDate || 0).getTime() || 0;
+          const remoteTs = new Date(remoteMatch.updatedAt || remoteMatch.submissionDate || 0).getTime() || 0;
+          if (localTs > remoteTs) {
+            await fetchSystemSite(`/api/installations/${encodeURIComponent(localInst.id)}`, {
+              method: "PATCH",
+              body: JSON.stringify({ request: localInst }),
+            }).catch(() => {});
+          }
+        }
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
   if (storeChanged) {
     savePortalSyncStore();
   }
@@ -6897,7 +7122,9 @@ function connectSystemSiteWebSocket(): void {
           eventType === "BILLINGS_RECONCILED" ||
           eventType === "CONSUMER_IDS_ISSUED" ||
           eventType === "CONSUMER_UPDATED" ||
-          eventType === "CONSUMER_REGISTERED"
+          eventType === "CONSUMER_REGISTERED" ||
+          eventType === "INSTALLATION_REQUEST_SUBMITTED" ||
+          eventType === "INSTALLATION_REQUEST_UPDATED"
         ) {
           syncWithSystemSitePeer(false)
             .then(() => pushValidatedConsumersAndMetersToMobile(false))

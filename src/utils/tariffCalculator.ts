@@ -463,6 +463,9 @@ export function normalizeReadingToOfficialBaseline<
     tariffBaselineSchema?: string;
     status?: string;
     isBillingIssued?: boolean;
+    isAnomaly?: boolean;
+    anomalyReason?: string;
+    meterCondition?: string;
   }
 >(reading: T): T {
   if (!reading) {
@@ -478,8 +481,24 @@ export function normalizeReadingToOfficialBaseline<
   const curr = odo.currentReading;
   const m3 = odo.consumption;
 
+  const hasConditionAlert = Boolean(
+    reading.isAnomaly ||
+      (reading.meterCondition && reading.meterCondition.trim().toUpperCase() !== 'NORMAL')
+  );
+  const shouldFlagHighUsage =
+    (reading.status === 'pending' || reading.status === 'flagged_abnormal') &&
+    (m3 >= 20 || hasConditionAlert);
+  const resolvedUnbilledStatus = shouldFlagHighUsage ? 'flagged_abnormal' : reading.status;
+  const resolvedAnomalyReason = shouldFlagHighUsage
+    ? reading.anomalyReason || 'High Usage / Condition Alert — Verify'
+    : reading.anomalyReason;
+
   if (reading.tariffBaselineSchema === OFFICIAL_TARIFF_BASELINE_SCHEMA) {
+    const needsAnomalyUpgrade =
+      shouldFlagHighUsage &&
+      (reading.status !== 'flagged_abnormal' || !reading.isAnomaly || !reading.anomalyReason);
     if (
+      !needsAnomalyUpgrade &&
       reading.previousReading === prev &&
       reading.presentReading === curr &&
       reading.currentReading === curr &&
@@ -489,6 +508,9 @@ export function normalizeReadingToOfficialBaseline<
     }
     return {
       ...reading,
+      ...(shouldFlagHighUsage
+        ? { status: resolvedUnbilledStatus, isAnomaly: true, anomalyReason: resolvedAnomalyReason }
+        : {}),
       previousReading: prev,
       presentReading: curr,
       currentReading: curr,
@@ -526,9 +548,15 @@ export function normalizeReadingToOfficialBaseline<
       : 'Residential';
 
   // Unbilled pending readings without billAmount yet
-  if (reading.billAmount === undefined && !reading.isBillingIssued && reading.status === 'pending') {
+  if (
+    reading.billAmount === undefined &&
+    !reading.isBillingIssued &&
+    (reading.status === 'pending' || reading.status === 'flagged_abnormal')
+  ) {
     return {
       ...reading,
+      status: resolvedUnbilledStatus,
+      ...(shouldFlagHighUsage ? { isAnomaly: true, anomalyReason: resolvedAnomalyReason } : {}),
       previousReading: prev,
       presentReading: curr,
       currentReading: curr,
@@ -544,12 +572,14 @@ export function normalizeReadingToOfficialBaseline<
   const pen = calculateLatePenalty(basic, DEFAULT_TARIFF_CONFIG);
   const afterDue = Math.round((total + pen) * 100) / 100;
   const paid = Math.max(0, Math.round((Number(reading.paidAmount) || 0) * 100) / 100);
-  const rem = Math.max(0, Math.round((total - paid) * 100) / 100);
+  const rem = Math.round(Math.max(0, total - paid) * 100) / 100;
   const nextPaymentStatus =
     paid > 0 && rem <= 0.009 ? 'paid' : paid > 0 ? 'partial' : reading.paymentStatus || 'unpaid';
 
   return {
     ...reading,
+    status: resolvedUnbilledStatus,
+    ...(shouldFlagHighUsage ? { isAnomaly: true, anomalyReason: resolvedAnomalyReason } : {}),
     previousReading: prev,
     presentReading: curr,
     currentReading: curr,

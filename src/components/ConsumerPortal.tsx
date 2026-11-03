@@ -1578,17 +1578,24 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           notifsRef.current = refreshedNotifs;
           setNotifications(refreshedNotifs);
 
-          if (data.type === 'INSTALLATION_REQUEST_UPDATED' && incomingReq) {
+          const effectiveReq = incomingReq || refreshedInst[0];
+          const effectiveStatus = incomingReq?.status || payload?.status || effectiveReq?.status;
+          if (data.type === 'INSTALLATION_REQUEST_UPDATED' && effectiveStatus) {
             if (payload?.consumer && isConsumerRecordIssued(payload.consumer)) {
               applyAutomaticIdConfirmation(payload.consumer, payload?.notification, false, true);
               return;
             }
-            toast.info(
-              `Installation Update — ${incomingReq.status}`,
-              incomingReq.status === 'Installed'
-                ? `Physical installation for ${incomingReq.applicationNumber} is completed and awaiting administrative validation.`
-                : `Application ${incomingReq.applicationNumber} status updated to ${incomingReq.status}.`
-            );
+            if (effectiveStatus === 'Installed') {
+              toast.success(
+                'Your Water Meter Has Been Installed!',
+                `Application ${effectiveReq?.applicationNumber || payload?.applicationNumber || ''} is now awaiting administrative validation. Please wait while we update your account and issue your official Account & Meter Tag Numbers.`
+              );
+            } else {
+              toast.info(
+                `Installation Update — ${effectiveStatus}`,
+                `Application ${effectiveReq?.applicationNumber || payload?.applicationNumber || ''} status updated to ${effectiveStatus}.`
+              );
+            }
           }
         }
         loadConsumerInfo(true);
@@ -1910,7 +1917,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const isAbnormalSpike = Boolean(
     latestRead && (
       latestRead.status === 'flagged_abnormal' ||
-      currentConsumptionVal >= 45 ||
+      currentConsumptionVal >= 20 ||
       (previousMonthRead && previousMonthRead.consumption >= 5 && consumptionDiff >= 12 && (consumptionDiff / previousMonthRead.consumption) >= 0.4)
     )
   );
