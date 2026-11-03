@@ -33,6 +33,7 @@ import {
   calculateLatePenalty, 
   getTariffBreakdown,
   getActiveTariffConfig,
+  getCanonicalBillSettlement,
   getEffectiveRatePerM3,
   getReadingEffectiveBillAmount,
   getReadingTotalAssessment,
@@ -137,22 +138,31 @@ export function computeBillBreakdown(
   const classification: 'Residential' | 'Commercial' = isComm ? 'Commercial' : 'Residential';
   const ratePerM3 = getEffectiveRatePerM3(classification, schedule);
   const assessment = reading ? getReadingTotalAssessment(reading, classification) : null;
+  const settlement = reading ? getCanonicalBillSettlement(reading, classification) : null;
 
-  // Basic Water Charge (Bill Amt.) — honors official baseline or locked historical paid bill
-  const billAmount = assessment ? assessment.basicCharge : 0;
+  // Basic Water Charge (Bill Amt.) — honors official baseline or locked historical/partial bill
+  const billAmount = settlement ? settlement.basicCharge : assessment ? assessment.basicCharge : 0;
 
   // 2% Local Franchise Tax
-  const franchiseTax = assessment ? assessment.franchiseTax : calculateFranchiseTax(billAmount, schedule);
+  const franchiseTax = settlement
+    ? settlement.franchiseTax
+    : assessment
+      ? assessment.franchiseTax
+      : calculateFranchiseTax(billAmount, schedule);
 
   // Arrears (Previous unpaid balance)
-  const arrears = assessment
-    ? assessment.arrears
-    : Math.max(0, consumer.outstandingBalance || 0);
+  const arrears = settlement
+    ? settlement.arrears
+    : assessment
+      ? assessment.arrears
+      : Math.max(0, consumer.outstandingBalance || 0);
 
   // Total current charges = Bill Amt + Franchise Tax + Arrears
-  const totalAmount = assessment
-    ? assessment.totalBeforeDue
-    : Math.round((billAmount + franchiseTax + arrears) * 100) / 100;
+  const totalAmount = settlement
+    ? settlement.grossTotal
+    : assessment
+      ? assessment.totalBeforeDue
+      : Math.round((billAmount + franchiseTax + arrears) * 100) / 100;
 
   // 10% Late penalty surcharge on basic bill amount
   const latePenaltyAmount = assessment
@@ -160,12 +170,10 @@ export function computeBillBreakdown(
     : calculateLatePenalty(billAmount, schedule);
 
   // Amount after due date
-  const amountAfterDueDate = assessment
-    ? assessment.amountAfterDueDate
-    : Math.round((totalAmount + latePenaltyAmount) * 100) / 100;
+  const amountAfterDueDate = Math.round((totalAmount + latePenaltyAmount) * 100) / 100;
 
-  const paidAmount = reading?.paidAmount || 0;
-  const rawRemaining = Math.max(0, totalAmount - paidAmount);
+  const paidAmount = settlement ? settlement.paidAmount : (reading?.paidAmount || 0);
+  const rawRemaining = settlement ? settlement.remainingBalance : Math.max(0, totalAmount - paidAmount);
 
   const dueDate = reading?.dueDate || '—';
   const dueDateObj = reading?.dueDate ? new Date(reading.dueDate) : null;
@@ -175,10 +183,14 @@ export function computeBillBreakdown(
       !Number.isNaN(dueDateObj.getTime()) &&
       new Date() > dueDateObj &&
       rawRemaining > 0 &&
-      reading.paymentStatus !== 'paid'
+      !settlement?.isPaid
   );
 
-  const netRemainingDue = isOverdue ? Math.max(0, amountAfterDueDate - paidAmount) : rawRemaining;
+  const netRemainingDue = settlement?.isPaid
+    ? 0
+    : isOverdue
+      ? Math.max(0, Math.round((amountAfterDueDate - paidAmount) * 100) / 100)
+      : rawRemaining;
 
   const sequenceNo = reading?.sequenceNo || consumer.sequenceNo || '—';
   const meterBrand = reading?.meterBrand || consumer.meterBrand || 'TWD';
@@ -277,8 +289,9 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
   }
 
   const breakdown = computeBillBreakdown(reading, consumer, calculateCostOf);
-  const isPaid = reading?.paymentStatus === 'paid';
-  const isPartial = reading?.paymentStatus === 'partial';
+  const liveSettlement = getCanonicalBillSettlement(reading, consumer.consumerType);
+  const isPaid = liveSettlement.isPaid;
+  const isPartial = liveSettlement.isPartial;
 
   const content = (
     <div className="space-y-6 text-slate-100" id="bill-details-component">
@@ -572,11 +585,42 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
             {/* Totals Box */}
             <div className="py-3.5 border-b-2 border-dashed border-slate-800 print:border-slate-300 space-y-2 text-xs">
               <div className="flex justify-between items-center bg-slate-900 border border-slate-800 print:bg-slate-100 print:border-slate-200 p-3 rounded-xl">
-                <span className="font-black text-white print:text-slate-900 text-sm uppercase">TOTAL AMOUNT DUE:</span>
+                <span className="font-black text-white print:text-slate-900 text-sm uppercase">
+                  {breakdown.paidAmount > 0 ? 'GROSS STATEMENT TOTAL:' : 'TOTAL AMOUNT DUE:'}
+                </span>
                 <span className="font-mono font-black text-sky-400 print:text-blue-800 text-lg">
                   ₱{breakdown.totalAmount.toFixed(2)}
                 </span>
               </div>
+
+              {breakdown.paidAmount > 0 && (
+                <>
+                  <div className="flex justify-between items-center px-1 text-emerald-400 print:text-emerald-700">
+                    <span className="font-bold">
+                      Less Payment Credited {reading?.orNumber ? `(OR #${reading.orNumber})` : ''}:
+                    </span>
+                    <span className="font-mono font-black text-sm">
+                      -₱{breakdown.paidAmount.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className={`flex justify-between items-center p-3 rounded-xl border ${
+                    isPaid
+                      ? 'bg-emerald-950/60 border-emerald-700/60 print:bg-emerald-50 print:border-emerald-300'
+                      : 'bg-amber-950/60 border-amber-700/60 print:bg-amber-50 print:border-amber-300'
+                  }`}>
+                    <span className={`font-black text-sm uppercase ${
+                      isPaid ? 'text-emerald-300 print:text-emerald-800' : 'text-amber-300 print:text-amber-800'
+                    }`}>
+                      {isPaid ? 'NET REMAINING BALANCE (CLEARED):' : 'NET REMAINING BALANCE DUE:'}
+                    </span>
+                    <span className={`font-mono font-black text-lg ${
+                      isPaid ? 'text-emerald-400 print:text-emerald-800' : 'text-amber-300 print:text-amber-800'
+                    }`}>
+                      ₱{(isPaid ? 0 : breakdown.netRemainingDue).toFixed(2)}
+                    </span>
+                  </div>
+                </>
+              )}
 
               <div className="flex justify-between items-center px-1">
                 <span className="font-bold text-rose-400 print:text-rose-700">Amount After Due Date (+10% Penalty):</span>
@@ -699,13 +743,21 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
                     ₱{breakdown.arrears.toFixed(2)}
                   </span>
                 </div>
+                {breakdown.paidAmount > 0 && (
+                  <div className="flex justify-between text-[11px] text-emerald-400">
+                    <span>Paid / Credited:</span>
+                    <span className="font-mono font-bold">-₱{breakdown.paidAmount.toFixed(2)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-[11px] text-slate-400">
-                  <span>10% Surcharge:</span>
+                  <span>10% Surcharge (After Due):</span>
                   <span className="font-mono font-bold text-rose-400">+₱{breakdown.latePenaltyAmount.toFixed(2)}</span>
                 </div>
                 <div className="pt-2 border-t border-slate-800 flex justify-between font-black text-white">
-                  <span>Total Payable:</span>
-                  <span className="font-mono text-sky-400">₱{breakdown.totalAmount.toFixed(2)}</span>
+                  <span>{breakdown.paidAmount > 0 ? 'Remaining Due:' : 'Total Payable:'}</span>
+                  <span className={`font-mono ${isPaid ? 'text-emerald-400' : isPartial ? 'text-amber-300' : 'text-sky-400'}`}>
+                    ₱{(isPaid ? 0 : breakdown.netRemainingDue).toFixed(2)}
+                  </span>
                 </div>
               </div>
             </div>

@@ -305,9 +305,19 @@ export function getReadingEffectiveBillAmount(
   const cls: 'Residential' | 'Commercial' =
     rawClass === 'Commercial' || rawClass === 'COMM' ? 'Commercial' : 'Residential';
 
+  const hasOfficialLock =
+    reading.paymentStatus === 'paid' ||
+    reading.paymentStatus === 'partial' ||
+    (typeof (reading as any).paidAmount === 'number' && (reading as any).paidAmount > 0) ||
+    Boolean(
+      (reading as any).isBillingIssued ||
+        (reading as any).billingIssuedAt ||
+        (reading as any).invoiceNumber
+    );
+
   const isLegacyUnpaidBaseline =
     reading.tariffBaselineSchema !== OFFICIAL_TARIFF_BASELINE_SCHEMA &&
-    reading.paymentStatus !== 'paid' &&
+    !hasOfficialLock &&
     (reading.appliedTariffVersion === undefined || reading.appliedTariffVersion <= 1);
 
   if (
@@ -400,30 +410,57 @@ export function getReadingTotalAssessment(
     };
   }
 
+  const hasOfficialLock =
+    reading.paymentStatus === 'paid' ||
+    reading.paymentStatus === 'partial' ||
+    (typeof reading.paidAmount === 'number' && reading.paidAmount > 0) ||
+    Boolean(
+      (reading as any).isBillingIssued ||
+        (reading as any).billingIssuedAt ||
+        (reading as any).invoiceNumber
+    );
+
   const isLegacyUnpaid =
     reading.tariffBaselineSchema !== OFFICIAL_TARIFF_BASELINE_SCHEMA &&
-    reading.paymentStatus !== 'paid' &&
+    !hasOfficialLock &&
     (reading.appliedTariffVersion === undefined || reading.appliedTariffVersion <= 1);
 
   const basicCharge = getReadingEffectiveBillAmount(reading, cls);
   const franchiseTax =
-    !isLegacyUnpaid && typeof reading.franchiseTax === 'number' && !Number.isNaN(reading.franchiseTax)
+    !isLegacyUnpaid &&
+    typeof reading.franchiseTax === 'number' &&
+    !Number.isNaN(reading.franchiseTax) &&
+    reading.franchiseTax >= 0
       ? Math.round(reading.franchiseTax * 100) / 100
       : calculateFranchiseTax(basicCharge);
   const arrears =
     typeof reading.arrears === 'number' && !Number.isNaN(reading.arrears)
       ? Math.max(0, Math.round(reading.arrears * 100) / 100)
       : 0;
-  const totalBeforeDue =
-    !isLegacyUnpaid && typeof reading.totalAmount === 'number' && !Number.isNaN(reading.totalAmount)
-      ? Math.round(reading.totalAmount * 100) / 100
-      : Math.round((basicCharge + franchiseTax + arrears) * 100) / 100;
+  const canonicalTotalBeforeDue = Math.round((basicCharge + franchiseTax + arrears) * 100) / 100;
+
+  let totalBeforeDue = canonicalTotalBeforeDue;
+  if (!isLegacyUnpaid && typeof reading.totalAmount === 'number' && !Number.isNaN(reading.totalAmount) && reading.totalAmount > 0) {
+    const roundedStoredTotal = Math.round(reading.totalAmount * 100) / 100;
+    // Heal records where totalAmount was accidentally stored as bare basicCharge without 2% franchiseTax
+    const droppedFranchiseTax =
+      franchiseTax > 0 &&
+      Math.abs(roundedStoredTotal - basicCharge) < 0.015 &&
+      Math.abs(canonicalTotalBeforeDue - roundedStoredTotal) >= 0.01;
+    if (!droppedFranchiseTax) {
+      totalBeforeDue = roundedStoredTotal;
+    }
+  }
+
   const penaltyAmount =
     !isLegacyUnpaid && typeof reading.penaltyAmount === 'number' && !Number.isNaN(reading.penaltyAmount)
       ? Math.round(reading.penaltyAmount * 100) / 100
       : calculateLatePenalty(basicCharge);
   const amountAfterDueDate =
-    !isLegacyUnpaid && typeof reading.amountAfterDueDate === 'number' && !Number.isNaN(reading.amountAfterDueDate)
+    !isLegacyUnpaid &&
+    typeof reading.amountAfterDueDate === 'number' &&
+    !Number.isNaN(reading.amountAfterDueDate) &&
+    reading.amountAfterDueDate >= totalBeforeDue
       ? Math.round(reading.amountAfterDueDate * 100) / 100
       : Math.round((totalBeforeDue + penaltyAmount) * 100) / 100;
 
@@ -441,7 +478,7 @@ export function getReadingTotalAssessment(
 
 /**
  * Normalizes a MeterReading record to the official ₱10/m³ (Residential) & ₱25/m³ (Commercial) + 2% Franchise Tax + 10% Penalty baseline.
- * Preserves settled ('paid') historical payments while upgrading unsettled legacy v1 statements.
+ * Preserves settled ('paid') and partial ('partial') payments and locked issued bills, ensuring `paidAmount + remainingBalance === totalAmount`.
  */
 export function normalizeReadingToOfficialBaseline<
   T extends {
@@ -463,6 +500,10 @@ export function normalizeReadingToOfficialBaseline<
     tariffBaselineSchema?: string;
     status?: string;
     isBillingIssued?: boolean;
+    billingIssuedAt?: string;
+    invoiceNumber?: string;
+    orNumber?: string;
+    dueDate?: string;
     isAnomaly?: boolean;
     anomalyReason?: string;
     meterCondition?: string;
@@ -493,10 +534,68 @@ export function normalizeReadingToOfficialBaseline<
     ? reading.anomalyReason || 'High Usage / Condition Alert — Verify'
     : reading.anomalyReason;
 
+  const isIssuedOrPaid =
+    isOfficialBillIssued(reading) ||
+    reading.paymentStatus === 'paid' ||
+    reading.paymentStatus === 'partial' ||
+    (typeof reading.paidAmount === 'number' && reading.paidAmount > 0);
+
   if (reading.tariffBaselineSchema === OFFICIAL_TARIFF_BASELINE_SCHEMA) {
     const needsAnomalyUpgrade =
       shouldFlagHighUsage &&
       (reading.status !== 'flagged_abnormal' || !reading.isAnomaly || !reading.anomalyReason);
+
+    if (isIssuedOrPaid && reading.status !== 'cancelled') {
+      const assessment = getReadingTotalAssessment(
+        { ...reading, consumption: m3 },
+        (reading.classification as 'Residential' | 'Commercial') || 'Residential'
+      );
+      const rawPaid = Math.max(0, Math.round((Number(reading.paidAmount) || 0) * 100) / 100);
+      const isCleared =
+        reading.paymentStatus === 'paid' ||
+        (assessment.totalBeforeDue > 0 && assessment.totalBeforeDue - rawPaid <= 0.01);
+      const nextPaid = isCleared ? Math.max(rawPaid, assessment.totalBeforeDue) : rawPaid;
+      const nextRem = isCleared
+        ? 0
+        : Math.max(0, Math.round((assessment.totalBeforeDue - nextPaid) * 100) / 100);
+      const nextPayStatus = isCleared ? 'paid' : nextPaid > 0 ? 'partial' : reading.paymentStatus || 'unpaid';
+
+      if (
+        !needsAnomalyUpgrade &&
+        reading.previousReading === prev &&
+        reading.presentReading === curr &&
+        reading.currentReading === curr &&
+        reading.consumption === m3 &&
+        reading.billAmount === assessment.basicCharge &&
+        reading.franchiseTax === assessment.franchiseTax &&
+        reading.totalAmount === assessment.totalBeforeDue &&
+        reading.remainingBalance === nextRem &&
+        reading.paymentStatus === nextPayStatus &&
+        (nextPaid === 0 || reading.paidAmount === nextPaid)
+      ) {
+        return reading;
+      }
+
+      return {
+        ...reading,
+        previousReading: prev,
+        presentReading: curr,
+        currentReading: curr,
+        consumption: m3,
+        status: reading.status === 'cancelled' ? 'cancelled' : 'verified',
+        isBillingIssued: true,
+        billAmount: assessment.basicCharge,
+        franchiseTax: assessment.franchiseTax,
+        arrears: assessment.arrears,
+        totalAmount: assessment.totalBeforeDue,
+        penaltyAmount: assessment.penaltyAmount,
+        amountAfterDueDate: assessment.amountAfterDueDate,
+        ...(nextPaid > 0 ? { paidAmount: nextPaid } : {}),
+        remainingBalance: nextRem,
+        paymentStatus: nextPayStatus,
+      };
+    }
+
     if (
       !needsAnomalyUpgrade &&
       reading.previousReading === prev &&
@@ -518,30 +617,6 @@ export function normalizeReadingToOfficialBaseline<
     };
   }
 
-  // Keep already-paid historical receipts intact, just normalize 5-digit odometer indices and stamp schema
-  if (reading.paymentStatus === 'paid') {
-    return {
-      ...reading,
-      previousReading: prev,
-      presentReading: curr,
-      currentReading: curr,
-      consumption: m3,
-      tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
-    };
-  }
-
-  // If reading was billed under a custom future admin version (>1), keep its locked amounts
-  if (reading.appliedTariffVersion !== undefined && reading.appliedTariffVersion > 1) {
-    return {
-      ...reading,
-      previousReading: prev,
-      presentReading: curr,
-      currentReading: curr,
-      consumption: m3,
-      tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
-    };
-  }
-
   const cls: 'Residential' | 'Commercial' =
     reading.classification === 'Commercial' || reading.classification === 'COMM'
       ? 'Commercial'
@@ -550,7 +625,7 @@ export function normalizeReadingToOfficialBaseline<
   // Unbilled pending readings without billAmount yet
   if (
     reading.billAmount === undefined &&
-    !reading.isBillingIssued &&
+    !isIssuedOrPaid &&
     (reading.status === 'pending' || reading.status === 'flagged_abnormal')
   ) {
     return {
@@ -565,21 +640,58 @@ export function normalizeReadingToOfficialBaseline<
     };
   }
 
-  const basic = calculateWaterTariff(m3, cls, DEFAULT_TARIFF_CONFIG);
-  const fTax = calculateFranchiseTax(basic, DEFAULT_TARIFF_CONFIG);
+  // Preserve locked billAmount on paid, partial, issued, or v2+ readings; otherwise compute from active/default baseline
+  const hasLockedBill =
+    (isIssuedOrPaid || (reading.appliedTariffVersion !== undefined && reading.appliedTariffVersion > 1)) &&
+    typeof reading.billAmount === 'number' &&
+    !Number.isNaN(reading.billAmount) &&
+    reading.billAmount > 0;
+
+  const activeCfg = getActiveTariffConfig();
+  const basic = hasLockedBill
+    ? Math.round(reading.billAmount! * 100) / 100
+    : calculateWaterTariff(
+        m3,
+        cls,
+        reading.appliedTariffVersion && reading.appliedTariffVersion > 1 ? activeCfg : DEFAULT_TARIFF_CONFIG
+      );
+  const fTax =
+    hasLockedBill && typeof reading.franchiseTax === 'number' && !Number.isNaN(reading.franchiseTax)
+      ? Math.round(reading.franchiseTax * 100) / 100
+      : calculateFranchiseTax(basic, DEFAULT_TARIFF_CONFIG);
   const arr = Math.max(0, Math.round((Number(reading.arrears) || 0) * 100) / 100);
-  const total = Math.round((basic + fTax + arr) * 100) / 100;
-  const pen = calculateLatePenalty(basic, DEFAULT_TARIFF_CONFIG);
+  const canonicalTotal = Math.round((basic + fTax + arr) * 100) / 100;
+  const total =
+    reading.paymentStatus === 'paid' &&
+    typeof reading.totalAmount === 'number' &&
+    !Number.isNaN(reading.totalAmount) &&
+    reading.totalAmount > 0 &&
+    !(fTax > 0 && Math.abs(reading.totalAmount - basic) < 0.015)
+      ? Math.round(reading.totalAmount * 100) / 100
+      : canonicalTotal;
+  const pen =
+    hasLockedBill && typeof reading.penaltyAmount === 'number' && !Number.isNaN(reading.penaltyAmount)
+      ? Math.round(reading.penaltyAmount * 100) / 100
+      : calculateLatePenalty(basic, DEFAULT_TARIFF_CONFIG);
   const afterDue = Math.round((total + pen) * 100) / 100;
-  const paid = Math.max(0, Math.round((Number(reading.paidAmount) || 0) * 100) / 100);
-  const rem = Math.round(Math.max(0, total - paid) * 100) / 100;
-  const nextPaymentStatus =
-    paid > 0 && rem <= 0.009 ? 'paid' : paid > 0 ? 'partial' : reading.paymentStatus || 'unpaid';
+  const rawPaid = Math.max(0, Math.round((Number(reading.paidAmount) || 0) * 100) / 100);
+  const isCleared =
+    reading.paymentStatus === 'paid' || (total > 0 && total - rawPaid <= 0.01);
+  const effectivePaid = isCleared ? Math.max(rawPaid, total) : rawPaid;
+  const rem = isCleared ? 0 : Math.round(Math.max(0, total - effectivePaid) * 100) / 100;
+  const nextPaymentStatus = isCleared
+    ? 'paid'
+    : effectivePaid > 0
+      ? 'partial'
+      : reading.paymentStatus || 'unpaid';
 
   return {
     ...reading,
-    status: resolvedUnbilledStatus,
-    ...(shouldFlagHighUsage ? { isAnomaly: true, anomalyReason: resolvedAnomalyReason } : {}),
+    status: isIssuedOrPaid && reading.status !== 'cancelled' ? 'verified' : resolvedUnbilledStatus,
+    ...(isIssuedOrPaid ? { isBillingIssued: true } : {}),
+    ...(shouldFlagHighUsage && !isIssuedOrPaid
+      ? { isAnomaly: true, anomalyReason: resolvedAnomalyReason }
+      : {}),
     previousReading: prev,
     presentReading: curr,
     currentReading: curr,
@@ -590,7 +702,8 @@ export function normalizeReadingToOfficialBaseline<
     totalAmount: total,
     penaltyAmount: pen,
     amountAfterDueDate: afterDue,
-    remainingBalance: nextPaymentStatus === 'paid' ? 0 : rem,
+    ...(effectivePaid > 0 ? { paidAmount: effectivePaid } : {}),
+    remainingBalance: rem,
     paymentStatus: nextPaymentStatus,
     tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
   };
@@ -832,4 +945,333 @@ export function computeDefaultDueDate(referenceDate?: string): string {
   const due = new Date(safeBase.getTime());
   due.setDate(due.getDate() + 15);
   return due.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+/**
+ * Canonical single-source-of-truth settlement summary for any MeterReading.
+ * Guarantees `paidAmount + remainingBalance === grossTotal` (within 1 centavo) across Admin & Consumer portals.
+ */
+export function getCanonicalBillSettlement(
+  reading: any,
+  fallbackClassification: 'Residential' | 'Commercial' | 'RES' | 'COMM' | string = 'Residential'
+) {
+  const cls: 'Residential' | 'Commercial' =
+    (reading?.classification || fallbackClassification) === 'Commercial' ||
+    (reading?.classification || fallbackClassification) === 'COMM'
+      ? 'Commercial'
+      : 'Residential';
+
+  if (!reading || reading.status === 'cancelled') {
+    const cancelledGross = reading ? getReadingTotalAssessment(reading, cls).totalBeforeDue : 0;
+    return {
+      grossTotal: cancelledGross,
+      basicCharge: 0,
+      franchiseTax: 0,
+      arrears: 0,
+      penaltyAmount: 0,
+      amountAfterDueDate: 0,
+      paidAmount: 0,
+      remainingBalance: 0,
+      paymentStatus: 'unpaid' as const,
+      isCleared: false,
+      isPaid: false,
+      isPartial: false,
+      isUnpaid: true,
+    };
+  }
+
+  const assessment = getReadingTotalAssessment(reading, cls);
+  const grossTotal = assessment.totalBeforeDue;
+  const rawPaid = Math.max(0, Math.round((Number(reading.paidAmount) || 0) * 100) / 100);
+  const isCleared =
+    reading.paymentStatus === 'paid' || (grossTotal > 0 && grossTotal - rawPaid <= 0.01);
+  const paidAmount = isCleared ? Math.max(rawPaid, grossTotal) : rawPaid;
+  const remainingBalance = isCleared
+    ? 0
+    : Math.max(0, Math.round((grossTotal - paidAmount) * 100) / 100);
+  const isPartial = !isCleared && (paidAmount > 0 || reading.paymentStatus === 'partial');
+  const isUnpaid = !isCleared && !isPartial;
+  const paymentStatus: 'paid' | 'partial' | 'unpaid' = isCleared
+    ? 'paid'
+    : isPartial
+      ? 'partial'
+      : 'unpaid';
+
+  return {
+    grossTotal,
+    basicCharge: assessment.basicCharge,
+    franchiseTax: assessment.franchiseTax,
+    arrears: assessment.arrears,
+    penaltyAmount: assessment.penaltyAmount,
+    amountAfterDueDate: assessment.amountAfterDueDate,
+    paidAmount,
+    remainingBalance,
+    paymentStatus,
+    isCleared,
+    isPaid: isCleared,
+    isPartial,
+    isUnpaid,
+  };
+}
+
+/**
+ * Strips duplicate rolled-over `arrears` on newer cycle bills when prior issued cycle bills
+ * for the same account ALREADY exist as separate rows in the ledger, preventing 2x double-counting
+ * or sudden jumps when a consumer pays partial/full on one bill.
+ */
+export function sanitizeMultiBillDuplicateArrears<T extends Record<string, any>>(readings: T[]): T[] {
+  if (!Array.isArray(readings) || readings.length <= 1) return readings;
+
+  const issuedByAccount = new Map<string, T[]>();
+  for (const r of readings) {
+    if (!r || r.status === 'cancelled' || !isOfficialBillIssued(r as any)) continue;
+    const acc = String(r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+    if (!acc) continue;
+    const bucket = issuedByAccount.get(acc) || [];
+    bucket.push(r);
+    issuedByAccount.set(acc, bucket);
+  }
+
+  const adjustedById = new Map<string, T>();
+  issuedByAccount.forEach((bucket) => {
+    if (bucket.length <= 1) return;
+    // Sort oldest -> newest
+    const chronological = [...bucket].sort(
+      (a, b) =>
+        new Date(a.readingDate || a.billingIssuedAt || 0).getTime() -
+        new Date(b.readingDate || b.billingIssuedAt || 0).getTime()
+    );
+    // Any subsequent bill (index >= 1) that rolled over `arrears > 0` while older bills are present as their own rows:
+    for (let i = 1; i < chronological.length; i++) {
+      const item = chronological[i];
+      const itemArrears = Number(item.arrears || 0);
+      if (itemArrears <= 0 || item.paymentStatus === 'paid') continue;
+      const cls =
+        item.classification === 'Commercial' || item.classification === 'COMM'
+          ? 'Commercial'
+          : 'Residential';
+      const basic = getReadingEffectiveBillAmount(item as any, cls);
+      const fTax =
+        typeof item.franchiseTax === 'number' && !Number.isNaN(item.franchiseTax)
+          ? Math.round(item.franchiseTax * 100) / 100
+          : calculateFranchiseTax(basic);
+      const cycleOnlyTotal = Math.round((basic + fTax) * 100) / 100;
+      const paidSoFar = Math.max(0, Math.round((Number(item.paidAmount) || 0) * 100) / 100);
+      // Only strip duplicate rolled-over arrears if paidSoFar fits within this cycle's own charge
+      if (paidSoFar <= cycleOnlyTotal + 0.01) {
+        const pen =
+          typeof item.penaltyAmount === 'number' && !Number.isNaN(item.penaltyAmount)
+            ? Math.round(item.penaltyAmount * 100) / 100
+            : calculateLatePenalty(basic);
+        const rem = Math.max(0, Math.round((cycleOnlyTotal - paidSoFar) * 100) / 100);
+        const isNowCleared = cycleOnlyTotal > 0 && rem <= 0.01;
+        adjustedById.set(String(item.id), {
+          ...item,
+          arrears: 0,
+          billAmount: basic,
+          franchiseTax: fTax,
+          totalAmount: cycleOnlyTotal,
+          amountAfterDueDate: Math.round((cycleOnlyTotal + pen) * 100) / 100,
+          remainingBalance: isNowCleared ? 0 : rem,
+          paymentStatus: isNowCleared ? 'paid' : paidSoFar > 0 ? 'partial' : item.paymentStatus || 'unpaid',
+        });
+      }
+    }
+  });
+
+  if (adjustedById.size === 0) return readings;
+  return readings.map((r) => (r && r.id && adjustedById.has(String(r.id)) ? adjustedById.get(String(r.id))! : r));
+}
+
+/**
+ * Computes exact total unsettled balance across all officially issued bills for an account (or across all accounts if accountNumber omitted).
+ */
+export function computeAccountOutstandingBalance(
+  readings: any[],
+  accountNumber?: string | null,
+  fallbackClassification: 'Residential' | 'Commercial' | string = 'Residential'
+): number {
+  if (!Array.isArray(readings) || readings.length === 0) return 0;
+  const cleanTargetAcc = accountNumber
+    ? String(accountNumber).replace(/^#/, '').trim().toUpperCase()
+    : '';
+  const sanitized = sanitizeMultiBillDuplicateArrears(readings);
+  let total = 0;
+  for (const r of sanitized) {
+    if (!r || r.status === 'cancelled' || !isOfficialBillIssued(r)) continue;
+    if (cleanTargetAcc) {
+      const rAcc = String(r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+      if (rAcc !== cleanTargetAcc) continue;
+    }
+    const settlement = getCanonicalBillSettlement(r, r.classification || fallbackClassification);
+    if (!settlement.isCleared) {
+      total += settlement.remainingBalance;
+    }
+  }
+  return Math.round(total * 100) / 100;
+}
+
+/**
+ * Merges two snapshots of the same MeterReading (e.g. local vs server/Firestore) without ever
+ * dropping 2% Franchise Tax, losing partial payments, or causing sudden number jumps.
+ */
+export function mergeReadingRecordCanonical<T extends Record<string, any>>(prev: T | null | undefined, incoming: T): T {
+  if (!prev) {
+    const odo = computeOdometerConsumption(
+      incoming.previousReading,
+      incoming.currentReading ?? incoming.presentReading,
+      incoming.consumption
+    );
+    return normalizeReadingToOfficialBaseline({
+      ...incoming,
+      previousReading: odo.previousReading,
+      presentReading: odo.currentReading,
+      currentReading: odo.currentReading,
+      consumption: odo.consumption,
+    } as any) as unknown as T;
+  }
+
+  const prevPaidVal = Math.max(0, Math.round((Number(prev.paidAmount) || 0) * 100) / 100);
+  const incPaidVal = Math.max(0, Math.round((Number(incoming.paidAmount) || 0) * 100) / 100);
+  const maxPaid = Math.max(prevPaidVal, incPaidVal);
+
+  const prevBilled = Boolean(
+    prev.isBillingIssued ||
+      prev.billingIssuedAt ||
+      prev.invoiceNumber ||
+      prev.paymentStatus === 'paid' ||
+      prev.paymentStatus === 'partial' ||
+      prevPaidVal > 0
+  );
+  const incBilled = Boolean(
+    incoming.isBillingIssued ||
+      incoming.billingIssuedAt ||
+      incoming.invoiceNumber ||
+      incoming.paymentStatus === 'paid' ||
+      incoming.paymentStatus === 'partial' ||
+      incPaidVal > 0
+  );
+  const mergedBillingIssued = prevBilled || incBilled;
+
+  const billedSource = incBilled ? incoming : prevBilled ? prev : incoming;
+  const fallbackBilled = billedSource === incoming ? prev : incoming;
+
+  // Prefer payment metadata from whichever snapshot has higher paidAmount (or incoming on tie when incoming has payment metadata)
+  const paymentPrimary =
+    incPaidVal > prevPaidVal ||
+    (incPaidVal === prevPaidVal &&
+      (incoming.paymentStatus === 'paid' ||
+        (incoming.paymentStatus === 'partial' && prev.paymentStatus !== 'paid') ||
+        Boolean(incoming.orNumber)))
+      ? incoming
+      : prev;
+  const paymentSecondary = paymentPrimary === incoming ? prev : incoming;
+
+  const rawCurr =
+    billedSource.currentReading ??
+    billedSource.presentReading ??
+    fallbackBilled.currentReading ??
+    fallbackBilled.presentReading ??
+    0;
+  const candPrev = billedSource.previousReading ?? fallbackBilled.previousReading ?? 0;
+  const odoMerged = computeOdometerConsumption(
+    candPrev,
+    rawCurr,
+    billedSource.consumption ?? fallbackBilled.consumption
+  );
+
+  const cls: 'Residential' | 'Commercial' =
+    (billedSource.classification || fallbackBilled.classification) === 'Commercial' ||
+    (billedSource.classification || fallbackBilled.classification) === 'COMM'
+      ? 'Commercial'
+      : 'Residential';
+
+  const mergedBillAmountRaw =
+    Number(billedSource.billAmount || fallbackBilled.billAmount || 0) ||
+    prev.billAmount ||
+    incoming.billAmount;
+  const basicCharge =
+    typeof mergedBillAmountRaw === 'number' && !Number.isNaN(mergedBillAmountRaw) && mergedBillAmountRaw > 0
+      ? Math.round(mergedBillAmountRaw * 100) / 100
+      : calculateWaterTariff(odoMerged.consumption, cls);
+
+  const rawFTax = billedSource.franchiseTax ?? fallbackBilled.franchiseTax;
+  const franchiseTax =
+    typeof rawFTax === 'number' && !Number.isNaN(rawFTax) && rawFTax >= 0
+      ? Math.round(rawFTax * 100) / 100
+      : calculateFranchiseTax(basicCharge);
+
+  const rawArrears = billedSource.arrears ?? fallbackBilled.arrears ?? 0;
+  const arrears = Math.max(0, Math.round((Number(rawArrears) || 0) * 100) / 100);
+  const canonicalGross = Math.round((basicCharge + franchiseTax + arrears) * 100) / 100;
+
+  const candidateTotal = Number(billedSource.totalAmount || fallbackBilled.totalAmount || 0);
+  const mergedTotalAmount =
+    candidateTotal > 0 && !(franchiseTax > 0 && Math.abs(candidateTotal - basicCharge) < 0.015)
+      ? Math.round(candidateTotal * 100) / 100
+      : canonicalGross;
+
+  const penaltyAmount =
+    typeof (billedSource.penaltyAmount ?? fallbackBilled.penaltyAmount) === 'number'
+      ? Math.round(Number(billedSource.penaltyAmount ?? fallbackBilled.penaltyAmount) * 100) / 100
+      : calculateLatePenalty(basicCharge);
+  const amountAfterDueDate = Math.round((mergedTotalAmount + penaltyAmount) * 100) / 100;
+
+  const isPaid =
+    prev.paymentStatus === 'paid' ||
+    incoming.paymentStatus === 'paid' ||
+    (mergedTotalAmount > 0 && mergedTotalAmount - maxPaid <= 0.01);
+  const effectivePaid = isPaid ? Math.max(maxPaid, mergedTotalAmount) : maxPaid;
+  const isPartial =
+    !isPaid &&
+    (effectivePaid > 0 || prev.paymentStatus === 'partial' || incoming.paymentStatus === 'partial');
+  const computedRemaining = isPaid
+    ? 0
+    : Math.max(0, Math.round((mergedTotalAmount - effectivePaid) * 100) / 100);
+
+  const mergedRecord = {
+    ...prev,
+    ...incoming,
+    classification: billedSource.classification || fallbackBilled.classification || cls,
+    previousReading: odoMerged.previousReading,
+    presentReading: odoMerged.currentReading,
+    currentReading: odoMerged.currentReading,
+    consumption: odoMerged.consumption,
+    submittedAt: incoming.submittedAt || prev.submittedAt,
+    isBillingIssued: mergedBillingIssued ? true : Boolean(incoming.isBillingIssued ?? prev.isBillingIssued),
+    billingIssuedAt: incoming.billingIssuedAt || prev.billingIssuedAt,
+    billingIssuedBy: incoming.billingIssuedBy || prev.billingIssuedBy,
+    invoiceNumber: incoming.invoiceNumber || prev.invoiceNumber,
+    dueDate: billedSource.dueDate || fallbackBilled.dueDate,
+    billAmount: basicCharge,
+    franchiseTax,
+    arrears,
+    totalAmount: mergedTotalAmount,
+    penaltyAmount,
+    amountAfterDueDate,
+    tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
+    status:
+      prev.status === 'cancelled' || incoming.status === 'cancelled'
+        ? 'cancelled'
+        : mergedBillingIssued || prev.status === 'verified' || incoming.status === 'verified'
+          ? 'verified'
+          : incoming.status || prev.status,
+    paymentStatus: isPaid ? 'paid' : isPartial ? 'partial' : incoming.paymentStatus || prev.paymentStatus || 'unpaid',
+    paidAmount: effectivePaid > 0 ? effectivePaid : prev.paidAmount ?? incoming.paidAmount,
+    remainingBalance: computedRemaining,
+    orNumber: paymentPrimary.orNumber || paymentSecondary.orNumber,
+    paymentReference: paymentPrimary.paymentReference || paymentSecondary.paymentReference,
+    paymentDate: paymentPrimary.paymentDate || paymentSecondary.paymentDate,
+    paymentMethod: paymentPrimary.paymentMethod || paymentSecondary.paymentMethod,
+    cashierName: paymentPrimary.cashierName || paymentSecondary.cashierName,
+    transactionId: paymentPrimary.transactionId || paymentSecondary.transactionId,
+    paymentReceiptUrl: paymentPrimary.paymentReceiptUrl || paymentSecondary.paymentReceiptUrl,
+    receiptUploadDate: paymentPrimary.receiptUploadDate || paymentSecondary.receiptUploadDate,
+    receiptStatus: paymentPrimary.receiptStatus || paymentSecondary.receiptStatus,
+    receiptNotes: paymentPrimary.receiptNotes || paymentSecondary.receiptNotes,
+    imageUrl: incoming.imageUrl || prev.imageUrl,
+    meterImageUrl: incoming.meterImageUrl || prev.meterImageUrl,
+  };
+
+  return normalizeReadingToOfficialBaseline(mergedRecord as any) as unknown as T;
 }

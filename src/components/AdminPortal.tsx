@@ -106,8 +106,10 @@ import {
   calculateWaterTariff,
   calculateFranchiseTax,
   calculateLatePenalty,
+  computeAccountOutstandingBalance,
   computeDefaultDueDate,
   getActiveTariffConfig,
+  getCanonicalBillSettlement,
   getEffectiveRatePerM3,
   getReadingEffectiveBillAmount,
   getReadingTotalAssessment,
@@ -1481,6 +1483,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         toast.info('Field Readings Received', data.payload?.message || 'Incoming meter reading queued for review.');
         loadAllDataFromStore(false);
       } else if (
+        data.type === 'PAYMENT_RECORDED' ||
+        data.type === 'payment:recorded' ||
+        data.type === 'CONSUMER_NOTIFICATION_CREATED'
+      ) {
+        if (Array.isArray(data.payload?.readings) && data.payload.readings.length > 0) {
+          const mergedReads = mockDb.mergeExternalReadings(data.payload.readings);
+          applyIfChanged(setReadings, mergedReads);
+        } else if (data.payload?.reading) {
+          const mergedReads = mockDb.mergeExternalReadings([data.payload.reading]);
+          applyIfChanged(setReadings, mergedReads);
+        }
+        if (data.payload?.notification) {
+          mockDb.mergeExternalNotifications([data.payload.notification]);
+        }
+        loadAllDataFromStore(false);
+      } else if (
         data.type === 'CONSUMER_REGISTERED' ||
         data.type === 'consumer:registered' ||
         data.type === 'CONSUMER_UPDATED' ||
@@ -2327,7 +2345,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     setConsumers(updated);
 
     if (targetConsumer) {
-      fetch('/api/consumers', {
+      safeBackendFetch('/api/consumers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(targetConsumer)
@@ -3462,20 +3480,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       const prevVal = odoCalc.previousReading;
       const usageVal = odoCalc.consumption;
 
-      const priorUnpaid = workingReadings.filter(
-        prev =>
-          prev.id !== r.id &&
-          String(prev.accountNumber || '').replace(/^#/, '').trim().toUpperCase() === cleanAcc &&
-          isOfficialBillIssued(prev) &&
-          prev.paymentStatus !== 'paid'
-      );
-      const computedArrears = Math.round(
-        priorUnpaid.reduce((sum, prev) => {
-          const prevGross = prev.totalAmount ?? calculateCostOf(prev, prev.classification);
-          const prevPaid = prev.paidAmount || 0;
-          return sum + Math.max(0, prevGross - prevPaid);
-        }, 0) * 100
-      ) / 100;
+      // Each issued monthly billing statement tracks its own cycle charges cleanly while prior unpaid bills remain separate active rows
+      const computedArrears = 0;
 
       const waterCharge = calculateWaterTariff(usageVal, cls, activeCfg);
       const fTax = calculateFranchiseTax(waterCharge, activeCfg);
@@ -3484,6 +3490,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       const afterDue = Math.round((totalDue + lPenalty) * 100) / 100;
       const finalDueDate = (customDueDate && customDueDate.trim()) || r.dueDate || computeDefaultDueDate(r.readingDate);
       const issuedIso = new Date(baseTimestampMs + seqIdx).toISOString();
+      const existingPaid = Math.min(totalDue, Math.max(0, Math.round((Number(r.paidAmount) || 0) * 100) / 100));
+      const nextRemaining = Math.max(0, Math.round((totalDue - existingPaid) * 100) / 100);
+      const nextPayStatus: 'paid' | 'partial' | 'unpaid' =
+        r.paymentStatus === 'paid' || (totalDue > 0 && nextRemaining <= 0.009)
+          ? 'paid'
+          : existingPaid > 0 || r.paymentStatus === 'partial'
+            ? 'partial'
+            : 'unpaid';
 
       const billedRecord: MeterReading = {
         ...r,
@@ -3506,9 +3520,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         amountAfterDueDate: afterDue,
         appliedTariffVersion: activeCfg.version,
         tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
-        paymentStatus: r.paymentStatus === 'paid' || r.paymentStatus === 'partial' ? r.paymentStatus : 'unpaid',
-        paidAmount: r.paidAmount || 0,
-        remainingBalance: Math.max(0, totalDue - (r.paidAmount || 0)),
+        paymentStatus: nextPayStatus,
+        paidAmount: nextPayStatus === 'paid' ? totalDue : existingPaid,
+        remainingBalance: nextPayStatus === 'paid' ? 0 : nextRemaining,
       };
 
       issuedMap.set(r.id, billedRecord);
@@ -3541,14 +3555,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         .filter(r => (r.accountNumber || '').replace(/^#/, '').trim().toLowerCase() === cAcct && r.status === 'verified')
         .sort(compareReadingsCanonical);
       const latestVerified = consumerVerified[0];
-      const consumerUnpaid = consumerVerified.filter(r => isOfficialBillIssued(r) && r.paymentStatus !== 'paid');
-      const newArrears = Math.round(
-        consumerUnpaid.reduce((sum, r) => {
-          const gross = calculateCostOf(r, r.classification);
-          const paid = r.paidAmount || 0;
-          return sum + Math.max(0, gross - paid);
-        }, 0) * 100
-      ) / 100;
+      const newArrears = computeAccountOutstandingBalance(updatedReadings, c.accountNumber, c.consumerType);
       return {
         ...c,
         outstandingBalance: newArrears,
@@ -3803,26 +3810,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             notes: createBillModal.notes || 'Official billing generated by Administration',
           };
 
-    const seededReadings =
-      existingIdx >= 0
-        ? readings.map((r, i) => (i === existingIdx ? baseRecord : r))
-        : [baseRecord, ...readings];
-
     const activeCfg = getActiveTariffConfig();
-    const priorUnpaid = seededReadings.filter(
-      prev =>
-        prev.id !== baseRecord.id &&
-        prev.accountNumber === targetConsumer.accountNumber &&
-        isOfficialBillIssued(prev) &&
-        prev.paymentStatus !== 'paid'
-    );
-    const computedArrears = Math.round(
-      priorUnpaid.reduce((sum, prev) => {
-        const prevGross = prev.totalAmount ?? calculateCostOf(prev, prev.classification);
-        const prevPaid = prev.paidAmount || 0;
-        return sum + Math.max(0, prevGross - prevPaid);
-      }, 0) * 100
-    ) / 100;
+    const computedArrears = 0;
 
     const waterCharge = calculateWaterTariff(usage, cls, activeCfg);
     const fTax = calculateFranchiseTax(waterCharge, activeCfg);
@@ -3850,6 +3839,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       penaltyAmount: lPenalty,
       amountAfterDueDate: afterDue,
       appliedTariffVersion: activeCfg.version,
+      tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
       paymentStatus: 'unpaid',
       paidAmount: 0,
       remainingBalance: totalDue,
@@ -3864,12 +3854,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveReadings(nextReadings);
     setReadings(nextReadings);
 
-    const consumerUnpaid = nextReadings.filter(
-      r => r.accountNumber === targetConsumer.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid'
-    );
-    const newArrears = Math.round(
-      consumerUnpaid.reduce((sum, r) => sum + Math.max(0, calculateCostOf(r, r.classification) - (r.paidAmount || 0)), 0) * 100
-    ) / 100;
+    const newArrears = computeAccountOutstandingBalance(nextReadings, targetConsumer.accountNumber, cls);
 
     const updatedConsumers = consumers.map(c =>
       c.accountNumber === targetConsumer.accountNumber
@@ -8223,13 +8208,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {(() => {
                 const isAdminBillCleared = (r: MeterReading): boolean => {
                   if (r.status === 'cancelled') return false;
-                  const gross = calculateCostOf(r, r.classification);
-                  const paid = r.paidAmount || 0;
-                  const rem =
-                    typeof r.remainingBalance === 'number'
-                      ? Math.max(0, Math.round(r.remainingBalance * 100) / 100)
-                      : Math.max(0, Math.round((gross - paid) * 100) / 100);
-                  return r.paymentStatus === 'paid' || (gross > 0 && rem <= 0.009);
+                  return getCanonicalBillSettlement(r, r.classification).isPaid;
                 };
 
                 const issuedBills = readings.filter(r => isOfficialBillIssued(r)).sort(compareReadingsCanonical);
@@ -8240,11 +8219,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 const clearedHistoryAll = readings
                   .filter(r => (isOfficialBillIssued(r) && isAdminBillCleared(r)) || r.status === 'cancelled')
                   .sort(compareReadingsCanonical);
-                const unpaidTotal = billedToSettleAll.reduce((sum, r) => {
-                  const gross = calculateCostOf(r, r.classification);
-                  const paid = r.paidAmount || 0;
-                  return sum + Math.max(0, gross - paid);
-                }, 0);
+                const unpaidTotal = Math.round(
+                  billedToSettleAll.reduce(
+                    (sum, r) => sum + getCanonicalBillSettlement(r, r.classification).remainingBalance,
+                    0
+                  ) * 100
+                ) / 100;
 
                 return (
                   <div className="space-y-5">
@@ -8418,13 +8398,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {(() => {
                 const isAdminBillCleared = (r: MeterReading): boolean => {
                   if (r.status === 'cancelled') return false;
-                  const gross = calculateCostOf(r, r.classification);
-                  const paid = r.paidAmount || 0;
-                  const rem =
-                    typeof r.remainingBalance === 'number'
-                      ? Math.max(0, Math.round(r.remainingBalance * 100) / 100)
-                      : Math.max(0, Math.round((gross - paid) * 100) / 100);
-                  return r.paymentStatus === 'paid' || (gross > 0 && rem <= 0.009);
+                  return getCanonicalBillSettlement(r, r.classification).isPaid;
                 };
 
                 const verifiedBillsAll = readings
@@ -8442,9 +8416,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                 const filteredBills = activeTabPool
                   .filter(r => {
+                    const st = getCanonicalBillSettlement(r, r.classification);
                     if (adminBillsViewTab === 'billed') {
-                      if (billStatusFilter === 'unpaid') return (r.paidAmount || 0) <= 0;
-                      if (billStatusFilter === 'partial') return r.paymentStatus === 'partial' || (r.paidAmount || 0) > 0;
+                      if (billStatusFilter === 'unpaid') return st.isUnpaid;
+                      if (billStatusFilter === 'partial') return st.isPartial;
                       if (billStatusFilter === 'overdue') return Boolean(r.isOverdue);
                       return true;
                     } else {
@@ -8453,8 +8428,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       return true;
                     }
                   })
-                  .filter(r =>
-                    smartMatch(billSearch, [
+                  .filter(r => {
+                    const st = getCanonicalBillSettlement(r, r.classification);
+                    return smartMatch(billSearch, [
                       r.accountNumber,
                       r.consumerName,
                       r.meterNumber,
@@ -8462,35 +8438,44 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       r.id,
                       r.orNumber,
                       r.paymentReference,
-                      r.paymentStatus || 'unpaid',
+                      st.paymentStatus,
                       r.classification,
                       `${r.consumption} m3`,
-                      calculateCostOf(r, r.classification).toFixed(2),
+                      st.grossTotal.toFixed(2),
+                      st.remainingBalance.toFixed(2),
                       formatOdometerReading(r.previousReading),
                       formatOdometerReading(r.presentReading ?? r.currentReading)
-                    ])
-                  )
+                    ]);
+                  })
                   .sort(compareReadingsCanonical);
 
                 const safeBillPage = Math.min(billPage, Math.max(1, Math.ceil(filteredBills.length / 10)));
                 const paginatedBills = filteredBills.slice((safeBillPage - 1) * 10, safeBillPage * 10);
 
                 const openBillNoticeModalForRow = (bill: MeterReading) => {
-                  const foundConsumer = consumers.find(c => c.accountNumber === bill.accountNumber) || {
-                    accountNumber: bill.accountNumber,
-                    name: bill.consumerName,
-                    address: bill.address || 'SIHAYON-LEFT (ZONE-11A)',
-                    sitioZone: bill.addressZone || 'ZONE-11A',
-                    contactNumber: '+63 917 000 0000',
-                    email: 'consumer@tagoloanwater.gov.ph',
-                    meterNumber: bill.meterNumber,
-                    meterBrand: bill.meterBrand || 'EVER',
-                    status: 'active' as const,
-                    isRegistered: true,
-                    consumerType: (bill.classification || 'Residential') as 'Residential' | 'Commercial',
-                    outstandingBalance: bill.arrears || 0,
-                    sequenceNo: bill.sequenceNo || '135',
-                  };
+                  const exactAcctOutstanding = computeAccountOutstandingBalance(
+                    readings,
+                    bill.accountNumber,
+                    bill.classification
+                  );
+                  const matchedCons = consumers.find(c => c.accountNumber === bill.accountNumber);
+                  const foundConsumer = matchedCons
+                    ? { ...matchedCons, outstandingBalance: exactAcctOutstanding }
+                    : {
+                        accountNumber: bill.accountNumber,
+                        name: bill.consumerName,
+                        address: bill.address || 'SIHAYON-LEFT (ZONE-11A)',
+                        sitioZone: bill.addressZone || 'ZONE-11A',
+                        contactNumber: '+63 917 000 0000',
+                        email: 'consumer@tagoloanwater.gov.ph',
+                        meterNumber: bill.meterNumber,
+                        meterBrand: bill.meterBrand || 'EVER',
+                        status: 'active' as const,
+                        isRegistered: true,
+                        consumerType: (bill.classification || 'Residential') as 'Residential' | 'Commercial',
+                        outstandingBalance: exactAcctOutstanding,
+                        sequenceNo: bill.sequenceNo || '135',
+                      };
                   setSelectedNoticeConsumer(foundConsumer);
                   setSelectedNoticeReading(bill);
                 };
@@ -8667,14 +8652,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             </tr>
                           ) : (
                             paginatedBills.map((bill, bIdx) => {
-                              const totalBill = calculateCostOf(bill, bill.classification);
-                              const paidAmt = bill.paidAmount || 0;
-                              const balanceDue =
-                                typeof bill.remainingBalance === 'number'
-                                  ? Math.max(0, Math.round(bill.remainingBalance * 100) / 100)
-                                  : Math.max(0, Math.round((totalBill - paidAmt) * 100) / 100);
-                              const isCleared = isAdminBillCleared(bill);
-                              const isPartial = !isCleared && (bill.paymentStatus === 'partial' || paidAmt > 0);
+                              const settlement = getCanonicalBillSettlement(bill, bill.classification);
+                              const totalBill = settlement.grossTotal;
+                              const paidAmt = settlement.paidAmount;
+                              const balanceDue = settlement.remainingBalance;
+                              const isCleared = bill.status !== 'cancelled' && settlement.isPaid;
+                              const isPartial = bill.status !== 'cancelled' && settlement.isPartial;
                               const isCancelled = bill.status === 'cancelled';
 
                               return (
@@ -8728,7 +8711,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                       <div className="flex flex-col items-end">
                                         <span className="text-amber-300 font-black text-sm">₱{balanceDue.toFixed(2)}</span>
                                         {isPartial ? (
-                                          <span className="text-[10px] text-slate-400 truncate max-w-full">
+                                          <span className="text-[10px] text-sky-300 truncate max-w-full">
                                             Paid ₱{paidAmt.toFixed(2)} / ₱{totalBill.toFixed(2)}
                                           </span>
                                         ) : (
@@ -8794,11 +8777,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                               if (matchedConsumer) {
                                                 setSelectedPaymentAccount(matchedConsumer);
                                                 setSelectedBillIds([bill.id]);
-                                                const exactDue = Math.max(
-                                                  0,
-                                                  calculateCostOf(bill, bill.classification || matchedConsumer.consumerType) - (bill.paidAmount || 0)
-                                                );
-                                                setPaymentAmountPaid(Math.round(exactDue * 100) / 100);
+                                                setPaymentAmountPaid(settlement.remainingBalance);
                                                 setPaymentType('full');
                                                 setAllocationMode('auto');
                                                 setManualAllocations({});
@@ -8951,37 +8930,44 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       })
                       .map((c, cIdx) => {
                         const isSelected = selectedPaymentAccount?.accountNumber === c.accountNumber;
-                        const consumerReadings = readings.filter(r => r.accountNumber === c.accountNumber && isOfficialBillIssued(r));
-                        const unpaidReadings = consumerReadings.filter(r => r.paymentStatus !== 'paid');
+                        const consumerReadings = readings.filter(
+                          r => r.accountNumber === c.accountNumber && r.status !== 'cancelled' && isOfficialBillIssued(r)
+                        );
+                        const unpaidReadings = consumerReadings.filter(
+                          r => !getCanonicalBillSettlement(r, r.classification || c.consumerType).isPaid
+                        );
                         const unpaidCount = unpaidReadings.length;
                         const unbilledVerifiedCount = readings.filter(
                           r => r.accountNumber === c.accountNumber && r.status === 'verified' && !isOfficialBillIssued(r)
                         ).length;
 
                         // Total due calculation aligned with Consumer Portal official tariff breakdown
-                        const totalArrears = unpaidReadings.reduce((acc, r) => {
-                          const gross = calculateCostOf(r, r.classification || c.consumerType);
-                          const paid = r.paidAmount || 0;
-                          return acc + Math.max(0, gross - paid);
-                        }, 0);
+                        const totalArrears = computeAccountOutstandingBalance(readings, c.accountNumber, c.consumerType);
 
                         return (
                           <div
                             key={`pos-cons-${c.id || c.accountNumber || c.email || c.applicationNumber || cIdx}`}
                             onClick={() => {
                               setSelectedPaymentAccount(c);
-                              const unpaidList = readings.filter(r => r.accountNumber === c.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid');
+                              const unpaidList = readings.filter(
+                                r =>
+                                  r.accountNumber === c.accountNumber &&
+                                  r.status !== 'cancelled' &&
+                                  isOfficialBillIssued(r) &&
+                                  !getCanonicalBillSettlement(r, r.classification || c.consumerType).isPaid
+                              );
                               const unpaidIds = unpaidList.map(r => r.id);
                               setSelectedBillIds(unpaidIds);
                               
                               // Auto calculate exact total due matching Consumer Portal
-                              const exactDue = unpaidList.reduce((acc, r) => {
-                                const gross = calculateCostOf(r, r.classification || c.consumerType);
-                                const paid = r.paidAmount || 0;
-                                return acc + Math.max(0, gross - paid);
-                              }, 0);
+                              const exactDue = Math.round(
+                                unpaidList.reduce(
+                                  (acc, r) => acc + getCanonicalBillSettlement(r, r.classification || c.consumerType).remainingBalance,
+                                  0
+                                ) * 100
+                              ) / 100;
 
-                              setPaymentAmountPaid(Math.round(exactDue * 100) / 100);
+                              setPaymentAmountPaid(exactDue);
                               setPaymentType('full');
                               setAllocationMode('auto');
                               setManualAllocations({});
@@ -9100,7 +9086,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           <span className="text-[10px] font-bold text-slate-500">Select bills to settle</span>
                         </div>
 
-                        {readings.filter(r => r.accountNumber === selectedPaymentAccount.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid').length === 0 ? (
+                        {readings.filter(
+                          r =>
+                            r.accountNumber === selectedPaymentAccount.accountNumber &&
+                            r.status !== 'cancelled' &&
+                            isOfficialBillIssued(r) &&
+                            !getCanonicalBillSettlement(r, r.classification || selectedPaymentAccount.consumerType).isPaid
+                        ).length === 0 ? (
                           <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-4 text-center text-xs font-bold space-y-1">
                             <CheckCircle className="h-6 w-6 text-emerald-600 mx-auto" />
                             <p>No unpaid issued bills for this account. Current balance is ₱0.00.</p>
@@ -9108,13 +9100,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         ) : (
                           <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
                             {readings
-                              .filter(r => r.accountNumber === selectedPaymentAccount.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid')
+                              .filter(
+                                r =>
+                                  r.accountNumber === selectedPaymentAccount.accountNumber &&
+                                  r.status !== 'cancelled' &&
+                                  isOfficialBillIssued(r) &&
+                                  !getCanonicalBillSettlement(r, r.classification || selectedPaymentAccount.consumerType).isPaid
+                              )
                               .sort(compareReadingsCanonical)
                               .map((r, bIdx) => {
-                                const grossTotal = calculateCostOf(r, r.classification || selectedPaymentAccount.consumerType);
+                                const st = getCanonicalBillSettlement(r, r.classification || selectedPaymentAccount.consumerType);
+                                const grossTotal = st.grossTotal;
                                 const isOverdue = Boolean(r.dueDate && !Number.isNaN(new Date(r.dueDate).getTime()) && new Date() > new Date(r.dueDate));
-                                const alreadyPaid = r.paidAmount || 0;
-                                const netBalanceDue = Math.max(0, grossTotal - alreadyPaid);
+                                const alreadyPaid = st.paidAmount;
+                                const netBalanceDue = st.remainingBalance;
                                 const isChecked = selectedBillIds.includes(r.id);
 
                                 return (
@@ -9136,7 +9135,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           if (paymentType === 'full') {
                                             const sel = readings.filter(x => nextIds.includes(x.id));
                                             const exactDue = sel.reduce(
-                                              (acc, x) => acc + Math.max(0, calculateCostOf(x, x.classification || selectedPaymentAccount.consumerType) - (x.paidAmount || 0)),
+                                              (acc, x) =>
+                                                acc +
+                                                getCanonicalBillSettlement(
+                                                  x,
+                                                  x.classification || selectedPaymentAccount.consumerType
+                                                ).remainingBalance,
                                               0
                                             );
                                             setPaymentAmountPaid(Math.round(exactDue * 100) / 100);
@@ -9147,7 +9151,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                       <div>
                                         <div className="flex items-center space-x-2">
                                           <span className="font-bold text-slate-900">{r.billingPeriod}</span>
-                                          {r.paymentStatus === 'partial' ? (
+                                          {st.isPartial ? (
                                             <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.2 rounded uppercase">PARTIAL</span>
                                           ) : (
                                             <span className="bg-rose-100 text-rose-800 text-[9px] font-black px-1.5 py-0.2 rounded uppercase">UNPAID</span>
@@ -9157,7 +9161,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           )}
                                         </div>
                                         <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                                          Usage: {r.consumption} m³ • Bill Amount: ₱{grossTotal.toFixed(2)}
+                                          Usage: {r.consumption} m³ • Gross Statement: ₱{grossTotal.toFixed(2)}
                                         </div>
                                       </div>
                                     </div>
@@ -9187,11 +9191,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                   setPaymentType('full');
                                   setAllocationMode('auto');
                                   const selectedReadings = readings.filter(r => selectedBillIds.includes(r.id));
-                                  const exactDue = selectedReadings.reduce((acc, r) => {
-                                    const gross = calculateCostOf(r, r.classification || selectedPaymentAccount.consumerType);
-                                    const paid = r.paidAmount || 0;
-                                    return acc + Math.max(0, gross - paid);
-                                  }, 0);
+                                  const exactDue = selectedReadings.reduce(
+                                    (acc, r) =>
+                                      acc +
+                                      getCanonicalBillSettlement(
+                                        r,
+                                        r.classification || selectedPaymentAccount.consumerType
+                                      ).remainingBalance,
+                                    0
+                                  );
                                   setPaymentAmountPaid(Math.round(exactDue * 100) / 100);
                                 }}
                                 className={`py-2 rounded-lg text-xs font-bold transition ${
@@ -9282,11 +9290,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             <span className="font-mono font-black text-slate-900 text-lg mt-0.5">
                               ₱{(() => {
                                 const selectedReadings = readings.filter(r => selectedBillIds.includes(r.id));
-                                const totalNetDue = selectedReadings.reduce((acc, r) => {
-                                  const gross = calculateCostOf(r, r.classification || selectedPaymentAccount.consumerType);
-                                  const paid = r.paidAmount || 0;
-                                  return acc + Math.max(0, gross - paid);
-                                }, 0);
+                                const totalNetDue = selectedReadings.reduce(
+                                  (acc, r) =>
+                                    acc +
+                                    getCanonicalBillSettlement(
+                                      r,
+                                      r.classification || selectedPaymentAccount.consumerType
+                                    ).remainingBalance,
+                                  0
+                                );
                                 const change = paymentAmountPaid - totalNetDue;
                                 return change > 0 ? change.toFixed(2) : '0.00';
                               })()}
@@ -9313,18 +9325,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             .sort((a, b) => new Date(a.readingDate).getTime() - new Date(b.readingDate).getTime());
 
                           let remainingCash = paymentAmountPaid;
-                          const allocations: { [billId: string]: { allocated: number; newPaid: number; newRem: number; newStatus: 'paid' | 'partial'; grossTotal: number; penaltyAmount: number } } = {};
+                          const allocations: { [billId: string]: { allocated: number; newPaid: number; newRem: number; newStatus: 'paid' | 'partial'; basicCharge: number; franchiseTax: number; arrears: number; grossTotal: number; penaltyAmount: number } } = {};
 
                           selectedReadings.forEach(r => {
-                            const grossTotal = calculateCostOf(r, r.classification || selectedPaymentAccount.consumerType);
+                            const st = getCanonicalBillSettlement(r, r.classification || selectedPaymentAccount.consumerType);
+                            const grossTotal = st.grossTotal;
                             const penaltyAmount = r.penaltyAmount || 0;
-                            const alreadyPaid = r.paidAmount || 0;
-                            const netDue = Math.max(0, grossTotal - alreadyPaid);
+                            const alreadyPaid = st.paidAmount;
+                            const netDue = st.remainingBalance;
 
                             let alloc = 0;
                             if (allocationMode === 'auto') {
                               alloc = Math.min(netDue, remainingCash);
-                              remainingCash -= alloc;
+                              remainingCash = Math.max(0, Math.round((remainingCash - alloc) * 100) / 100);
                             } else {
                               alloc = Math.min(netDue, manualAllocations[r.id] || 0);
                             }
@@ -9332,7 +9345,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             const rawPaid = Math.round((alreadyPaid + alloc) * 100) / 100;
                             const rawRem = Math.max(0, Math.round((grossTotal - rawPaid) * 100) / 100);
                             const newStatus: 'paid' | 'partial' = rawRem <= 0.01 ? 'paid' : 'partial';
-                            const newPaid = newStatus === 'paid' ? Math.max(rawPaid, grossTotal) : rawPaid;
+                            const newPaid = newStatus === 'paid' ? grossTotal : rawPaid;
                             const newRem = newStatus === 'paid' ? 0 : rawRem;
 
                             allocations[r.id] = {
@@ -9340,6 +9353,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               newPaid,
                               newRem,
                               newStatus,
+                              basicCharge: st.basicCharge,
+                              franchiseTax: st.franchiseTax,
+                              arrears: st.arrears,
                               grossTotal,
                               penaltyAmount
                             };
@@ -9357,12 +9373,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           const paymentDateStr = new Date().toISOString().split('T')[0];
                           const paidReadingsPayload: MeterReading[] = [];
 
-                          // Atomic Database Update (guarantees isBillingIssued=true and remainingBalance=0 when settled)
+                          // Atomic Database Update (locks canonical gross assessment across partial/full settlements)
                           const updatedReadings = readings.map(r => {
                             if (selectedBillIds.includes(r.id)) {
                               const alloc = allocations[r.id];
-                              const basicBillAmt = r.billAmount ?? getReadingEffectiveBillAmount(r, r.classification || selectedPaymentAccount.consumerType);
-                              const fTaxAmt = r.franchiseTax ?? calculateFranchiseTax(basicBillAmt);
                               const updatedRecord: MeterReading = {
                                 ...r,
                                 status: 'verified',
@@ -9371,17 +9385,20 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                 billingIssuedBy: r.billingIssuedBy || currentUser.name,
                                 invoiceNumber: r.invoiceNumber || `INV-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`,
                                 dueDate: r.dueDate || computeDefaultDueDate(r.readingDate),
-                                billAmount: basicBillAmt,
-                                franchiseTax: fTaxAmt,
-                                totalAmount: r.totalAmount || alloc.grossTotal,
-                                tariffBaselineSchema: r.tariffBaselineSchema || OFFICIAL_TARIFF_BASELINE_SCHEMA,
+                                classification: r.classification || selectedPaymentAccount.consumerType,
+                                billAmount: alloc.basicCharge,
+                                franchiseTax: alloc.franchiseTax,
+                                arrears: alloc.arrears,
+                                totalAmount: alloc.grossTotal,
+                                tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
                                 paymentStatus: alloc.newStatus,
                                 paidAmount: alloc.newPaid,
                                 remainingBalance: alloc.newRem,
-                                penaltyAmount: alloc.penaltyAmount,
+                                penaltyAmount: alloc.newStatus === 'paid' ? 0 : alloc.penaltyAmount,
                                 paymentDate: paymentDateStr,
                                 paymentMethod: 'Cash',
                                 orNumber: generatedOrNumber,
+                                paymentReference: generatedOrNumber,
                                 cashierName: currentUser.name,
                                 transactionId: `TXN-CASH-${selectedPaymentAccount.accountNumber}-${Date.now().toString().slice(-5)}`
                               };
@@ -9404,17 +9421,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               .catch(() => {});
                           }
 
-                          // Recalculate Consumer Outstanding Arrears across officially issued unpaid bills
+                          // Recalculate Consumer Outstanding Arrears across officially issued unpaid/partial bills
                           const updatedUnpaid = updatedReadings.filter(
-                            r => r.accountNumber === selectedPaymentAccount.accountNumber && isOfficialBillIssued(r) && r.paymentStatus !== 'paid'
+                            r =>
+                              r.accountNumber === selectedPaymentAccount.accountNumber &&
+                              r.status !== 'cancelled' &&
+                              isOfficialBillIssued(r) &&
+                              !getCanonicalBillSettlement(r, r.classification || selectedPaymentAccount.consumerType).isPaid
                           );
-                          const newConsumerArrears = Math.round(
-                            updatedUnpaid.reduce((acc, r) => {
-                              const gross = calculateCostOf(r, r.classification || selectedPaymentAccount.consumerType);
-                              const paid = r.paidAmount || 0;
-                              return acc + Math.max(0, gross - paid);
-                            }, 0) * 100
-                          ) / 100;
+                          const newConsumerArrears = computeAccountOutstandingBalance(
+                            updatedReadings,
+                            selectedPaymentAccount.accountNumber,
+                            selectedPaymentAccount.consumerType
+                          );
 
                           const updatedTargetConsumer: Consumer = {
                             ...selectedPaymentAccount,

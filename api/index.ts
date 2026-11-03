@@ -3204,28 +3204,64 @@ function mergeBillingRecordVercel(prev: any, incoming: any): any {
       incoming.currentReading ?? incoming.presentReading,
       incoming.consumption
     );
+    const baseAmt = Number(incoming.billAmount || 0);
+    const fTax =
+      typeof incoming.franchiseTax === "number"
+        ? Math.round(incoming.franchiseTax * 100) / 100
+        : Math.round(baseAmt * 0.02 * 100) / 100;
+    const arr = Math.max(0, Math.round(Number(incoming.arrears || 0) * 100) / 100);
+    const canonicalTotal = Math.round((baseAmt + fTax + arr) * 100) / 100;
+    const rawTotal = Number(incoming.totalAmount || 0);
+    const effTotal =
+      rawTotal > 0 && !(fTax > 0 && Math.abs(rawTotal - baseAmt) < 0.009)
+        ? Math.round(rawTotal * 100) / 100
+        : canonicalTotal;
+    const paidAmt = Math.max(0, Math.round(Number(incoming.paidAmount || 0) * 100) / 100);
+    const isCleared = incoming.paymentStatus === "paid" || (effTotal > 0 && paidAmt >= effTotal - 0.009);
+    const isPart = !isCleared && (incoming.paymentStatus === "partial" || paidAmt > 0);
     return {
       ...incoming,
       previousReading: odo.previousReading,
       presentReading: odo.currentReading,
       currentReading: odo.currentReading,
       consumption: odo.consumption,
+      billAmount: baseAmt > 0 ? baseAmt : incoming.billAmount,
+      franchiseTax: baseAmt > 0 ? fTax : incoming.franchiseTax,
+      arrears: arr,
+      totalAmount: effTotal > 0 ? effTotal : incoming.totalAmount,
+      paymentStatus: isCleared ? "paid" : isPart ? "partial" : (incoming.paymentStatus || "unpaid"),
+      paidAmount: isCleared ? Math.max(effTotal, paidAmt) : paidAmt,
+      remainingBalance: isCleared ? 0 : Math.max(0, Math.round((effTotal - paidAmt) * 100) / 100),
+      tariffBaselineSchema: incoming.tariffBaselineSchema || "twd_per_m3_v2",
     };
   }
-  const isPaid = prev.paymentStatus === "paid" || incoming.paymentStatus === "paid";
-  const isPartial = !isPaid && (prev.paymentStatus === "partial" || incoming.paymentStatus === "partial");
   const prevBilled = Boolean(
-    prev.isBillingIssued || prev.billingIssuedAt || prev.invoiceNumber || prev.paymentStatus === "paid" || prev.paymentStatus === "partial"
+    prev.isBillingIssued || prev.billingIssuedAt || prev.invoiceNumber || prev.paymentStatus === "paid" || prev.paymentStatus === "partial" || Number(prev.paidAmount || 0) > 0
   );
   const incBilled = Boolean(
-    incoming.isBillingIssued || incoming.billingIssuedAt || incoming.invoiceNumber || incoming.paymentStatus === "paid" || incoming.paymentStatus === "partial"
+    incoming.isBillingIssued || incoming.billingIssuedAt || incoming.invoiceNumber || incoming.paymentStatus === "paid" || incoming.paymentStatus === "partial" || Number(incoming.paidAmount || 0) > 0
   );
   const mergedBilled = prevBilled || incBilled;
   const billedSrc = incBilled ? incoming : prevBilled ? prev : incoming;
   const altSrc = billedSrc === incoming ? prev : incoming;
-  const maxPaid = Math.max(Number(prev.paidAmount || 0), Number(incoming.paidAmount || 0));
-  const effBillAmt = Number(billedSrc.billAmount || altSrc.billAmount || 0) || prev.billAmount || incoming.billAmount;
-  const effTotalAmt = Number(billedSrc.totalAmount || altSrc.totalAmount || effBillAmt || 0) || prev.totalAmount || incoming.totalAmount;
+  const maxPaid = Math.round(Math.max(Number(prev.paidAmount || 0), Number(incoming.paidAmount || 0)) * 100) / 100;
+  const effBillAmt = Number(billedSrc.billAmount ?? altSrc.billAmount ?? 0);
+  const effFranchiseTax =
+    typeof (billedSrc.franchiseTax ?? altSrc.franchiseTax) === "number"
+      ? Math.round(Number(billedSrc.franchiseTax ?? altSrc.franchiseTax) * 100) / 100
+      : Math.round(effBillAmt * 0.02 * 100) / 100;
+  const effArrears = Math.max(0, Math.round(Number(billedSrc.arrears ?? altSrc.arrears ?? 0) * 100) / 100);
+  const canonicalGross = Math.round((effBillAmt + effFranchiseTax + effArrears) * 100) / 100;
+  const candidateTotal = Number(billedSrc.totalAmount ?? altSrc.totalAmount ?? 0);
+  const effTotalAmt =
+    candidateTotal > 0 && !(effFranchiseTax > 0 && Math.abs(candidateTotal - effBillAmt) < 0.009)
+      ? Math.round(candidateTotal * 100) / 100
+      : canonicalGross;
+  const isPaid =
+    prev.paymentStatus === "paid" ||
+    incoming.paymentStatus === "paid" ||
+    (effTotalAmt > 0 && maxPaid >= effTotalAmt - 0.009);
+  const isPartial = !isPaid && (prev.paymentStatus === "partial" || incoming.paymentStatus === "partial" || maxPaid > 0);
 
   const rawCurr = billedSrc.currentReading ?? billedSrc.presentReading ?? altSrc.currentReading ?? altSrc.presentReading ?? 0;
   const candPrev = billedSrc.previousReading ?? altSrc.previousReading ?? 0;
@@ -3245,8 +3281,8 @@ function mergeBillingRecordVercel(prev: any, incoming: any): any {
     dueDate: billedSrc.dueDate || altSrc.dueDate,
     billAmount: effBillAmt,
     totalAmount: effTotalAmt,
-    franchiseTax: billedSrc.franchiseTax ?? altSrc.franchiseTax,
-    arrears: billedSrc.arrears ?? altSrc.arrears,
+    franchiseTax: effFranchiseTax,
+    arrears: effArrears,
     penaltyAmount: billedSrc.penaltyAmount ?? altSrc.penaltyAmount,
     amountAfterDueDate: billedSrc.amountAfterDueDate ?? altSrc.amountAfterDueDate,
     status:
@@ -3255,23 +3291,19 @@ function mergeBillingRecordVercel(prev: any, incoming: any): any {
         : mergedBilled || prev.status === "verified" || incoming.status === "verified"
           ? "verified"
           : (incoming.status || prev.status),
-    paymentStatus: isPaid ? "paid" : isPartial ? "partial" : (incoming.paymentStatus || prev.paymentStatus),
-    paidAmount: maxPaid > 0 ? maxPaid : (prev.paidAmount ?? incoming.paidAmount),
+    paymentStatus: isPaid ? "paid" : isPartial ? "partial" : (incoming.paymentStatus || prev.paymentStatus || "unpaid"),
+    paidAmount: isPaid ? Math.max(effTotalAmt, maxPaid) : maxPaid > 0 ? maxPaid : (prev.paidAmount ?? incoming.paidAmount ?? 0),
     remainingBalance: isPaid
       ? 0
-      : isPartial
-        ? Math.max(0, Number(effTotalAmt || effBillAmt || 0) - maxPaid)
-        : (typeof billedSrc.remainingBalance === "number"
-            ? billedSrc.remainingBalance
-            : typeof altSrc.remainingBalance === "number"
-              ? altSrc.remainingBalance
-              : effTotalAmt),
+      : Math.max(0, Math.round((effTotalAmt - maxPaid) * 100) / 100),
     orNumber: incoming.orNumber || prev.orNumber,
+    paymentReference: incoming.paymentReference || prev.paymentReference || incoming.orNumber || prev.orNumber,
     paymentDate: incoming.paymentDate || prev.paymentDate,
     paymentMethod: incoming.paymentMethod || prev.paymentMethod,
     cashierName: incoming.cashierName || prev.cashierName,
     transactionId: incoming.transactionId || prev.transactionId,
     paymentReceiptUrl: incoming.paymentReceiptUrl || prev.paymentReceiptUrl,
+    tariffBaselineSchema: incoming.tariffBaselineSchema || prev.tariffBaselineSchema || "twd_per_m3_v2",
   };
 }
 
@@ -3292,7 +3324,7 @@ app.get("/api/billings", async (req, res) => {
           if (idx >= 0) {
             syncedReadings[idx] = mergeBillingRecordVercel(syncedReadings[idx], { ...r, id });
           } else {
-            syncedReadings.push({ ...r, id });
+            syncedReadings.push(mergeBillingRecordVercel(null, { ...r, id }));
           }
         });
       } catch (err) {
@@ -3313,22 +3345,72 @@ app.get("/api/billings", async (req, res) => {
 app.post("/api/billings/reconcile", async (req, res) => {
   try {
     const incoming = Array.isArray(req.body?.readings) ? req.body.readings : [];
+    const affectedAccounts = new Set<string>();
     for (const r of incoming) {
       if (!r || !r.id) continue;
       const idx = syncedReadings.findIndex((x) => x.id === r.id);
+      let merged: any;
       if (idx >= 0) {
-        syncedReadings[idx] = mergeBillingRecordVercel(syncedReadings[idx], r);
+        merged = mergeBillingRecordVercel(syncedReadings[idx], r);
+        syncedReadings[idx] = merged;
       } else {
-        syncedReadings.unshift(mergeBillingRecordVercel(null, r));
+        merged = mergeBillingRecordVercel(null, r);
+        syncedReadings.unshift(merged);
       }
+      const cleanAcc = String(merged?.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+      if (cleanAcc) affectedAccounts.add(cleanAcc);
+
       if (canWriteFs()) {
-        const target = syncedReadings.find((x) => x.id === r.id) || r;
         await withFsTimeout(
-          setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(r.id)), sanitizePayload(target), { merge: true }),
+          setDoc(doc(fsDb, FS_COLLECTIONS.READINGS, sanitizeDocId(r.id)), sanitizePayload(merged), { merge: true }),
           2200
         ).catch((err) => recordFsErr(err, "write"));
       }
     }
+
+    if (affectedAccounts.size > 0) {
+      for (const accUpper of affectedAccounts) {
+        const targetConsumer = syncedConsumers.find(
+          (c) => String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === accUpper
+        );
+        if (!targetConsumer) continue;
+        const accountIssuedBills = syncedReadings.filter((b: any) => {
+          if (!b || b.status === "cancelled") return false;
+          const bAcc = String(b.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+          if (bAcc !== accUpper) return false;
+          return Boolean(
+            b.isBillingIssued ||
+            b.billingIssuedAt ||
+            b.invoiceNumber ||
+            b.paymentStatus === "paid" ||
+            b.paymentStatus === "partial"
+          );
+        });
+        if (accountIssuedBills.length > 0) {
+          const sumRemaining =
+            Math.round(
+              accountIssuedBills.reduce((sum: number, b: any) => {
+                if (b.paymentStatus === "paid") return sum;
+                const gross = Number(b.totalAmount ?? b.billAmount ?? 0);
+                const paid = Number(b.paidAmount || 0);
+                const rem = typeof b.remainingBalance === "number" ? b.remainingBalance : Math.max(0, gross - paid);
+                return sum + Math.max(0, rem);
+              }, 0) * 100
+            ) / 100;
+          if (Math.abs(Number(targetConsumer.outstandingBalance || 0) - sumRemaining) > 0.009) {
+            targetConsumer.outstandingBalance = sumRemaining;
+            if (canWriteFs()) {
+              const cDocId = sanitizeDocId(targetConsumer.accountNumber || targetConsumer.id || accUpper);
+              await withFsTimeout(
+                setDoc(doc(fsDb, FS_COLLECTIONS.CONSUMERS, cDocId), sanitizePayload(targetConsumer), { merge: true }),
+                2000
+              ).catch((err) => recordFsErr(err, "write"));
+            }
+          }
+        }
+      }
+    }
+
     const accQuery = String(req.body?.accountNumber || "").trim().toUpperCase();
     let list = [...syncedReadings];
     if (accQuery) {

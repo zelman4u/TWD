@@ -29,9 +29,32 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { scrubBloatedLocalStorageOnce, syncMemoryStoreFromStorageEvent } from './services/storageSafe';
+
+if (typeof window !== 'undefined') {
+  scrubBloatedLocalStorageOnce();
+
+  window.addEventListener('storage', (ev) => {
+    syncMemoryStoreFromStorageEvent(ev.key);
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event?.reason;
+    const msg = String(reason?.message || reason || '');
+    if (
+      msg.includes('Failed to fetch') ||
+      msg.includes('NetworkError when attempting to fetch resource') ||
+      msg.includes('Load failed') ||
+      msg.includes('QuotaExceededError')
+    ) {
+      event.preventDefault();
+    }
+  });
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
   </StrictMode>,
 );
+

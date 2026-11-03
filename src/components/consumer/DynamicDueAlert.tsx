@@ -19,7 +19,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { Consumer, MeterReading } from '../../types';
-import { calculateLatePenalty, getReadingEffectiveBillAmount } from '../../utils/tariffCalculator';
+import { calculateLatePenalty, getCanonicalBillSettlement, getReadingEffectiveBillAmount } from '../../utils/tariffCalculator';
 
 interface DynamicDueAlertProps {
   consumerRecord: Consumer;
@@ -49,14 +49,13 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
     return null;
   }
 
-  // Identify current / latest verified reading
-  const latestReading = readings[0];
-  const grossLatestCost = calculateCostOf(latestReading, consumerRecord.consumerType);
-  const paidLatestAmt = latestReading.paidAmount || 0;
-  const netLatestDue = latestReading.remainingBalance !== undefined 
-    ? latestReading.remainingBalance 
-    : Math.max(0, grossLatestCost - paidLatestAmt);
-  const isLatestPaid = latestReading.paymentStatus === 'paid' || netLatestDue <= 0;
+  // Identify current / latest active unsettled or verified reading
+  const latestReading = unpaidBills && unpaidBills.length > 0 ? unpaidBills[0] : readings[0];
+  const latestSt = getCanonicalBillSettlement(latestReading, consumerRecord.consumerType);
+  const grossLatestCost = latestSt.grossTotal;
+  const paidLatestAmt = latestSt.paidAmount;
+  const netLatestDue = latestSt.remainingBalance;
+  const isLatestPaid = latestSt.isPaid;
 
   // Calculate Due Date for Current/Latest Reading
   let currentDueDateObj: Date;
@@ -76,12 +75,11 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
 
   // Overdue calculations across all overdue bills
   const hasOverdue = overdueBills && overdueBills.length > 0;
-  const overdueTotalNet = overdueBills.reduce((sum, r) => {
-    const gross = calculateCostOf(r, consumerRecord.consumerType);
-    const paid = r.paidAmount || 0;
-    const net = r.remainingBalance !== undefined ? r.remainingBalance : Math.max(0, gross - paid);
-    return sum + net;
-  }, 0);
+  const overdueTotalNet = Math.round(
+    overdueBills.reduce((sum, r) => {
+      return sum + getCanonicalBillSettlement(r, consumerRecord.consumerType).remainingBalance;
+    }, 0) * 100
+  ) / 100;
 
   const totalPenalties = overdueBills.reduce((sum, r) => {
     const basicAmt = getReadingEffectiveBillAmount(
@@ -219,9 +217,7 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
             {/* Overdue Statements Summary Pill List */}
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {overdueBills.slice(0, 3).map((b, idx) => {
-                const bGross = calculateCostOf(b, consumerRecord.consumerType);
-                const bPaid = b.paidAmount || 0;
-                const bNet = b.remainingBalance !== undefined ? b.remainingBalance : Math.max(0, bGross - bPaid);
+                const bNet = getCanonicalBillSettlement(b, consumerRecord.consumerType).remainingBalance;
                 return (
                   <div key={`overdue-pill-${b.id || idx}`} className="text-[11px] bg-black/30 border border-white/15 px-3 py-1 rounded-xl flex items-center space-x-2">
                     <span className="font-bold text-amber-300">{b.billingPeriod}:</span>
@@ -327,15 +323,21 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
 
           <div>
             <h3 className="text-xl sm:text-2xl font-black tracking-tight text-white flex flex-wrap items-center gap-2">
-              <span>Water Tariff Statement Due: ₱{netLatestDue.toFixed(2)}</span>
-              {latestReading.paymentStatus === 'partial' && (
+              <span>
+                {latestSt.isPartial
+                  ? `Remaining Balance Due: ₱${netLatestDue.toFixed(2)}`
+                  : `Water Tariff Statement Due: ₱${netLatestDue.toFixed(2)}`}
+              </span>
+              {latestSt.isPartial && (
                 <span className="text-[10px] font-bold bg-amber-300 text-slate-900 px-2.5 py-0.5 rounded-full uppercase">
-                  Partial Balance
+                  Paid ₱{paidLatestAmt.toFixed(2)} of ₱{grossLatestCost.toFixed(2)}
                 </span>
               )}
             </h3>
             <p className="text-xs sm:text-sm text-white/90 leading-relaxed mt-1">
-              {isDueToday
+              {latestSt.isPartial
+                ? `Your partial payment of ₱${paidLatestAmt.toFixed(2)} for ${latestReading.billingPeriod} (${latestReading.consumption} m³) has been credited against your ₱${grossLatestCost.toFixed(2)} statement. Remaining balance of ₱${netLatestDue.toFixed(2)} is due on ${formattedDueDate}.`
+                : isDueToday
                 ? `Today (${formattedDueDate}) is the final payment cutoff for your ${latestReading.billingPeriod} consumption (${latestReading.consumption} m³). Pay now online or upload your municipal cashier receipt to avoid the 10% late surcharge.`
                 : isDueSoon
                 ? `Your water bill of ₱${netLatestDue.toFixed(2)} for ${latestReading.billingPeriod} is due in ${remainingDays} days on ${formattedDueDate}. Settle promptly to maintain uninterrupted district water supply.`

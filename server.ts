@@ -8,12 +8,31 @@ process.env.DISABLE_HMR = "true";
 
 import express from "express";
 import fs from "fs";
+import os from "os";
 import path from "path";
+import { fileURLToPath } from "url";
 import { createServer as createHttpServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import "dotenv/config";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const IS_CLOUD_RUN = Boolean(
+  process.env.K_SERVICE ||
+  process.env.K_REVISION ||
+  process.env.K_CONFIGURATION ||
+  process.env.CLOUD_RUN_JOB
+);
+const TMP_RUNTIME_DIR = path.join(os.tmpdir(), "twd-portal-runtime");
+
+// Prevent transient outbound socket/fetch rejections from crashing Cloud Run instances
+process.on("unhandledRejection", (reason) => {
+  console.warn("[Server Guard] Unhandled promise rejection:", reason instanceof Error ? reason.message : reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[Server Guard] Uncaught exception:", err?.message || err);
+});
 
 const app = express();
 app.set("trust proxy", 1);
@@ -82,6 +101,11 @@ httpServer.on("upgrade", (request, socket, head) => {
   } else {
     socket.destroy();
   }
+});
+
+// Dedicated Cloud Run & HTTP startup/liveness probes
+app.get(["/_ah/health", "/healthz"], (_req, res) => {
+  res.status(200).json({ status: "ok", healthy: true, timestamp: Date.now() });
 });
 
 // Dedicated HTTP fallback for /ws probe / health check requests
@@ -258,6 +282,8 @@ interface MobileConsumerSync {
   installationStatus?: string;
   accountValidationStatus?: string;
   isRegistered?: boolean;
+  id?: string;
+  outstandingBalance?: number;
 }
 
 interface PortalSyncUser {
@@ -3355,15 +3381,60 @@ app.all("/api/readings/:id/reject", (req, res) => {
   });
 });
 
-// 7.1 Official Admin Billing Sync & Consumer Billing Feed (GET /api/billings, POST /api/billings/reconcile)
+/// 7.1 Official Admin Billing Sync & Consumer Billing Feed (GET /api/billings, POST /api/billings/reconcile)
 const BILLINGS_SYNC_FILE = path.join(process.cwd(), ".twd-billings-sync.json");
+const TMP_BILLINGS_SYNC_FILE = path.join(TMP_RUNTIME_DIR, "twd-billings-sync.json");
 const reconciledBillingRecords = new Map<string, any>();
 
 function normalizeBillingRecordToOfficialBaselineServer(r: any): any {
   if (!r || typeof r !== "object") return r;
-  if (r.tariffBaselineSchema === "twd_per_m3_v2") return r;
-  if (r.paymentStatus === "paid") {
-    return { ...r, tariffBaselineSchema: "twd_per_m3_v2" };
+  const paidAmt = Math.max(0, Number(r.paidAmount || 0));
+  const isLockedBill = Boolean(
+    r.tariffBaselineSchema === "twd_per_m3_v2" ||
+    r.paymentStatus === "paid" ||
+    r.paymentStatus === "partial" ||
+    paidAmt > 0 ||
+    ((r.isBillingIssued || r.billingIssuedAt || r.invoiceNumber) &&
+      typeof r.billAmount === "number" &&
+      r.billAmount >= 0)
+  );
+  if (isLockedBill) {
+    const basicLocked =
+      typeof r.billAmount === "number" && r.billAmount >= 0
+        ? Math.round(r.billAmount * 100) / 100
+        : Math.max(0, Number(r.totalAmount || 0));
+    const fTaxLocked =
+      typeof r.franchiseTax === "number" && r.franchiseTax >= 0
+        ? Math.round(r.franchiseTax * 100) / 100
+        : Math.round(basicLocked * 0.02 * 100) / 100;
+    const arrLocked = Math.max(0, Math.round(Number(r.arrears || 0) * 100) / 100);
+    const canonicalTotal = Math.round((basicLocked + fTaxLocked + arrLocked) * 100) / 100;
+    const storedTotal = typeof r.totalAmount === "number" ? Math.round(r.totalAmount * 100) / 100 : 0;
+    const healedTotal =
+      storedTotal > 0 && !(fTaxLocked > 0 && Math.abs(storedTotal - basicLocked) < 0.009)
+        ? storedTotal
+        : canonicalTotal;
+    const lPenLocked =
+      typeof r.penaltyAmount === "number" && r.penaltyAmount >= 0
+        ? Math.round(r.penaltyAmount * 100) / 100
+        : Math.round(basicLocked * 0.10 * 100) / 100;
+    const afterDueLocked = Math.round((healedTotal + lPenLocked) * 100) / 100;
+    const isCleared = r.paymentStatus === "paid" || (healedTotal > 0 && paidAmt >= healedTotal - 0.009);
+    const isPart = !isCleared && (r.paymentStatus === "partial" || paidAmt > 0);
+    const remLocked = isCleared ? 0 : Math.max(0, Math.round((healedTotal - paidAmt) * 100) / 100);
+    return {
+      ...r,
+      billAmount: basicLocked,
+      franchiseTax: fTaxLocked,
+      arrears: arrLocked,
+      penaltyAmount: lPenLocked,
+      totalAmount: healedTotal,
+      amountAfterDueDate: afterDueLocked,
+      paymentStatus: isCleared ? "paid" : isPart ? "partial" : (r.paymentStatus || "unpaid"),
+      paidAmount: isCleared ? Math.max(healedTotal, paidAmt) : paidAmt,
+      remainingBalance: remLocked,
+      tariffBaselineSchema: "twd_per_m3_v2",
+    };
   }
   const hasIssuedBilling = Boolean(
     r.isBillingIssued ||
@@ -3383,7 +3454,6 @@ function normalizeBillingRecordToOfficialBaselineServer(r: any): any {
   const arr = Math.max(0, Number(r.arrears || 0));
   const totalDue = Math.round((basic + fTax + arr) * 100) / 100;
   const afterDue = Math.round((totalDue + lPen) * 100) / 100;
-  const paidAmt = Math.max(0, Number(r.paidAmount || 0));
   const remBal = Math.max(0, Math.round((totalDue - paidAmt) * 100) / 100);
 
   return {
@@ -3400,8 +3470,13 @@ function normalizeBillingRecordToOfficialBaselineServer(r: any): any {
 
 function loadBillingsSyncStore() {
   try {
-    if (fs.existsSync(BILLINGS_SYNC_FILE)) {
-      const raw = fs.readFileSync(BILLINGS_SYNC_FILE, "utf8");
+    const sourceFile = fs.existsSync(TMP_BILLINGS_SYNC_FILE)
+      ? TMP_BILLINGS_SYNC_FILE
+      : fs.existsSync(BILLINGS_SYNC_FILE)
+        ? BILLINGS_SYNC_FILE
+        : null;
+    if (sourceFile) {
+      const raw = fs.readFileSync(sourceFile, "utf8");
       const parsed = JSON.parse(raw);
       let migrated = false;
       if (Array.isArray(parsed)) {
@@ -3423,12 +3498,20 @@ function loadBillingsSyncStore() {
 }
 
 function saveBillingsSyncStore() {
+  const serialized = JSON.stringify(Array.from(reconciledBillingRecords.values()), null, 2);
+  if (!IS_CLOUD_RUN) {
+    try {
+      fs.writeFileSync(BILLINGS_SYNC_FILE, serialized, "utf8");
+      return;
+    } catch {
+      // Fall through to tmpdir
+    }
+  }
   try {
-    fs.writeFileSync(
-      BILLINGS_SYNC_FILE,
-      JSON.stringify(Array.from(reconciledBillingRecords.values()), null, 2),
-      "utf8"
-    );
+    if (!fs.existsSync(TMP_RUNTIME_DIR)) {
+      fs.mkdirSync(TMP_RUNTIME_DIR, { recursive: true });
+    }
+    fs.writeFileSync(TMP_BILLINGS_SYNC_FILE, serialized, "utf8");
   } catch {
     // Ignore read-only fs environments
   }
@@ -3461,20 +3544,33 @@ function mergeBillingRecordServer(prev: any, incoming: any): any {
       consumption: odo.consumption,
     });
   }
-  const isPaid = prev.paymentStatus === "paid" || incoming.paymentStatus === "paid";
-  const isPartial = !isPaid && (prev.paymentStatus === "partial" || incoming.paymentStatus === "partial");
   const prevBilled = Boolean(
-    prev.isBillingIssued || prev.billingIssuedAt || prev.invoiceNumber || prev.paymentStatus === "paid" || prev.paymentStatus === "partial"
+    prev.isBillingIssued || prev.billingIssuedAt || prev.invoiceNumber || prev.paymentStatus === "paid" || prev.paymentStatus === "partial" || Number(prev.paidAmount || 0) > 0
   );
   const incBilled = Boolean(
-    incoming.isBillingIssued || incoming.billingIssuedAt || incoming.invoiceNumber || incoming.paymentStatus === "paid" || incoming.paymentStatus === "partial"
+    incoming.isBillingIssued || incoming.billingIssuedAt || incoming.invoiceNumber || incoming.paymentStatus === "paid" || incoming.paymentStatus === "partial" || Number(incoming.paidAmount || 0) > 0
   );
   const mergedBilled = prevBilled || incBilled;
   const billedSrc = incBilled ? incoming : prevBilled ? prev : incoming;
   const altSrc = billedSrc === incoming ? prev : incoming;
-  const maxPaid = Math.max(Number(prev.paidAmount || 0), Number(incoming.paidAmount || 0));
-  const effBillAmt = Number(billedSrc.billAmount || altSrc.billAmount || 0) || prev.billAmount || incoming.billAmount;
-  const effTotalAmt = Number(billedSrc.totalAmount || altSrc.totalAmount || effBillAmt || 0) || prev.totalAmount || incoming.totalAmount;
+  const maxPaid = Math.round(Math.max(Number(prev.paidAmount || 0), Number(incoming.paidAmount || 0)) * 100) / 100;
+  const effBillAmt = Number(billedSrc.billAmount ?? altSrc.billAmount ?? 0);
+  const effFranchiseTax =
+    typeof (billedSrc.franchiseTax ?? altSrc.franchiseTax) === "number"
+      ? Math.round(Number(billedSrc.franchiseTax ?? altSrc.franchiseTax) * 100) / 100
+      : Math.round(effBillAmt * 0.02 * 100) / 100;
+  const effArrears = Math.max(0, Math.round(Number(billedSrc.arrears ?? altSrc.arrears ?? 0) * 100) / 100);
+  const canonicalGross = Math.round((effBillAmt + effFranchiseTax + effArrears) * 100) / 100;
+  const candidateTotal = Number(billedSrc.totalAmount ?? altSrc.totalAmount ?? 0);
+  const effTotalAmt =
+    candidateTotal > 0 && !(effFranchiseTax > 0 && Math.abs(candidateTotal - effBillAmt) < 0.009)
+      ? Math.round(candidateTotal * 100) / 100
+      : canonicalGross;
+  const isPaid =
+    prev.paymentStatus === "paid" ||
+    incoming.paymentStatus === "paid" ||
+    (effTotalAmt > 0 && maxPaid >= effTotalAmt - 0.009);
+  const isPartial = !isPaid && (prev.paymentStatus === "partial" || incoming.paymentStatus === "partial" || maxPaid > 0);
 
   const rawCurr = billedSrc.currentReading ?? billedSrc.presentReading ?? altSrc.currentReading ?? altSrc.presentReading ?? 0;
   const candPrev = billedSrc.previousReading ?? altSrc.previousReading ?? 0;
@@ -3494,8 +3590,8 @@ function mergeBillingRecordServer(prev: any, incoming: any): any {
     dueDate: billedSrc.dueDate || altSrc.dueDate,
     billAmount: effBillAmt,
     totalAmount: effTotalAmt,
-    franchiseTax: billedSrc.franchiseTax ?? altSrc.franchiseTax,
-    arrears: billedSrc.arrears ?? altSrc.arrears,
+    franchiseTax: effFranchiseTax,
+    arrears: effArrears,
     penaltyAmount: billedSrc.penaltyAmount ?? altSrc.penaltyAmount,
     amountAfterDueDate: billedSrc.amountAfterDueDate ?? altSrc.amountAfterDueDate,
     status:
@@ -3504,24 +3600,19 @@ function mergeBillingRecordServer(prev: any, incoming: any): any {
         : mergedBilled || prev.status === "verified" || incoming.status === "verified"
           ? "verified"
           : (incoming.status || prev.status),
-    paymentStatus: isPaid ? "paid" : isPartial ? "partial" : (incoming.paymentStatus || prev.paymentStatus),
-    paidAmount: maxPaid > 0 ? maxPaid : (prev.paidAmount ?? incoming.paidAmount),
+    paymentStatus: isPaid ? "paid" : isPartial ? "partial" : (incoming.paymentStatus || prev.paymentStatus || "unpaid"),
+    paidAmount: isPaid ? Math.max(effTotalAmt, maxPaid) : maxPaid > 0 ? maxPaid : (prev.paidAmount ?? incoming.paidAmount ?? 0),
     remainingBalance: isPaid
       ? 0
-      : isPartial
-        ? Math.max(0, Number(effTotalAmt || effBillAmt || 0) - maxPaid)
-        : (typeof billedSrc.remainingBalance === "number"
-            ? billedSrc.remainingBalance
-            : typeof altSrc.remainingBalance === "number"
-              ? altSrc.remainingBalance
-              : effTotalAmt),
+      : Math.max(0, Math.round((effTotalAmt - maxPaid) * 100) / 100),
     orNumber: incoming.orNumber || prev.orNumber,
+    paymentReference: incoming.paymentReference || prev.paymentReference || incoming.orNumber || prev.orNumber,
     paymentDate: incoming.paymentDate || prev.paymentDate,
     paymentMethod: incoming.paymentMethod || prev.paymentMethod,
     cashierName: incoming.cashierName || prev.cashierName,
     transactionId: incoming.transactionId || prev.transactionId,
     paymentReceiptUrl: incoming.paymentReceiptUrl || prev.paymentReceiptUrl,
-    tariffBaselineSchema: incoming.tariffBaselineSchema || prev.tariffBaselineSchema,
+    tariffBaselineSchema: incoming.tariffBaselineSchema || prev.tariffBaselineSchema || "twd_per_m3_v2",
   });
 }
 
@@ -3539,6 +3630,7 @@ app.post("/api/billings/reconcile", (req, res) => {
   const incoming = Array.isArray(req.body?.readings) ? req.body.readings : [];
   const newlyBilled: any[] = [];
   const newlyPaid: any[] = [];
+  const affectedAccounts = new Set<string>();
   let storeChanged = false;
 
   for (const r of incoming) {
@@ -3550,13 +3642,17 @@ app.post("/api/billings/reconcile", (req, res) => {
       storeChanged = true;
     }
 
+    const cleanAcc = String(merged.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    if (cleanAcc) {
+      affectedAccounts.add(cleanAcc);
+    }
+
     // Roll forward mobile queue status & consumer baseline whenever a reading is verified or billed
     if (merged.status === "verified" || merged.isBillingIssued) {
       const mobItem = pendingMobileReadings.find(m => m.id === merged.id);
       if (mobItem && mobItem.status !== "approved") {
         mobItem.status = "approved";
       }
-      const cleanAcc = String(merged.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
       if (cleanAcc) {
         const targetConsumer = syncedConsumers.find(
           c => String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc
@@ -3583,9 +3679,41 @@ app.post("/api/billings/reconcile", (req, res) => {
     if (
       (prev?.paymentStatus !== "paid" && merged.paymentStatus === "paid") ||
       (prev?.paymentStatus !== "partial" && merged.paymentStatus === "partial") ||
-      nextPaidAmt > prevPaidAmt
+      nextPaidAmt > prevPaidAmt + 0.009
     ) {
       newlyPaid.push(merged);
+    }
+  }
+
+  // Reconcile affected consumers' outstandingBalance from authoritative issued unsettled bills
+  if (affectedAccounts.size > 0) {
+    const allStoredBills = Array.from(reconciledBillingRecords.values());
+    for (const accUpper of affectedAccounts) {
+      const targetConsumer = syncedConsumers.find(
+        c => String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === accUpper
+      );
+      if (!targetConsumer) continue;
+      const accountIssuedBills = allStoredBills.filter(b => {
+        if (!b || b.status === "cancelled") return false;
+        const bAcc = String(b.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+        if (bAcc !== accUpper) return false;
+        return Boolean(b.isBillingIssued || b.billingIssuedAt || b.invoiceNumber || b.paymentStatus === "paid" || b.paymentStatus === "partial");
+      });
+      if (accountIssuedBills.length > 0) {
+        const sumRemaining = Math.round(
+          accountIssuedBills.reduce((sum, b) => {
+            if (b.paymentStatus === "paid") return sum;
+            const gross = Number(b.totalAmount ?? b.billAmount ?? 0);
+            const paid = Number(b.paidAmount || 0);
+            const rem = typeof b.remainingBalance === "number" ? b.remainingBalance : Math.max(0, gross - paid);
+            return sum + Math.max(0, rem);
+          }, 0) * 100
+        ) / 100;
+        if (Math.abs(Number(targetConsumer.outstandingBalance || 0) - sumRemaining) > 0.009) {
+          targetConsumer.outstandingBalance = sumRemaining;
+          storeChanged = true;
+        }
+      }
     }
   }
 
@@ -3627,6 +3755,10 @@ app.post("/api/billings/reconcile", (req, res) => {
   }
 
   for (const paidBill of newlyPaid) {
+    const paidAcc = String(paidBill.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    const matchedConsumer = syncedConsumers.find(
+      c => String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === paidAcc
+    );
     broadcast("PAYMENT_RECORDED", {
       accountNumber: paidBill.accountNumber,
       billingPeriod: paidBill.billingPeriod,
@@ -3635,6 +3767,7 @@ app.post("/api/billings/reconcile", (req, res) => {
       remainingBalance: paidBill.remainingBalance ?? 0,
       reading: paidBill,
       readings: [paidBill],
+      consumer: matchedConsumer || undefined,
       message: `Payment recorded for ${paidBill.billingPeriod} (OR #${paidBill.orNumber || "ISSUED"}).`
     });
     broadcast("payment:recorded", {
@@ -4355,12 +4488,11 @@ let inMemoryInstallations: any[] = [];
 // ==========================================
 const PORTAL_SYNC_DIR = path.join(process.cwd(), ".data");
 const PORTAL_SYNC_FILE = path.join(PORTAL_SYNC_DIR, "portal_sync_store.json");
+const TMP_PORTAL_SYNC_FILE = path.join(TMP_RUNTIME_DIR, "portal_sync_store.json");
 
 function savePortalSyncStore(): void {
+  let serialized = "";
   try {
-    if (!fs.existsSync(PORTAL_SYNC_DIR)) {
-      fs.mkdirSync(PORTAL_SYNC_DIR, { recursive: true });
-    }
     const payload = {
       updatedAt: new Date().toISOString(),
       consumers: syncedConsumers,
@@ -4376,9 +4508,30 @@ function savePortalSyncStore(): void {
       tariffConfig: inMemoryTariffConfig,
       installations: inMemoryInstallations
     };
-    fs.writeFileSync(PORTAL_SYNC_FILE, JSON.stringify(payload, null, 2), "utf8");
-  } catch (err) {
-    console.warn("[PortalSyncStore] Could not write sync store:", err);
+    serialized = JSON.stringify(payload, null, 2);
+  } catch {
+    return;
+  }
+
+  if (!IS_CLOUD_RUN) {
+    try {
+      if (!fs.existsSync(PORTAL_SYNC_DIR)) {
+        fs.mkdirSync(PORTAL_SYNC_DIR, { recursive: true });
+      }
+      fs.writeFileSync(PORTAL_SYNC_FILE, serialized, "utf8");
+      return;
+    } catch {
+      // Fall back to os.tmpdir() when workspace root is read-only
+    }
+  }
+
+  try {
+    if (!fs.existsSync(TMP_RUNTIME_DIR)) {
+      fs.mkdirSync(TMP_RUNTIME_DIR, { recursive: true });
+    }
+    fs.writeFileSync(TMP_PORTAL_SYNC_FILE, serialized, "utf8");
+  } catch {
+    // Ignore non-writable runtime fs
   }
 }
 
@@ -4677,8 +4830,13 @@ function inferServerNotificationType(n: Record<string, any> | null | undefined):
 
 function loadPortalSyncStore(): void {
   try {
-    if (!fs.existsSync(PORTAL_SYNC_FILE)) return;
-    const raw = fs.readFileSync(PORTAL_SYNC_FILE, "utf8");
+    const syncSource = fs.existsSync(TMP_PORTAL_SYNC_FILE)
+      ? TMP_PORTAL_SYNC_FILE
+      : fs.existsSync(PORTAL_SYNC_FILE)
+        ? PORTAL_SYNC_FILE
+        : null;
+    if (!syncSource) return;
+    const raw = fs.readFileSync(syncSource, "utf8");
     const parsed = JSON.parse(raw);
     let cleanedStore = false;
 
@@ -7297,22 +7455,24 @@ app.post("/api/mobile-bridge/sync", async (_req, res) => {
   }
 });
 
-// Boot live outbound System Site + Mobile Field Terminal WebSockets & periodic 45s reconciliation
-setTimeout(() => {
-  connectMobileTerminalWebSocket();
-  connectSystemSiteWebSocket();
-  runFullMobileBridgeSync(true).catch(() => {});
-}, 1500);
-
-setInterval(() => {
-  if (!mobileBridgeState.wsConnected) {
+// Boot live outbound System Site + Mobile Field Terminal WebSockets & periodic 45s reconciliation AFTER HTTP port is bound
+function startBackgroundPeerBridges() {
+  setTimeout(() => {
     connectMobileTerminalWebSocket();
-  }
-  if (!mobileBridgeState.systemSiteWsConnected && !isSelfSystemSite()) {
     connectSystemSiteWebSocket();
-  }
-  runFullMobileBridgeSync(false).catch(() => {});
-}, 45000);
+    runFullMobileBridgeSync(true).catch(() => {});
+  }, 2000);
+
+  setInterval(() => {
+    if (!mobileBridgeState.wsConnected) {
+      connectMobileTerminalWebSocket();
+    }
+    if (!mobileBridgeState.systemSiteWsConnected && !isSelfSystemSite()) {
+      connectSystemSiteWebSocket();
+    }
+    runFullMobileBridgeSync(false).catch(() => {});
+  }, 45000);
+}
 
 app.get(["/api/health", "/api/status", "/api/ping", "/api/survival"], (req, res) => {
   const mem = process.memoryUsage();
@@ -7363,35 +7523,88 @@ app.all("/api/*", (req, res) => {
   });
 });
 
+function resolveDistDirectory(): string {
+  const candidates = [
+    path.join(process.cwd(), "dist"),
+    path.join(__dirname, "dist"),
+    path.join(__dirname, "..", "dist"),
+  ];
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(path.join(dir, "index.html"))) {
+        return dir;
+      }
+    } catch {}
+  }
+  return candidates[0];
+}
+
+function mountProductionStaticAssets(distPath: string): void {
+  console.log(`Running in PRODUCTION mode - Serving static artifacts from ${distPath}...`);
+  app.use(express.static(distPath));
+  app.get("*", (_req, res) => {
+    const indexHtml = path.join(distPath, "index.html");
+    res.sendFile(indexHtml, (err) => {
+      if (err && !res.headersSent) {
+        res.status(200).type("html").send("<!doctype html><html><head><title>Tagoloan Water District Portal</title></head><body>Tagoloan Water District Service Online</body></html>");
+      }
+    });
+  });
+}
+
 // Setup Vite Dev server or production static assets handler
-async function setupVite() {
+async function setupServer() {
   if (process.env.DISABLE_HMR === undefined) {
     process.env.DISABLE_HMR = "true";
   }
 
-  if (process.env.NODE_ENV !== "production") {
-    console.log("Running in DEVELOPMENT mode - Mounting Vite dev middleware...");
-    const vite = await createViteServer({
-      server: { 
-        middlewareMode: true,
-        hmr: false
-      },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+  const distPath = resolveDistDirectory();
+  const hasBuiltDist = fs.existsSync(path.join(distPath, "index.html"));
+  const isStartScript = process.env.npm_lifecycle_event === "start";
+  const isDevExplicit =
+    process.env.NODE_ENV === "development" ||
+    process.env.npm_lifecycle_event === "dev";
+
+  const isProduction =
+    process.env.NODE_ENV === "production" ||
+    IS_CLOUD_RUN ||
+    isStartScript ||
+    (!isDevExplicit && hasBuiltDist);
+
+  if (!isProduction) {
+    try {
+      console.log("Running in DEVELOPMENT mode - Mounting Vite dev middleware...");
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: {
+          middlewareMode: true,
+          hmr: false,
+        },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (viteErr) {
+      console.warn("Vite dev middleware unavailable, falling back to built dist assets:", viteErr);
+      mountProductionStaticAssets(distPath);
+    }
   } else {
-    console.log("Running in PRODUCTION mode - Serving static artifacts...");
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+    mountProductionStaticAssets(distPath);
   }
+
+  httpServer.on("error", (err) => {
+    console.error("[HTTP Server] Listen error:", err);
+  });
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server launched on http://0.0.0.0:${PORT}`);
     console.log(`WebSocket Server active on ws://0.0.0.0:${PORT}`);
+    startBackgroundPeerBridges();
   });
 }
 
-setupVite();
+setupServer().catch((err) => {
+  console.error("Fatal server setup error, starting fallback listener:", err);
+  try {
+    httpServer.listen(PORT, "0.0.0.0");
+  } catch {}
+});

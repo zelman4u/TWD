@@ -10,7 +10,10 @@ import {
   saveActiveTariffConfig, 
   DEFAULT_TARIFF_CONFIG,
   OFFICIAL_TARIFF_BASELINE_SCHEMA,
-  normalizeReadingToOfficialBaseline
+  normalizeReadingToOfficialBaseline,
+  mergeReadingRecordCanonical,
+  sanitizeMultiBillDuplicateArrears,
+  computeAccountOutstandingBalance
 } from './utils/tariffCalculator';
 import { 
   initializeFirestoreSeed, 
@@ -27,6 +30,12 @@ import {
   COLLECTIONS 
 } from './services/firebaseDb';
 import { safeBackendFetch } from './services/apiClient';
+import {
+  safeStorageGetItem,
+  safeStorageSetStructured,
+  rehydrateValueFromSessionImages,
+  stripOversizedImagesForSync,
+} from './services/storageSafe';
 import {
   dedupeNotifications,
   getNotificationSemanticKey,
@@ -1125,14 +1134,14 @@ const INITIAL_AUDIT_LOGS: AuditLog[] = [
   }
 ];
 
-// Helper functions to fetch and save from/to localStorage
+// Helper functions to fetch and save from/to localStorage (with quota-safe image offloading & fallback)
 function getStored<T>(key: string, initial: T): T {
-  const data = localStorage.getItem(key);
+  const data = safeStorageGetItem(key);
   if (!data) {
     const validInitial = Array.isArray(initial) 
       ? initial.filter((item: any) => !isAccountTerminated(item)) 
       : initial;
-    localStorage.setItem(key, JSON.stringify(validInitial));
+    safeStorageSetStructured(key, validInitial);
     return validInitial as unknown as T;
   }
   try {
@@ -1171,7 +1180,7 @@ function getStored<T>(key: string, initial: T): T {
       deduplicatedReaders.sort(compareReadersCanonical);
       const nextReadersJson = JSON.stringify(deduplicatedReaders);
       if (deduplicatedReaders.length !== readers.length || data !== nextReadersJson) {
-        localStorage.setItem(key, nextReadersJson);
+        safeStorageSetStructured(key, deduplicatedReaders);
       }
       return deduplicatedReaders as unknown as T;
     }
@@ -1180,7 +1189,7 @@ function getStored<T>(key: string, initial: T): T {
       let modified = false;
       let overrides: Record<string, { password: string; passwordUpdatedAt: number }> = {};
       try {
-        const rawOv = localStorage.getItem('twd_live_v4_password_overrides');
+        const rawOv = safeStorageGetItem('twd_live_v4_password_overrides');
         if (rawOv) overrides = JSON.parse(rawOv) || {};
       } catch {}
 
@@ -1317,7 +1326,7 @@ function getStored<T>(key: string, initial: T): T {
       cleanedUsers.sort(compareUsersCanonical);
       const nextUsersJson = JSON.stringify(cleanedUsers);
       if (hasMockUsers || !adminExists || modified || data !== nextUsersJson) {
-        localStorage.setItem(key, nextUsersJson);
+        safeStorageSetStructured(key, cleanedUsers);
       }
       return cleanedUsers as unknown as T;
     }
@@ -1325,7 +1334,7 @@ function getStored<T>(key: string, initial: T): T {
       const brgs = Array.isArray(parsed) ? [...(parsed as Barangay[])] : [];
       const hasLegacyPoblacionEast = brgs.some(b => b.name === 'Poblacion East' || b.name === 'Poblacion West');
       if (hasLegacyPoblacionEast) {
-        localStorage.setItem(key, JSON.stringify(INITIAL_BARANGAYS));
+        safeStorageSetStructured(key, INITIAL_BARANGAYS);
         return INITIAL_BARANGAYS as unknown as T;
       }
       const deletedBarangayIds = getDeletedBarangayIds();
@@ -1349,7 +1358,7 @@ function getStored<T>(key: string, initial: T): T {
         }
       });
       if (brgChanged) {
-        localStorage.setItem(key, JSON.stringify(brgs));
+        safeStorageSetStructured(key, brgs);
         return brgs as unknown as T;
       }
     }
@@ -1363,7 +1372,7 @@ function getStored<T>(key: string, initial: T): T {
       let changed = hasMockConsumers;
       let storedUsersList: User[] = [];
       try {
-        const rawUsers = localStorage.getItem(KEYS.USERS);
+        const rawUsers = safeStorageGetItem(KEYS.USERS);
         if (rawUsers) storedUsersList = JSON.parse(rawUsers) as User[];
       } catch {}
 
@@ -1447,10 +1456,44 @@ function getStored<T>(key: string, initial: T): T {
         changed = true;
       }
 
+      // Keep consumer outstandingBalance synchronized with active issued readings
+      try {
+        const rawReadings = safeStorageGetItem(KEYS.READINGS);
+        if (rawReadings) {
+          const allReads = JSON.parse(rawReadings) as MeterReading[];
+          if (Array.isArray(allReads) && allReads.length > 0) {
+            cons = cons.map((c) => {
+              if (!isRealIssuedAccountNumber(c.accountNumber)) return c;
+              const cAccUpper = c.accountNumber.trim().toUpperCase();
+              const hasIssuedBills = allReads.some(
+                (r) =>
+                  r &&
+                  r.status !== 'cancelled' &&
+                  String(r.accountNumber || '').trim().toUpperCase() === cAccUpper &&
+                  Boolean(
+                    r.isBillingIssued ||
+                      r.billingIssuedAt ||
+                      r.invoiceNumber ||
+                      r.paymentStatus === 'paid' ||
+                      r.paymentStatus === 'partial'
+                  )
+              );
+              if (!hasIssuedBills) return c;
+              const exactBal = computeAccountOutstandingBalance(allReads, c.accountNumber, c.consumerType);
+              if (Math.abs((c.outstandingBalance || 0) - exactBal) > 0.009) {
+                changed = true;
+                return { ...c, outstandingBalance: exactBal };
+              }
+              return c;
+            });
+          }
+        }
+      } catch {}
+
       cons.sort(compareConsumersCanonical);
       const nextConsJson = JSON.stringify(cons);
       if (changed || data !== nextConsJson) {
-        localStorage.setItem(key, nextConsJson);
+        safeStorageSetStructured(key, cons);
       }
       return cons as unknown as T;
     }
@@ -1464,12 +1507,12 @@ function getStored<T>(key: string, initial: T): T {
       meters = meters.map((m) => ensureMeterSerialNumber(m)).sort(compareMetersCanonical);
       const nextMetersJson = JSON.stringify(meters);
       if (data !== nextMetersJson) {
-        localStorage.setItem(key, nextMetersJson);
+        safeStorageSetStructured(key, meters);
       }
       return meters as unknown as T;
     }
     if (key === KEYS.READINGS) {
-      let reads = parsed as MeterReading[];
+      let reads = rehydrateValueFromSessionImages(parsed as MeterReading[]);
       const hasMockReads = reads.some(r => r.id.startsWith('R-1001-A') || r.id.startsWith('R-1002-B'));
       if (hasMockReads) {
         reads = reads.filter(r => !r.id.startsWith('R-1001-A') && !r.id.startsWith('R-1002-B'));
@@ -1496,7 +1539,7 @@ function getStored<T>(key: string, initial: T): T {
 
       // Synchronize reading account numbers if consumer was assigned official IDs
       try {
-        const storedConsumers = localStorage.getItem(KEYS.CONSUMERS);
+        const storedConsumers = safeStorageGetItem(KEYS.CONSUMERS);
         if (storedConsumers) {
           const consumersList = JSON.parse(storedConsumers) as Consumer[];
           reads = reads.map(r => {
@@ -1517,12 +1560,14 @@ function getStored<T>(key: string, initial: T): T {
         }
       } catch {}
 
-      reads = reads.map(r => normalizeReadingToOfficialBaseline(r)).sort(compareReadingsCanonical);
-      const nextReadsJson = JSON.stringify(reads);
-      if (data !== nextReadsJson) {
-        localStorage.setItem(key, nextReadsJson);
-      }
-      return reads as unknown as T;
+      reads = sanitizeMultiBillDuplicateArrears(
+        reads.map(r => normalizeReadingToOfficialBaseline(r))
+      ).sort(compareReadingsCanonical);
+      safeStorageSetStructured(key, reads);
+      return rehydrateValueFromSessionImages(reads) as unknown as T;
+    }
+    if (key === KEYS.NOTIFICATIONS || key === KEYS.REPORTS || key === KEYS.INSTALLATIONS) {
+      return rehydrateValueFromSessionImages(parsed) as T;
     }
     return parsed;
   } catch (e) {
@@ -1531,23 +1576,17 @@ function getStored<T>(key: string, initial: T): T {
 }
 
 function setStored<T>(key: string, value: T): void {
-  try {
-    const json = JSON.stringify(value);
-    const existing = localStorage.getItem(key);
-    if (existing === json) {
-      return; // Data has not changed, do not trigger event loops
-    }
-    localStorage.setItem(key, json);
-    if (typeof window !== 'undefined') {
-      // Notify mounted components in same window immediately
-      window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key, timestamp: Date.now() } }));
-      // Cross-tab synchronization ping
-      try {
-        localStorage.setItem('twd_sync_ping', `${Date.now()}_${key}`);
-      } catch {}
-    }
-  } catch (e) {
-    console.warn(`[mockDb] Error persisting key "${key}":`, e);
+  const { changed } = safeStorageSetStructured(key, value);
+  if (!changed) {
+    return; // Data has not changed, do not trigger event loops
+  }
+  if (typeof window !== 'undefined') {
+    // Notify mounted components in same window immediately
+    window.dispatchEvent(new CustomEvent('twd_database_updated', { detail: { key, timestamp: Date.now() } }));
+    // Cross-tab synchronization ping
+    try {
+      localStorage.setItem('twd_sync_ping', `${Date.now()}_${key}`);
+    } catch {}
   }
 }
 
@@ -1616,9 +1655,9 @@ function markBroadcastNotifReadForIdentity(notifId: string, identityKey: string)
  */
 function diffChangedItems<T extends Record<string, any>>(key: string, nextItems: T[], idField: string): T[] {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = safeStorageGetItem(key);
     if (!raw) return nextItems;
-    const prevItems = JSON.parse(raw) as T[];
+    const prevItems = rehydrateValueFromSessionImages(JSON.parse(raw) as T[]);
     if (!Array.isArray(prevItems)) return nextItems;
     const prevMap = new Map<string, string>();
     prevItems.forEach((item) => {
@@ -2053,8 +2092,8 @@ export const mockDb = {
     return nextMeters;
   },
   saveReadings: (readings: MeterReading[]): void => {
-    const normalized = readings
-      .map(r => {
+    const normalized = sanitizeMultiBillDuplicateArrears(
+      readings.map(r => {
         const odo = computeOdometerConsumption(
           r.previousReading,
           r.currentReading ?? r.presentReading,
@@ -2068,15 +2107,16 @@ export const mockDb = {
           consumption: odo.consumption,
         });
       })
-      .sort(compareReadingsCanonical);
+    ).sort(compareReadingsCanonical);
     const changed = diffChangedItems(KEYS.READINGS, normalized, 'id');
     setStored(KEYS.READINGS, normalized);
     if (changed.length > 0) {
-      syncBatchToFirestore(COLLECTIONS.READINGS, changed, 'id');
+      const syncSafeChanged = stripOversizedImagesForSync(changed);
+      syncBatchToFirestore(COLLECTIONS.READINGS, syncSafeChanged, 'id');
       safeBackendFetch('/api/billings/reconcile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ readings: changed }),
+        body: JSON.stringify({ readings: syncSafeChanged }),
       }).catch(() => {});
     }
   },
@@ -2087,98 +2127,35 @@ export const mockDb = {
     localList.forEach(lr => {
       if (lr?.id) map.set(lr.id, lr);
     });
-    let changed = false;
     incoming.forEach(ir => {
       if (!ir?.id) return;
+      const odo = computeOdometerConsumption(
+        ir.previousReading,
+        ir.currentReading ?? ir.presentReading,
+        ir.consumption
+      );
+      const cleanIr: MeterReading = {
+        ...ir,
+        previousReading: odo.previousReading,
+        presentReading: odo.currentReading,
+        currentReading: odo.currentReading,
+        consumption: odo.consumption,
+      };
       const prev = map.get(ir.id);
       if (!prev) {
-        const odo = computeOdometerConsumption(
-          ir.previousReading,
-          ir.currentReading ?? ir.presentReading,
-          ir.consumption
-        );
-        map.set(ir.id, normalizeReadingToOfficialBaseline({
-          ...ir,
-          previousReading: odo.previousReading,
-          presentReading: odo.currentReading,
-          currentReading: odo.currentReading,
-          consumption: odo.consumption,
-        }));
-        changed = true;
+        map.set(ir.id, normalizeReadingToOfficialBaseline(cleanIr));
         return;
       }
-      const isPaid = prev.paymentStatus === 'paid' || ir.paymentStatus === 'paid';
-      const isPartial = !isPaid && (prev.paymentStatus === 'partial' || ir.paymentStatus === 'partial');
-      const prevBilled = Boolean(prev.isBillingIssued || prev.billingIssuedAt || prev.invoiceNumber || prev.paymentStatus === 'paid' || prev.paymentStatus === 'partial');
-      const irBilled = Boolean(ir.isBillingIssued || ir.billingIssuedAt || ir.invoiceNumber || ir.paymentStatus === 'paid' || ir.paymentStatus === 'partial');
-      const mergedBillingIssued = prevBilled || irBilled;
-      const billedSource = irBilled ? ir : prevBilled ? prev : ir;
-      const fallbackBilled = irBilled ? prev : ir;
-      const maxPaid = Math.max(Number(prev.paidAmount || 0), Number(ir.paidAmount || 0));
-      const mergedBillAmount = Number(billedSource.billAmount || fallbackBilled.billAmount || 0) || prev.billAmount || ir.billAmount;
-      const mergedTotalAmount = Number(billedSource.totalAmount || fallbackBilled.totalAmount || mergedBillAmount || 0) || prev.totalAmount || ir.totalAmount;
-      const computedRemaining = isPaid
-        ? 0
-        : isPartial
-          ? Math.max(0, Number(mergedTotalAmount || mergedBillAmount || 0) - maxPaid)
-          : (typeof billedSource.remainingBalance === 'number'
-              ? billedSource.remainingBalance
-              : typeof fallbackBilled.remainingBalance === 'number'
-                ? fallbackBilled.remainingBalance
-                : mergedTotalAmount);
-
-      const rawCurr = billedSource.currentReading ?? billedSource.presentReading ?? fallbackBilled.currentReading ?? fallbackBilled.presentReading ?? 0;
-      const candPrev = billedSource.previousReading ?? fallbackBilled.previousReading ?? 0;
-      const odoMerged = computeOdometerConsumption(
-        candPrev,
-        rawCurr,
-        billedSource.consumption ?? fallbackBilled.consumption
-      );
-
-      const next: MeterReading = {
-        ...prev,
-        ...ir,
-        previousReading: odoMerged.previousReading,
-        presentReading: odoMerged.currentReading,
-        currentReading: odoMerged.currentReading,
-        consumption: odoMerged.consumption,
-        submittedAt: ir.submittedAt || prev.submittedAt,
-        isBillingIssued: mergedBillingIssued ? true : Boolean(ir.isBillingIssued ?? prev.isBillingIssued),
-        billingIssuedAt: ir.billingIssuedAt || prev.billingIssuedAt,
-        billingIssuedBy: ir.billingIssuedBy || prev.billingIssuedBy,
-        invoiceNumber: ir.invoiceNumber || prev.invoiceNumber,
-        dueDate: billedSource.dueDate || fallbackBilled.dueDate,
-        billAmount: mergedBillAmount,
-        totalAmount: mergedTotalAmount,
-        franchiseTax: billedSource.franchiseTax ?? fallbackBilled.franchiseTax,
-        arrears: billedSource.arrears ?? fallbackBilled.arrears,
-        penaltyAmount: billedSource.penaltyAmount ?? fallbackBilled.penaltyAmount,
-        amountAfterDueDate: billedSource.amountAfterDueDate ?? fallbackBilled.amountAfterDueDate,
-        status:
-          prev.status === 'cancelled' || ir.status === 'cancelled'
-            ? 'cancelled'
-            : mergedBillingIssued || prev.status === 'verified' || ir.status === 'verified'
-              ? 'verified'
-              : (ir.status || prev.status),
-        paymentStatus: isPaid ? 'paid' : isPartial ? 'partial' : (ir.paymentStatus || prev.paymentStatus),
-        paidAmount: maxPaid > 0 ? maxPaid : (prev.paidAmount ?? ir.paidAmount),
-        remainingBalance: computedRemaining,
-        orNumber: ir.orNumber || prev.orNumber,
-        paymentDate: ir.paymentDate || prev.paymentDate,
-        paymentMethod: ir.paymentMethod || prev.paymentMethod,
-        cashierName: ir.cashierName || prev.cashierName,
-        transactionId: ir.transactionId || prev.transactionId,
-        paymentReceiptUrl: ir.paymentReceiptUrl || prev.paymentReceiptUrl,
-      };
-      const normalizedNext = normalizeReadingToOfficialBaseline(next);
+      const normalizedNext = mergeReadingRecordCanonical(prev, cleanIr);
       if (JSON.stringify(prev) !== JSON.stringify(normalizedNext)) {
         map.set(ir.id, normalizedNext);
-        changed = true;
       }
     });
-    const merged = Array.from(map.values()).sort(compareReadingsCanonical);
+    const merged = sanitizeMultiBillDuplicateArrears(
+      Array.from(map.values())
+    ).sort(compareReadingsCanonical);
     setStored(KEYS.READINGS, merged);
-    return merged;
+    return rehydrateValueFromSessionImages(merged);
   },
   saveRoutes: (routes: RouteAssignment[]): void => {
     const sorted = [...routes].sort(compareRoutesCanonical);

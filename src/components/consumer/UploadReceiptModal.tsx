@@ -26,6 +26,15 @@ import {
 } from 'lucide-react';
 import { Consumer, MeterReading } from '../../types';
 import { mockDb } from '../../mockDb';
+import { apiClient, safeBackendFetch } from '../../services/apiClient';
+import { sendRealtimeMessage } from '../../services/realtimeSocket';
+import {
+  getCanonicalBillSettlement,
+  computeAccountOutstandingBalance,
+  OFFICIAL_TARIFF_BASELINE_SCHEMA,
+  computeDefaultDueDate,
+} from '../../utils/tariffCalculator';
+import { stripOversizedImagesForSync } from '../../services/storageSafe';
 
 interface UploadReceiptModalProps {
   isOpen: boolean;
@@ -78,12 +87,19 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
   const [selectedReadingId, setSelectedReadingId] = useState<string>(targetReading?.id || '');
   const activeReading = safeAllReadings.find(r => r.id === selectedReadingId) || targetReading;
 
-  // Calculation
-  const grossCost = activeReading 
-    ? calculateCostOf(activeReading, consumerRecord.consumerType)
-    : 0;
-  const alreadyPaid = activeReading?.paidAmount || 0;
-  const currentNetDue = Math.max(0, grossCost - alreadyPaid);
+  // Canonical Settlement Calculation (locks gross assessment across partial/full payments)
+  const activeSettlement = activeReading
+    ? getCanonicalBillSettlement(activeReading, consumerRecord.consumerType)
+    : null;
+  const grossCost = activeSettlement
+    ? activeSettlement.grossTotal
+    : activeReading
+      ? calculateCostOf(activeReading, consumerRecord.consumerType)
+      : 0;
+  const alreadyPaid = activeSettlement ? activeSettlement.paidAmount : (activeReading?.paidAmount || 0);
+  const currentNetDue = activeSettlement
+    ? activeSettlement.remainingBalance
+    : Math.max(0, Math.round((grossCost - alreadyPaid) * 100) / 100);
 
   // Strict 50% minimum rule
   const minPartialAmount = Math.round((currentNetDue * 0.50) * 100) / 100;
@@ -112,11 +128,9 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
   useEffect(() => {
     if (activeReading) {
       setSelectedReadingId(activeReading.id);
-      const gross = calculateCostOf(activeReading, consumerRecord.consumerType);
-      const paid = activeReading.paidAmount || 0;
-      const net = Math.max(0, gross - paid);
+      const settlement = getCanonicalBillSettlement(activeReading, consumerRecord.consumerType);
       setSettlementType('full');
-      setPaymentAmount(net.toFixed(2));
+      setPaymentAmount(settlement.remainingBalance.toFixed(2));
       setOrNumber(`OR-2024-${Math.floor(100000 + Math.random() * 900000)}`);
       setReceiptPhotoUrl(activeReading.paymentReceiptUrl || null);
       setSmartScanResult(null);
@@ -140,7 +154,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
     }, 150);
 
     try {
-      const response = await fetch('/api/receipts/smart-scan', {
+      const response = await safeBackendFetch('/api/receipts/smart-scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -213,6 +227,48 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
     }
   };
 
+  const compressReceiptDataUrl = (rawDataUrl: string): Promise<string> => {
+    return new Promise((resolve) => {
+      try {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const maxDim = 640;
+            let width = img.width || 600;
+            let height = img.height || 800;
+            if (width > maxDim || height > maxDim) {
+              if (width > height) {
+                height = Math.round((height * maxDim) / width);
+                width = maxDim;
+              } else {
+                width = Math.round((width * maxDim) / height);
+                height = maxDim;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              resolve(rawDataUrl);
+              return;
+            }
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, width, height);
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.68));
+          } catch {
+            resolve(rawDataUrl);
+          }
+        };
+        img.onerror = () => resolve(rawDataUrl);
+        img.src = rawDataUrl;
+      } catch {
+        resolve(rawDataUrl);
+      }
+    });
+  };
+
   const processFile = (file: File) => {
     if (!file.type.startsWith('image/')) {
       setValidationError('Please upload a valid image file (JPEG, PNG, WEBP).');
@@ -220,10 +276,11 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
     }
     setValidationError(null);
     const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result as string;
-      setReceiptPhotoUrl(result);
-      triggerSmartScan(result);
+    reader.onload = async (event) => {
+      const rawResult = event.target?.result as string;
+      const compactResult = await compressReceiptDataUrl(rawResult);
+      setReceiptPhotoUrl(compactResult);
+      triggerSmartScan(compactResult);
     };
     reader.readAsDataURL(file);
   };
@@ -371,7 +428,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
     ctx.font = 'italic 10px sans-serif';
     ctx.fillText('This document serves as proof of payment upon portal validation.', 50, 745);
 
-    const generatedDataUrl = canvas.toDataURL('image/png');
+    const generatedDataUrl = canvas.toDataURL('image/jpeg', 0.68);
     setReceiptPhotoUrl(generatedDataUrl);
     setOrNumber(sampleOr);
     setPaymentAmount(samplePaid.toFixed(2));
@@ -417,25 +474,43 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
     setValidationError(null);
 
     setTimeout(() => {
-      const newTotalPaid = alreadyPaid + numericPayment;
-      const newRemainingBalance = Math.max(0, Math.round((grossCost - newTotalPaid) * 100) / 100);
+      const settlement = getCanonicalBillSettlement(activeReading, consumerRecord.consumerType);
+      const lockedGross = settlement.grossTotal;
+      const newTotalPaid = Math.min(lockedGross, Math.round((settlement.paidAmount + numericPayment) * 100) / 100);
+      const newRemainingBalance = Math.max(0, Math.round((lockedGross - newTotalPaid) * 100) / 100);
       const isFullSettlement = newRemainingBalance <= 0.01;
       const newPaymentStatus: 'paid' | 'partial' = isFullSettlement ? 'paid' : 'partial';
+      const cleanOr = orNumber.trim();
+      const nowIso = new Date().toISOString();
 
-      // 1. Update reading in mockDb
+      // 1. Update reading in mockDb with full locked official assessment fields so merges never shift amounts
       const allReadings = mockDb.getReadings();
       const updatedReadings = allReadings.map(r => {
         if (r.id === activeReading.id) {
           return {
             ...r,
+            status: 'verified' as const,
+            isBillingIssued: true,
+            billingIssuedAt: r.billingIssuedAt || nowIso,
+            invoiceNumber: r.invoiceNumber || `INV-${r.accountNumber}-${Date.now().toString().slice(-4)}`,
+            dueDate: r.dueDate || computeDefaultDueDate(r.readingDate || nowIso.split('T')[0]),
+            classification: r.classification || consumerRecord.consumerType,
+            billAmount: settlement.basicCharge,
+            franchiseTax: settlement.franchiseTax,
+            arrears: settlement.arrears,
+            totalAmount: lockedGross,
+            tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
             paymentStatus: newPaymentStatus,
             paymentDate: paymentDate,
             paymentMethod: `TWD Office Cashier (${cashierCounter})`,
-            orNumber: orNumber.trim(),
-            paidAmount: newTotalPaid,
-            remainingBalance: newRemainingBalance,
+            cashierName: cashierCounter,
+            orNumber: cleanOr,
+            paymentReference: cleanOr,
+            transactionId: r.transactionId || `TXN-${Date.now().toString().slice(-6)}`,
+            paidAmount: isFullSettlement ? lockedGross : newTotalPaid,
+            remainingBalance: isFullSettlement ? 0 : newRemainingBalance,
             paymentReceiptUrl: receiptPhotoUrl,
-            receiptUploadDate: new Date().toISOString(),
+            receiptUploadDate: nowIso,
             receiptStatus: 'verified' as const,
             receiptNotes: receiptNotes || `Validated via Smart Photo Scanner at ${cashierCounter}`,
             isDisconnectionNoticeIssued: isFullSettlement ? false : r.isDisconnectionNoticeIssued,
@@ -447,28 +522,29 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
       mockDb.saveReadings(updatedReadings);
 
       // 2. Update Consumer Master Outstanding Balance & forward arrears computation
-      const conUnpaid = updatedReadings.filter(
-        r => r.accountNumber === consumerRecord.accountNumber && r.paymentStatus !== 'paid'
+      const newTotalArrears = computeAccountOutstandingBalance(
+        updatedReadings,
+        consumerRecord.accountNumber,
+        consumerRecord.consumerType
       );
-      const newTotalArrears = conUnpaid.reduce((acc, r) => {
-        const gross = calculateCostOf(r, consumerRecord.consumerType);
-        const paid = r.paidAmount || 0;
-        return acc + Math.max(0, gross - paid);
-      }, 0);
 
-      const updatedConsumers = mockDb.getConsumers().map(c => 
-        c.accountNumber === consumerRecord.accountNumber
-          ? { 
-              ...c, 
-              outstandingBalance: newTotalArrears,
-              status: c.status === 'blocked' && newTotalArrears === 0 ? 'active' : c.status
-            }
-          : c
-      );
+      let updatedConsumerObj: Consumer | null = null;
+      const updatedConsumers = mockDb.getConsumers().map(c => {
+        if (c.accountNumber === consumerRecord.accountNumber) {
+          const nextC: Consumer = {
+            ...c,
+            outstandingBalance: newTotalArrears,
+            status: c.status === 'blocked' && newTotalArrears === 0 ? 'active' : c.status,
+          };
+          updatedConsumerObj = nextC;
+          return nextC;
+        }
+        return c;
+      });
       mockDb.saveConsumers(updatedConsumers);
 
       // 3. Create Official Real-time Notification
-      mockDb.addNotification({
+      const createdNotif = mockDb.addNotification({
         accountNumber: consumerRecord.accountNumber,
         consumerId: consumerRecord.id,
         userId: consumerRecord.linkedUserId,
@@ -477,15 +553,14 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
           ? `Receipt Validated: ${activeReading.billingPeriod} Settled in Full`
           : `Receipt Validated: Partial Payment (₱${numericPayment.toFixed(2)}) Recorded`,
         message: isFullSettlement
-          ? `Your official physical cashier receipt (OR #${orNumber}) was verified via Smart Photo Scanner! Account balance for ${activeReading.billingPeriod} is cleared in full (₱0.00). Active due alerts stopped.`
-          : `Your official cashier receipt (OR #${orNumber}) was verified. Partial payment of ₱${numericPayment.toFixed(2)} credited. Remaining balance of ₱${newRemainingBalance.toFixed(2)} will automatically roll into next cycle arrears.`,
+          ? `Your official physical cashier receipt (OR #${cleanOr}) was verified via Smart Photo Scanner! Account balance for ${activeReading.billingPeriod} is cleared in full (₱0.00). Active due alerts stopped.`
+          : `Your official cashier receipt (OR #${cleanOr}) was verified. Partial payment of ₱${numericPayment.toFixed(2)} credited against ₱${lockedGross.toFixed(2)}. Remaining balance of ₱${newRemainingBalance.toFixed(2)} is now reflected on your statement and account ledger.`,
         type: 'receipt_upload',
-        orNumber: orNumber.trim(),
+        orNumber: cleanOr,
         amountPaid: numericPayment,
         remainingBalance: newRemainingBalance,
         readingId: activeReading.id,
         billingPeriod: activeReading.billingPeriod,
-        receiptUrl: receiptPhotoUrl
       });
 
       // 4. Create Audit Log
@@ -494,15 +569,61 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
         consumerRecord.name,
         'consumer',
         'Smart Photo Receipt Verification',
-        `Validated physical cashier receipt (OR #${orNumber}) for ${activeReading.billingPeriod}. Paid: ₱${numericPayment.toFixed(2)}, Remaining Arrears: ₱${newRemainingBalance.toFixed(2)}.`
+        `Validated physical cashier receipt (OR #${cleanOr}) for ${activeReading.billingPeriod}. Paid: ₱${numericPayment.toFixed(2)}, Remaining Balance: ₱${newRemainingBalance.toFixed(2)}, Account Outstanding: ₱${newTotalArrears.toFixed(2)}.`
       );
 
       // Find updated reading object
       const updatedItem = updatedReadings.find(r => r.id === activeReading.id) || activeReading;
+      const syncSafeItem = stripOversizedImagesForSync(updatedItem);
+
+      // 5. Reconcile immediately with Backend API + Realtime WebSocket so Admin & Consumer portals stay 100% in sync
+      apiClient
+        .reconcileBillings(
+          {
+            readings: [syncSafeItem],
+            accountNumber: consumerRecord.accountNumber,
+          },
+          { skipLogging: true }
+        )
+        .catch(() => {});
+
+      if (updatedConsumerObj) {
+        safeBackendFetch('/api/consumers/reconcile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-portal': 'consumer' },
+          body: JSON.stringify({
+            consumers: [updatedConsumerObj],
+            notifications: [createdNotif],
+          }),
+        }).catch(() => {});
+      }
+
+      sendRealtimeMessage('PAYMENT_RECORDED', {
+        accountNumber: consumerRecord.accountNumber,
+        consumerEmail: consumerRecord.email,
+        userId: consumerRecord.linkedUserId,
+        orNumber: cleanOr,
+        amountPaid: numericPayment,
+        remainingBalance: newRemainingBalance,
+        outstandingBalance: newTotalArrears,
+        isPartial: !isFullSettlement,
+        paymentDate,
+        readings: [syncSafeItem],
+        reading: syncSafeItem,
+        consumer: updatedConsumerObj || { ...consumerRecord, outstandingBalance: newTotalArrears },
+        notification: createdNotif,
+      });
+
+      sendRealtimeMessage('CONSUMER_NOTIFICATION_CREATED', {
+        notification: createdNotif,
+        accountNumber: consumerRecord.accountNumber,
+        consumerEmail: consumerRecord.email,
+        userId: consumerRecord.linkedUserId,
+      });
 
       setIsSubmitting(false);
       if (typeof onSuccess === 'function') {
-        onSuccess(updatedItem, orNumber, !isFullSettlement);
+        onSuccess(updatedItem, cleanOr, !isFullSettlement);
       }
       if (typeof onReceiptValidated === 'function') {
         onReceiptValidated({
@@ -510,12 +631,12 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
           amountPaid: numericPayment,
           remainingBalance: newRemainingBalance,
           isPartial: !isFullSettlement,
-          orNumber: orNumber.trim(),
+          orNumber: cleanOr,
           paymentDate: paymentDate
         });
       }
       onClose();
-    }, 450);
+    }, 350);
   };
 
   return (

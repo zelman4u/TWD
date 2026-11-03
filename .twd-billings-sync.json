@@ -9,7 +9,7 @@
     "amountAfterDueDate": 112,
     "id": "BILL-BRG-03-2114-516867",
     "remainingBalance": 102,
-    "addressZone": "Zone 2A",
+    "addressZone": "",
     "currentReading": 34,
     "status": "verified",
     "consumption": 10,
@@ -33,10 +33,13 @@
     "penaltyAmount": 10,
     "consumerName": "Dovan Ray G Salcedo",
     "route": "Baluarte Route",
-    "address": "Zone 2A, Baluarte, Tagoloan, Misamis Oriental",
+    "address": "",
     "meterReaderDate": "2026-10-28",
     "meterBrand": "EVER",
-    "presentReading": 34
+    "presentReading": 34,
+    "meterImageUrl": "",
+    "gpsLocation": "",
+    "submittedAt": "2026-11-01T14:42:50.215Z"
   },
   {
     "dueDate": "November 12, 2026",
@@ -63,8 +66,8 @@
     "paymentStatus": "unpaid",
     "id": "BILL-BRG-03-2114-605476",
     "consumption": 33,
-    "addressZone": "Zone 2A",
-    "address": "Zone 2A, Baluarte, Tagoloan, Misamis Oriental",
+    "addressZone": "",
+    "address": "",
     "amountAfterDueDate": 369.6,
     "franchiseTax": 6.6,
     "meterReaderName": "Admin",
@@ -75,7 +78,10 @@
     "tariffBaselineSchema": "twd_per_m3_v2",
     "classification": "Residential",
     "status": "verified",
-    "presentReading": 100
+    "presentReading": 100,
+    "gpsLocation": "",
+    "submittedAt": "2026-11-01T14:42:50.215Z",
+    "meterImageUrl": ""
   },
   {
     "meterReaderDate": "2026-10-28",
@@ -83,11 +89,11 @@
     "appliedTariffVersion": 1,
     "tariffBaselineSchema": "twd_per_m3_v2",
     "billAmount": 289.5,
-    "address": "Zone 2A, Baluarte, Tagoloan, Misamis Oriental",
+    "address": "",
     "remainingBalance": 0,
     "meterBrand": "EVER",
     "isBillingIssued": true,
-    "totalAmount": 295.41,
+    "totalAmount": 289.5,
     "currentReading": 67,
     "imageUrl": "",
     "isDisconnectionNoticeIssued": false,
@@ -113,7 +119,7 @@
     "franchiseTax": 5.91,
     "consumption": 33,
     "invoiceNumber": "INV-2026-611766",
-    "addressZone": "Zone 2A",
+    "addressZone": "",
     "route": "Baluarte Route",
     "sequenceNo": 948,
     "paymentReceiptUrl": "data:image/jpeg;base64,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",
@@ -122,7 +128,10 @@
     "accountNumber": "BRG-03-2114",
     "previousReading": 34,
     "meterReaderName": "Admin",
-    "presentReading": 67
+    "presentReading": 67,
+    "submittedAt": "2026-11-01T14:42:50.216Z",
+    "gpsLocation": "",
+    "meterImageUrl": ""
   },
   {
     "notes": "Official billing generated by Administration",
@@ -146,7 +155,7 @@
     "amountAfterDueDate": 168,
     "consumption": 15,
     "dueDate": "November 12, 2026",
-    "addressZone": "Wakwak",
+    "addressZone": "Zone-2 Sto Nino.",
     "totalAmount": 153,
     "meterBrand": "EVER",
     "currentReading": 36,
@@ -154,14 +163,19 @@
     "previousReading": 21,
     "imageUrl": "",
     "billAmount": 150,
-    "address": "Wakwak, Sta. Ana, Tagoloan, Misamis Oriental",
+    "address": "Zone-2 Sto Nino., Poblacion, Tagoloan, Misamis Oriental",
     "appliedTariffVersion": 1,
     "tariffBaselineSchema": "twd_per_m3_v2",
     "remainingBalance": 153,
     "paymentStatus": "unpaid",
     "paidAmount": 0,
     "consumerName": "Dovan Ray Salcedo",
-    "presentReading": 36
+    "presentReading": 36,
+    "isDisconnectionNoticeIssued": true,
+    "disconnectionDate": "2026-11-06",
+    "meterImageUrl": "",
+    "gpsLocation": "",
+    "submittedAt": "2026-11-01T14:42:50.216Z"
   },
   {
     "meterNumber": "121111102",
@@ -348,7 +362,9 @@
     "invoiceNumber": "INV-2026-574465",
     "appliedTariffVersion": 1,
     "tariffBaselineSchema": "twd_per_m3_v2",
-    "penaltyAmount": 24
+    "penaltyAmount": 24,
+    "isAnomaly": true,
+    "anomalyReason": "High Usage / Condition Alert — Verify"
   },
   {
     "address": "HIGHWAY PROPER, BALUARTE",
@@ -430,7 +446,9 @@
     "billingIssuedAt": "2026-10-29T09:49:57.332Z",
     "appliedTariffVersion": 1,
     "tariffBaselineSchema": "twd_per_m3_v2",
-    "billingIssuedBy": "Admin"
+    "billingIssuedBy": "Admin",
+    "anomalyReason": "High Usage / Condition Alert — Verify",
+    "isAnomaly": true
   },
   {
     "meterReaderDate": "2026-08-25",
@@ -762,7 +780,9 @@
     "receiptUploadDate": "2026-10-28T12:44:46.794Z",
     "orNumber": "OR-2024-286233",
     "arrears": 118.62,
-    "paymentDate": "2026-10-28"
+    "paymentDate": "2026-10-28",
+    "disconnectionDate": "2026-11-06",
+    "isDisconnectionNoticeIssued": true
   },
   {
     "consumerName": "Consumer Account",
@@ -797,7 +817,11 @@
     "totalAmount": 306,
     "remainingBalance": 306,
     "paidAmount": 0,
-    "invoiceNumber": "INV-2026-400085"
+    "invoiceNumber": "INV-2026-400085",
+    "gpsLocation": "",
+    "addressZone": "",
+    "meterBrand": "EVER",
+    "meterImageUrl": ""
   },
   {
     "address": "",
@@ -832,7 +856,11 @@
     "penaltyAmount": 10,
     "billingIssuedBy": "Admin",
     "invoiceNumber": "INV-2026-626346",
-    "billingIssuedAt": "2026-10-29T09:49:57.332Z"
+    "billingIssuedAt": "2026-10-29T09:49:57.332Z",
+    "meterBrand": "EVER",
+    "meterImageUrl": "",
+    "addressZone": "",
+    "gpsLocation": ""
   },
   {
     "meterNumber": "MT-E2E-001",
@@ -947,7 +975,7 @@
     "billingIssuedAt": "2026-10-29T09:49:57.332Z"
   },
   {
-    "disconnectionDate": "2026-11-03",
+    "disconnectionDate": "2026-10-30",
     "id": "READ-SYNC-1",
     "meterNumber": "MT-A",
     "meterReaderName": "SYNC READER A",
@@ -1029,7 +1057,8 @@
     "orNumber": "OR-2024-261359",
     "paymentDate": "2026-10-28",
     "transactionId": "TXN-CASH-BRG-01-9037-54761",
-    "receiptNotes": "Validated via Smart Photo Scanner at TWD Main Office - Counter 1"
+    "receiptNotes": "Validated via Smart Photo Scanner at TWD Main Office - Counter 1",
+    "disconnectionDate": "2026-11-06"
   },
   {
     "readingDate": "2026-09-07",
@@ -1105,6 +1134,92 @@
     "appliedTariffVersion": 1,
     "tariffBaselineSchema": "twd_per_m3_v2",
     "penaltyAmount": 23,
-    "billAmount": 230
+    "billAmount": 230,
+    "meterBrand": "EVER",
+    "gpsLocation": "",
+    "addressZone": "EmanoCalang Street",
+    "meterImageUrl": ""
+  },
+  {
+    "id": "WDT-RDG-1793675719801-010420091",
+    "accountNumber": "01-042-0091",
+    "consumerName": "AMORATO, VICENTE G.",
+    "address": "Zone 2, Brgy. Poblacion, Tagoloan, Misamis Oriental",
+    "addressZone": "Zone 1",
+    "meterNumber": "MTR-8849201",
+    "meterBrand": "EVER",
+    "classification": "Residential",
+    "previousReading": 342,
+    "presentReading": 354,
+    "currentReading": 354,
+    "consumption": 12,
+    "billAmount": 120,
+    "franchiseTax": 2.4,
+    "totalAmount": 632.4,
+    "penaltyAmount": 12,
+    "amountAfterDueDate": 644.4,
+    "appliedTariffVersion": 2,
+    "tariffBaselineSchema": "twd_per_m3_v2",
+    "readingDate": "2026-11-03",
+    "submittedAt": "2026-11-03T03:15:20.923Z",
+    "billingPeriod": "August 2026",
+    "meterReaderName": "Randyvi Emano",
+    "readerId": "RDR-0527",
+    "route": "Poblacion",
+    "status": "verified",
+    "isBillingIssued": true,
+    "paymentStatus": "unpaid",
+    "imageUrl": "",
+    "meterImageUrl": "",
+    "gpsLocation": "8.5398, 124.7523",
+    "mobileSyncSource": "rest_pull",
+    "notes": "Synced from Tagoloan Mobile Field Terminal",
+    "remainingBalance": 632.4,
+    "billingIssuedAt": "2026-11-03T11:26:47.239Z",
+    "billingIssuedBy": "Admin",
+    "invoiceNumber": "INV-2026-473711",
+    "dueDate": "November 18, 2026",
+    "arrears": 510,
+    "paidAmount": 0
+  },
+  {
+    "id": "WDT-RDG-1793671185205-010880044",
+    "accountNumber": "01-088-0044",
+    "consumerName": "RODRIGUEZ, BENJAMIN T.",
+    "address": "Zone 1, Brgy. Mohon, Tagoloan, Misamis Oriental",
+    "addressZone": "Zone 1",
+    "meterNumber": "MTR-9021844",
+    "meterBrand": "EVER",
+    "classification": "Residential",
+    "previousReading": 198,
+    "presentReading": 200,
+    "currentReading": 200,
+    "consumption": 2,
+    "billAmount": 20,
+    "franchiseTax": 0.4,
+    "totalAmount": 20.4,
+    "penaltyAmount": 2,
+    "amountAfterDueDate": 22.4,
+    "appliedTariffVersion": 2,
+    "tariffBaselineSchema": "twd_per_m3_v2",
+    "readingDate": "2026-11-03",
+    "submittedAt": "2026-11-03T01:59:46.506Z",
+    "billingPeriod": "August 2026",
+    "meterReaderName": "Maria Lourdes Santos",
+    "route": "Poblacion",
+    "status": "verified",
+    "isBillingIssued": true,
+    "paymentStatus": "unpaid",
+    "imageUrl": "",
+    "meterImageUrl": "",
+    "gpsLocation": "8.5398, 124.7523",
+    "notes": "Synced from Tagoloan Mobile Field Terminal",
+    "remainingBalance": 20.4,
+    "billingIssuedAt": "2026-11-03T02:05:40.976Z",
+    "billingIssuedBy": "Admin",
+    "invoiceNumber": "INV-2026-101760",
+    "dueDate": "November 18, 2026",
+    "arrears": 0,
+    "paidAmount": 0
   }
 ]

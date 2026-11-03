@@ -84,7 +84,9 @@ import { useLoading } from '../context/LoadingContext';
 import {
   calculateWaterTariff,
   calculateFranchiseTax,
+  computeAccountOutstandingBalance,
   getActiveTariffConfig,
+  getCanonicalBillSettlement,
   getEffectiveRatePerM3,
   getReadingEffectiveBillAmount,
   getReadingTotalAssessment,
@@ -1155,53 +1157,53 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         // Only APPROVED / VERIFIED readings trigger billing operations, payable ledgers, and overdue calculations!
         const verifiedReads = allCustomerReads.filter(r => r.status === 'verified');
         
-        // Detect newly issued bills AND newly recorded Admin/Cashier payments in real time
+        // Detect newly issued bills AND newly recorded Admin/Cashier full or partial payments in real time
         if (hasHydratedReadingsOnceRef.current) {
           verifiedReads.forEach(newR => {
             const oldR = prevReadingsRef.current.find(o => o.id === newR.id);
             const wasIssuedBefore = oldR ? isOfficialBillIssued(oldR) : false;
             const isIssuedNow = isOfficialBillIssued(newR);
+            const newSt = getCanonicalBillSettlement(newR, record.consumerType);
+            const oldSt = oldR ? getCanonicalBillSettlement(oldR, record.consumerType) : null;
 
             if (!wasIssuedBefore && isIssuedNow && !announcedIssuedBillIdsRef.current.has(newR.id)) {
               announcedIssuedBillIdsRef.current.add(newR.id);
               dismissedSpotlightIdsRef.current.delete(newR.id);
               setSpotlightReading(newR);
-              if (newR.paymentStatus !== 'paid') {
+              if (!newSt.isPaid) {
                 const presDial = newR.presentReading ?? newR.currentReading;
                 toast.info(
                   `Water Bill Issued — ${newR.billingPeriod}`,
-                  `Dial: ${formatOdometerReading(newR.previousReading)} → ${formatOdometerReading(presDial)} (${newR.consumption} m³ used). Total Due: ₱${calculateCostOf(newR, record.consumerType).toFixed(2)}.`,
+                  `Dial: ${formatOdometerReading(newR.previousReading)} → ${formatOdometerReading(presDial)} (${newR.consumption} m³ used). Total Due: ₱${newSt.grossTotal.toFixed(2)}.`,
                   6500
                 );
               }
             }
 
-            if (oldR) {
-              if (oldR.paymentStatus !== 'paid' && newR.paymentStatus === 'paid') {
+            if (oldSt) {
+              if (!oldSt.isPaid && newSt.isPaid) {
                 setPaymentConfirmationToast({
                   period: newR.billingPeriod,
-                  amount: newR.paidAmount || calculateCostOf(newR, record.consumerType),
+                  amount: newSt.paidAmount || newSt.grossTotal,
                   remaining: 0,
                   isPartial: false,
                   reference: newR.orNumber || newR.paymentReference || `OR-${Math.floor(100000 + Math.random() * 900000)}`,
                   date: newR.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
                 });
-              } else if (oldR.paymentStatus === 'unpaid' && newR.paymentStatus === 'partial') {
-                const gross = calculateCostOf(newR, record.consumerType);
-                const rem = newR.remainingBalance ?? Math.max(0, gross - (newR.paidAmount || 0));
+              } else if (!newSt.isPaid && newSt.isPartial && newSt.paidAmount > oldSt.paidAmount + 0.009) {
                 setPaymentConfirmationToast({
                   period: newR.billingPeriod,
-                  amount: newR.paidAmount || 0,
-                  remaining: rem,
+                  amount: newSt.paidAmount,
+                  remaining: newSt.remainingBalance,
                   isPartial: true,
                   reference: newR.orNumber || newR.paymentReference || `OR-${Math.floor(100000 + Math.random() * 900000)}`,
                   date: newR.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
                 });
               }
-            } else if (isIssuedNow && newR.paymentStatus === 'paid') {
+            } else if (isIssuedNow && newSt.isPaid) {
               setPaymentConfirmationToast({
                 period: newR.billingPeriod,
-                amount: newR.paidAmount || calculateCostOf(newR, record.consumerType),
+                amount: newSt.paidAmount || newSt.grossTotal,
                 remaining: 0,
                 isPartial: false,
                 reference: newR.orNumber || newR.paymentReference || `OR-${Math.floor(100000 + Math.random() * 900000)}`,
@@ -1220,9 +1222,35 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         
         // Check and generate automated overdue alert notifications & 3-month disconnection notices ONLY for Admin-issued bills!
         const issuedBills = verifiedReads.filter(r => isOfficialBillIssued(r));
-        const unpaidList = issuedBills.filter(r => r.paymentStatus !== 'paid');
+        const unpaidList = issuedBills.filter(r => !getCanonicalBillSettlement(r, record.consumerType).isPaid);
 
-        // Keep spotlightReading synchronized with live updates (e.g. when Admin clears payment) or auto-spotlight active unpaid bill
+        // Keep consumerRecord.outstandingBalance strictly synchronized with canonical remaining balances across issued bills
+        if (issuedBills.length > 0 && hasValidAccId) {
+          const canonicalAccountBal = computeAccountOutstandingBalance(
+            verifiedReads,
+            record.accountNumber,
+            record.consumerType
+          );
+          if (Math.abs((record.outstandingBalance || 0) - canonicalAccountBal) > 0.009) {
+            record = { ...record, outstandingBalance: canonicalAccountBal };
+            consumerRecordRef.current = record;
+            setConsumerRecord(record);
+          }
+        }
+
+        // Keep open receipt & bill details modals synchronized with live payment updates
+        setReceiptDetailModal(prevModal => {
+          if (!prevModal) return prevModal;
+          const refreshed = verifiedReads.find(v => v.id === prevModal.id);
+          return refreshed && JSON.stringify(refreshed) !== JSON.stringify(prevModal) ? refreshed : prevModal;
+        });
+        setBillDetailsReading(prevBillModal => {
+          if (!prevBillModal) return prevBillModal;
+          const refreshed = verifiedReads.find(v => v.id === prevBillModal.id);
+          return refreshed && JSON.stringify(refreshed) !== JSON.stringify(prevBillModal) ? refreshed : prevBillModal;
+        });
+
+        // Keep spotlightReading synchronized with live updates (e.g. when Admin clears or partially credits payment)
         setSpotlightReading(prevSpot => {
           if (prevSpot) {
             const refreshedSpot = verifiedReads.find(v => v.id === prevSpot.id);
@@ -1741,6 +1769,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         const belongsToMe =
           doesPayloadBelongToCurrentUser(payload) ||
           incomingPaid.some((b: any) => doesPayloadBelongToCurrentUser(b));
+        if (payload?.consumer && belongsToMe) {
+          const allLocalConsumers = mockDb.getConsumers();
+          const cIdx = allLocalConsumers.findIndex(
+            c =>
+              (payload.consumer.accountNumber &&
+                (c.accountNumber || '').trim().toUpperCase() ===
+                  String(payload.consumer.accountNumber).trim().toUpperCase()) ||
+              (payload.consumer.id && c.id === payload.consumer.id)
+          );
+          if (cIdx >= 0) {
+            allLocalConsumers[cIdx] = { ...allLocalConsumers[cIdx], ...payload.consumer };
+            mockDb.saveConsumers(allLocalConsumers);
+          }
+        }
         if (payload?.notification && belongsToMe) {
           mockDb.mergeExternalNotifications([payload.notification]);
           const refreshedNotifs = getConsumerNotificationsFromLocal();
@@ -1751,12 +1793,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           const primaryBill = incomingPaid[0] as MeterReading | undefined;
           if (primaryBill) {
             announcedIssuedBillIdsRef.current.add(primaryBill.id);
+            setSpotlightReading(primaryBill);
+            setReceiptDetailModal(prev => (prev && prev.id === primaryBill.id ? primaryBill : prev));
           }
-          const isPartial = primaryBill ? primaryBill.paymentStatus === 'partial' : (payload?.remainingBalance || 0) > 0;
+          const st = primaryBill
+            ? getCanonicalBillSettlement(primaryBill, consumerRecordRef.current?.consumerType)
+            : null;
+          const isPartial = st ? st.isPartial : (payload?.remainingBalance || 0) > 0;
           setPaymentConfirmationToast({
             period: primaryBill?.billingPeriod || payload?.billingPeriod || 'Water Bill',
-            amount: payload?.amountPaid || primaryBill?.paidAmount || 0,
-            remaining: payload?.remainingBalance ?? primaryBill?.remainingBalance ?? 0,
+            amount: payload?.amountPaid ?? st?.paidAmount ?? primaryBill?.paidAmount ?? 0,
+            remaining: st ? st.remainingBalance : (payload?.remainingBalance ?? primaryBill?.remainingBalance ?? 0),
             isPartial,
             reference: payload?.orNumber || primaryBill?.orNumber || 'OR-ISSUED',
             date: payload?.paymentDate || primaryBill?.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
@@ -1853,32 +1900,28 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const latestBill = billedReadings.length > 0 ? billedReadings[0] : null;
 
   // If no billing has been issued by Administration yet (or account is pending), current bill is 0.00
-  const currentBillAmount = (consumerRecord && latestBill && !isAccountPending)
-    ? (latestBill.paymentStatus === 'paid' ? 0 : Math.max(0, calculateCostOf(latestBill, consumerRecord.consumerType) - (latestBill.paidAmount || 0)))
-    : 0;
+  const currentBillSettlement =
+    consumerRecord && latestBill && !isAccountPending
+      ? getCanonicalBillSettlement(latestBill, consumerRecord.consumerType)
+      : null;
+  const currentBillAmount = currentBillSettlement ? currentBillSettlement.remainingBalance : 0;
   
   // Helper: Check if an issued bill has been cleared / settled in full
   const isConsumerBillCleared = (r: MeterReading): boolean => {
     if (r.status === 'cancelled') return false;
-    const gross = calculateCostOf(r, consumerRecord?.consumerType);
-    const paid = r.paidAmount || 0;
-    const rem =
-      typeof r.remainingBalance === 'number'
-        ? Math.max(0, Math.round(r.remainingBalance * 100) / 100)
-        : Math.max(0, Math.round((gross - paid) * 100) / 100);
-    return r.paymentStatus === 'paid' || (gross > 0 && rem <= 0.009);
+    return getCanonicalBillSettlement(r, consumerRecord?.consumerType).isPaid;
   };
 
   // Unpaid/To-Settle vs Cleared (Billing History) Admin-issued bills
   const unpaidBills = billedReadings.filter(r => !isConsumerBillCleared(r));
   const paidBills = billedReadings.filter(r => isConsumerBillCleared(r));
-  const partialBills = unpaidBills.filter(r => r.paymentStatus === 'partial' || (r.paidAmount || 0) > 0);
-  const unpaidFullBills = unpaidBills.filter(r => !r.paymentStatus || (r.paymentStatus === 'unpaid' && !(r.paidAmount && r.paidAmount > 0)));
+  const partialBills = unpaidBills.filter(r => getCanonicalBillSettlement(r, consumerRecord?.consumerType).isPartial);
+  const unpaidFullBills = unpaidBills.filter(r => !getCanonicalBillSettlement(r, consumerRecord?.consumerType).isPartial);
 
   // Helper to determine overdue status (only on Admin-issued billings)
   const isReadingOverdue = (reading: MeterReading) => {
     if (!isOfficialBillIssued(reading)) return false;
-    if (reading.paymentStatus === 'paid') return false;
+    if (getCanonicalBillSettlement(reading, consumerRecord?.consumerType).isPaid) return false;
     let dueDateObj: Date;
     if (reading.dueDate) {
       dueDateObj = new Date(reading.dueDate);
@@ -1894,18 +1937,18 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
   const overdueBills = billedReadings.filter(r => isReadingOverdue(r));
   
-  // Dynamic accurate outstanding sum across Admin-issued billings only
-  const outstandingSum = unpaidBills.reduce((acc, b) => {
-    const total = calculateCostOf(b, consumerRecord?.consumerType);
-    const paid = b.paidAmount || 0;
-    return acc + Math.max(0, total - paid);
-  }, 0);
+  // Dynamic accurate outstanding sum across Admin-issued billings only (strictly honors partial payments)
+  const outstandingSum = Math.round(
+    unpaidBills.reduce((acc, b) => {
+      return acc + getCanonicalBillSettlement(b, consumerRecord?.consumerType).remainingBalance;
+    }, 0) * 100
+  ) / 100;
 
-  const partialBalanceSum = partialBills.reduce((acc, b) => {
-    const total = calculateCostOf(b, consumerRecord?.consumerType);
-    const paid = b.paidAmount || 0;
-    return acc + Math.max(0, total - paid);
-  }, 0);
+  const partialBalanceSum = Math.round(
+    partialBills.reduce((acc, b) => {
+      return acc + getCanonicalBillSettlement(b, consumerRecord?.consumerType).remainingBalance;
+    }, 0) * 100
+  ) / 100;
 
   // Trend vs Previous Month & Problem / Leak Detection
   const previousMonthRead = readings[1] || null;
@@ -2077,20 +2120,32 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       setHighlightedReadingId(matchedReading.id);
     }
 
-    // If clicked directly without explicit tab override and it's a paid receipt notification, open receipt modal
-    if (!targetPreference && effectiveNotifType === 'payment' && matchedReading && matchedReading.paymentStatus === 'paid') {
+    // If clicked directly without explicit tab override and it's a paid or partial receipt notification, open receipt modal
+    const matchedSt = matchedReading
+      ? getCanonicalBillSettlement(matchedReading, consumerRecord?.consumerType)
+      : null;
+    if (
+      !targetPreference &&
+      effectiveNotifType === 'payment' &&
+      matchedReading &&
+      matchedSt &&
+      (matchedSt.isPaid || matchedSt.isPartial)
+    ) {
       setReceiptDetailModal(matchedReading);
       return;
     }
 
     if (effectiveTarget === 'bills') {
       setActiveTab('bills');
-      if (matchedReading) {
-        if (matchedReading.paymentStatus === 'paid') {
-          setBillFilter('paid');
-        } else if (matchedReading.paymentStatus === 'partial') {
+      if (matchedReading && matchedSt) {
+        if (matchedSt.isPaid) {
+          setConsumerBillingSection('history');
+          setBillFilter('all');
+        } else if (matchedSt.isPartial) {
+          setConsumerBillingSection('billed');
           setBillFilter('partial');
         } else {
+          setConsumerBillingSection('billed');
           setBillFilter('unpaid');
         }
       }
@@ -3272,29 +3327,67 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
         {/* IMMEDIATE REAL-TIME PAYMENT CONFIRMATION BANNER / TOAST */}
         {paymentConfirmationToast && (
-          <div className="bg-emerald-600 text-white rounded-2xl p-5 shadow-lg border border-emerald-500 flex items-start justify-between gap-4 animate-slide-down">
+          <div className={`${
+            paymentConfirmationToast.isPartial
+              ? 'bg-amber-600 border-amber-400'
+              : 'bg-emerald-600 border-emerald-500'
+          } text-white rounded-2xl p-5 shadow-lg border flex items-start justify-between gap-4 animate-slide-down`}>
             <div className="flex items-start space-x-3.5">
               <div className="p-2 bg-white/20 rounded-xl text-white shrink-0 mt-0.5">
                 <CheckCircle2 className="h-6 w-6" />
               </div>
               <div>
-                <h4 className="text-sm font-black uppercase tracking-wider flex items-center gap-2">
-                  <span>Payment Settle Confirmed!</span>
+                <h4 className="text-sm font-black uppercase tracking-wider flex flex-wrap items-center gap-2">
+                  <span>
+                    {paymentConfirmationToast.isPartial
+                      ? 'Partial Payment Credited!'
+                      : 'Payment Settlement Confirmed!'}
+                  </span>
                   <span className="text-[10px] font-bold bg-white/20 px-2 py-0.5 rounded-full">
                     Official Receipt #{paymentConfirmationToast.reference}
                   </span>
                 </h4>
-                <p className="text-xs text-emerald-100 mt-1 leading-relaxed">
-                  Your water tariff payment of <strong>₱{paymentConfirmationToast.amount.toFixed(2)}</strong> for billing cycle <strong>{paymentConfirmationToast.period}</strong> has been cleared and stamped into the central district records on {paymentConfirmationToast.date}. Outstanding balance updated.
+                <p className="text-xs text-white/95 mt-1 leading-relaxed">
+                  {paymentConfirmationToast.isPartial ? (
+                    <>
+                      Your partial payment of <strong>₱{paymentConfirmationToast.amount.toFixed(2)}</strong> for billing cycle <strong>{paymentConfirmationToast.period}</strong> has been credited on {paymentConfirmationToast.date}. Remaining balance due: <strong>₱{(paymentConfirmationToast.remaining ?? 0).toFixed(2)}</strong>.
+                    </>
+                  ) : (
+                    <>
+                      Your water tariff payment of <strong>₱{paymentConfirmationToast.amount.toFixed(2)}</strong> for billing cycle <strong>{paymentConfirmationToast.period}</strong> has been cleared and stamped into the central district records on {paymentConfirmationToast.date}. Outstanding balance updated.
+                    </>
+                  )}
                 </p>
               </div>
             </div>
-            <button
-              onClick={() => setPaymentConfirmationToast(null)}
-              className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition cursor-pointer"
-            >
-              <X className="h-5 w-5" />
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              {(() => {
+                const targetReceiptReading = billedReadings.find(
+                  b =>
+                    (paymentConfirmationToast.reference &&
+                      (b.orNumber || b.paymentReference || '').toUpperCase() ===
+                        paymentConfirmationToast.reference.toUpperCase()) ||
+                    b.billingPeriod === paymentConfirmationToast.period
+                );
+                if (!targetReceiptReading) return null;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => setReceiptDetailModal(targetReceiptReading)}
+                    className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <ReceiptText className="h-3.5 w-3.5" />
+                    <span>View Receipt</span>
+                  </button>
+                );
+              })()}
+              <button
+                onClick={() => setPaymentConfirmationToast(null)}
+                className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
           </div>
         )}
 
@@ -3572,7 +3665,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             </div>
             
             {/* SPOTLIGHT: METER READING & BILL ISSUED NOTIFICATION FOCUS CARD */}
-            {spotlightReading && isOfficialBillIssued(spotlightReading) && (
+            {spotlightReading && isOfficialBillIssued(spotlightReading) && (() => {
+              const spotSt = getCanonicalBillSettlement(spotlightReading, consumerRecord?.consumerType);
+              return (
               <div 
                 className="bg-slate-900 border border-blue-500/60 rounded-3xl p-6 shadow-xl relative overflow-hidden animate-slide-down ring-2 ring-blue-500/20 text-slate-100"
                 id="dashboard-reading-spotlight"
@@ -3585,13 +3680,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <span className="text-slate-300">Period: {spotlightReading.billingPeriod}</span>
                       <span aria-hidden="true" className="text-slate-600">·</span>
                       <span className={
-                        spotlightReading.paymentStatus === 'paid'
+                        spotSt.isPaid
                           ? 'text-emerald-400 font-bold'
-                          : spotlightReading.paymentStatus === 'partial'
+                          : spotSt.isPartial
                           ? 'text-amber-400 font-bold'
                           : 'text-rose-400 font-bold'
                       }>
-                        {spotlightReading.paymentStatus === 'paid' ? 'Paid in Full' : spotlightReading.paymentStatus === 'partial' ? 'Partial Balance' : 'Unpaid Statement'}
+                        {spotSt.isPaid ? 'Paid in Full' : spotSt.isPartial ? `Partial Paid (₱${spotSt.paidAmount.toFixed(2)} Credited)` : 'Unpaid Statement'}
                       </span>
                     </div>
 
@@ -3599,7 +3694,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       Official Meter Reading for {spotlightReading.billingPeriod}
                     </h3>
                     <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-                      Your meter reading was approved by Administration. Baseline Dial <strong className="text-slate-100 font-mono tabular-nums">{formatOdometerReading(spotlightReading.previousReading)}</strong> to Present Dial <strong className="text-white font-mono tabular-nums">{formatOdometerReading(spotlightReading.presentReading ?? spotlightReading.currentReading)}</strong> yielded <strong className="text-sky-300 font-mono tabular-nums">{spotlightReading.consumption} m³</strong> net usage with a calculated bill of <strong className="text-emerald-400 font-mono tabular-nums">₱{calculateCostOf(spotlightReading, consumerRecord?.consumerType).toFixed(2)}</strong>.
+                      Your meter reading was approved by Administration. Baseline Dial <strong className="text-slate-100 font-mono tabular-nums">{formatOdometerReading(spotlightReading.previousReading)}</strong> to Present Dial <strong className="text-white font-mono tabular-nums">{formatOdometerReading(spotlightReading.presentReading ?? spotlightReading.currentReading)}</strong> yielded <strong className="text-sky-300 font-mono tabular-nums">{spotlightReading.consumption} m³</strong> net usage with a gross bill of <strong className="text-emerald-400 font-mono tabular-nums">₱{spotSt.grossTotal.toFixed(2)}</strong>
+                      {spotSt.isPartial ? (
+                        <> (Credited: <strong className="text-emerald-300 font-mono tabular-nums">₱{spotSt.paidAmount.toFixed(2)}</strong> · Remaining Due: <strong className="text-amber-300 font-mono tabular-nums">₱{spotSt.remainingBalance.toFixed(2)}</strong>)</>
+                      ) : null}.
                     </p>
                   </div>
 
@@ -3653,15 +3751,27 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     </span>
                   </div>
 
-                  <div className="bg-slate-950 border border-emerald-500/30 rounded-2xl p-3.5 space-y-1">
-                    <span className="text-[11px] font-semibold text-emerald-400 block">
-                      Calculated Bill
+                  <div className={`bg-slate-950 border rounded-2xl p-3.5 space-y-1 ${
+                    spotSt.isPartial ? 'border-amber-500/40' : 'border-emerald-500/30'
+                  }`}>
+                    <span className={`text-[11px] font-semibold block ${
+                      spotSt.isPartial ? 'text-amber-400' : 'text-emerald-400'
+                    }`}>
+                      {spotSt.isPartial ? 'Remaining Balance Due' : 'Calculated Bill'}
                     </span>
-                    <span className="text-lg font-black font-mono tabular-nums text-emerald-300 block">
-                      ₱{calculateCostOf(spotlightReading, consumerRecord?.consumerType).toFixed(2)}
+                    <span className={`text-lg font-black font-mono tabular-nums block ${
+                      spotSt.isPartial ? 'text-amber-300' : 'text-emerald-300'
+                    }`}>
+                      ₱{(spotSt.isPartial ? spotSt.remainingBalance : spotSt.grossTotal).toFixed(2)}
                     </span>
-                    <span className="text-[10px] text-emerald-400/80 font-medium">
-                      {spotlightReading.paymentStatus === 'paid' ? 'Settled in full' : `Due ${spotlightReading.dueDate || '20th of Month'}`}
+                    <span className={`text-[10px] font-medium block ${
+                      spotSt.isPartial ? 'text-emerald-400' : 'text-emerald-400/80'
+                    }`}>
+                      {spotSt.isPaid
+                        ? 'Settled in full'
+                        : spotSt.isPartial
+                        ? `Paid ₱${spotSt.paidAmount.toFixed(2)} of ₱${spotSt.grossTotal.toFixed(2)}`
+                        : `Due ${spotlightReading.dueDate || '20th of Month'}`}
                     </span>
                   </div>
                 </div>
@@ -3689,32 +3799,38 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <Calculator className="h-4 w-4 text-blue-400" />
                       <span>Bill Details</span>
                     </button>
-                    {spotlightReading.paymentStatus !== 'paid' ? (
+                    {!spotSt.isPaid ? (
                       <>
-                        <button
-                          onClick={() => {
-                            setActiveTab('bills');
-                            handleStartPayment(spotlightReading, 'full');
-                          }}
-                          className="flex-1 sm:flex-initial px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center justify-center space-x-1.5 cursor-pointer"
-                        >
-                          <CreditCard className="h-4 w-4" />
-                          <span>Pay Online (₱{calculateCostOf(spotlightReading, consumerRecord?.consumerType).toFixed(2)})</span>
-                        </button>
+                        {spotSt.isPartial && (
+                          <button
+                            onClick={() => setReceiptDetailModal(spotlightReading)}
+                            className="px-4 py-2.5 bg-emerald-600/90 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
+                            title="View Official Partial Payment Receipt"
+                          >
+                            <ReceiptText className="h-3.5 w-3.5" />
+                            <span>Official Receipt</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             setUploadReceiptReading(spotlightReading);
                             setIsUploadReceiptOpen(true);
                           }}
-                          className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition flex items-center space-x-1.5 cursor-pointer"
+                          className="flex-1 sm:flex-initial px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-md transition flex items-center justify-center space-x-1.5 cursor-pointer"
                           title="Upload physical cashier receipt"
                         >
                           <Upload className="h-3.5 w-3.5" />
-                          <span>Upload Receipt</span>
+                          <span>
+                            {spotSt.isPartial
+                              ? `Settle Balance (₱${spotSt.remainingBalance.toFixed(2)})`
+                              : `Upload Receipt (₱${spotSt.remainingBalance.toFixed(2)})`}
+                          </span>
                         </button>
                         <button
                           onClick={() => {
                             setActiveTab('bills');
+                            setConsumerBillingSection('billed');
+                            setBillFilter(spotSt.isPartial ? 'partial' : 'all');
                             setHighlightedReadingId(spotlightReading.id);
                           }}
                           className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
@@ -3745,7 +3861,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         <button
                           onClick={() => {
                             setActiveTab('bills');
-                            setBillFilter('paid');
+                            setConsumerBillingSection('history');
+                            setBillFilter('all');
                             setHighlightedReadingId(spotlightReading.id);
                           }}
                           className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl transition flex items-center space-x-1.5 cursor-pointer"
@@ -3758,7 +3875,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   </div>
                 </div>
               </div>
-            )}
+              );
+            })()}
             
             {/* 4 CORE OVERVIEW METRIC CARDS */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -3848,8 +3966,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               {/* Card 3: Current Bill Amount */}
               <div 
                 onClick={() => {
-                  if (latestBill && !isAccountPending) {
-                    if (latestBill.paymentStatus === 'paid') {
+                  if (latestBill && !isAccountPending && currentBillSettlement) {
+                    if (currentBillSettlement.isPaid || currentBillSettlement.isPartial) {
                       setReceiptDetailModal(latestBill);
                     } else {
                       setBillDetailsReading(latestBill);
@@ -3857,23 +3975,32 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     }
                   }
                 }}
-                className={`bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-md space-y-3 relative overflow-hidden ${
+                className={`bg-slate-900 border rounded-3xl p-5 shadow-md space-y-3 relative overflow-hidden ${
+                  currentBillSettlement?.isPartial
+                    ? 'border-amber-500/40'
+                    : 'border-slate-800'
+                } ${
                   latestBill && !isAccountPending
                     ? 'hover:border-indigo-500/60 hover:bg-slate-900/90 transition-all cursor-pointer group'
                     : ''
                 }`}
                 id="card-current-bill-amount"
-                title={latestBill && !isAccountPending ? 'Click to view full itemized bill or official receipt' : 'Billing statement will be available once issued by Administration'}
+                title={latestBill && !isAccountPending ? 'Click to view official payment receipt or full itemized bill' : 'Billing statement will be available once issued by Administration'}
               >
                 <div className="flex justify-between items-start">
                   <div>
                     <span className="text-xs font-semibold text-slate-400 block">
-                      Current Bill Amount
+                      {currentBillSettlement?.isPartial ? 'Remaining Bill Balance' : 'Current Bill Amount'}
                     </span>
-                    {latestBill && !isAccountPending ? (
-                      latestBill.paymentStatus === 'paid' ? (
+                    {latestBill && !isAccountPending && currentBillSettlement ? (
+                      currentBillSettlement.isPaid ? (
                         <span className="text-[11px] font-semibold text-emerald-400 group-hover:text-emerald-300 flex items-center mt-0.5">
                           <span>Settled {latestBill.orNumber ? `· ${latestBill.orNumber}` : '· Official OR'}</span>
+                          <ArrowRight className="h-3 w-3 ml-1 group-hover:translate-x-0.5 transition-transform" />
+                        </span>
+                      ) : currentBillSettlement.isPartial ? (
+                        <span className="text-[11px] font-semibold text-amber-400 group-hover:text-amber-300 flex items-center mt-0.5">
+                          <span>Paid ₱{currentBillSettlement.paidAmount.toFixed(2)} · View Receipt</span>
                           <ArrowRight className="h-3 w-3 ml-1 group-hover:translate-x-0.5 transition-transform" />
                         </span>
                       ) : (
@@ -3889,38 +4016,53 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     )}
                   </div>
                   <div className={`p-2 rounded-xl border ${
-                    latestBill && !isAccountPending && latestBill.paymentStatus === 'paid'
+                    currentBillSettlement?.isPaid
                       ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20 group-hover:bg-emerald-600 group-hover:text-white transition-colors'
-                      : latestBill && !isAccountPending
-                        ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/20 group-hover:bg-indigo-600 group-hover:text-white transition-colors'
-                        : 'bg-indigo-500/15 text-indigo-400 border-indigo-500/20 opacity-70'
+                      : currentBillSettlement?.isPartial
+                        ? 'bg-amber-500/15 text-amber-400 border-amber-500/25 group-hover:bg-amber-600 group-hover:text-white transition-colors'
+                        : latestBill && !isAccountPending
+                          ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/20 group-hover:bg-indigo-600 group-hover:text-white transition-colors'
+                          : 'bg-indigo-500/15 text-indigo-400 border-indigo-500/20 opacity-70'
                   }`}>
                     <Calculator className="h-5 w-5" />
                   </div>
                 </div>
                 <div>
-                  <div className="flex items-baseline space-x-1">
+                  <div className="flex items-baseline space-x-2">
                     <span className={`text-3xl font-black font-mono tabular-nums ${
-                      latestBill && !isAccountPending
-                        ? latestBill.paymentStatus === 'paid'
+                      currentBillSettlement
+                        ? currentBillSettlement.isPaid
                           ? 'text-emerald-400'
-                          : 'text-indigo-300'
+                          : currentBillSettlement.isPartial
+                            ? 'text-amber-300'
+                            : 'text-indigo-300'
                         : 'text-slate-400'
                     }`}>
                       ₱{currentBillAmount.toFixed(2)}
                     </span>
+                    {currentBillSettlement?.isPartial && (
+                      <span className="text-[11px] font-mono text-slate-400">
+                        of ₱{currentBillSettlement.grossTotal.toFixed(2)}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1 font-medium">
                     <span>
                       Cycle: {latestBill ? latestBill.billingPeriod : 'No Billing Issued Yet'}
                     </span>
                     <span className={`text-[10px] font-semibold ${
-                      latestBill?.paymentStatus === 'paid' ? 'text-emerald-400' : 'text-slate-500'
+                      currentBillSettlement?.isPaid
+                        ? 'text-emerald-400'
+                        : currentBillSettlement?.isPartial
+                          ? 'text-amber-400'
+                          : 'text-slate-500'
                     }`}>
-                      {latestBill
-                        ? latestBill.paymentStatus === 'paid'
+                      {currentBillSettlement
+                        ? currentBillSettlement.isPaid
                           ? 'Paid · View Receipt'
-                          : 'Fixed + Vol + Tax'
+                          : currentBillSettlement.isPartial
+                            ? 'Partial · View Receipt'
+                            : 'Fixed + Vol + Tax'
                         : 'No Receipt Yet'}
                     </span>
                   </div>
@@ -3930,16 +4072,27 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               {/* Card 4: Outstanding Balance */}
               <div className={`bg-slate-900 border rounded-3xl p-5 shadow-md space-y-3 ${
                 outstandingSum > 0 
-                  ? 'border-rose-500/40' 
+                  ? partialBills.length > 0 && unpaidFullBills.length === 0
+                    ? 'border-amber-500/40'
+                    : 'border-rose-500/40' 
                   : 'border-emerald-500/40'
               }`}>
                 <div className="flex justify-between items-start">
-                  <span className="text-xs font-semibold text-slate-400">
-                    Outstanding Balance
-                  </span>
+                  <div>
+                    <span className="text-xs font-semibold text-slate-400 block">
+                      Outstanding Balance
+                    </span>
+                    {partialBills.length > 0 && (
+                      <span className="text-[11px] font-semibold text-emerald-400 block mt-0.5">
+                        Partial credit deducted
+                      </span>
+                    )}
+                  </div>
                   <div className={`p-2 rounded-xl border ${
                     outstandingSum > 0
-                      ? 'bg-rose-500/15 text-rose-400 border-rose-500/25'
+                      ? partialBills.length > 0 && unpaidFullBills.length === 0
+                        ? 'bg-amber-500/15 text-amber-400 border-amber-500/25'
+                        : 'bg-rose-500/15 text-rose-400 border-rose-500/25'
                       : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25'
                   }`}>
                     <ReceiptText className="h-5 w-5" />
@@ -3948,7 +4101,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 <div>
                   <div className="flex items-baseline space-x-1">
                     <span className={`text-3xl font-black font-mono tabular-nums ${
-                      outstandingSum > 0 ? 'text-rose-400' : 'text-emerald-400'
+                      outstandingSum > 0
+                        ? partialBills.length > 0 && unpaidFullBills.length === 0
+                          ? 'text-amber-300'
+                          : 'text-rose-400'
+                        : 'text-emerald-400'
                     }`}>
                       ₱{outstandingSum.toFixed(2)}
                     </span>
@@ -4937,11 +5094,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             </td>
                           </tr>
                         ) : paginatedBills.map((r, idx) => {
-                        const totalAmount = calculateCostOf(r, consumerRecord.consumerType);
-                        const isPaid = isConsumerBillCleared(r);
-                        const paidAmt = isPaid ? Math.max(totalAmount, r.paidAmount || 0) : (r.paidAmount || 0);
-                        const remainingDue = isPaid ? 0 : Math.max(0, totalAmount - paidAmt);
-                        const isPartial = !isPaid && paidAmt > 0;
+                        const st = getCanonicalBillSettlement(r, consumerRecord.consumerType);
+                        const totalAmount = st.grossTotal;
+                        const isPaid = st.isPaid;
+                        const paidAmt = isPaid ? Math.max(totalAmount, st.paidAmount) : st.paidAmount;
+                        const remainingDue = st.remainingBalance;
+                        const isPartial = st.isPartial;
                         const isHighlight = highlightedReadingId === r.id;
 
                         return (
@@ -5165,11 +5323,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     </p>
                   </div>
                 ) : paginatedBills.map((r, idx) => {
-                    const totalAmount = calculateCostOf(r, consumerRecord.consumerType);
-                    const isPaid = isConsumerBillCleared(r);
-                    const paidAmt = isPaid ? Math.max(totalAmount, r.paidAmount || 0) : (r.paidAmount || 0);
-                    const remainingDue = isPaid ? 0 : Math.max(0, totalAmount - paidAmt);
-                    const isPartial = !isPaid && paidAmt > 0;
+                    const st = getCanonicalBillSettlement(r, consumerRecord.consumerType);
+                    const totalAmount = st.grossTotal;
+                    const isPaid = st.isPaid;
+                    const paidAmt = isPaid ? Math.max(totalAmount, st.paidAmount) : st.paidAmount;
+                    const remainingDue = st.remainingBalance;
+                    const isPartial = st.isPartial;
                     const isHighlight = highlightedReadingId === r.id;
 
                     return (
@@ -5217,16 +5376,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           </div>
                           <div>
                             <span className="text-[10px] text-slate-400 font-bold uppercase block">
-                              {isPaid ? 'Date Cleared' : 'Due Date'}
+                              {isPaid ? 'Date Cleared' : isPartial ? 'Paid / Credited' : 'Due Date'}
                             </span>
-                            <span className="text-slate-300 font-semibold">
-                              {isPaid ? (r.paymentDate || 'Cleared') : (r.dueDate || '20th')}
+                            <span className={`font-semibold ${isPartial ? 'font-mono font-black text-emerald-300' : 'text-slate-300'}`}>
+                              {isPaid ? (r.paymentDate || 'Cleared') : isPartial ? `₱${paidAmt.toFixed(2)}` : (r.dueDate || '20th')}
                             </span>
                           </div>
                           <div>
                             <span className="text-[10px] text-slate-400 font-bold uppercase block">Balance Due</span>
                             <span className={`font-mono font-black ${isPaid ? 'text-emerald-400' : isPartial ? 'text-amber-300' : 'text-rose-300'}`}>
-                              ₱{(isPaid ? 0 : isPartial ? remainingDue : totalAmount).toFixed(2)}
+                              ₱{(isPaid ? 0 : remainingDue).toFixed(2)}
                             </span>
                           </div>
                         </div>
@@ -6842,10 +7001,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 <span className="font-bold text-slate-200 print:text-slate-800">{receiptDetailModal.paymentDate || 'N/A'}</span>
               </div>
               {(() => {
-                const totalCost = calculateCostOf(receiptDetailModal, consumerRecord.consumerType);
-                const isPart = receiptDetailModal.paymentStatus === 'partial';
-                const paid = receiptDetailModal.paidAmount || totalCost;
-                const rem = Math.max(0, totalCost - paid);
+                const st = getCanonicalBillSettlement(receiptDetailModal, consumerRecord.consumerType);
+                const totalCost = st.grossTotal;
+                const isPart = st.isPartial;
+                const paid = st.isPaid ? Math.max(totalCost, st.paidAmount) : st.paidAmount;
+                const rem = st.remainingBalance;
 
                 return (
                   <>
@@ -6855,26 +7015,38 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         {isPart ? 'Partial Payment Credited' : 'Paid in Full (Settled)'}
                       </span>
                     </div>
-                    {isPart && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-400 font-sans">Basic Water Charge:</span>
+                      <span className="font-bold text-slate-200 print:text-slate-800">₱{st.basicCharge.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400 font-sans">2% Franchise Tax:</span>
+                      <span className="font-bold text-slate-200 print:text-slate-800">₱{st.franchiseTax.toFixed(2)}</span>
+                    </div>
+                    {st.arrears > 0 && (
                       <div className="flex justify-between">
-                        <span className="text-slate-400 font-sans">Gross Statement Total:</span>
-                        <span className="font-bold text-slate-200 print:text-slate-800">₱{totalCost.toFixed(2)}</span>
+                        <span className="text-slate-400 font-sans">Arrears Included:</span>
+                        <span className="font-bold text-slate-200 print:text-slate-800">₱{st.arrears.toFixed(2)}</span>
                       </div>
                     )}
+                    <div className="flex justify-between">
+                      <span className="text-slate-400 font-sans">Gross Statement Total:</span>
+                      <span className="font-bold text-white print:text-slate-900">₱{totalCost.toFixed(2)}</span>
+                    </div>
                     <div className="pt-2.5 border-t border-slate-800 print:border-slate-200 border-dashed flex justify-between items-baseline">
-                      <span className="text-sm font-bold text-white print:text-slate-900 font-sans">{isPart ? 'Amount Credited:' : 'Total Amount Paid:'}</span>
+                      <span className="text-sm font-bold text-white print:text-slate-900 font-sans">{isPart ? 'Amount Paid / Credited:' : 'Total Amount Paid:'}</span>
                       <span className="text-xl font-black text-emerald-400 print:text-emerald-700 font-sans tabular-nums">
                         ₱{paid.toFixed(2)}
                       </span>
                     </div>
-                    {isPart && (
-                      <div className="flex justify-between items-baseline pt-1">
-                        <span className="text-xs font-bold text-rose-400 print:text-rose-700 font-sans">Remaining Balance Due:</span>
-                        <span className="text-sm font-black text-rose-400 print:text-rose-700 font-sans tabular-nums">
-                          ₱{rem.toFixed(2)}
-                        </span>
-                      </div>
-                    )}
+                    <div className="flex justify-between items-baseline pt-1">
+                      <span className={`text-xs font-bold font-sans ${isPart ? 'text-amber-400 print:text-amber-700' : 'text-emerald-400 print:text-emerald-700'}`}>
+                        Remaining Balance Due:
+                      </span>
+                      <span className={`text-sm font-black font-sans tabular-nums ${isPart ? 'text-amber-300 print:text-amber-700' : 'text-emerald-400 print:text-emerald-700'}`}>
+                        ₱{rem.toFixed(2)}
+                      </span>
+                    </div>
                   </>
                 );
               })()}
@@ -6935,6 +7107,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           onClose={() => {
             setIsUploadReceiptOpen(false);
             setUploadReceiptReading(null);
+          }}
+          onSuccess={(updatedReading) => {
+            setSpotlightReading(updatedReading);
+            setReceiptDetailModal(updatedReading);
+            loadConsumerInfo(true);
           }}
           onReceiptValidated={(receipt) => {
             setPaymentConfirmationToast({
