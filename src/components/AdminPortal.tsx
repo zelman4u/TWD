@@ -172,6 +172,42 @@ const IS_HOSTED_ON_SYSTEM_SITE =
   typeof window !== 'undefined' &&
   window.location.hostname.toLowerCase() === 'twd-427m.onrender.com';
 
+function resolveReaderAssignedRoutes(r: any): string[] {
+  const collected: string[] = [];
+  const pushParsed = (val: unknown) => {
+    if (!val) return;
+    if (Array.isArray(val)) {
+      val.forEach(item => pushParsed(item));
+      return;
+    }
+    if (typeof val === 'string') {
+      val
+        .split(',')
+        .map(part => part.trim())
+        .filter(Boolean)
+        .forEach(part => collected.push(part));
+    }
+  };
+
+  if (Array.isArray(r?.assignedRoutes) && r.assignedRoutes.length > 0) {
+    pushParsed(r.assignedRoutes);
+  } else {
+    pushParsed(r?.targetRoute);
+    pushParsed(r?.zone);
+  }
+
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const route of collected) {
+    const key = route.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(route);
+  }
+
+  return deduped.length > 0 ? deduped : ['Zone 1-4: Poblacion (Main Central)'];
+}
+
 interface AdminPortalProps {
   currentUser: User;
   onLogout: () => void;
@@ -839,8 +875,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             const normalizedStatus: 'active' | 'inactive' = 
               rawStatus === 'inactive' ? 'inactive' : 'active';
 
+            const normalizedRoutes = resolveReaderAssignedRoutes(ar);
+            const joinedRoutes = normalizedRoutes.join(', ');
+
             if (!exists) {
-              // Add new mobile registrant to local store
+              // Add new mobile registrant to local store with all selected route areas preserved
               const newReaderObj: MeterReader = {
                 id: ar.id || `reader-${Date.now()}`,
                 name: ar.name,
@@ -848,15 +887,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 email: ar.email || `${(ar.username || ar.name).toLowerCase().replace(/\s+/g, '_')}@tagoloanwater.gov.ph`,
                 employeeId: ar.employeeId || ar.id,
                 contactNumber: ar.contactNumber || ar.phone || 'N/A',
-                assignedRoutes: (ar.assignedRoutes && ar.assignedRoutes.length > 0) ? ar.assignedRoutes : [ar.zone || 'Zone 1-4: Poblacion (Main Central)'],
-                targetRoute: (ar.assignedRoutes && ar.assignedRoutes.length > 0) ? ar.assignedRoutes[0] : (ar.zone || 'Zone 1-4: Poblacion (Main Central)'),
-                zone: ar.zone || 'Zone 1-4: Poblacion (Main Central)',
+                assignedRoutes: normalizedRoutes,
+                targetRoute: joinedRoutes,
+                zone: joinedRoutes,
                 employmentStatus: normalizedStatus,
                 completedReadings: 0,
                 pendingReadings: 0,
                 performanceRating: 5.0,
                 deviceInfo: ar.deviceInfo,
-                mobileSynced: Boolean(ar.mobileSynced)
+                mobileSynced: Boolean(ar.mobileSynced),
+                password: ar.password || ar.pin,
+                pin: ar.pin || ar.password
               };
               currentLocal.push(newReaderObj);
               hasChanges = true;
@@ -865,8 +906,16 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 exists.employmentStatus = normalizedStatus;
                 hasChanges = true;
               }
-              if (ar.assignedRoutes && Array.isArray(ar.assignedRoutes) && ar.assignedRoutes.length > 0) {
-                exists.assignedRoutes = ar.assignedRoutes;
+              const existingNormalized = resolveReaderAssignedRoutes(exists);
+              if (
+                normalizedRoutes.length > 0 &&
+                (JSON.stringify(existingNormalized) !== JSON.stringify(normalizedRoutes) ||
+                  exists.zone !== joinedRoutes ||
+                  exists.targetRoute !== joinedRoutes)
+              ) {
+                exists.assignedRoutes = normalizedRoutes;
+                exists.targetRoute = joinedRoutes;
+                exists.zone = joinedRoutes;
                 hasChanges = true;
               }
               if (ar.deviceInfo && !exists.deviceInfo) {
@@ -1363,7 +1412,49 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     // 4. Dedicated Live WebSocket + BroadcastChannel Stream for instant 0ms push events
     const cleanupWs = initRealtimeSocket((data) => {
-      if (data.type === 'READER_REGISTERED_ACTIVE' || data.type === 'READER_REGISTERED_PENDING' || data.type === 'staff:registered') {
+      if (
+        data.type === 'READER_REGISTERED_ACTIVE' ||
+        data.type === 'READER_REGISTERED_PENDING' ||
+        data.type === 'METER_READER_REGISTERED' ||
+        data.type === 'staff:registered'
+      ) {
+        const incomingReader = data.payload?.reader;
+        if (incomingReader && incomingReader.name) {
+          const incomingRoutes = resolveReaderAssignedRoutes(incomingReader);
+          const joinedIncomingRoutes = incomingRoutes.join(', ');
+          const currentReaders = mockDb.getReaders();
+          const matchIdx = currentReaders.findIndex(lr =>
+            (incomingReader.id && lr.id === incomingReader.id) ||
+            (incomingReader.employeeId && lr.employeeId === incomingReader.employeeId) ||
+            (incomingReader.username && lr.username && lr.username.toLowerCase() === String(incomingReader.username).toLowerCase())
+          );
+          const formattedReader: MeterReader = {
+            ...(matchIdx >= 0 ? currentReaders[matchIdx] : {}),
+            id: incomingReader.id || `reader-${Date.now()}`,
+            name: incomingReader.name,
+            username: incomingReader.username || incomingReader.name.toLowerCase().replace(/\s+/g, '_'),
+            email: incomingReader.email || `${(incomingReader.username || incomingReader.name).toLowerCase().replace(/\s+/g, '_')}@tagoloanwater.gov.ph`,
+            employeeId: incomingReader.employeeId || incomingReader.id,
+            contactNumber: incomingReader.contactNumber || incomingReader.phone || 'N/A',
+            assignedRoutes: incomingRoutes,
+            targetRoute: joinedIncomingRoutes,
+            zone: joinedIncomingRoutes,
+            employmentStatus: incomingReader.employmentStatus === 'inactive' ? 'inactive' : 'active',
+            completedReadings: incomingReader.completedReadings || 0,
+            pendingReadings: incomingReader.pendingReadings || 0,
+            performanceRating: incomingReader.performanceRating || 5.0,
+            deviceInfo: incomingReader.deviceInfo,
+            mobileSynced: true,
+            password: incomingReader.password || incomingReader.pin,
+            pin: incomingReader.pin || incomingReader.password
+          };
+          if (matchIdx >= 0) {
+            currentReaders[matchIdx] = formattedReader;
+          } else {
+            currentReaders.unshift(formattedReader);
+          }
+          mockDb.saveReaders(currentReaders);
+        }
         toast.info('Meter Reader Registered', data.payload?.message || 'New field staff registered via mobile app.');
         loadAllDataFromStore(false);
       } else if (data.type === 'READER_TERMINATED' || data.type === 'READER_ACCOUNT_TERMINATED' || data.type === 'staff:terminated') {
@@ -3110,19 +3201,28 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     e.preventDefault();
     if (!editingReaderModal) return;
 
+    const normalizedEditRoutes = resolveReaderAssignedRoutes(editingReaderModal);
+    const joinedEditRoutes = normalizedEditRoutes.join(', ');
+    const normalizedReaderPayload: MeterReader = {
+      ...editingReaderModal,
+      assignedRoutes: normalizedEditRoutes,
+      targetRoute: joinedEditRoutes,
+      zone: joinedEditRoutes
+    };
+
     const allReaders = mockDb.getReaders();
-    const updated = allReaders.map(r => r.id === editingReaderModal.id ? editingReaderModal : r);
+    const updated = allReaders.map(r => r.id === normalizedReaderPayload.id ? normalizedReaderPayload : r);
     mockDb.saveReaders(updated);
     setReaders(updated);
 
     // Sync user account
     const allUsers = mockDb.getUsers();
     const updatedUsers = allUsers.map(u => {
-      if (u.id === editingReaderModal.id || (editingReaderModal.username && u.email?.startsWith(editingReaderModal.username))) {
+      if (u.id === normalizedReaderPayload.id || (normalizedReaderPayload.username && u.email?.startsWith(normalizedReaderPayload.username))) {
         return {
           ...u,
-          name: editingReaderModal.name,
-          status: (editingReaderModal.employmentStatus === 'active' ? 'active' : 'inactive') as User['status']
+          name: normalizedReaderPayload.name,
+          status: (normalizedReaderPayload.employmentStatus === 'active' ? 'active' : 'inactive') as User['status']
         };
       }
       return u;
@@ -3131,12 +3231,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     // Sync to backend API
     try {
-      await apiClient.patch(`/api/readers/${encodeURIComponent(editingReaderModal.id)}`, editingReaderModal);
+      await apiClient.patch(`/api/readers/${encodeURIComponent(normalizedReaderPayload.id)}`, normalizedReaderPayload);
       sendRealtimeMessage('staff:status_updated', {
-        readerId: editingReaderModal.id,
-        employmentStatus: editingReaderModal.employmentStatus,
-        status: editingReaderModal.employmentStatus,
-        reader: editingReaderModal
+        readerId: normalizedReaderPayload.id,
+        employmentStatus: normalizedReaderPayload.employmentStatus,
+        status: normalizedReaderPayload.employmentStatus,
+        reader: normalizedReaderPayload
       });
     } catch (err) {
       console.warn('[AdminPortal] Error syncing reader edit to API:', err);
@@ -3147,11 +3247,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       currentUser.name,
       'admin',
       'Update Meter Reader',
-      `Updated profile & status (${editingReaderModal.employmentStatus}) for field officer "${editingReaderModal.name}".`
+      `Updated profile, routes (${joinedEditRoutes}) & status (${normalizedReaderPayload.employmentStatus}) for field officer "${normalizedReaderPayload.name}".`
     );
     setEditingReaderModal(null);
     window.dispatchEvent(new Event('twd_database_updated'));
-    toast.success('Officer Updated', `Reader profile for ${editingReaderModal.name} updated successfully.`);
+    toast.success('Officer Updated', `Reader profile & ${normalizedEditRoutes.length} route area(s) for ${normalizedReaderPayload.name} updated.`);
   };
 
   // Action: Route assignment changes
@@ -3159,6 +3259,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     const selectedReader = readers.find(r => r.id === assignedReaderId);
     if (!selectedReader) return;
 
+    const targetRouteObj = routes.find(r => r.id === routeId);
     const updatedRoutes = routes.map(r => {
       if (r.id === routeId) {
         return {
@@ -3174,12 +3275,33 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     mockDb.saveRoutes(updatedRoutes);
     setRoutes(updatedRoutes);
 
+    if (targetRouteObj?.routeName) {
+      const mergedReaderRoutes = resolveReaderAssignedRoutes({
+        assignedRoutes: [...resolveReaderAssignedRoutes(selectedReader), targetRouteObj.routeName]
+      });
+      const joinedReaderRoutes = mergedReaderRoutes.join(', ');
+      const updatedReadersList = mockDb.getReaders().map(rd =>
+        rd.id === selectedReader.id
+          ? { ...rd, assignedRoutes: mergedReaderRoutes, targetRoute: joinedReaderRoutes, zone: joinedReaderRoutes }
+          : rd
+      );
+      mockDb.saveReaders(updatedReadersList);
+      setReaders(updatedReadersList);
+      apiClient
+        .patch(`/api/readers/${encodeURIComponent(selectedReader.id)}`, {
+          assignedRoutes: mergedReaderRoutes,
+          targetRoute: joinedReaderRoutes,
+          zone: joinedReaderRoutes
+        })
+        .catch(() => {});
+    }
+
     mockDb.addAuditLog(
       currentUser.id,
       currentUser.name,
       'admin',
       'Reassign Service Area Route',
-      `Reallocated zone route "${routes.find(r => r.id === routeId)?.routeName}" to field officer "${selectedReader.name}".`
+      `Reallocated zone route "${targetRouteObj?.routeName}" to field officer "${selectedReader.name}".`
     );
 
     setEditingRouteId(null);
@@ -6359,6 +6481,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   if (readerFilter !== 'all' && currentStatus !== readerFilter) {
                     return false;
                   }
+                  const resolvedRoutes = resolveReaderAssignedRoutes(r);
                   return smartMatch(readerSearch, [
                     r.name,
                     r.username,
@@ -6366,7 +6489,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     r.id,
                     r.email,
                     r.contactNumber,
-                    r.assignedRoutes,
+                    resolvedRoutes.join(' '),
                     r.targetRoute,
                     r.zone
                   ]);
@@ -6398,7 +6521,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 .sort(compareReadersCanonical);
             })();
 
-            const uniqueRoutesCount = new Set(readers.flatMap(r => r.assignedRoutes || ['Zone 1-4: Poblacion (Main Central)'])).size;
+            const uniqueRoutesCount = new Set(
+              readers.flatMap(r => resolveReaderAssignedRoutes(r).map(rt => rt.toLowerCase()))
+            ).size;
 
             return (
               <div className="space-y-6 animate-fade-in" id="readers-tab">
@@ -6619,16 +6744,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     const readerKey = r.id || `reader-${rIdx}`;
                     const isPasswordRevealed = !!revealedPasswords[readerKey];
                     const displayedPassword = r.password || r.pin || '1234';
-                    const targetRouteDisplay = (r.assignedRoutes && r.assignedRoutes.length > 0) 
-                      ? r.assignedRoutes[0] 
-                      : (r.targetRoute || r.zone || 'Zone 1-4: Poblacion (Main Central)');
+                    const readerRoutes = resolveReaderAssignedRoutes(r);
+                    const targetRouteDisplay = readerRoutes.join(', ');
 
                     const currentStatus = r.employmentStatus || ((r as any).status === 'inactive' ? 'inactive' : ((r as any).status === 'pending_approval' ? 'pending_approval' : 'active'));
 
                     return (
                       <div 
                         key={`reader-unified-card-${r.id || r.employeeId || r.username || rIdx}`} 
-                        onClick={() => setViewingStaffDetailModal({ ...r, isFieldOfficer: true, targetRouteDisplay, currentStatus })}
+                        onClick={() => setViewingStaffDetailModal({ ...r, isFieldOfficer: true, targetRouteDisplay, assignedRoutesList: readerRoutes, currentStatus })}
                         title="Click card to view complete Field Staff Officer details"
                         className="bg-slate-900 rounded-2xl p-5 shadow-xl border border-slate-800 hover:border-blue-500/60 hover:shadow-2xl transition-all flex flex-col justify-between space-y-4 relative cursor-pointer"
                       >
@@ -6717,15 +6841,29 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                               </div>
                             </div>
 
-                            {/* Target Route / Barangay Assignment */}
+                            {/* Assigned Route Area(s) — displays all 1, 2, or more selected mobile route areas */}
                             <div className="pt-1">
-                              <div className="flex items-center space-x-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                                <MapPin className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-                                <span>Target Route / Barangay Assignment</span>
+                              <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 gap-2">
+                                <div className="flex items-center space-x-1 min-w-0">
+                                  <MapPin className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                                  <span className="truncate">
+                                    {readerRoutes.length > 1 ? 'Assigned Route Areas' : 'Assigned Route Area'}
+                                  </span>
+                                </div>
+                                <span className="text-[10px] text-blue-300 bg-blue-950/80 px-2 py-0.5 rounded-md font-mono font-extrabold border border-blue-800/70 shrink-0">
+                                  {readerRoutes.length} {readerRoutes.length === 1 ? 'Route Area' : 'Route Areas'}
+                                </span>
                               </div>
-                              <div className="p-2.5 bg-blue-950/60 rounded-lg border border-blue-800/70 text-blue-300 font-bold text-xs flex items-center justify-between">
-                                <span>{targetRouteDisplay}</span>
-                                <span className="text-[10px] text-blue-400/80 bg-blue-900/50 px-1.5 py-0.5 rounded font-mono border border-blue-800/50">Route Zone</span>
+                              <div className="p-2.5 bg-blue-950/40 rounded-lg border border-blue-800/70 flex flex-wrap gap-1.5">
+                                {readerRoutes.map((routeArea, idx) => (
+                                  <span
+                                    key={`${readerKey}-route-${idx}-${routeArea}`}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-blue-900/60 border border-blue-700/70 text-blue-200 font-bold text-xs shadow-2xs"
+                                  >
+                                    <MapPin className="h-3 w-3 text-blue-400 shrink-0" />
+                                    <span>{routeArea}</span>
+                                  </span>
+                                ))}
                               </div>
                             </div>
                           </div>
@@ -6776,8 +6914,43 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
                     {routes
-                      .filter(rt => smartMatch(routesSearch, [rt.routeName, rt.description, rt.assignedReaderName, rt.status]))
-                      .map((rt, rtIdx) => (
+                      .filter(rt => {
+                        const matchingReaderNames = readers
+                          .filter(rd => {
+                            const rdRoutes = resolveReaderAssignedRoutes(rd);
+                            const rtLower = (rt.routeName || '').toLowerCase();
+                            const bgLower = (rt.barangay || '').toLowerCase();
+                            return rdRoutes.some(rArea => {
+                              const areaLower = rArea.toLowerCase();
+                              return (
+                                (rtLower && (areaLower === rtLower || rtLower.includes(areaLower) || areaLower.includes(rtLower))) ||
+                                (bgLower && (areaLower === bgLower || areaLower.includes(bgLower)))
+                              );
+                            });
+                          })
+                          .map(rd => rd.name)
+                          .join(' ');
+                        return smartMatch(routesSearch, [rt.routeName, rt.description, rt.assignedReaderName, matchingReaderNames, rt.status]);
+                      })
+                      .map((rt, rtIdx) => {
+                        const matchedZoneOfficers = readers.filter(rd => {
+                          const rdRoutes = resolveReaderAssignedRoutes(rd);
+                          const rtLower = (rt.routeName || '').toLowerCase();
+                          const bgLower = (rt.barangay || '').toLowerCase();
+                          return rdRoutes.some(rArea => {
+                            const areaLower = rArea.toLowerCase();
+                            return (
+                              (rtLower && (areaLower === rtLower || rtLower.includes(areaLower) || areaLower.includes(rtLower))) ||
+                              (bgLower && (areaLower === bgLower || areaLower.includes(bgLower)))
+                            );
+                          });
+                        });
+                        const assignedOfficerDisplay =
+                          matchedZoneOfficers.length > 0
+                            ? Array.from(new Set(matchedZoneOfficers.map(o => o.name))).join(', ')
+                            : rt.assignedReaderName;
+
+                        return (
                       <div key={`route-card-${rt.id || ''}-${rtIdx}`} className="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-lg">
                         <div className="flex justify-between items-start">
                           <div>
@@ -6795,14 +6968,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           </span>
                         </div>
 
-                        <div className="flex justify-between items-center text-xs">
+                        <div className="flex flex-wrap justify-between items-center gap-2 text-xs">
                           <div>
                             <span className="text-slate-400">Consumers in zone:</span>
                             <span className="font-bold text-slate-200 ml-1.5">{rt.totalConsumers} connections</span>
                           </div>
                           <div>
-                            <span className="text-slate-400">Assigned Reader Option:</span>
-                            <span className="font-extrabold text-blue-400 ml-1.5">{rt.assignedReaderName}</span>
+                            <span className="text-slate-400">Assigned Reader(s):</span>
+                            <span className="font-extrabold text-blue-400 ml-1.5">{assignedOfficerDisplay}</span>
                           </div>
                         </div>
 
@@ -6845,7 +7018,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           )}
                         </div>
                       </div>
-                    ))}
+                        );
+                      })}
                   </div>
                 </div>
               </div>
@@ -11730,25 +11904,82 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Primary Route Assignment</label>
-                <select
-                  value={(editingReaderModal.assignedRoutes && editingReaderModal.assignedRoutes[0]) || editingReaderModal.targetRoute || 'Zone 1-4: Poblacion (Main Central)'}
-                  onChange={(e) => {
-                    const newRoute = e.target.value;
+                {(() => {
+                  const selectedEditRoutes = resolveReaderAssignedRoutes(editingReaderModal);
+                  const optionPool: string[] = [];
+                  const seenOpt = new Set<string>();
+                  const addOpt = (label?: string) => {
+                    const clean = (label || '').trim();
+                    if (!clean) return;
+                    const key = clean.toLowerCase();
+                    if (seenOpt.has(key)) return;
+                    seenOpt.add(key);
+                    optionPool.push(clean);
+                  };
+                  selectedEditRoutes.forEach(addOpt);
+                  barangayList.forEach(bg => addOpt(bg.name));
+                  routes.forEach(rt => addOpt(rt.routeName));
+
+                  const toggleRouteSelection = (routeLabel: string) => {
+                    const lowerTarget = routeLabel.toLowerCase();
+                    const isSelected = selectedEditRoutes.some(item => item.toLowerCase() === lowerTarget);
+                    let nextRoutes: string[];
+                    if (isSelected) {
+                      if (selectedEditRoutes.length <= 1) return; // Require at least 1 assigned route area
+                      nextRoutes = selectedEditRoutes.filter(item => item.toLowerCase() !== lowerTarget);
+                    } else {
+                      nextRoutes = [...selectedEditRoutes, routeLabel];
+                    }
+                    const joinedNext = nextRoutes.join(', ');
                     setEditingReaderModal({
                       ...editingReaderModal,
-                      assignedRoutes: [newRoute],
-                      targetRoute: newRoute
+                      assignedRoutes: nextRoutes,
+                      targetRoute: joinedNext,
+                      zone: joinedNext
                     });
-                  }}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-bold text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 cursor-pointer"
-                >
-                  {routes.map(rt => (
-                    <option key={rt.id} value={rt.routeName}>
-                      {rt.routeName} ({rt.barangay || 'Tagoloan'})
-                    </option>
-                  ))}
-                </select>
+                  };
+
+                  return (
+                    <>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">
+                          Assigned Route Areas (Select 1 or more)
+                        </label>
+                        <span className="text-[10px] font-mono font-bold text-blue-300 bg-blue-950/70 border border-blue-800/60 px-2 py-0.5 rounded">
+                          {selectedEditRoutes.length} Selected
+                        </span>
+                      </div>
+                      <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 max-h-48 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {optionPool.map(opt => {
+                          const checked = selectedEditRoutes.some(item => item.toLowerCase() === opt.toLowerCase());
+                          return (
+                            <button
+                              key={`edit-reader-route-${opt}`}
+                              type="button"
+                              onClick={() => toggleRouteSelection(opt)}
+                              className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-left text-xs font-bold border transition cursor-pointer ${
+                                checked
+                                  ? 'bg-blue-950/80 border-blue-600 text-blue-200'
+                                  : 'bg-slate-900/70 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                              }`}
+                            >
+                              <span className="truncate">{opt}</span>
+                              <span
+                                className={`w-4 h-4 rounded flex items-center justify-center shrink-0 text-[10px] border ${
+                                  checked
+                                    ? 'bg-blue-600 border-blue-500 text-white'
+                                    : 'border-slate-700 bg-slate-950 text-transparent'
+                                }`}
+                              >
+                                ✓
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
 
               <div className="flex justify-end space-x-3 pt-4 border-t border-slate-800">
@@ -12680,17 +12911,61 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     <span className="text-slate-200 font-semibold mt-0.5 block">{viewingStaffDetailModal.department}</span>
                   </div>
                 )}
-                {viewingStaffDetailModal.targetRouteDisplay && (
+                {(viewingStaffDetailModal.targetRouteDisplay || viewingStaffDetailModal.isFieldOfficer) && (
                   <div className="sm:col-span-2">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Assigned Service Route / Zone</span>
-                    <span className="text-blue-300 font-bold mt-0.5 block">{viewingStaffDetailModal.targetRouteDisplay}</span>
+                    {(() => {
+                      const modalRoutes: string[] = Array.isArray(viewingStaffDetailModal.assignedRoutesList) && viewingStaffDetailModal.assignedRoutesList.length > 0
+                        ? viewingStaffDetailModal.assignedRoutesList
+                        : resolveReaderAssignedRoutes(viewingStaffDetailModal);
+                      return (
+                        <>
+                          <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                              {modalRoutes.length > 1 ? 'Assigned Service Route Areas' : 'Assigned Service Route / Zone'}
+                            </span>
+                            <span className="text-[10px] font-mono font-bold text-blue-300 bg-blue-950/80 border border-blue-800/70 px-2 py-0.5 rounded">
+                              {modalRoutes.length} {modalRoutes.length === 1 ? 'Route Area' : 'Route Areas'}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5 p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                            {modalRoutes.map((rtArea, idx) => (
+                              <span
+                                key={`staff-modal-route-${idx}-${rtArea}`}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-950/70 border border-blue-800/80 text-blue-200 font-bold text-xs"
+                              >
+                                <MapPin className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                                <span>{rtArea}</span>
+                              </span>
+                            ))}
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
                 )}
               </div>
             </div>
 
             <div className="px-6 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2">
-              {!viewingStaffDetailModal.isFieldOfficer && (
+              {viewingStaffDetailModal.isFieldOfficer ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = viewingStaffDetailModal;
+                    const normalizedRoutes = resolveReaderAssignedRoutes(target);
+                    setViewingStaffDetailModal(null);
+                    setEditingReaderModal({
+                      ...target,
+                      assignedRoutes: normalizedRoutes,
+                      targetRoute: normalizedRoutes.join(', '),
+                      zone: normalizedRoutes.join(', ')
+                    });
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition cursor-pointer"
+                >
+                  Edit Assigned Routes & Profile
+                </button>
+              ) : (
                 <button
                   type="button"
                   onClick={() => {

@@ -1014,6 +1014,24 @@ export function startRealtimeFirestoreListeners() {
           const mergedList: MeterReader[] = [];
           const seen = new Set<string>();
 
+          const sanitizeRoutes = (r: MeterReader): string[] => {
+            const raw: string[] = Array.isArray(r.assignedRoutes) && r.assignedRoutes.length > 0
+              ? r.assignedRoutes.flatMap((x) => String(x || '').split(','))
+              : String(r.targetRoute || r.zone || '').split(',');
+            const out: string[] = [];
+            const seenRt = new Set<string>();
+            for (const item of raw) {
+              const clean = item.trim();
+              if (!clean) continue;
+              const k = clean.toLowerCase();
+              if (!seenRt.has(k)) {
+                seenRt.add(k);
+                out.push(clean);
+              }
+            }
+            return out.length > 0 ? out : ['Poblacion'];
+          };
+
           const addUniqueReader = (r: MeterReader) => {
             if (isAccountTerminated(r)) return;
             const kId = (r.id || '').trim().toLowerCase();
@@ -1022,13 +1040,32 @@ export function startRealtimeFirestoreListeners() {
             const kName = (r.name || '').trim().toLowerCase();
             const kEmail = (r.email || '').trim().toLowerCase();
 
-            if (
-              (kId && seen.has(kId)) ||
-              (kEmp && seen.has(kEmp)) ||
-              (kUser && seen.has(kUser)) ||
-              (kName && seen.has(kName)) ||
-              (kEmail && seen.has(kEmail))
-            ) {
+            const existingIdx = mergedList.findIndex((m) => {
+              const mId = (m.id || '').trim().toLowerCase();
+              const mEmp = (m.employeeId || '').trim().toLowerCase();
+              const mUser = (m.username || '').trim().toLowerCase();
+              const mName = (m.name || '').trim().toLowerCase();
+              const mEmail = (m.email || '').trim().toLowerCase();
+              return (
+                (kId && mId && kId === mId) ||
+                (kEmp && mEmp && kEmp === mEmp) ||
+                (kUser && mUser && kUser === mUser) ||
+                (kName && mName && kName === mName) ||
+                (kEmail && mEmail && kEmail === mEmail)
+              );
+            });
+
+            const cleanRoutes = sanitizeRoutes(r);
+            if (existingIdx >= 0) {
+              const prevRoutes = sanitizeRoutes(mergedList[existingIdx]);
+              if (cleanRoutes.length > prevRoutes.length) {
+                mergedList[existingIdx] = {
+                  ...mergedList[existingIdx],
+                  assignedRoutes: cleanRoutes,
+                  targetRoute: cleanRoutes.join(', '),
+                  zone: cleanRoutes.join(', '),
+                };
+              }
               return;
             }
 
@@ -1037,7 +1074,13 @@ export function startRealtimeFirestoreListeners() {
             if (kUser) seen.add(kUser);
             if (kName) seen.add(kName);
             if (kEmail) seen.add(kEmail);
-            mergedList.push({ ...r, employmentStatus: r.employmentStatus || 'active' });
+            mergedList.push({
+              ...r,
+              employmentStatus: r.employmentStatus || 'active',
+              assignedRoutes: cleanRoutes,
+              targetRoute: cleanRoutes.join(', '),
+              zone: cleanRoutes.join(', '),
+            });
           };
 
           cloudReaders.forEach(addUniqueReader);

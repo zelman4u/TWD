@@ -974,6 +974,36 @@ function broadcast(type: string, payload: unknown) {
 // REST API ENDPOINTS FOR MOBILE APP & WEB
 // ==========================================
 
+function normalizeAssignedRoutesServer(...sources: unknown[]): string[] {
+  const collected: string[] = [];
+  const seenLower = new Set<string>();
+
+  for (const src of sources) {
+    if (!src) continue;
+    const rawItems: string[] = Array.isArray(src)
+      ? src.flatMap(item => String(item || "").split(","))
+      : typeof src === "string"
+        ? src.split(",")
+        : [];
+
+    for (const part of rawItems) {
+      const cleaned = part.trim();
+      if (!cleaned) continue;
+      const key = cleaned.toLowerCase();
+      if (!seenLower.has(key)) {
+        seenLower.add(key);
+        collected.push(cleaned);
+      }
+    }
+    // Once a primary source yields explicit route areas, do not append redundant fallback strings
+    if (collected.length > 0 && Array.isArray(src)) {
+      break;
+    }
+  }
+
+  return collected.length > 0 ? collected : ["Poblacion"];
+}
+
 // 1. Mobile Meter Reader Registration (POST /api/auth/register, /api/readers/register, /api/readers, /api/staff/register)
 app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/auth/register-reader", "/api/staff/register", "/api/staff"], (req, res) => {
   const name = (req.body.name || req.body.fullName || req.body.displayName || "").toString().trim();
@@ -981,31 +1011,23 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
   const pin = (req.body.pin || req.body.password || "1234").toString().trim();
   const contactNumber = (req.body.contactNumber || req.body.phoneNumber || req.body.phone || "").toString().trim();
 
-  // Extract 1, 2, or multiple assigned areas / barangays / routes
-  let assignedRoutes: string[] = [];
-  const rawAssigned = req.body.assignedRoutes || req.body.assignedBarangays || req.body.assignedZones || req.body.coverageAreas || req.body.barangays || req.body.routes;
-  if (Array.isArray(rawAssigned)) {
-    assignedRoutes.push(...rawAssigned.map(String));
-  } else if (typeof rawAssigned === "string" && rawAssigned.trim()) {
-    assignedRoutes.push(...rawAssigned.split(","));
-  }
+  // Extract 1, 2, or multiple assigned route areas without duplicating fallback zone strings
+  const rawAssigned =
+    req.body.assignedRoutes ||
+    req.body.assignedBarangays ||
+    req.body.assignedZones ||
+    req.body.coverageAreas ||
+    req.body.barangays ||
+    req.body.routes;
 
-  if (typeof req.body.barangay === "string" && req.body.barangay.trim()) {
-    assignedRoutes.push(...req.body.barangay.split(","));
-  }
-  if (typeof req.body.zone === "string" && req.body.zone.trim()) {
-    assignedRoutes.push(...req.body.zone.split(","));
-  }
-  if (typeof req.body.targetRoute === "string" && req.body.targetRoute.trim()) {
-    assignedRoutes.push(...req.body.targetRoute.split(","));
-  }
+  const assignedRoutes = normalizeAssignedRoutesServer(
+    rawAssigned,
+    req.body.barangay,
+    req.body.zone,
+    req.body.targetRoute
+  );
 
-  assignedRoutes = assignedRoutes.map(r => r.trim()).filter(Boolean);
-  if (assignedRoutes.length === 0) {
-    assignedRoutes = ["Poblacion"];
-  }
-
-  const primaryZone = assignedRoutes[0] || "Poblacion";
+  const combinedZoneLabel = assignedRoutes.join(", ");
 
   if (!name && !username) {
     return res.status(400).json({
@@ -1020,12 +1042,14 @@ app.post(["/api/auth/register", "/api/readers/register", "/api/readers", "/api/a
 
   const newReader: MobileReader = {
     id: readerId,
+    employeeId: req.body.employeeId || readerId,
+    email: req.body.email || undefined,
     username: effectiveUsername,
     name: effectiveName,
     password: req.body.password || req.body.pin || "password123",
     pin: pin || req.body.password || "1234",
     role: req.body.role || "Meter Reader I",
-    zone: primaryZone,
+    zone: combinedZoneLabel,
     contactNumber: contactNumber,
     employmentStatus: "active", // Directly active - no admin approval needed
     registeredAt: req.body.registeredAt || req.body.submittedAt || new Date().toISOString(),
@@ -1195,7 +1219,12 @@ app.get(["/api/staff", "/api/readers"], (req, res) => {
     if (kName) seen.add(kName);
     if (kUser) seen.add(kUser);
     if (kId) seen.add(kId);
-    deduplicatedStaff.push(s);
+    const cleanRoutes = normalizeAssignedRoutesServer(s.assignedRoutes, s.zone);
+    deduplicatedStaff.push({
+      ...s,
+      assignedRoutes: cleanRoutes,
+      zone: cleanRoutes.join(", "),
+    });
   });
   res.json({
     success: true,
@@ -1406,12 +1435,19 @@ app.patch(["/api/staff/:id", "/api/readers/:id", "/api/readers/:id/status"], (re
   }
 
   const existing = registeredStaff[readerIndex];
+  const nextRoutes = normalizeAssignedRoutesServer(
+    updates.assignedRoutes,
+    updates.zone,
+    existing.assignedRoutes,
+    existing.zone
+  );
   const updatedReader = {
     ...existing,
     ...updates,
     employmentStatus: updates.employmentStatus || updates.status || existing.employmentStatus || "active",
     status: updates.employmentStatus || updates.status || existing.status || "active",
-    assignedRoutes: updates.assignedRoutes || existing.assignedRoutes || []
+    assignedRoutes: nextRoutes,
+    zone: nextRoutes.join(", "),
   };
 
   registeredStaff[readerIndex] = updatedReader;
@@ -6212,15 +6248,13 @@ async function pullReadersFromMobileTerminal(): Promise<number> {
         continue;
       }
 
-      const routesFromRemote: string[] = Array.isArray(rr.assignedRoutes) && rr.assignedRoutes.length > 0
-        ? rr.assignedRoutes.map(String)
-        : Array.isArray(rr.assignedZones) && rr.assignedZones.length > 0
-          ? rr.assignedZones.map(String)
-          : rr.assignedBarangay
-            ? [String(rr.assignedBarangay)]
-            : rr.zone
-              ? [String(rr.zone)]
-              : ["Poblacion"];
+      const routesFromRemote = normalizeAssignedRoutesServer(
+        rr.assignedRoutes,
+        rr.assignedZones,
+        rr.assignedBarangays,
+        rr.assignedBarangay,
+        rr.zone
+      );
 
       const mappedStatus: "active" | "inactive" = rStatusRaw === "inactive" ? "inactive" : "active";
 
@@ -6241,7 +6275,7 @@ async function pullReadersFromMobileTerminal(): Promise<number> {
           name: rName,
           pin: rr.pin || "1234",
           role: rr.role || "Field Meter Reader",
-          zone: rr.zone || routesFromRemote[0] || "Poblacion",
+          zone: routesFromRemote.join(", "),
           contactNumber: rr.phone || rr.contactNumber || "",
           employmentStatus: mappedStatus,
           status: mappedStatus,
@@ -6255,10 +6289,19 @@ async function pullReadersFromMobileTerminal(): Promise<number> {
         storeChanged = true;
       } else {
         const curr = registeredStaff[existingIdx];
-        if (!curr.mobileSynced || (!curr.deviceInfo && rr.deviceInfo) || (!curr.employeeId && rEmp)) {
+        const currCleanRoutes = normalizeAssignedRoutesServer(curr.assignedRoutes, curr.zone);
+        const routesChanged = JSON.stringify(currCleanRoutes) !== JSON.stringify(routesFromRemote);
+        if (
+          routesChanged ||
+          !curr.mobileSynced ||
+          (!curr.deviceInfo && rr.deviceInfo) ||
+          (!curr.employeeId && rEmp)
+        ) {
           registeredStaff[existingIdx] = {
             ...curr,
             employeeId: curr.employeeId || rEmp || curr.id,
+            assignedRoutes: routesFromRemote,
+            zone: routesFromRemote.join(", "),
             contactNumber: curr.contactNumber && curr.contactNumber !== "N/A" ? curr.contactNumber : (rr.phone || rr.contactNumber || curr.contactNumber),
             deviceInfo: rr.deviceInfo || curr.deviceInfo || "Tagoloan Mobile Field Terminal",
             mobileSynced: true,
