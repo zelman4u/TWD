@@ -1859,11 +1859,16 @@ app.post("/api/consumers/register", (req, res) => {
     const uIdx = syncedPortalUsers.findIndex(
       u => (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) || u.id === userId
     );
+    const trimmedPassword = password !== undefined && password !== null && String(password).trim() !== ""
+      ? String(password).trim()
+      : undefined;
+    const regPwTs = Number(req.body?.passwordUpdatedAt) || Date.now();
     const portalUserEntry: PortalSyncUser = {
       id: activeConsumerRecord.linkedUserId || userId,
       email: cleanEmail,
       name: consumerName,
-      password: password ? String(password) : (uIdx >= 0 ? syncedPortalUsers[uIdx].password : undefined),
+      password: trimmedPassword || (uIdx >= 0 ? syncedPortalUsers[uIdx].password : undefined),
+      ...(trimmedPassword ? { passwordUpdatedAt: regPwTs } : (uIdx >= 0 && syncedPortalUsers[uIdx].passwordUpdatedAt ? { passwordUpdatedAt: syncedPortalUsers[uIdx].passwordUpdatedAt } : {})),
       role: "consumer",
       status: hasIssuedAcc ? "active" : initialPendingStatus,
       linkedAccountNumber: hasIssuedAcc ? activeConsumerRecord.accountNumber : undefined,
@@ -1877,6 +1882,22 @@ app.post("/api/consumers/register", (req, res) => {
     }
 
     savePortalSyncStore();
+
+    if (!isSelfSystemSite() && req.headers["x-peer-resolve"] !== "1") {
+      fetchSystemSite(
+        "/api/consumers/register",
+        {
+          method: "POST",
+          headers: { "x-peer-resolve": "1" },
+          body: JSON.stringify({
+            ...req.body,
+            password: trimmedPassword,
+            passwordUpdatedAt: regPwTs
+          })
+        },
+        4500
+      ).catch(() => {});
+    }
 
     // Broadcast live event to all connected Admin dashboards
     broadcast("CONSUMER_REGISTERED", {
@@ -2337,6 +2358,24 @@ app.post("/api/consumers/change-password", (req, res) => {
 
     savePortalSyncStore();
 
+    if (!isSelfSystemSite() && req.headers["x-peer-resolve"] !== "1") {
+      fetchSystemSite(
+        "/api/consumers/change-password",
+        {
+          method: "POST",
+          headers: { "x-peer-resolve": "1" },
+          body: JSON.stringify({
+            userId: cleanUid || undefined,
+            email: cleanEmail || undefined,
+            accountNumber: cleanAcc || undefined,
+            newPassword: nextPwd,
+            passwordUpdatedAt: updatedTs
+          })
+        },
+        4000
+      ).catch(() => {});
+    }
+
     res.json({
       success: true,
       passwordUpdatedAt: updatedTs,
@@ -2692,7 +2731,7 @@ app.post("/api/consumers/reconcile", (req, res) => {
 });
 
 // POST /api/consumers/resolve-account - Authoritative consumer account + notification resolver for Consumer Portal & Login
-app.post("/api/consumers/resolve-account", (req, res) => {
+app.post("/api/consumers/resolve-account", async (req, res) => {
   try {
     const { email, userId, accountNumber, name, contactNumber, password, verifyPassword, includeAuthMeta } = req.body || {};
     const cleanEmail = (email || "").trim().toLowerCase();
@@ -2705,40 +2744,122 @@ app.post("/api/consumers/resolve-account", (req, res) => {
     // Ensure server store is internally consistent first
     reconcileAllServerConsumersAndUsers();
 
-    // 1. Match ALL candidate Portal Users and pick authoritative password with highest passwordUpdatedAt
-    const matchingUsers = syncedPortalUsers.filter(u =>
-      (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) ||
-      (cleanUid && u.id === cleanUid) ||
-      (hasValidAcc && u.linkedAccountNumber && u.linkedAccountNumber.toUpperCase() === cleanAcc)
-    );
+    const findBestLocalUser = (): PortalSyncUser | undefined => {
+      const matchingUsers = syncedPortalUsers.filter(u =>
+        (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) ||
+        (cleanUid && u.id === cleanUid) ||
+        (hasValidAcc && u.linkedAccountNumber && u.linkedAccountNumber.toUpperCase() === cleanAcc)
+      );
 
-    let matchedUser: PortalSyncUser | undefined;
-    for (const u of matchingUsers) {
-      if (!matchedUser) {
-        matchedUser = { ...u };
-      } else {
-        const uPwTs = Number(u.passwordUpdatedAt || 0);
-        const mPwTs = Number(matchedUser.passwordUpdatedAt || 0);
-        const chosenPassword =
-          uPwTs > mPwTs
-            ? u.password || matchedUser.password
-            : mPwTs > uPwTs
-              ? matchedUser.password || u.password
-              : matchedUser.password || u.password;
-        const chosenPwTs = Math.max(uPwTs, mPwTs) || undefined;
-        matchedUser = {
-          ...matchedUser,
-          ...u,
-          id: matchedUser.id && !matchedUser.id.startsWith("email_") ? matchedUser.id : u.id,
-          password: chosenPassword,
-          ...(chosenPwTs ? { passwordUpdatedAt: chosenPwTs } : {})
-        };
+      let best: PortalSyncUser | undefined;
+      for (const u of matchingUsers) {
+        if (!best) {
+          best = { ...u };
+        } else {
+          const uPwTs = Number(u.passwordUpdatedAt || 0);
+          const mPwTs = Number(best.passwordUpdatedAt || 0);
+          const chosenPassword =
+            uPwTs > mPwTs
+              ? u.password || best.password
+              : mPwTs > uPwTs
+                ? best.password || u.password
+                : best.password || u.password;
+          const chosenPwTs = Math.max(uPwTs, mPwTs) || undefined;
+          best = {
+            ...best,
+            ...u,
+            id: best.id && !best.id.startsWith("email_") ? best.id : u.id,
+            password: chosenPassword,
+            ...(chosenPwTs ? { passwordUpdatedAt: chosenPwTs } : {})
+          };
+        }
+      }
+      return best;
+    };
+
+    let matchedUser = findBestLocalUser();
+
+    // Cross-peer fallback: if this instance lacks the consumer's password/user record, query System Site peer cleanly
+    if ((!matchedUser || !matchedUser.password) && !isSelfSystemSite() && req.headers["x-peer-resolve"] !== "1") {
+      try {
+        const peerResp = await fetchSystemSite(
+          "/api/consumers/resolve-account",
+          {
+            method: "POST",
+            headers: { "x-peer-resolve": "1" },
+            body: JSON.stringify({
+              email: cleanEmail || undefined,
+              userId: cleanUid || undefined,
+              accountNumber: hasValidAcc ? cleanAcc : undefined,
+              name: name || undefined,
+              contactNumber: cleanPhone || undefined,
+              password,
+              verifyPassword: false,
+              includeAuthMeta: true
+            })
+          },
+          2500
+        );
+        if (peerResp.ok) {
+          const peerData = await peerResp.json().catch(() => null);
+          let peerChanged = false;
+          if (peerData?.consumer && (peerData.consumer.name || peerData.consumer.email || peerData.consumer.accountNumber)) {
+            const pc = peerData.consumer;
+            const pcEmail = String(pc.email || "").trim().toLowerCase();
+            const pcAcc = String(pc.accountNumber || "").trim().toUpperCase();
+            const pcIdx = syncedConsumers.findIndex(lc =>
+              (isIssuedAccountNumberServer(pcAcc) && lc.accountNumber && lc.accountNumber.toUpperCase() === pcAcc) ||
+              (pcEmail && lc.email && lc.email.toLowerCase() === pcEmail) ||
+              (pc.linkedUserId && lc.linkedUserId === pc.linkedUserId)
+            );
+            if (pcIdx >= 0) {
+              syncedConsumers[pcIdx] = { ...syncedConsumers[pcIdx], ...pc };
+            } else {
+              syncedConsumers.unshift(pc);
+            }
+            peerChanged = true;
+          }
+          if (peerData?.user && (peerData.user.email || peerData.user.id)) {
+            const pu = peerData.user as PortalSyncUser;
+            const puEmail = String(pu.email || "").trim().toLowerCase();
+            const puIdx = syncedPortalUsers.findIndex(lu =>
+              (puEmail && lu.email && lu.email.toLowerCase() === puEmail) ||
+              (pu.id && lu.id === pu.id)
+            );
+            if (puIdx >= 0) {
+              const ex = syncedPortalUsers[puIdx];
+              const puTs = Number(pu.passwordUpdatedAt || 0);
+              const exTs = Number(ex.passwordUpdatedAt || 0);
+              syncedPortalUsers[puIdx] = {
+                ...ex,
+                ...pu,
+                password: puTs >= exTs ? (pu.password || ex.password) : (ex.password || pu.password),
+                passwordUpdatedAt: Math.max(puTs, exTs) || undefined
+              };
+            } else {
+              syncedPortalUsers.unshift(pu);
+            }
+            peerChanged = true;
+          }
+          if (peerChanged) {
+            reconcileAllServerConsumersAndUsers();
+            savePortalSyncStore();
+            matchedUser = findBestLocalUser();
+          }
+        }
+      } catch {
+        // Non-fatal if peer is unreachable
       }
     }
 
-    const passwordVerified = Boolean(
-      matchedUser && matchedUser.password && password !== undefined && String(password).trim() === matchedUser.password
-    );
+    const checkPwMatch = (storedPw?: string, candidatePw?: unknown): boolean => {
+      if (!storedPw || candidatePw === undefined || candidatePw === null) return false;
+      const rawCand = String(candidatePw);
+      const trimCand = rawCand.trim();
+      return storedPw === rawCand || storedPw === trimCand || storedPw.trim() === trimCand;
+    };
+
+    const passwordVerified = Boolean(matchedUser && matchedUser.password && checkPwMatch(matchedUser.password, password));
 
     if (verifyPassword && matchedUser && matchedUser.password && password !== undefined) {
       if (!passwordVerified) {
@@ -2805,7 +2926,8 @@ app.post("/api/consumers/resolve-account", (req, res) => {
 
     const refreshedCandidates = syncedPortalUsers.filter(u =>
       (effectiveEmail && u.email && u.email.toLowerCase() === effectiveEmail) ||
-      (effectiveUid && u.id.toLowerCase() === effectiveUid)
+      (effectiveUid && u.id.toLowerCase() === effectiveUid) ||
+      (effectiveHasAcc && u.linkedAccountNumber && u.linkedAccountNumber.toLowerCase() === effectiveAcc)
     );
     let refreshedUser: PortalSyncUser | null = matchedUser || null;
     for (const u of refreshedCandidates) {
@@ -2817,6 +2939,24 @@ app.post("/api/consumers/resolve-account", (req, res) => {
           passwordUpdatedAt: Math.max(Number(u.passwordUpdatedAt || 0), Number(refreshedUser?.passwordUpdatedAt || 0)) || undefined
         };
       }
+    }
+
+    // Synthesize PortalSyncUser from resolvedConsumer if consumer exists in registry without a syncedPortalUsers entry yet
+    if (!refreshedUser && resolvedConsumer) {
+      const pendingStatus: PortalSyncUser["status"] =
+        resolvedConsumer.status === "pending_installation" || resolvedConsumer.status === "installation_not_scheduled"
+          ? resolvedConsumer.status
+          : "pending_approval";
+      refreshedUser = {
+        id: resolvedConsumer.linkedUserId || cleanUid || `user-${(resolvedConsumer.accountNumber || effectiveEmail || "cons").replace(/[^a-zA-Z0-9_-]/g, "_")}`,
+        email: (resolvedConsumer.email || effectiveEmail || "").trim().toLowerCase(),
+        name: resolvedConsumer.name,
+        role: "consumer",
+        status: isIssued ? "active" : pendingStatus,
+        linkedAccountNumber: isIssued ? resolvedConsumer.accountNumber.trim().toUpperCase() : undefined,
+        contactNumber: resolvedConsumer.contactNumber,
+        registrationDate: resolvedConsumer.registrationDate
+      };
     }
 
     const safeUser = refreshedUser

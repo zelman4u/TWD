@@ -1027,7 +1027,12 @@ app.post("/api/consumers/resolve-account", async (req, res) => {
     }
 
     const passwordVerified = Boolean(
-      resolvedUser?.password && password !== undefined && resolvedUser.password === String(password).trim()
+      resolvedUser?.password &&
+        password !== undefined &&
+        password !== null &&
+        (resolvedUser.password === String(password) ||
+          resolvedUser.password === String(password).trim() ||
+          resolvedUser.password.trim() === String(password).trim())
     );
 
     if (

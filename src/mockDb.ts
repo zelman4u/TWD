@@ -1138,7 +1138,58 @@ const INITIAL_AUDIT_LOGS: AuditLog[] = [
   }
 ];
 
-// Helper functions to fetch and save from/to localStorage (with quota-safe image offloading & fallback)
+interface StoredCacheEntry {
+  rawData: string;
+  depUsers?: string | null;
+  depConsumers?: string | null;
+  depReadings?: string | null;
+  depOverrides?: string | null;
+  depTerminated?: string | null;
+  value: unknown;
+}
+
+const storedReadCache = new Map<string, StoredCacheEntry>();
+let lastReconciledSignature = '';
+
+function cloneCachedResult<T>(val: unknown): T {
+  if (Array.isArray(val)) {
+    return val.map((item) => (item && typeof item === 'object' ? { ...item } : item)) as unknown as T;
+  }
+  if (val && typeof val === 'object') {
+    return { ...(val as Record<string, unknown>) } as unknown as T;
+  }
+  return val as T;
+}
+
+function invalidateStoredReadCache(changedKey?: string): void {
+  lastReconciledSignature = '';
+  if (!changedKey) {
+    storedReadCache.clear();
+    return;
+  }
+  storedReadCache.delete(changedKey);
+  if (
+    changedKey === KEYS.USERS ||
+    changedKey === KEYS.CONSUMERS ||
+    changedKey === KEYS.READINGS ||
+    changedKey === 'twd_live_v4_password_overrides' ||
+    changedKey === 'twd_live_v4_terminated_accounts'
+  ) {
+    storedReadCache.delete(KEYS.USERS);
+    storedReadCache.delete(KEYS.CONSUMERS);
+    storedReadCache.delete(KEYS.READINGS);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', () => invalidateStoredReadCache());
+  window.addEventListener('twd_database_updated', (ev: Event) => {
+    const detailKey = (ev as CustomEvent)?.detail?.key;
+    invalidateStoredReadCache(typeof detailKey === 'string' ? detailKey : undefined);
+  });
+}
+
+// Helper functions to fetch and save from/to localStorage (with quota-safe image offloading, memoization & fallback)
 function getStored<T>(key: string, initial: T): T {
   const data = safeStorageGetItem(key);
   if (!data) {
@@ -1146,8 +1197,45 @@ function getStored<T>(key: string, initial: T): T {
       ? initial.filter((item: any) => !isAccountTerminated(item)) 
       : initial;
     safeStorageSetStructured(key, validInitial);
-    return validInitial as unknown as T;
+    storedReadCache.delete(key);
+    return cloneCachedResult<T>(validInitial);
   }
+
+  const depUsers = key === KEYS.CONSUMERS ? safeStorageGetItem(KEYS.USERS) : null;
+  const depConsumers = key === KEYS.READINGS ? safeStorageGetItem(KEYS.CONSUMERS) : null;
+  const depReadings = key === KEYS.CONSUMERS ? safeStorageGetItem(KEYS.READINGS) : null;
+  const depOverrides = key === KEYS.USERS ? safeStorageGetItem('twd_live_v4_password_overrides') : null;
+  const depTerminated =
+    key === KEYS.USERS || key === KEYS.READERS ? safeStorageGetItem('twd_live_v4_terminated_accounts') : null;
+
+  const cached = storedReadCache.get(key);
+  if (
+    cached &&
+    cached.rawData === data &&
+    cached.depUsers === depUsers &&
+    cached.depConsumers === depConsumers &&
+    cached.depReadings === depReadings &&
+    cached.depOverrides === depOverrides &&
+    cached.depTerminated === depTerminated
+  ) {
+    return cloneCachedResult<T>(cached.value);
+  }
+
+  const saveToReadCache = (val: unknown): T => {
+    const latestRaw = safeStorageGetItem(key) || data;
+    storedReadCache.set(key, {
+      rawData: latestRaw,
+      depUsers: key === KEYS.CONSUMERS ? safeStorageGetItem(KEYS.USERS) : null,
+      depConsumers: key === KEYS.READINGS ? safeStorageGetItem(KEYS.CONSUMERS) : null,
+      depReadings: key === KEYS.CONSUMERS ? safeStorageGetItem(KEYS.READINGS) : null,
+      depOverrides: key === KEYS.USERS ? safeStorageGetItem('twd_live_v4_password_overrides') : null,
+      depTerminated:
+        key === KEYS.USERS || key === KEYS.READERS ? safeStorageGetItem('twd_live_v4_terminated_accounts') : null,
+      value: val,
+    });
+    return cloneCachedResult<T>(val);
+  };
+
   try {
     const parsed = JSON.parse(data);
     // Automatic cleanup of legacy mock test accounts & name normalization
@@ -1186,7 +1274,7 @@ function getStored<T>(key: string, initial: T): T {
       if (deduplicatedReaders.length !== readers.length || data !== nextReadersJson) {
         safeStorageSetStructured(key, deduplicatedReaders);
       }
-      return deduplicatedReaders as unknown as T;
+      return saveToReadCache(deduplicatedReaders);
     }
     if (key === KEYS.USERS) {
       const users = parsed as User[];
@@ -1332,14 +1420,14 @@ function getStored<T>(key: string, initial: T): T {
       if (hasMockUsers || !adminExists || modified || data !== nextUsersJson) {
         safeStorageSetStructured(key, cleanedUsers);
       }
-      return cleanedUsers as unknown as T;
+      return saveToReadCache(cleanedUsers);
     }
     if (key === KEYS.BARANGAYS) {
       const brgs = Array.isArray(parsed) ? [...(parsed as Barangay[])] : [];
       const hasLegacyPoblacionEast = brgs.some(b => b.name === 'Poblacion East' || b.name === 'Poblacion West');
       if (hasLegacyPoblacionEast) {
         safeStorageSetStructured(key, INITIAL_BARANGAYS);
-        return INITIAL_BARANGAYS as unknown as T;
+        return saveToReadCache(INITIAL_BARANGAYS);
       }
       const deletedBarangayIds = getDeletedBarangayIds();
       let brgChanged = false;
@@ -1363,8 +1451,8 @@ function getStored<T>(key: string, initial: T): T {
       });
       if (brgChanged) {
         safeStorageSetStructured(key, brgs);
-        return brgs as unknown as T;
       }
+      return saveToReadCache(brgs);
     }
     if (key === KEYS.CONSUMERS) {
       let cons = parsed as Consumer[];
@@ -1499,7 +1587,7 @@ function getStored<T>(key: string, initial: T): T {
       if (changed || data !== nextConsJson) {
         safeStorageSetStructured(key, cons);
       }
-      return cons as unknown as T;
+      return saveToReadCache(cons);
     }
     if (key === KEYS.METERS) {
       let meters = parsed as WaterMeter[];
@@ -1513,7 +1601,7 @@ function getStored<T>(key: string, initial: T): T {
       if (data !== nextMetersJson) {
         safeStorageSetStructured(key, meters);
       }
-      return meters as unknown as T;
+      return saveToReadCache(meters);
     }
     if (key === KEYS.READINGS) {
       let reads = rehydrateValueFromSessionImages(parsed as MeterReading[]);
@@ -1567,13 +1655,17 @@ function getStored<T>(key: string, initial: T): T {
       reads = sanitizeMultiBillDuplicateArrears(
         reads.map(r => normalizeReadingToOfficialBaseline(r))
       ).sort(compareReadingsCanonical);
-      safeStorageSetStructured(key, reads);
-      return rehydrateValueFromSessionImages(reads) as unknown as T;
+      const strippedJson = JSON.stringify(stripOversizedImagesForSync(reads));
+      if (hasMockReads || strippedJson !== data) {
+        safeStorageSetStructured(key, reads);
+      }
+      const hydratedReads = rehydrateValueFromSessionImages(reads);
+      return saveToReadCache(hydratedReads);
     }
     if (key === KEYS.NOTIFICATIONS || key === KEYS.REPORTS || key === KEYS.INSTALLATIONS) {
-      return rehydrateValueFromSessionImages(parsed) as T;
+      return saveToReadCache(rehydrateValueFromSessionImages(parsed));
     }
-    return parsed;
+    return saveToReadCache(parsed);
   } catch (e) {
     return initial;
   }
@@ -1581,6 +1673,7 @@ function getStored<T>(key: string, initial: T): T {
 
 function setStored<T>(key: string, value: T): void {
   const { changed } = safeStorageSetStructured(key, value);
+  invalidateStoredReadCache(key);
   if (!changed) {
     return; // Data has not changed, do not trigger event loops
   }
@@ -1778,6 +1871,7 @@ export const mockDb = {
         ovMap[cleanAcc.toLowerCase()] = { password: newPassword, passwordUpdatedAt: ts };
       }
       localStorage.setItem('twd_live_v4_password_overrides', JSON.stringify(ovMap));
+      invalidateStoredReadCache('twd_live_v4_password_overrides');
     } catch {}
 
     // 2. Update ALL matching user records in localStorage KEYS.USERS
@@ -3865,6 +3959,16 @@ export const mockDb = {
   // Retroactively heals & links any previously issued consumer IDs across users, active session, and notifications
   reconcileIssuedAccounts: (): void => {
     try {
+      const rawC = safeStorageGetItem(KEYS.CONSUMERS) || '';
+      const rawU = safeStorageGetItem(KEYS.USERS) || '';
+      const rawN = safeStorageGetItem(KEYS.NOTIFICATIONS) || '';
+      const rawM = safeStorageGetItem(KEYS.METERS) || '';
+      const rawCur = typeof window !== 'undefined' ? localStorage.getItem(KEYS.CURRENT_USER) || '' : '';
+      const sig = `${rawC.length}:${rawU.length}:${rawN.length}:${rawM.length}:${rawCur}`;
+      if (sig === lastReconciledSignature && rawC.length > 0 && rawU.length > 0) {
+        return;
+      }
+
       const consumers = getStored<Consumer[]>(KEYS.CONSUMERS, INITIAL_CONSUMERS);
       const users = getStored<User[]>(KEYS.USERS, INITIAL_USERS);
       const notifications = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
@@ -4082,12 +4186,20 @@ export const mockDb = {
       if (usersChanged) setStored(KEYS.USERS, users);
       if (notifsChanged) setStored(KEYS.NOTIFICATIONS, dedupedNotifs);
       if (metersChanged) setStored(KEYS.METERS, meters);
+
+      const postC = safeStorageGetItem(KEYS.CONSUMERS) || '';
+      const postU = safeStorageGetItem(KEYS.USERS) || '';
+      const postN = safeStorageGetItem(KEYS.NOTIFICATIONS) || '';
+      const postM = safeStorageGetItem(KEYS.METERS) || '';
+      const postCur = typeof window !== 'undefined' ? localStorage.getItem(KEYS.CURRENT_USER) || '' : '';
+      lastReconciledSignature = `${postC.length}:${postU.length}:${postN.length}:${postM.length}:${postCur}`;
     } catch (err) {
       console.warn('[mockDb] reconcileIssuedAccounts warning:', err);
     }
   },
 
   resetDatabase: (): void => {
+    invalidateStoredReadCache();
     localStorage.removeItem(KEYS.USERS);
     localStorage.removeItem(KEYS.CONSUMERS);
     localStorage.removeItem(KEYS.READERS);

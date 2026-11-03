@@ -20,6 +20,8 @@ import {
   QUOTA_STORAGE_KEY,
   WRITE_QUOTA_SESSION_KEY,
   READ_QUOTA_SESSION_KEY,
+  isFirestoreTransportPaused,
+  markFirestoreTransportPaused,
 } from '../firebase';
 import {
   User,
@@ -390,6 +392,8 @@ try {
       'twd_firestore_quota_exceeded',
       'twd_firestore_quota_exceeded_v1',
       'twd_firestore_quota_v2',
+      'twd_fs_write_quota_until_v4',
+      'twd_fs_read_quota_until_v4',
       QUOTA_STORAGE_KEY,
     ].forEach((k) => {
       localStorage.removeItem(k);
@@ -409,10 +413,8 @@ try {
     if (savedReadUntil > Date.now()) {
       memoryReadQuotaUntil = savedReadUntil;
     }
-    if (memoryWriteQuotaUntil > Date.now() || memoryReadQuotaUntil > Date.now()) {
+    if (memoryWriteQuotaUntil > Date.now() || memoryReadQuotaUntil > Date.now() || isFirestoreTransportPaused()) {
       disableNetwork(db).catch(() => {});
-    } else {
-      enableNetwork(db).catch(() => {});
     }
   }
 } catch {}
@@ -421,6 +423,9 @@ export function isQuotaError(err: any): boolean {
   if (!err) return false;
   const code = err?.code || '';
   const msg = err?.message || String(err);
+  if (code === 'firestore-write-timeout' || code === 'firestore-read-timeout') {
+    return false;
+  }
   return (
     code === 'resource-exhausted' ||
     msg.includes('Quota limit exceeded') ||
@@ -431,7 +436,24 @@ export function isQuotaError(err: any): boolean {
   );
 }
 
+export function isTransportBlockedError(err: any): boolean {
+  if (!err) return false;
+  const code = err?.code || '';
+  const msg = (err?.message || String(err)).toLowerCase();
+  return (
+    code === 'firestore-write-timeout' ||
+    code === 'firestore-read-timeout' ||
+    code === 'unavailable' ||
+    msg.includes('blocked_by_client') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('client is offline') ||
+    msg.includes('could not reach cloud firestore backend')
+  );
+}
+
 export function isFirestoreWriteQuotaExceeded(): boolean {
+  if (isFirestoreTransportPaused()) return true;
   if (Date.now() < memoryWriteQuotaUntil) return true;
   if (memoryWriteQuotaUntil !== 0) {
     memoryWriteQuotaUntil = 0;
@@ -444,6 +466,7 @@ export function isFirestoreWriteQuotaExceeded(): boolean {
 }
 
 export function isFirestoreReadQuotaExceeded(): boolean {
+  if (isFirestoreTransportPaused()) return true;
   if (Date.now() < memoryReadQuotaUntil) return true;
   if (memoryReadQuotaUntil !== 0) {
     memoryReadQuotaUntil = 0;
@@ -460,11 +483,13 @@ export function isFirestoreQuotaExceeded(): boolean {
 }
 
 export function markFirestoreQuotaExceeded(err?: any, mode: 'write' | 'read' = 'write') {
+  if (isTransportBlockedError(err)) {
+    stopRealtimeFirestoreListeners();
+    markFirestoreTransportPaused(90_000);
+    return;
+  }
   const msg = err?.message || String(err || '');
-  const isDailyLimit =
-    msg.includes('Free daily write units') ||
-    msg.includes('Free daily read units') ||
-    msg.includes('write stream stalled');
+  const isDailyLimit = msg.includes('Free daily write units') || msg.includes('Free daily read units');
   const cooldownMs = isDailyLimit ? 30 * 60 * 1000 : 2 * 60 * 1000;
   const until = Date.now() + cooldownMs;
 
@@ -487,11 +512,40 @@ export function markFirestoreQuotaExceeded(err?: any, mode: 'write' | 'read' = '
   disableNetwork(db).catch(() => {});
 }
 
-function withWriteTimeout<T>(promise: Promise<T>, timeoutMs = 4000): Promise<T> {
+function handleTransportOrQuotaFailure(err: any, mode: 'write' | 'read' = 'write'): void {
+  if (isQuotaError(err)) {
+    markFirestoreQuotaExceeded(err, mode);
+  } else if (isTransportBlockedError(err)) {
+    stopRealtimeFirestoreListeners();
+    markFirestoreTransportPaused(90_000);
+  }
+}
+
+function withWriteTimeout<T>(promise: Promise<T>, timeoutMs = 3500): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      const timeoutErr: any = new Error('Firestore write stream stalled / Free daily write units quota protection');
-      timeoutErr.code = 'resource-exhausted';
+      const timeoutErr: any = new Error('Firestore write stream stalled or blocked by client');
+      timeoutErr.code = 'firestore-write-timeout';
+      reject(timeoutErr);
+    }, timeoutMs);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+function withReadTimeout<T>(promise: Promise<T>, timeoutMs = 2500): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const timeoutErr: any = new Error('Firestore read timed out or blocked by client');
+      timeoutErr.code = 'firestore-read-timeout';
       reject(timeoutErr);
     }, timeoutMs);
     promise.then(
@@ -643,7 +697,7 @@ export function ensureRealtimeFirestoreListeners() {
  * Starts live real-time two-way Firestore synchronization across all devices
  */
 export function startRealtimeFirestoreListeners() {
-  if (isFirestoreReadQuotaExceeded() || isFirestoreWriteQuotaExceeded()) {
+  if (isFirestoreReadQuotaExceeded() || isFirestoreTransportPaused()) {
     return;
   }
   stopRealtimeFirestoreListeners();
@@ -669,18 +723,9 @@ export function startRealtimeFirestoreListeners() {
 
           const localRaw = safeStorageGetItem(KEYS.USERS);
           const localUsers: User[] = localRaw ? JSON.parse(localRaw) : [];
-          // Only retain local users that aren't stale pending ghosts superseded by cloudUsers
+          // Always retain local users with passwords or active sessions even if Write/channel was blocked
           const activeLocalUsers = localUsers.filter((u) => {
             if (isAccountTerminated(u)) return false;
-            if (u.role === 'admin') return true;
-            if (!isRealIssuedAccountNumber(u.linkedAccountNumber) && isPendingConsumerStatus(u.status)) {
-              const existsInCloud = cloudUsers.some(
-                (cu) =>
-                  (u.email && cu.email && u.email.toLowerCase() === cu.email.toLowerCase()) ||
-                  (u.id && cu.id === u.id)
-              );
-              return existsInCloud;
-            }
             return true;
           });
           const mergedMap = new Map<string, User>();
@@ -820,6 +865,14 @@ export function startRealtimeFirestoreListeners() {
                 );
               });
               if (stillPendingInCloud) return true;
+
+              const hasMatchingLocalUser = localUsersAll.some(
+                (lu) =>
+                  !isAccountTerminated(lu) &&
+                  ((lcEmail && lu.email && lu.email.trim().toLowerCase() === lcEmail) ||
+                    (lcUid && lu.id === lcUid))
+              );
+              if (hasMatchingLocalUser || isFirestoreWriteQuotaExceeded()) return true;
 
               const isFreshlyCreatedLocally = Boolean(lc.createdAt && nowMs - lc.createdAt < 45000);
               return isFreshlyCreatedLocally;
@@ -1666,58 +1719,69 @@ export function stopRealtimeFirestoreListeners() {
  * so password AND issued linkedAccountNumber are both preserved.
  */
 export async function directFindUserInFirestore(emailOrId: string): Promise<User | null> {
-  if (isFirestoreReadQuotaExceeded() || isFirestoreWriteQuotaExceeded()) return null;
+  if (isFirestoreReadQuotaExceeded() || isFirestoreTransportPaused()) return null;
   const rawInput = emailOrId.trim();
   const cleanSearch = rawInput.toLowerCase();
   if (!cleanSearch) return null;
 
   try {
-    const candidates: User[] = [];
+    return await withReadTimeout(
+      (async () => {
+        const candidates: User[] = [];
 
-    // 1. Check email_... doc ID
-    if (cleanSearch.includes('@')) {
-      const emailDoc = await getDoc(doc(db, COLLECTIONS.USERS, sanitizeEmailDocId(cleanSearch)));
-      if (emailDoc.exists()) candidates.push(emailDoc.data() as User);
-    }
+        // 1. Check email_... doc ID
+        if (cleanSearch.includes('@')) {
+          const emailDoc = await getDoc(doc(db, COLLECTIONS.USERS, sanitizeEmailDocId(cleanSearch)));
+          if (emailDoc.exists()) candidates.push(emailDoc.data() as User);
+        }
 
-    // 2. Check direct doc ID
-    const directDoc = await getDoc(doc(db, COLLECTIONS.USERS, sanitizeDocId(rawInput)));
-    if (directDoc.exists()) candidates.push(directDoc.data() as User);
+        // 2. Check direct doc ID
+        const directDoc = await getDoc(doc(db, COLLECTIONS.USERS, sanitizeDocId(rawInput)));
+        if (directDoc.exists()) candidates.push(directDoc.data() as User);
 
-    // 3. Query by email field (lowercase + raw casing if different)
-    const q = query(collection(db, COLLECTIONS.USERS), where('email', '==', cleanSearch), limit(5));
-    const snap = await getDocs(q);
-    snap.forEach((d) => {
-      const u = d.data() as User;
-      if (!u.id) u.id = d.id;
-      candidates.push(u);
-    });
-
-    if (rawInput.includes('@') && rawInput !== cleanSearch) {
-      const qRaw = query(collection(db, COLLECTIONS.USERS), where('email', '==', rawInput), limit(5));
-      const snapRaw = await getDocs(qRaw);
-      snapRaw.forEach((d) => {
-        const u = d.data() as User;
-        if (!u.id) u.id = d.id;
-        candidates.push(u);
-      });
-    }
-
-    // 4. Case-insensitive fallback scan across users if still empty
-    if (candidates.length === 0 && cleanSearch.includes('@')) {
-      const allUsersSnap = await getDocs(query(collection(db, COLLECTIONS.USERS), limit(250)));
-      allUsersSnap.forEach((d) => {
-        const u = d.data() as User;
-        if ((u.email || '').trim().toLowerCase() === cleanSearch) {
+        // 3. Query by email field (lowercase + raw casing if different)
+        const q = query(collection(db, COLLECTIONS.USERS), where('email', '==', cleanSearch), limit(5));
+        const snap = await getDocs(q);
+        snap.forEach((d) => {
+          const u = d.data() as User;
           if (!u.id) u.id = d.id;
           candidates.push(u);
-        }
-      });
-    }
+        });
 
-    if (candidates.length === 0) return null;
-    return candidates.reduce((acc, item) => mergeUserPair(acc, item));
+        if (rawInput.includes('@') && rawInput !== cleanSearch) {
+          const qRaw = query(collection(db, COLLECTIONS.USERS), where('email', '==', rawInput), limit(5));
+          const snapRaw = await getDocs(qRaw);
+          snapRaw.forEach((d) => {
+            const u = d.data() as User;
+            if (!u.id) u.id = d.id;
+            candidates.push(u);
+          });
+        }
+
+        // 4. Case-insensitive fallback scan across users if still empty
+        if (candidates.length === 0) {
+          const allUsersSnap = await getDocs(query(collection(db, COLLECTIONS.USERS), limit(250)));
+          allUsersSnap.forEach((d) => {
+            const u = d.data() as User;
+            const uEmail = (u.email || '').trim().toLowerCase();
+            const uAcc = (u.linkedAccountNumber || '').replace(/^#/, '').trim().toLowerCase();
+            if (
+              (cleanSearch.includes('@') && uEmail === cleanSearch) ||
+              (!cleanSearch.includes('@') && uAcc && uAcc === cleanSearch.replace(/^#/, ''))
+            ) {
+              if (!u.id) u.id = d.id;
+              candidates.push(u);
+            }
+          });
+        }
+
+        if (candidates.length === 0) return null;
+        return candidates.reduce((acc, item) => mergeUserPair(acc, item));
+      })(),
+      2500
+    );
   } catch (error) {
+    handleTransportOrQuotaFailure(error, 'read');
     if (isPermissionDeniedError(error)) {
       try {
         handleFirestoreError(error, OperationType.GET, COLLECTIONS.USERS);
@@ -1946,9 +2010,8 @@ export async function pushIssuedConsumerToFirestore(
       markPayloadSynced(COLLECTIONS.NOTIFICATIONS, nDocId, notifToSync);
     }
   } catch (error: any) {
-    if (isQuotaError(error)) {
-      markFirestoreQuotaExceeded(error);
-    } else if (isPermissionDeniedError(error)) {
+    handleTransportOrQuotaFailure(error, 'write');
+    if (isPermissionDeniedError(error)) {
       try {
         handleFirestoreError(error, OperationType.WRITE, `${COLLECTIONS.CONSUMERS}/${accNum}`);
       } catch {}
@@ -1982,16 +2045,20 @@ export async function resolveConsumerAccountInFirestore(params: {
   const cleanPhone = normalizePhone11(params.contactNumber);
 
   if (!cleanEmail && !cleanUid && !cleanAcc && !cleanName) return null;
-  if (isFirestoreReadQuotaExceeded() || isFirestoreWriteQuotaExceeded()) return null;
+  if (isFirestoreReadQuotaExceeded() || isFirestoreTransportPaused()) return null;
 
   try {
-    // 1. Resolve User docs
-    let resolvedUser: User | null = null;
-    if (rawEmail) {
-      resolvedUser = await directFindUserInFirestore(rawEmail);
-    } else if (cleanUid) {
-      resolvedUser = await directFindUserInFirestore(cleanUid);
-    }
+    return await withReadTimeout(
+      (async () => {
+        // 1. Resolve User docs
+        let resolvedUser: User | null = null;
+        if (rawEmail) {
+          resolvedUser = await directFindUserInFirestore(rawEmail);
+        } else if (cleanUid) {
+          resolvedUser = await directFindUserInFirestore(cleanUid);
+        } else if (cleanAcc) {
+          resolvedUser = await directFindUserInFirestore(cleanAcc);
+        }
 
     const effectiveAcc =
       cleanAcc ||
@@ -2197,16 +2264,18 @@ export async function resolveConsumerAccountInFirestore(params: {
       }
     }
 
-    return {
-      isIssued,
-      user: resolvedUser,
-      consumer: resolvedConsumer ? normalizeConsumerRecord(resolvedConsumer) : null,
-      notifications,
-    };
+        return {
+          isIssued,
+          user: resolvedUser,
+          consumer: resolvedConsumer ? normalizeConsumerRecord(resolvedConsumer) : null,
+          notifications,
+        };
+      })(),
+      2800
+    );
   } catch (error) {
-    if (isQuotaError(error)) {
-      markFirestoreQuotaExceeded(error, 'read');
-    } else if (isPermissionDeniedError(error)) {
+    handleTransportOrQuotaFailure(error, 'read');
+    if (isPermissionDeniedError(error)) {
       try {
         handleFirestoreError(error, OperationType.GET, COLLECTIONS.CONSUMERS);
       } catch {}
@@ -2448,15 +2517,11 @@ export async function initializeFirestoreSeed(initialData: {
           localStorage.setItem(SEEDED_STORAGE_KEY, '1');
         } catch {}
       } catch (innerError: any) {
-        if (isQuotaError(innerError)) {
-          markFirestoreQuotaExceeded(innerError, 'write');
-        }
+        handleTransportOrQuotaFailure(innerError, 'write');
       }
     }, 300);
   } catch (error: any) {
-    if (isQuotaError(error)) {
-      markFirestoreQuotaExceeded(error, 'write');
-    }
+    handleTransportOrQuotaFailure(error, 'write');
   }
 }
 
@@ -2479,9 +2544,8 @@ export async function syncDocToFirestore<T extends object>(
     await withWriteTimeout(setDoc(doc(db, collectionName, cleanId), cleanData, { merge: true }));
     markPayloadSynced(collectionName, cleanId, cleanData);
   } catch (error: any) {
-    if (isQuotaError(error)) {
-      markFirestoreQuotaExceeded(error, 'write');
-    } else if (isPermissionDeniedError(error)) {
+    handleTransportOrQuotaFailure(error, 'write');
+    if (isPermissionDeniedError(error)) {
       try {
         handleFirestoreError(error, OperationType.WRITE, `${collectionName}/${cleanId}`);
       } catch {}
@@ -2539,8 +2603,8 @@ export async function syncBatchToFirestore<T extends object>(
       markPayloadSynced(collectionName, cleanId, cleanItem);
     });
   } catch (error: any) {
-    if (isQuotaError(error)) {
-      markFirestoreQuotaExceeded(error, 'write');
+    if (isQuotaError(error) || isTransportBlockedError(error)) {
+      handleTransportOrQuotaFailure(error, 'write');
       return;
     }
     // Fallback: write changed items individually so one legacy invalid record never blocks new users/IDs
@@ -2550,8 +2614,8 @@ export async function syncBatchToFirestore<T extends object>(
         await withWriteTimeout(setDoc(doc(db, collectionName, cleanId), cleanItem, { merge: true }));
         markPayloadSynced(collectionName, cleanId, cleanItem);
       } catch (innerErr: any) {
-        if (isQuotaError(innerErr)) {
-          markFirestoreQuotaExceeded(innerErr, 'write');
+        if (isQuotaError(innerErr) || isTransportBlockedError(innerErr)) {
+          handleTransportOrQuotaFailure(innerErr, 'write');
           break;
         }
       }
@@ -2570,9 +2634,8 @@ export async function deleteDocFromFirestore(collectionName: string, docId: stri
     syncedPayloadCache.delete(`${collectionName}/${cleanId}`);
     await withWriteTimeout(deleteDoc(doc(db, collectionName, cleanId)));
   } catch (error: any) {
-    if (isQuotaError(error)) {
-      markFirestoreQuotaExceeded(error, 'write');
-    } else if (isPermissionDeniedError(error)) {
+    handleTransportOrQuotaFailure(error, 'write');
+    if (isPermissionDeniedError(error)) {
       try {
         handleFirestoreError(error, OperationType.DELETE, `${collectionName}/${cleanId}`);
       } catch {}

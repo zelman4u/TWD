@@ -129,23 +129,26 @@ function AppContent() {
 
   // Logout routine with visual loading feedback
   const handleLogout = () => {
+    const loggedOutUser = currentUser;
     showLoading('Signing out of session...', 'Safely terminating portal session and securing records');
     setTimeout(() => {
-      if (currentUser) {
-        mockDb.addAuditLog(
-          currentUser.id,
-          currentUser.name,
-          currentUser.role,
-          'User Logout',
-          `Closed unified portal session for ${currentUser.name} voluntarily.`
-        );
-      }
       mockDb.setCurrentUser(null);
       setCurrentUser(null);
       setCurrentPage('landing');
       hideLoading();
       toast.info('Session Terminated', 'You have been safely signed out of Tagoloan Water District portal.');
-    }, 700);
+      if (loggedOutUser) {
+        setTimeout(() => {
+          mockDb.addAuditLog(
+            loggedOutUser.id,
+            loggedOutUser.name,
+            loggedOutUser.role,
+            'User Logout',
+            `Closed unified portal session for ${loggedOutUser.name} voluntarily.`
+          );
+        }, 50);
+      }
+    }, 350);
   };
 
   // Navigations

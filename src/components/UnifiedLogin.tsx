@@ -8,7 +8,14 @@ import { Mail, Lock, LogIn, AlertCircle, RefreshCw, ArrowLeft, Eye, EyeOff, Smar
 import { User } from '../types';
 import { mockDb } from '../mockDb';
 import { apiClient } from '../services/apiClient';
-import { COLLECTIONS, directFindUserInFirestore, resolveConsumerAccountInFirestore, syncDocToFirestore } from '../services/firebaseDb';
+import {
+  COLLECTIONS,
+  directFindUserInFirestore,
+  resolveConsumerAccountInFirestore,
+  syncDocToFirestore,
+  removeTerminatedAccountKeys,
+  isRealIssuedAccountNumber,
+} from '../services/firebaseDb';
 import { isPendingConsumerStatus } from '../utils/installationWorkflow';
 import { useLoading } from '../context/LoadingContext';
 import { useToast } from '../context/ToastContext';
@@ -55,346 +62,482 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
+
+    const rawIdentifier = email.trim();
+    const inputPassword = password.trim();
+
+    if (!rawIdentifier || !inputPassword) {
+      setError('Please enter both your registered email (or Account #) and password.');
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     showLoading('Authenticating Credentials...', 'Verifying digital security certificate with Tagoloan Water District');
 
-    const inputEmail = email.trim().toLowerCase();
-    const inputPassword = password.trim();
+    const isEmailInput = rawIdentifier.includes('@');
+    const inputEmail = isEmailInput ? rawIdentifier.toLowerCase() : '';
+    const inputAccount = !isEmailInput ? rawIdentifier.replace(/^#/, '').trim().toUpperCase() : '';
 
-    // 1. Official Admin Authentication Check
-    if (inputEmail === 'admin@tagoloanwater.gov.ph') {
-      if (inputPassword === 'AdminWater2025!') {
-        const adminUser: User = {
-          id: 'admin-1',
-          email: 'admin@tagoloanwater.gov.ph',
-          name: 'Admin',
-          role: 'admin',
-          status: 'active',
-          password: 'AdminWater2025!',
-        };
+    const passwordMatches = (storedPw?: string | null): boolean => {
+      if (!storedPw) return false;
+      return storedPw === password || storedPw === inputPassword || storedPw.trim() === inputPassword;
+    };
 
-        // Guarantee admin user is registered and remembered in persistence
-        const users = mockDb.getUsers();
-        const existingIdx = users.findIndex(u => (u.email || '').toLowerCase() === adminUser.email.toLowerCase());
-        if (existingIdx >= 0) {
-          users[existingIdx] = { ...users[existingIdx], ...adminUser };
+    try {
+      // 1. Official Admin Authentication Check
+      if (inputEmail === 'admin@tagoloanwater.gov.ph') {
+        if (passwordMatches('AdminWater2025!')) {
+          const adminUser: User = {
+            id: 'admin-1',
+            email: 'admin@tagoloanwater.gov.ph',
+            name: 'Admin',
+            role: 'admin',
+            status: 'active',
+            password: 'AdminWater2025!',
+          };
+
+          const users = mockDb.getUsers();
+          const existingIdx = users.findIndex((u) => (u.email || '').toLowerCase() === adminUser.email.toLowerCase());
+          if (existingIdx >= 0) {
+            users[existingIdx] = { ...users[existingIdx], ...adminUser };
+          } else {
+            users.push(adminUser);
+          }
+          mockDb.saveUsers(users);
+
+          showLoading(`Access Granted: ${adminUser.name}`, 'Loading District Management Console...');
+
+          setTimeout(() => {
+            mockDb.setCurrentUser(adminUser);
+            hideLoading();
+            setIsLoading(false);
+            onLoginSuccess(adminUser);
+            setTimeout(() => {
+              mockDb.addAuditLog(
+                adminUser.id,
+                adminUser.name,
+                'admin',
+                'Administrator Authentication',
+                'Official administrator session authenticated and remembered.'
+              );
+            }, 60);
+          }, 220);
+          return;
         } else {
-          users.push(adminUser);
-        }
-        mockDb.saveUsers(users);
-
-        showLoading(
-          `Access Granted: ${adminUser.name}`,
-          `Loading District Management Console...`
-        );
-
-        setTimeout(() => {
-          mockDb.setCurrentUser(adminUser);
-          mockDb.addAuditLog(
-            adminUser.id,
-            adminUser.name,
-            'admin',
-            'Administrator Authentication',
-            'Official administrator session authenticated and remembered.'
-          );
-
           hideLoading();
+          setError('Invalid administrator password. Please check your credentials.');
+          toast.error('Authentication Failed', 'Invalid administrator password. Please check your credentials.');
           setIsLoading(false);
-          onLoginSuccess(adminUser);
-        }, 500);
-        return;
-      } else {
+          return;
+        }
+      }
+
+      // 2. Real Registered Consumer Authentication Check (Local + Server + Cloud Firestore Resolution)
+      mockDb.reconcileIssuedAccounts();
+      const users = mockDb.getUsers();
+      const localConsumers = mockDb.getConsumers();
+
+      const localMatchedConsumer = localConsumers.find((c) => {
+        const cEmail = (c.email || '').trim().toLowerCase();
+        const cAcc = (c.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+        return (inputEmail && cEmail === inputEmail) || (inputAccount && cAcc && cAcc === inputAccount);
+      });
+
+      const effectiveLookupEmail = inputEmail || (localMatchedConsumer?.email || '').trim().toLowerCase();
+      const effectiveLookupAcc =
+        inputAccount ||
+        (localMatchedConsumer && isRealIssuedAccountNumber(localMatchedConsumer.accountNumber)
+          ? localMatchedConsumer.accountNumber.replace(/^#/, '').trim().toUpperCase()
+          : '');
+
+      let matchedUser = users.find((u) => {
+        if (u.role === 'admin') return false;
+        const uEmail = (u.email || '').trim().toLowerCase();
+        const uAcc = (u.linkedAccountNumber || '').replace(/^#/, '').trim().toUpperCase();
+        return (
+          (effectiveLookupEmail && uEmail && uEmail === effectiveLookupEmail) ||
+          (effectiveLookupAcc && uAcc && uAcc === effectiveLookupAcc) ||
+          (localMatchedConsumer?.linkedUserId && u.id === localMatchedConsumer.linkedUserId)
+        );
+      });
+
+      // Query central server (bounded timeout) AND Cloud Firestore in parallel WITHOUT mutating state before auth passes
+      const [serverResolved, firestoreResolved] = await Promise.all([
+        (async () => {
+          const controller = new AbortController();
+          const abortTimer = setTimeout(() => controller.abort(), 4000);
+          try {
+            const resp = await fetch('/api/consumers/resolve-account', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: controller.signal,
+              body: JSON.stringify({
+                email: effectiveLookupEmail || undefined,
+                userId: matchedUser?.id || localMatchedConsumer?.linkedUserId,
+                accountNumber: effectiveLookupAcc || matchedUser?.linkedAccountNumber,
+                name: matchedUser?.name || localMatchedConsumer?.name,
+                password: inputPassword,
+                verifyPassword: false,
+                includeAuthMeta: true,
+              }),
+            });
+            if (resp.status === 401) {
+              const errBody = await resp.json().catch(() => null);
+              return { authFailed: Boolean(errBody?.authFailed) };
+            }
+            if (resp.ok) {
+              return await resp.json().catch(() => null);
+            }
+          } catch {
+            // Non-fatal if offline or server waking up
+          } finally {
+            clearTimeout(abortTimer);
+          }
+          return null;
+        })(),
+        resolveConsumerAccountInFirestore({
+          email: effectiveLookupEmail || undefined,
+          userId: matchedUser?.id || localMatchedConsumer?.linkedUserId,
+          accountNumber: effectiveLookupAcc || matchedUser?.linkedAccountNumber,
+          name: matchedUser?.name || localMatchedConsumer?.name,
+        }).catch(() => null),
+      ]);
+
+      // Direct Firestore user lookup if neither local nor parallel resolvers returned a user with a password
+      let directFirestoreUser: User | null = null;
+      if (
+        !matchedUser?.password &&
+        !serverResolved?.user?.password &&
+        !firestoreResolved?.user?.password &&
+        (effectiveLookupEmail || effectiveLookupAcc)
+      ) {
+        directFirestoreUser = await directFindUserInFirestore(effectiveLookupEmail || effectiveLookupAcc).catch(
+          () => null
+        );
+      }
+
+      if (!matchedUser && serverResolved?.authFailed && !firestoreResolved?.user && !directFirestoreUser) {
         hideLoading();
-        setError("Invalid administrator password. Please check your credentials.");
-        toast.error("Authentication Failed", "Invalid administrator password. Please check your credentials.");
+        setError('Incorrect account password. Please try again.');
+        toast.error('Authentication Failed', 'Incorrect account password. Please try again.');
         setIsLoading(false);
         return;
       }
-    }
 
-    // 2. Real Registered Consumer Authentication Check (Local + Server Account/ID Resolution)
-    mockDb.reconcileIssuedAccounts();
-    let users = mockDb.getUsers();
-    let matchedUser = users.find(u => (u.email || '').toLowerCase() === inputEmail);
+      // Assemble candidate User WITHOUT injecting inputPassword or saving before password verification!
+      const resolvedConsumerAny =
+        (firestoreResolved?.isIssued ? firestoreResolved.consumer : null) ||
+        (serverResolved?.isIssued ? serverResolved.consumer : null) ||
+        firestoreResolved?.consumer ||
+        serverResolved?.consumer ||
+        localMatchedConsumer ||
+        null;
 
-    // Query central server AND Cloud Firestore in parallel to resolve cross-device registrations, issued IDs & notifications
-    const [serverResolved, firestoreResolved] = await Promise.all([
-      (async () => {
-        try {
-          const resp = await fetch('/api/consumers/resolve-account', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email: inputEmail,
-              userId: matchedUser?.id,
-              accountNumber: matchedUser?.linkedAccountNumber,
-              name: matchedUser?.name,
-              password: inputPassword,
-              verifyPassword: false,
-              includeAuthMeta: true
-            })
-          });
-          if (resp.status === 401) {
-            const errBody = await resp.json().catch(() => null);
-            return { authFailed: Boolean(errBody?.authFailed) };
-          }
-          if (resp.ok) {
-            return await resp.json().catch(() => null);
-          }
-        } catch {}
-        return null;
-      })(),
-      resolveConsumerAccountInFirestore({
-        email: inputEmail,
-        userId: matchedUser?.id,
-        accountNumber: matchedUser?.linkedAccountNumber,
-        name: matchedUser?.name
-      }).catch(() => null)
-    ]);
-
-    if (!matchedUser && serverResolved?.authFailed && !firestoreResolved?.user) {
-      hideLoading();
-      setError("Incorrect account password. Please try again.");
-      toast.error("Authentication Failed", "Incorrect account password. Please try again.");
-      setIsLoading(false);
-      return;
-    }
-
-    if (!matchedUser && firestoreResolved?.user) {
-      matchedUser = {
-        ...firestoreResolved.user,
-        password: firestoreResolved.user.password || inputPassword
-      };
-      users.push(matchedUser);
-      mockDb.saveUsers(users);
-      syncDocToFirestore(COLLECTIONS.USERS, matchedUser.id, matchedUser, true);
-      syncDocToFirestore(COLLECTIONS.USERS, `email_${inputEmail.replace(/[^a-zA-Z0-9_-]/g, '_')}`, matchedUser, true);
-    }
-
-    if (!matchedUser && serverResolved?.user) {
-      matchedUser = {
-        ...serverResolved.user,
-        password: serverResolved.user.password || inputPassword
-      } as User;
-      users.push(matchedUser);
-      mockDb.saveUsers(users);
-      syncDocToFirestore(COLLECTIONS.USERS, matchedUser.id, matchedUser, true);
-      syncDocToFirestore(COLLECTIONS.USERS, `email_${inputEmail.replace(/[^a-zA-Z0-9_-]/g, '_')}`, matchedUser, true);
-    }
-
-    // If still not found in local cache or server, query live Firestore user collection directly
-    if (!matchedUser) {
-      const firestoreUser = await directFindUserInFirestore(inputEmail);
-      if (firestoreUser) {
-        matchedUser = firestoreUser;
-        users.push(matchedUser);
-        mockDb.saveUsers(users);
-      }
-    }
-
-    if (!matchedUser) {
-      hideLoading();
-      setError("Account not found. Please review the registered email address or register a new account below.");
-      toast.error("Account Not Found", "No account registered with this email address.");
-      setIsLoading(false);
-      return;
-    }
-
-    // Select authoritative password from whichever source (local override/user, server, or Firestore) has the highest passwordUpdatedAt
-    let authoritativePassword = matchedUser.password;
-    let authoritativePwTs = matchedUser.passwordUpdatedAt || 0;
-
-    try {
-      const rawOv = localStorage.getItem('twd_live_v4_password_overrides');
-      if (rawOv) {
-        const ovMap = JSON.parse(rawOv) || {};
-        for (const k of [inputEmail, (matchedUser.id || '').toLowerCase(), (matchedUser.linkedAccountNumber || '').toLowerCase()].filter(Boolean)) {
-          const ov = ovMap[k];
-          if (ov && ov.password && ov.passwordUpdatedAt >= authoritativePwTs) {
-            authoritativePassword = ov.password;
-            authoritativePwTs = ov.passwordUpdatedAt;
-          }
+      if (!matchedUser) {
+        if (serverResolved?.user) {
+          matchedUser = { ...(serverResolved.user as User) };
+        } else if (firestoreResolved?.user) {
+          matchedUser = { ...firestoreResolved.user };
+        } else if (directFirestoreUser) {
+          matchedUser = { ...directFirestoreUser };
+        } else if (resolvedConsumerAny) {
+          const isConsIssued = isRealIssuedAccountNumber(resolvedConsumerAny.accountNumber);
+          const fallbackPendingStatus: User['status'] =
+            resolvedConsumerAny.status === 'pending_installation' ||
+            resolvedConsumerAny.status === 'installation_not_scheduled'
+              ? resolvedConsumerAny.status
+              : 'pending_approval';
+          matchedUser = {
+            id: resolvedConsumerAny.linkedUserId || resolvedConsumerAny.id || `user-${Date.now()}`,
+            email: (resolvedConsumerAny.email || effectiveLookupEmail || '').trim().toLowerCase(),
+            name: resolvedConsumerAny.name || 'Consumer',
+            role: 'consumer',
+            status: isConsIssued ? 'active' : fallbackPendingStatus,
+            linkedAccountNumber: isConsIssued
+              ? resolvedConsumerAny.accountNumber.replace(/^#/, '').trim().toUpperCase()
+              : undefined,
+            contactNumber: resolvedConsumerAny.contactNumber,
+            registrationDate: resolvedConsumerAny.registrationDate,
+          };
         }
       }
-    } catch {}
 
-    for (const rc of [serverResolved?.user, firestoreResolved?.user].filter(Boolean) as Array<{ password?: string; passwordUpdatedAt?: number }>) {
-      const rcTs = Number(rc.passwordUpdatedAt || 0);
-      if (rc.password && (rcTs > authoritativePwTs || (!authoritativePassword && rcTs === authoritativePwTs))) {
-        authoritativePassword = rc.password;
-        authoritativePwTs = rcTs;
+      if (!matchedUser) {
+        hideLoading();
+        setError(
+          'Account not found. Please review the registered email address or Account Number, or register a new account below.'
+        );
+        toast.error('Account Not Found', 'No registered consumer account matched these credentials.');
+        setIsLoading(false);
+        return;
       }
-    }
 
-    if (authoritativePassword && authoritativePassword !== matchedUser.password) {
+      // Gather all authoritative password candidates across local override, server, Firestore, and local user
+      type PwCandidate = { password: string; ts: number; source: 'override' | 'server' | 'firestore' | 'local' };
+      const pwCandidates: PwCandidate[] = [];
+      const pushCandidate = (pw: string | undefined, ts: number | undefined, source: PwCandidate['source']) => {
+        if (!pw || typeof pw !== 'string' || !pw.trim()) return;
+        pwCandidates.push({ password: pw, ts: Number(ts || 0), source });
+      };
+
+      try {
+        const rawOv = localStorage.getItem('twd_live_v4_password_overrides');
+        if (rawOv) {
+          const ovMap = JSON.parse(rawOv) || {};
+          for (const k of [
+            effectiveLookupEmail,
+            (matchedUser.email || '').trim().toLowerCase(),
+            (matchedUser.id || '').trim().toLowerCase(),
+            (matchedUser.linkedAccountNumber || '').trim().toLowerCase(),
+          ].filter(Boolean)) {
+            const ov = ovMap[k];
+            if (ov && ov.password) {
+              pushCandidate(ov.password, ov.passwordUpdatedAt, 'override');
+            }
+          }
+        }
+      } catch {}
+
+      pushCandidate(serverResolved?.user?.password, serverResolved?.user?.passwordUpdatedAt, 'server');
+      pushCandidate(firestoreResolved?.user?.password, firestoreResolved?.user?.passwordUpdatedAt, 'firestore');
+      pushCandidate(directFirestoreUser?.password, directFirestoreUser?.passwordUpdatedAt, 'firestore');
+      pushCandidate(matchedUser.password, matchedUser.passwordUpdatedAt, 'local');
+
+      // Rank candidates: strictly highest passwordUpdatedAt wins; on tie (both 0), prefer server/firestore over potentially stale local cache
+      const sourcePriority: Record<PwCandidate['source'], number> = {
+        override: 4,
+        server: 3,
+        firestore: 2,
+        local: 1,
+      };
+      pwCandidates.sort((a, b) => {
+        if (b.ts !== a.ts) return b.ts - a.ts;
+        return sourcePriority[b.source] - sourcePriority[a.source];
+      });
+
+      let verifiedPassword: string | undefined;
+      let verifiedPwTs = 0;
+
+      if (pwCandidates.length > 0) {
+        const primary = pwCandidates[0];
+        if (passwordMatches(primary.password)) {
+          verifiedPassword = primary.password;
+          verifiedPwTs = primary.ts;
+        } else {
+          // Self-heal if local password had ts === 0 (e.g. poisoned by an earlier mistyped attempt) while server or Firestore matches!
+          const remoteMatch = pwCandidates.find(
+            (c) =>
+              (c.source === 'server' || c.source === 'firestore') &&
+              passwordMatches(c.password) &&
+              (primary.ts === 0 || c.ts >= primary.ts)
+          );
+          if (remoteMatch) {
+            verifiedPassword = remoteMatch.password;
+            verifiedPwTs = Math.max(remoteMatch.ts, Date.now());
+          } else if (serverResolved?.passwordVerified && (primary.ts === 0 || Number(serverResolved?.user?.passwordUpdatedAt || 0) >= primary.ts)) {
+            verifiedPassword = inputPassword;
+            verifiedPwTs = Number(serverResolved?.user?.passwordUpdatedAt || Date.now());
+          } else {
+            hideLoading();
+            setError('Incorrect account password. Please try again.');
+            toast.error('Authentication Failed', 'Incorrect account password. Please try again.');
+            setIsLoading(false);
+            return;
+          }
+        }
+      } else if (serverResolved?.authFailed) {
+        hideLoading();
+        setError('Incorrect account password. Please try again.');
+        toast.error('Authentication Failed', 'Incorrect account password. Please try again.');
+        setIsLoading(false);
+        return;
+      } else {
+        // Legacy pre-seeded utility consumer without an online password yet — bind password ONLY now after valid account match
+        verifiedPassword = inputPassword;
+        verifiedPwTs = Date.now();
+      }
+
+      // Authentication PASSED! Clear any stale local termination tombstones for this active account
+      if (serverResolved?.user || serverResolved?.consumer || firestoreResolved?.user || firestoreResolved?.consumer) {
+        removeTerminatedAccountKeys([matchedUser.email, matchedUser.id, matchedUser.linkedAccountNumber]);
+      }
+
       matchedUser = {
         ...matchedUser,
-        password: authoritativePassword,
-        ...(authoritativePwTs > 0 ? { passwordUpdatedAt: authoritativePwTs } : {})
+        email: (matchedUser.email || effectiveLookupEmail || '').trim().toLowerCase(),
+        password: verifiedPassword,
+        ...(verifiedPwTs > 0 ? { passwordUpdatedAt: verifiedPwTs } : {}),
       };
-      if (authoritativePwTs > 0) {
+
+      // Heal local password override if verified password updated or healed a stale local record
+      if (verifiedPassword) {
         mockDb.updateUserPassword(
-          { userId: matchedUser.id, email: inputEmail, accountNumber: matchedUser.linkedAccountNumber },
-          authoritativePassword,
-          authoritativePwTs
+          {
+            userId: matchedUser.id,
+            email: matchedUser.email,
+            accountNumber: matchedUser.linkedAccountNumber,
+          },
+          verifiedPassword,
+          verifiedPwTs || Date.now()
         );
       }
-    }
 
-    // Upgrade matchedUser if Firestore or Server has an active linkedAccountNumber
-    const resolvedLinkedAcc =
-      firestoreResolved?.user?.linkedAccountNumber ||
-      (firestoreResolved?.isIssued ? firestoreResolved.consumer?.accountNumber : '') ||
-      serverResolved?.user?.linkedAccountNumber ||
-      (serverResolved?.isIssued ? serverResolved.consumer?.accountNumber : '');
+      // Upgrade matchedUser if Firestore or Server has an active linkedAccountNumber
+      const resolvedLinkedAcc =
+        firestoreResolved?.user?.linkedAccountNumber ||
+        (firestoreResolved?.isIssued ? firestoreResolved.consumer?.accountNumber : '') ||
+        serverResolved?.user?.linkedAccountNumber ||
+        (serverResolved?.isIssued ? serverResolved.consumer?.accountNumber : '');
 
-    if (
-      resolvedLinkedAcc &&
-      !resolvedLinkedAcc.toUpperCase().startsWith('PENDING') &&
-      (!matchedUser.linkedAccountNumber || matchedUser.linkedAccountNumber.toUpperCase().startsWith('PENDING'))
-    ) {
-      matchedUser = {
-        ...matchedUser,
-        linkedAccountNumber: resolvedLinkedAcc.trim().toUpperCase(),
-        status: 'active',
-        password: authoritativePassword || matchedUser.password,
-        ...(authoritativePwTs > 0 ? { passwordUpdatedAt: authoritativePwTs } : {})
-      };
-    }
-
-    const serverExplicitlyVerifiedNewer =
-      Boolean(serverResolved?.passwordVerified) &&
-      Number(serverResolved?.user?.passwordUpdatedAt || 0) > authoritativePwTs;
-
-    if (!serverExplicitlyVerifiedNewer && authoritativePassword && authoritativePassword !== inputPassword) {
-      hideLoading();
-      setError("Incorrect account password. Please try again.");
-      toast.error("Authentication Failed", "Incorrect account password. Please try again.");
-      setIsLoading(false);
-      return;
-    }
-
-    // Merge server-resolved & Firestore-resolved notifications and consumer record before entering portal
-    if (serverResolved?.notifications && Array.isArray(serverResolved.notifications)) {
-      mockDb.mergeExternalNotifications(serverResolved.notifications);
-    }
-    if (firestoreResolved?.notifications && Array.isArray(firestoreResolved.notifications)) {
-      mockDb.mergeExternalNotifications(firestoreResolved.notifications);
-    }
-
-    const incomingCandidates = [
-      firestoreResolved?.isIssued ? firestoreResolved.consumer : null,
-      serverResolved?.isIssued ? serverResolved.consumer : null,
-      firestoreResolved?.consumer,
-      serverResolved?.consumer
-    ].filter(Boolean);
-
-    if (incomingCandidates.length > 0) {
-      const rc = incomingCandidates[0];
-      const rcIssued = Boolean(rc.accountNumber && !rc.accountNumber.toUpperCase().startsWith('PENDING') && !isPendingConsumerStatus(rc.status));
-      const localCons = mockDb.getConsumers();
-      const cIdx = localCons.findIndex(lc =>
-        (rc.accountNumber && !rc.accountNumber.toUpperCase().startsWith('PENDING') && lc.accountNumber === rc.accountNumber) ||
-        (rc.email && lc.email && lc.email.toLowerCase() === rc.email.toLowerCase()) ||
-        (rc.linkedUserId && lc.linkedUserId && lc.linkedUserId === rc.linkedUserId)
-      );
-      if (cIdx >= 0) {
-        if (rcIssued || !localCons[cIdx].accountNumber || localCons[cIdx].accountNumber.toUpperCase().startsWith('PENDING')) {
-          localCons[cIdx] = { ...localCons[cIdx], ...rc };
-        }
-      } else {
-        localCons.unshift(rc);
+      if (
+        resolvedLinkedAcc &&
+        isRealIssuedAccountNumber(resolvedLinkedAcc) &&
+        !isRealIssuedAccountNumber(matchedUser.linkedAccountNumber)
+      ) {
+        matchedUser = {
+          ...matchedUser,
+          linkedAccountNumber: resolvedLinkedAcc.replace(/^#/, '').trim().toUpperCase(),
+          status: 'active',
+        };
       }
-      mockDb.saveConsumers(localCons);
-    }
 
-    // Also pull any installation requests associated with this consumer from backend
-    if (matchedUser.role === 'consumer' && (matchedUser.email || matchedUser.id)) {
-      apiClient
-        .getInstallations({ email: matchedUser.email, userId: matchedUser.id })
-        .then((res) => {
-          if (res?.installations && Array.isArray(res.installations)) {
-            mockDb.mergeExternalInstallations(res.installations);
+      // Merge server-resolved & Firestore-resolved notifications and consumer record before entering portal
+      if (serverResolved?.notifications && Array.isArray(serverResolved.notifications)) {
+        mockDb.mergeExternalNotifications(serverResolved.notifications);
+      }
+      if (firestoreResolved?.notifications && Array.isArray(firestoreResolved.notifications)) {
+        mockDb.mergeExternalNotifications(firestoreResolved.notifications);
+      }
+
+      const incomingCandidates = [
+        firestoreResolved?.isIssued ? firestoreResolved.consumer : null,
+        serverResolved?.isIssued ? serverResolved.consumer : null,
+        firestoreResolved?.consumer,
+        serverResolved?.consumer,
+      ].filter(Boolean);
+
+      if (incomingCandidates.length > 0) {
+        const rc = incomingCandidates[0];
+        const rcIssued = Boolean(isRealIssuedAccountNumber(rc.accountNumber) && !isPendingConsumerStatus(rc.status));
+        const localCons = mockDb.getConsumers();
+        const cIdx = localCons.findIndex(
+          (lc) =>
+            (isRealIssuedAccountNumber(rc.accountNumber) && lc.accountNumber === rc.accountNumber) ||
+            (rc.email && lc.email && lc.email.toLowerCase() === rc.email.toLowerCase()) ||
+            (rc.linkedUserId && lc.linkedUserId && lc.linkedUserId === rc.linkedUserId)
+        );
+        if (cIdx >= 0) {
+          if (rcIssued || !isRealIssuedAccountNumber(localCons[cIdx].accountNumber)) {
+            localCons[cIdx] = { ...localCons[cIdx], ...rc };
           }
-        })
-        .catch(() => {});
-    }
+        } else {
+          localCons.unshift(rc);
+        }
+        mockDb.saveConsumers(localCons);
+      }
 
-    mockDb.reconcileIssuedAccounts();
+      // Pull any installation requests associated with this consumer from backend asynchronously
+      if (matchedUser.role === 'consumer' && (matchedUser.email || matchedUser.id)) {
+        apiClient
+          .getInstallations({ email: matchedUser.email, userId: matchedUser.id })
+          .then((res) => {
+            if (res?.installations && Array.isArray(res.installations)) {
+              mockDb.mergeExternalInstallations(res.installations);
+            }
+          })
+          .catch(() => {});
+      }
 
-    // Access Granted: Consumer or Field Meter Reader
-    // Auto-link issued account number from consumers database if available
-    const allConsumers = mockDb.getConsumers();
-    const matchedConsumers = allConsumers
-      .filter(
-        c => (c.linkedUserId && c.linkedUserId === matchedUser!.id) ||
-             (c.email && c.email.toLowerCase() === matchedUser!.email?.toLowerCase()) ||
-             (c.name && c.name.toLowerCase() === matchedUser!.name.toLowerCase() && (!c.email || !matchedUser!.email || c.email.toLowerCase() === matchedUser!.email.toLowerCase()))
-      )
-      .sort((a, b) => {
-        const aIssued = a.accountNumber && !a.accountNumber.toUpperCase().startsWith('PENDING') && !isPendingConsumerStatus(a.status) ? 1 : 0;
-        const bIssued = b.accountNumber && !b.accountNumber.toUpperCase().startsWith('PENDING') && !isPendingConsumerStatus(b.status) ? 1 : 0;
-        return bIssued - aIssued;
-      });
-    const matchedConsumer = matchedConsumers[0];
+      mockDb.reconcileIssuedAccounts();
 
-    if (matchedConsumer && matchedConsumer.accountNumber && !matchedConsumer.accountNumber.toUpperCase().startsWith('PENDING') && !isPendingConsumerStatus(matchedConsumer.status)) {
-      const userStatus: User['status'] =
-        matchedConsumer.status === 'inactive' ? 'inactive' : 'active';
+      // Auto-link issued account number from consumers database if available
+      const allConsumers = mockDb.getConsumers();
+      const matchedConsumers = allConsumers
+        .filter(
+          (c) =>
+            (c.linkedUserId && c.linkedUserId === matchedUser!.id) ||
+            (c.email && matchedUser!.email && c.email.toLowerCase() === matchedUser!.email.toLowerCase()) ||
+            (c.name &&
+              c.name.toLowerCase() === matchedUser!.name.toLowerCase() &&
+              (!c.email || !matchedUser!.email || c.email.toLowerCase() === matchedUser!.email.toLowerCase()))
+        )
+        .sort((a, b) => {
+          const aIssued = isRealIssuedAccountNumber(a.accountNumber) && !isPendingConsumerStatus(a.status) ? 1 : 0;
+          const bIssued = isRealIssuedAccountNumber(b.accountNumber) && !isPendingConsumerStatus(b.status) ? 1 : 0;
+          return bIssued - aIssued;
+        });
+      const matchedConsumer = matchedConsumers[0];
 
-      matchedUser = {
-        ...matchedUser,
-        linkedAccountNumber: matchedConsumer.accountNumber,
-        status: userStatus
-      };
-      // Update in stored users
+      if (
+        matchedConsumer &&
+        isRealIssuedAccountNumber(matchedConsumer.accountNumber) &&
+        !isPendingConsumerStatus(matchedConsumer.status)
+      ) {
+        const userStatus: User['status'] = matchedConsumer.status === 'inactive' ? 'inactive' : 'active';
+        matchedUser = {
+          ...matchedUser,
+          linkedAccountNumber: matchedConsumer.accountNumber.replace(/^#/, '').trim().toUpperCase(),
+          status: userStatus,
+        };
+      } else if (
+        matchedConsumer &&
+        (matchedConsumer.status === 'pending_installation' || matchedConsumer.status === 'installation_not_scheduled') &&
+        matchedUser.status !== matchedConsumer.status
+      ) {
+        matchedUser = {
+          ...matchedUser,
+          status: matchedConsumer.status,
+        };
+      }
+
+      // Persist authenticated user to local users registry & background sync
       const currentUsers = mockDb.getUsers();
       const uIdx = currentUsers.findIndex(
-        u => u.id === matchedUser!.id || (u.email && matchedUser!.email && u.email.toLowerCase() === matchedUser!.email.toLowerCase())
+        (u) =>
+          u.id === matchedUser!.id ||
+          (u.email && matchedUser!.email && u.email.toLowerCase() === matchedUser!.email.toLowerCase())
       );
       if (uIdx >= 0) {
-        currentUsers[uIdx] = matchedUser;
-        mockDb.saveUsers(currentUsers);
+        currentUsers[uIdx] = { ...currentUsers[uIdx], ...matchedUser };
+      } else {
+        currentUsers.unshift(matchedUser);
       }
-    } else if (
-      matchedConsumer &&
-      (matchedConsumer.status === 'pending_installation' || matchedConsumer.status === 'installation_not_scheduled') &&
-      matchedUser.status !== matchedConsumer.status
-    ) {
-      matchedUser = {
-        ...matchedUser,
-        status: matchedConsumer.status,
-      };
-      const currentUsers = mockDb.getUsers();
-      const uIdx = currentUsers.findIndex(
-        u => u.id === matchedUser!.id || (u.email && matchedUser!.email && u.email.toLowerCase() === matchedUser!.email.toLowerCase())
-      );
-      if (uIdx >= 0) {
-        currentUsers[uIdx] = matchedUser;
-        mockDb.saveUsers(currentUsers);
-      }
-    }
+      mockDb.saveUsers(currentUsers);
 
-    showLoading(
-      `Access Granted: ${matchedUser.name}`,
-      `Loading Portal Dashboard...`
-    );
+      const finalUser = matchedUser;
+      showLoading(`Access Granted: ${finalUser.name}`, 'Loading Portal Dashboard...');
 
-    setTimeout(() => {
-      mockDb.setCurrentUser(matchedUser!);
-      mockDb.addAuditLog(
-        matchedUser!.id,
-        matchedUser!.name,
-        matchedUser!.role,
-        'User Login',
-        `Portal session initialized for ${matchedUser!.name}.`
-      );
+      setTimeout(() => {
+        mockDb.setCurrentUser(finalUser);
+        hideLoading();
+        setIsLoading(false);
+        onLoginSuccess(finalUser);
 
+        // Defer non-critical audit & cloud sync off the transition frame so timer handlers stay <5ms
+        setTimeout(() => {
+          mockDb.addAuditLog(
+            finalUser.id,
+            finalUser.name,
+            finalUser.role,
+            'User Login',
+            `Portal session initialized for ${finalUser.name}.`
+          );
+          syncDocToFirestore(COLLECTIONS.USERS, finalUser.id, finalUser, false);
+          if (finalUser.email) {
+            const emailDocKey = `email_${finalUser.email.replace(/[^a-zA-Z0-9_-]/g, '_')}`.slice(0, 120);
+            syncDocToFirestore(COLLECTIONS.USERS, emailDocKey, finalUser, false);
+          }
+        }, 80);
+      }, 220);
+    } catch (err) {
+      console.error('[Login] Unexpected authentication error:', err);
       hideLoading();
       setIsLoading(false);
-      onLoginSuccess(matchedUser!);
-    }, 500);
+      setError('Unable to complete sign-in right now. Please try again.');
+      toast.error('Sign-In Error', 'Unable to complete sign-in right now. Please try again.');
+    }
   };
 
   return (
@@ -479,20 +622,24 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
 
           <form onSubmit={handleLogin} className="space-y-3">
             
-            {/* Email Field */}
+            {/* Email or Account Number Field */}
             <div>
-              <label className="block text-[9px] font-black text-slate-300 uppercase tracking-widest mb-1">Registered Email</label>
+              <label className="block text-[9px] font-black text-slate-300 uppercase tracking-widest mb-1">Registered Email or Account #</label>
               <div className="relative">
                 <span className="absolute left-3 top-2.5 text-slate-400">
                   <Mail className="h-3.5 w-3.5" />
                 </span>
                 <input 
-                  type="email"
+                  type="text"
+                  inputMode="email"
                   autoComplete="username"
                   required
                   placeholder="name@domain.com"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (error) setError(null);
+                  }}
                   className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 rounded-xl py-2 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:outline-none shadow-inner"
                 />
               </div>
@@ -513,7 +660,10 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
                   required
                   placeholder="••••••••"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (error) setError(null);
+                  }}
                   className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 rounded-xl py-2 pl-9 pr-10 text-xs text-white placeholder-slate-500 focus:outline-none shadow-inner"
                 />
                 <button

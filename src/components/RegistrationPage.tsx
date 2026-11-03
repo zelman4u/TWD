@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Consumer, Barangay } from '../types';
-import { syncDocToFirestore, COLLECTIONS } from '../services/firebaseDb';
+import { syncDocToFirestore, removeTerminatedAccountKeys, COLLECTIONS } from '../services/firebaseDb';
 import { sendRealtimeMessage } from '../services/realtimeSocket';
 import { useLoading } from '../context/LoadingContext';
 import { useToast } from '../context/ToastContext';
@@ -263,8 +263,13 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
 
       const officialName = fullName.trim();
       const normalizedEmail = email.trim().toLowerCase();
+      const cleanPassword = password.trim();
+      const nowTs = Date.now();
       const emailDocKey = `email_${normalizedEmail.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-      const newUserId = `user-${Date.now()}`;
+      const newUserId = `user-${nowTs}`;
+
+      // Ensure any prior terminated tombstones for this email/id are cleared upon fresh registration
+      removeTerminatedAccountKeys([normalizedEmail, newUserId]);
 
       const initialUserStatus: User['status'] = hasExistingMeter
         ? 'pending_approval'
@@ -287,7 +292,8 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         role: 'consumer',
         status: initialUserStatus,
         contactNumber: cleanPhone,
-        password: password,
+        password: cleanPassword,
+        passwordUpdatedAt: nowTs,
         registrationDate: new Date().toISOString().split('T')[0],
       };
 
@@ -309,13 +315,14 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
         accountValidationStatus: hasExistingMeter ? undefined : 'pending_installation',
         isRegistered: true,
         registrationDate: new Date().toISOString().split('T')[0],
-        createdAt: Date.now(),
+        createdAt: nowTs,
         linkedUserId: newUserId,
         consumerType: consumerType,
         outstandingBalance: 0,
       };
 
       mockDb.saveUsers([newUser, ...users]);
+      mockDb.updateUserPassword({ userId: newUserId, email: normalizedEmail }, cleanPassword, nowTs);
       mockDb.saveConsumers([newConsumer, ...consumers]);
 
       let createdRequestId: string | undefined;
@@ -407,7 +414,8 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
           sitioZone: sitioZone.trim(),
           consumerType: consumerType,
           linkedUserId: newUserId,
-          password: password,
+          password: cleanPassword,
+          passwordUpdatedAt: nowTs,
           status: initialConsumerStatus,
           applicationNumber: appNumber,
           hasExistingMeter: hasExistingMeter,

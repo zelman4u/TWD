@@ -402,6 +402,8 @@ export function scanAndUpdateAccounts(): ScanSummary {
   return summary;
 }
 
+let initialScanTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
 /**
  * Starts the continuous background scanning service (defaults to 60 second intervals)
  */
@@ -410,12 +412,16 @@ export function startGracePeriodScanner(intervalMs = 60000): void {
     return; // Already running
   }
 
-  // Run initial scan immediately on service startup
-  try {
-    scanAndUpdateAccounts();
-  } catch (err) {
-    console.error('[GracePeriodScanner] Initial scan error:', err);
-  }
+  // Defer initial scan off critical startup tick to prevent main-thread timer violations
+  if (initialScanTimeoutId) clearTimeout(initialScanTimeoutId);
+  initialScanTimeoutId = setTimeout(() => {
+    initialScanTimeoutId = null;
+    try {
+      scanAndUpdateAccounts();
+    } catch (err) {
+      console.error('[GracePeriodScanner] Initial scan error:', err);
+    }
+  }, 1500);
 
   // Set periodic background interval
   scannerIntervalId = setInterval(() => {
@@ -433,6 +439,10 @@ export function startGracePeriodScanner(intervalMs = 60000): void {
  * Stops the continuous background scanning service
  */
 export function stopGracePeriodScanner(): void {
+  if (initialScanTimeoutId) {
+    clearTimeout(initialScanTimeoutId);
+    initialScanTimeoutId = null;
+  }
   if (scannerIntervalId) {
     clearInterval(scannerIntervalId);
     scannerIntervalId = null;
