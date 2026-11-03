@@ -40,8 +40,12 @@ import {
   dedupeNotifications,
   getNotificationSemanticKey,
   isIssuedNotifAccount,
+  isNotificationReadPersistently,
+  markNotificationsReadPersistently,
   normalizeNotifAccount,
 } from './utils/notificationDeduper';
+
+const postedNotificationSemKeys = new Set<string>();
 import {
   inferNotificationType,
   isPersonalNotificationType,
@@ -2439,7 +2443,7 @@ export const mockDb = {
     const cleanAcc = normalizeNotifAccount(notif.accountNumber) || notif.accountNumber || 'PENDING';
     const cleanEmail = notif.consumerEmail ? notif.consumerEmail.trim().toLowerCase() : undefined;
 
-    const candidate: ConsumerNotification = {
+    const baseCandidate: ConsumerNotification = {
       ...notif,
       type: inferNotificationType(notif),
       accountNumber: cleanAcc,
@@ -2448,9 +2452,13 @@ export const mockDb = {
       timestamp: notif.timestamp || new Date().toISOString(),
       read: false,
     };
+    const candidate: ConsumerNotification = {
+      ...baseCandidate,
+      read: isNotificationReadPersistently(baseCandidate),
+    };
 
     const candidateSemKey = getNotificationSemanticKey(candidate);
-    const existing = list.find((item) => getNotificationSemanticKey(item) === candidateSemKey);
+    const existing = list.find((item) => item.id === candidate.id || getNotificationSemanticKey(item) === candidateSemKey);
     if (existing) {
       if (list.length !== rawList.length) {
         setStored(KEYS.NOTIFICATIONS, list);
@@ -2460,18 +2468,21 @@ export const mockDb = {
 
     const nextList = dedupeNotifications([candidate, ...list]);
     setStored(KEYS.NOTIFICATIONS, nextList);
-    syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, candidate.id, candidate as unknown as Record<string, unknown>);
-    safeBackendFetch('/api/notifications', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(candidate)
-    }).catch(() => {});
+    if (!postedNotificationSemKeys.has(candidateSemKey)) {
+      postedNotificationSemKeys.add(candidateSemKey);
+      syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, candidate.id, candidate as unknown as Record<string, unknown>);
+      safeBackendFetch('/api/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(candidate)
+      }).catch(() => {});
+    }
     return candidate;
   },
 
   mergeExternalNotifications: (incoming: ConsumerNotification[]): boolean => {
     if (!Array.isArray(incoming) || incoming.length === 0) return false;
-    const prevRaw = localStorage.getItem(KEYS.NOTIFICATIONS) || '[]';
+    const prevRaw = safeStorageGetItem(KEYS.NOTIFICATIONS) || '[]';
     const currentList = getStored<ConsumerNotification[]>(KEYS.NOTIFICATIONS, []);
     const merged = dedupeNotifications([...currentList, ...incoming]);
     const nextRaw = JSON.stringify(merged);
@@ -2495,11 +2506,29 @@ export const mockDb = {
       }
       return;
     }
-    if (target && target.read) return;
-    const updated = list.map(n => n.id === id ? { ...n, read: true } : n);
-    setStored(KEYS.NOTIFICATIONS, updated);
-    syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, id, { read: true });
-    safeBackendFetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'PATCH' }).catch(() => {});
+    markNotificationsReadPersistently([target || id], list);
+    const targetSemKey = target ? getNotificationSemanticKey(target) : '';
+    let anyChanged = false;
+    const updated = list.map(n => {
+      if (n.id === id || (targetSemKey && getNotificationSemanticKey(n) === targetSemKey)) {
+        if (!n.read) anyChanged = true;
+        return { ...n, read: true };
+      }
+      return n;
+    });
+    if (anyChanged || !target) {
+      setStored(KEYS.NOTIFICATIONS, updated);
+    }
+    const fullDoc = target ? { ...target, read: true } : { id, read: true };
+    syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, id, fullDoc as unknown as Record<string, unknown>);
+    safeBackendFetch(`/api/notifications/${encodeURIComponent(id)}/read`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        semanticKey: targetSemKey || undefined,
+        notification: target ? { ...target, read: true } : undefined,
+      }),
+    }).catch(() => {});
   },
 
   markAllNotificationsRead: (ids?: string[]): void => {
@@ -2510,6 +2539,7 @@ export const mockDb = {
 
     let broadcastUpdated = false;
     const changedItems: ConsumerNotification[] = [];
+    const targetedPersonal: ConsumerNotification[] = [];
     const updated = list.map((n) => {
       if (idSet && !idSet.has(n.id)) return n;
       const nAcc = (n.accountNumber || '').replace(/^#/, '').trim().toLowerCase();
@@ -2518,24 +2548,31 @@ export const mockDb = {
         broadcastUpdated = true;
         return n;
       }
+      const next = { ...n, read: true };
+      targetedPersonal.push(next);
       if (!n.read) {
-        const next = { ...n, read: true };
         changedItems.push(next);
-        return next;
       }
-      return n;
+      return next;
     });
+
+    if (targetedPersonal.length > 0) {
+      markNotificationsReadPersistently(targetedPersonal, list);
+    } else if (ids && ids.length > 0) {
+      markNotificationsReadPersistently(ids, list);
+    }
 
     if (changedItems.length > 0) {
       setStored(KEYS.NOTIFICATIONS, updated);
       changedItems.slice(0, 20).forEach((item) => {
-        syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, item.id, { read: true });
+        syncDocToFirestore(COLLECTIONS.NOTIFICATIONS, item.id, item as unknown as Record<string, unknown>);
       });
       safeBackendFetch('/api/notifications/mark-all-read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ids: changedItems.map((i) => i.id),
+          semanticKeys: changedItems.map((i) => getNotificationSemanticKey(i)),
           accountNumber: cur?.linkedAccountNumber,
           email: cur?.email,
           userId: cur?.id,

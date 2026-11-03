@@ -4,6 +4,43 @@ import {
   isPersonalNotificationType,
   isTransactionalPaymentOrReceiptItem,
 } from './announcementSanitizer';
+import { safeStorageGetItem, safeStorageSetStructured } from '../services/storageSafe';
+
+const READ_NOTIFS_STORAGE_KEY = 'twd_live_v4_read_notifs_v2';
+const MAX_PERSISTED_READ_KEYS = 800;
+let hydratedReadKeys = false;
+const readNotificationKeySet = new Set<string>();
+
+function ensureReadKeysHydrated(): void {
+  if (hydratedReadKeys) return;
+  hydratedReadKeys = true;
+  try {
+    const raw = safeStorageGetItem(READ_NOTIFS_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      parsed.forEach((k) => {
+        if (typeof k === 'string' && k) readNotificationKeySet.add(k);
+      });
+    }
+  } catch {
+    // Ignore malformed storage
+  }
+}
+
+function persistReadKeySet(): void {
+  try {
+    const all = Array.from(readNotificationKeySet);
+    const trimmed = all.length > MAX_PERSISTED_READ_KEYS ? all.slice(all.length - MAX_PERSISTED_READ_KEYS) : all;
+    if (trimmed.length !== all.length) {
+      readNotificationKeySet.clear();
+      trimmed.forEach((k) => readNotificationKeySet.add(k));
+    }
+    safeStorageSetStructured(READ_NOTIFS_STORAGE_KEY, trimmed);
+  } catch {
+    // In-memory readNotificationKeySet remains authoritative
+  }
+}
 
 const PLACEHOLDER_ACCOUNTS = new Set([
   '',
@@ -93,15 +130,14 @@ export function getNotificationSemanticKey(n: Partial<ConsumerNotification>): st
   if (type === 'meter_status') {
     const meterKey = String(n.meterNumber || '').trim().toLowerCase();
     const statusKey = String(n.meterStatus || '').trim().toLowerCase();
-    const eventStamp = String(n.statusUpdateDate || n.id || n.timestamp || '').trim();
+    const eventStamp = String(n.statusUpdateDate || '').trim().slice(0, 16);
     return `meter_status::${target}::${meterKey}::${statusKey}::${eventStamp}`;
   }
 
   if (type === 'installation') {
     const reqKey = String(n.installationRequestId || n.applicationNumber || '').trim().toLowerCase();
     const instStatus = String(n.installationStatus || normTitle).trim().toLowerCase();
-    const eventId = String(n.id || n.timestamp || '').trim();
-    return `installation::${target}::${reqKey}::${instStatus}::${eventId}`;
+    return `installation::${target}::${reqKey}::${instStatus}`;
   }
 
   if (type === 'report') {
@@ -114,6 +150,122 @@ export function getNotificationSemanticKey(n: Partial<ConsumerNotification>): st
   }
 
   return `${type}::${target}::${normTitle}::${normMsg.slice(0, 140)}`;
+}
+
+/**
+ * Computes an identity-invariant event fingerprint for personal notifications that carry a unique
+ * transaction/document reference (readingId, applicationNumber, installationRequestId, reportId, orNumber)
+ * so read state survives even if an account transitions from PENDING/EMAIL to an issued Account Number.
+ */
+function getLooseNotificationEventKey(n: Partial<ConsumerNotification>): string | null {
+  const acc = normalizeNotifAccount(n.accountNumber);
+  if (isBroadcastNotifAccount(acc)) return null;
+
+  const type = inferNotificationType(n);
+  const normTitle = String(n.title || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+  if (type === 'billing' || type === 'balance' || type === 'disconnection') {
+    if (n.readingId) {
+      const isOverdue = normTitle.includes('overdue') || normTitle.includes('urgent');
+      return `loose:${type}:${isOverdue ? 'overdue' : 'stmt'}:rid:${String(n.readingId).trim().toLowerCase()}`;
+    }
+  }
+  if ((type === 'payment' || type === 'receipt_upload') && (n.orNumber || n.readingId)) {
+    return `loose:${type}:ref:${String(n.orNumber || n.readingId).trim().toLowerCase()}:${normTitle}`;
+  }
+  if (type === 'installation' && (n.installationRequestId || n.applicationNumber)) {
+    const reqKey = String(n.installationRequestId || n.applicationNumber).trim().toLowerCase();
+    const instStatus = String(n.installationStatus || normTitle).trim().toLowerCase();
+    return `loose:installation:${reqKey}:${instStatus}`;
+  }
+  if (type === 'report' && (n.reportId || n.ticketNumber)) {
+    const repKey = String(n.reportId || n.ticketNumber).trim().toLowerCase();
+    const replyKey = String(n.replyId || normTitle).trim().toLowerCase();
+    return `loose:report:${repKey}:${replyKey}`;
+  }
+  if (type === 'account_issue') {
+    const email = String(n.consumerEmail || '').trim().toLowerCase();
+    if (isIssuedNotifAccount(acc)) {
+      return `loose:account_issue:acc:${acc}::${normTitle.includes('updated to') ? normTitle : 'confirmed'}`;
+    }
+    if (email && normTitle.includes('registration application submitted')) {
+      return `loose:account_issue:reg:${email}`;
+    }
+  }
+  return null;
+}
+
+export function markNotificationsReadPersistently(
+  itemsOrIds: Array<Partial<ConsumerNotification> | string>,
+  knownList?: ConsumerNotification[]
+): void {
+  if (!Array.isArray(itemsOrIds) || itemsOrIds.length === 0) return;
+  ensureReadKeysHydrated();
+  let added = false;
+
+  for (const entry of itemsOrIds) {
+    let notifObj: Partial<ConsumerNotification> | undefined;
+    if (typeof entry === 'string') {
+      const cleanId = entry.trim();
+      if (!cleanId) continue;
+      const idKey = `id:${cleanId}`;
+      if (!readNotificationKeySet.has(idKey)) {
+        readNotificationKeySet.add(idKey);
+        added = true;
+      }
+      notifObj = knownList?.find((n) => n.id === cleanId);
+    } else if (entry && typeof entry === 'object') {
+      notifObj = entry;
+      if (entry.id) {
+        const idKey = `id:${String(entry.id).trim()}`;
+        if (!readNotificationKeySet.has(idKey)) {
+          readNotificationKeySet.add(idKey);
+          added = true;
+        }
+      }
+    }
+
+    if (notifObj && notifObj.title && !isBroadcastNotifAccount(notifObj.accountNumber)) {
+      const semKey = `sem:${getNotificationSemanticKey(notifObj)}`;
+      if (!readNotificationKeySet.has(semKey)) {
+        readNotificationKeySet.add(semKey);
+        added = true;
+      }
+      const looseKey = getLooseNotificationEventKey(notifObj);
+      if (looseKey && !readNotificationKeySet.has(looseKey)) {
+        readNotificationKeySet.add(looseKey);
+        added = true;
+      }
+    }
+  }
+
+  if (added) {
+    persistReadKeySet();
+  }
+}
+
+export function isNotificationReadPersistently(n?: Partial<ConsumerNotification> | null): boolean {
+  if (!n) return false;
+  if (n.read) return true;
+  if (isBroadcastNotifAccount(n.accountNumber)) return false;
+
+  ensureReadKeysHydrated();
+  if (readNotificationKeySet.size === 0) return false;
+
+  if (n.id && readNotificationKeySet.has(`id:${String(n.id).trim()}`)) {
+    return true;
+  }
+  if (n.title) {
+    const semKey = `sem:${getNotificationSemanticKey(n)}`;
+    if (readNotificationKeySet.has(semKey)) {
+      return true;
+    }
+    const looseKey = getLooseNotificationEventKey(n);
+    if (looseKey && readNotificationKeySet.has(looseKey)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -152,14 +304,23 @@ export function dedupeNotifications(
       continue;
     }
 
-    const item: ConsumerNotification = {
+    const itemId = String(raw.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`);
+    const candidateItem: ConsumerNotification = {
       ...raw,
       type: inferredType,
-      id: String(raw.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`),
+      id: itemId,
       accountNumber: cleanAcc || raw.accountNumber || 'PENDING',
       ...(cleanEmail ? { consumerEmail: cleanEmail } : {}),
       timestamp: raw.timestamp || '2026-01-01T08:00:00.000Z',
       read: Boolean(raw.read),
+    };
+    const resolvedRead = Boolean(candidateItem.read || isNotificationReadPersistently(candidateItem));
+    if (resolvedRead && !isBroadcastNotifAccount(cleanAcc)) {
+      markNotificationsReadPersistently([candidateItem]);
+    }
+    const item: ConsumerNotification = {
+      ...candidateItem,
+      read: resolvedRead,
     };
 
     const semKey = getNotificationSemanticKey(item);
@@ -183,6 +344,7 @@ export function dedupeNotifications(
           ? normalizeNotifAccount(older.accountNumber)
           : newer.accountNumber || older.accountNumber;
 
+      const mergedRead = Boolean(prev.read || item.read);
       const merged: ConsumerNotification = {
         ...older,
         ...newer,
@@ -196,8 +358,11 @@ export function dedupeNotifications(
           item.type === 'account_issue' && older.timestamp
             ? older.timestamp
             : newer.timestamp || older.timestamp,
-        read: Boolean(prev.read || item.read),
+        read: mergedRead,
       };
+      if (mergedRead && !isBroadcastNotifAccount(mergedAcc)) {
+        markNotificationsReadPersistently([merged, prev, item]);
+      }
 
       if (preferItemId !== existingId) {
         byId.delete(existingId);

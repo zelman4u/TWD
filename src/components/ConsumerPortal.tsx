@@ -72,7 +72,7 @@ import { mockDb } from '../mockDb';
 import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotification, ConsumerReport, WaterMeterInstallationRequest } from '../types';
 import { ConsumerPortalSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import DataLoadingIndicator from './common/DataLoadingIndicator';
-import { OverdueBillBanner } from './consumer/OverdueBillBanner';
+import { OverdueBillBanner, markOverdueBannerDismissedForBill } from './consumer/OverdueBillBanner';
 import { DynamicDueAlert } from './consumer/DynamicDueAlert';
 import { UploadReceiptModal } from './consumer/UploadReceiptModal';
 import { MonthlyUsageReportModal, downloadConsumerUsageReportPdf } from './consumer/MonthlyUsageReportModal';
@@ -139,6 +139,74 @@ import {
   compareReadingsCanonical,
   compareReportsCanonical
 } from '../utils/canonicalSort';
+import { safeStorageGetItem, safeStorageSetStructured } from '../services/storageSafe';
+import {
+  getNotificationSemanticKey,
+  isNotificationReadPersistently,
+  markNotificationsReadPersistently,
+} from '../utils/notificationDeduper';
+
+const SEEN_CONSUMER_BANNERS_KEY = 'twd_live_v4_consumer_seen_banners_v1';
+
+interface PersistedConsumerBannerState {
+  seenAccounts: string[];
+  seenBills: string[];
+  dismissedSpotlights: string[];
+  seenPayments: string[];
+  seenLiveNotifs: string[];
+}
+
+function readConsumerBannerState(viewerKey: string): PersistedConsumerBannerState {
+  const empty: PersistedConsumerBannerState = {
+    seenAccounts: [],
+    seenBills: [],
+    dismissedSpotlights: [],
+    seenPayments: [],
+    seenLiveNotifs: [],
+  };
+  if (!viewerKey) return empty;
+  try {
+    const raw = safeStorageGetItem(SEEN_CONSUMER_BANNERS_KEY);
+    if (!raw) return empty;
+    const parsed = JSON.parse(raw);
+    const entry = parsed?.[viewerKey];
+    if (!entry || typeof entry !== 'object') return empty;
+    return {
+      seenAccounts: Array.isArray(entry.seenAccounts) ? entry.seenAccounts : [],
+      seenBills: Array.isArray(entry.seenBills) ? entry.seenBills : [],
+      dismissedSpotlights: Array.isArray(entry.dismissedSpotlights) ? entry.dismissedSpotlights : [],
+      seenPayments: Array.isArray(entry.seenPayments) ? entry.seenPayments : [],
+      seenLiveNotifs: Array.isArray(entry.seenLiveNotifs) ? entry.seenLiveNotifs : [],
+    };
+  } catch {
+    return empty;
+  }
+}
+
+function updateConsumerBannerState(
+  viewerKey: string,
+  updater: (prev: PersistedConsumerBannerState) => PersistedConsumerBannerState
+): void {
+  if (!viewerKey) return;
+  try {
+    const raw = safeStorageGetItem(SEEN_CONSUMER_BANNERS_KEY);
+    const all = raw ? JSON.parse(raw) : {};
+    const safeAll = all && typeof all === 'object' ? all : {};
+    const current = readConsumerBannerState(viewerKey);
+    const next = updater(current);
+    const trim = (arr: string[], max = 200) => Array.from(new Set(arr.filter(Boolean))).slice(-max);
+    safeAll[viewerKey] = {
+      seenAccounts: trim(next.seenAccounts, 50),
+      seenBills: trim(next.seenBills, 200),
+      dismissedSpotlights: trim(next.dismissedSpotlights, 200),
+      seenPayments: trim(next.seenPayments, 200),
+      seenLiveNotifs: trim(next.seenLiveNotifs, 300),
+    };
+    safeStorageSetStructured(SEEN_CONSUMER_BANNERS_KEY, safeAll);
+  } catch {
+    // Non-fatal
+  }
+}
 
 interface ConsumerPortalProps {
   currentUser: UserType;
@@ -304,13 +372,60 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const alertedOverdueRef = useRef<Set<string>>(new Set());
   const announcedIssuedBillIdsRef = useRef<Set<string>>(new Set());
   const dismissedSpotlightIdsRef = useRef<Set<string>>(new Set());
+  const seenPaymentKeysRef = useRef<Set<string>>(new Set());
+  const seenLiveNotifKeysRef = useRef<Set<string>>(new Set());
   const hasHydratedReadingsOnceRef = useRef<boolean>(false);
+  const hasCompletedFirstRemoteBillSyncRef = useRef<boolean>(false);
   const wasAccountPendingRef = useRef<boolean | null>(null);
   const lastAnnouncedAccountRef = useRef<string>('');
   const confirmedIssuedAccRef = useRef<string>('');
   const reconciledIssuedAccRef = useRef<string>('');
   const notifDropdownRef = useRef<HTMLDivElement | null>(null);
   const mainScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const getViewerBannerStorageKey = (): string => {
+    return String(
+      currentUser?.id || currentUser?.email || currentUser?.linkedAccountNumber || 'consumer'
+    )
+      .trim()
+      .toLowerCase();
+  };
+
+  const buildPaymentBannerKey = (readingId?: string, amount?: number, orNum?: string): string => {
+    const cleanId = String(readingId || '').trim();
+    const cleanAmt = Number(amount || 0).toFixed(2);
+    const cleanOr = String(orNum || '').trim().toUpperCase();
+    return `${cleanId}::${cleanAmt}::${cleanOr}`;
+  };
+
+  const isBillNotificationAlreadyRead = (bill?: MeterReading | null, notifList?: ConsumerNotification[]): boolean => {
+    if (!bill) return false;
+    const list = notifList || notifsRef.current || [];
+    const targetBp = String(bill.billingPeriod || '').trim().toLowerCase();
+    return list.some((n) => {
+      if (!n || (!n.read && !isNotificationReadPersistently(n))) return false;
+      const t = inferNotificationType(n);
+      if (t !== 'billing' && t !== 'balance' && t !== 'disconnection') return false;
+      if (n.readingId && n.readingId === bill.id) return true;
+      if (targetBp && String(n.billingPeriod || '').trim().toLowerCase() === targetBp) return true;
+      return false;
+    });
+  };
+
+  const isPaymentNotificationAlreadyRead = (bill?: MeterReading | null, orNum?: string, notifList?: ConsumerNotification[]): boolean => {
+    const list = notifList || notifsRef.current || [];
+    const cleanOr = String(orNum || bill?.orNumber || bill?.paymentReference || '').trim().toLowerCase();
+    const targetBp = String(bill?.billingPeriod || '').trim().toLowerCase();
+    return list.some((n) => {
+      if (!n || (!n.read && !isNotificationReadPersistently(n))) return false;
+      const t = inferNotificationType(n);
+      if (t !== 'payment' && t !== 'receipt_upload') return false;
+      if (bill?.id && n.readingId === bill.id) return true;
+      if (cleanOr && String(n.orNumber || '').trim().toLowerCase() === cleanOr) return true;
+      if (targetBp && String(n.billingPeriod || '').trim().toLowerCase() === targetBp) return true;
+      return false;
+    });
+  };
 
   // Close Notification Bell dropdown on outside click or Escape key
   useEffect(() => {
@@ -573,7 +688,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
 
     const nowMs = Date.now();
-    const shouldPollReportsAndNotifs = !silent || nowMs - lastReportsSyncRef.current >= 4000;
+    const shouldPollReportsAndNotifs = !silent || nowMs - lastReportsSyncRef.current >= 10000;
 
     const acc = (activeRec?.accountNumber || currentUser.linkedAccountNumber || '').trim();
     const validAcc = acc && !acc.toUpperCase().startsWith('PENDING') ? acc : undefined;
@@ -581,37 +696,50 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
     if (shouldPollReportsAndNotifs && (validAcc || myEmail)) {
       lastReportsSyncRef.current = nowMs;
-      apiClient
-        .reconcileReports(
-          {
-            reports: localReports.slice(0, 20),
-            accountNumber: validAcc,
-            email: myEmail
-          },
-          { skipLogging: true }
-        )
-        .then(res => {
-          if (res?.success && Array.isArray(res.reports)) {
-            if (res.reports.length > 0) {
-              mockDb.mergeExternalReports(res.reports);
-            }
-            applyIfChanged(setReports, getConsumerReportsFromLocal());
-          }
-        })
-        .catch(() => {
-          apiClient
-            .getReports({ accountNumber: validAcc, email: myEmail }, { skipLogging: true })
-            .then(res => {
-              if (res?.success && Array.isArray(res.reports) && res.reports.length > 0) {
+      if (localReports.length > 0) {
+        apiClient
+          .reconcileReports(
+            {
+              reports: localReports.slice(0, 20),
+              accountNumber: validAcc,
+              email: myEmail
+            },
+            { skipLogging: true }
+          )
+          .then(res => {
+            if (res?.success && Array.isArray(res.reports)) {
+              if (res.reports.length > 0) {
                 mockDb.mergeExternalReports(res.reports);
-                applyIfChanged(setReports, getConsumerReportsFromLocal());
               }
-            })
-            .catch(() => {});
-        });
+              applyIfChanged(setReports, getConsumerReportsFromLocal());
+            }
+          })
+          .catch((err: any) => {
+            if (err?.status === 429 || err?.isRateLimited) return;
+            apiClient
+              .getReports({ accountNumber: validAcc, email: myEmail }, { skipLogging: true })
+              .then(res => {
+                if (res?.success && Array.isArray(res.reports) && res.reports.length > 0) {
+                  mockDb.mergeExternalReports(res.reports);
+                  applyIfChanged(setReports, getConsumerReportsFromLocal());
+                }
+              })
+              .catch(() => {});
+          });
+      } else {
+        apiClient
+          .getReports({ accountNumber: validAcc, email: myEmail }, { skipLogging: true })
+          .then(res => {
+            if (res?.success && Array.isArray(res.reports) && res.reports.length > 0) {
+              mockDb.mergeExternalReports(res.reports);
+              applyIfChanged(setReports, getConsumerReportsFromLocal());
+            }
+          })
+          .catch(() => {});
+      }
     }
 
-    if (validAcc && (!silent || nowMs - lastBillingsSyncRef.current >= 3500)) {
+    if (validAcc && (!silent || nowMs - lastBillingsSyncRef.current >= 12000)) {
       lastBillingsSyncRef.current = nowMs;
       const validAccUpper = validAcc.replace(/^#/, '').trim().toUpperCase();
       const recMeterUpper = (activeRec?.meterNumber || '').trim().toUpperCase();
@@ -619,6 +747,33 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         .getBillings({ accountNumber: validAccUpper }, { skipLogging: true })
         .then(bRes => {
           if (bRes?.success && Array.isArray(bRes.readings) && bRes.readings.length > 0) {
+            // Seed initial remote historical bills before running diff so existing server bills never fire new-bill/payment banners on load
+            if (!hasCompletedFirstRemoteBillSyncRef.current) {
+              hasCompletedFirstRemoteBillSyncRef.current = true;
+              const viewerKey = getViewerBannerStorageKey();
+              const seededBillIds: string[] = [];
+              const seededPayKeys: string[] = [];
+              bRes.readings.forEach((br: MeterReading) => {
+                if (!br?.id) return;
+                if (isOfficialBillIssued(br)) {
+                  announcedIssuedBillIdsRef.current.add(br.id);
+                  seededBillIds.push(br.id);
+                }
+                const st = getCanonicalBillSettlement(br, activeRec?.consumerType);
+                if (st.isPaid || st.isPartial) {
+                  const pk = buildPaymentBannerKey(br.id, st.paidAmount || st.grossTotal, br.orNumber || br.paymentReference);
+                  seenPaymentKeysRef.current.add(pk);
+                  seededPayKeys.push(pk);
+                }
+              });
+              if (seededBillIds.length > 0 || seededPayKeys.length > 0) {
+                updateConsumerBannerState(viewerKey, (prev) => ({
+                  ...prev,
+                  seenBills: [...prev.seenBills, ...seededBillIds],
+                  seenPayments: [...prev.seenPayments, ...seededPayKeys],
+                }));
+              }
+            }
             const mergedReadings = mockDb.mergeExternalReadings(bRes.readings);
             const customerVerified = mergedReadings
               .filter(r => {
@@ -634,6 +789,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             if (JSON.stringify(readingsRef.current) !== JSON.stringify(customerVerified)) {
               loadConsumerInfo(true);
             }
+          } else {
+            hasCompletedFirstRemoteBillSyncRef.current = true;
           }
         })
         .catch(() => {});
@@ -859,9 +1016,35 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       setNotifications(refreshedNotifs);
     }
 
-    // 5. Announce confirmation banner & toast once per newly confirmed account number
-    if (triggerBanner && lastAnnouncedAccountRef.current !== accNum) {
+    // 5. Announce confirmation banner & toast strictly once per newly confirmed account number
+    const viewerKey = getViewerBannerStorageKey();
+    const persistedBanners = readConsumerBannerState(viewerKey);
+    const alreadyReadAccountNotif = refreshedNotifs.some(
+      (n) =>
+        (n.read || isNotificationReadPersistently(n)) &&
+        inferNotificationType(n) === 'account_issue' &&
+        !(n.title || '').toLowerCase().includes('registration application submitted') &&
+        (n.accountNumber || '').replace(/^#/, '').trim().toUpperCase() === accNum
+    );
+    const alreadySeenAcc =
+      lastAnnouncedAccountRef.current === accNum ||
+      persistedBanners.seenAccounts.includes(accNum) ||
+      alreadyReadAccountNotif;
+
+    if (alreadySeenAcc) {
       lastAnnouncedAccountRef.current = accNum;
+      if (!persistedBanners.seenAccounts.includes(accNum)) {
+        updateConsumerBannerState(viewerKey, (prev) => ({
+          ...prev,
+          seenAccounts: [...prev.seenAccounts, accNum],
+        }));
+      }
+    } else if (triggerBanner) {
+      lastAnnouncedAccountRef.current = accNum;
+      updateConsumerBannerState(viewerKey, (prev) => ({
+        ...prev,
+        seenAccounts: [...prev.seenAccounts, accNum],
+      }));
       setIdConfirmedBanner({
         accountNumber: accNum,
         meterNumber: meterNum,
@@ -1158,6 +1341,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         const verifiedReads = allCustomerReads.filter(r => r.status === 'verified');
         
         // Detect newly issued bills AND newly recorded Admin/Cashier full or partial payments in real time
+        const viewerKey = getViewerBannerStorageKey();
         if (hasHydratedReadingsOnceRef.current) {
           verifiedReads.forEach(newR => {
             const oldR = prevReadingsRef.current.find(o => o.id === newR.id);
@@ -1166,10 +1350,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             const newSt = getCanonicalBillSettlement(newR, record.consumerType);
             const oldSt = oldR ? getCanonicalBillSettlement(oldR, record.consumerType) : null;
 
-            if (!wasIssuedBefore && isIssuedNow && !announcedIssuedBillIdsRef.current.has(newR.id)) {
+            if (
+              !wasIssuedBefore &&
+              isIssuedNow &&
+              !announcedIssuedBillIdsRef.current.has(newR.id) &&
+              !isBillNotificationAlreadyRead(newR)
+            ) {
               announcedIssuedBillIdsRef.current.add(newR.id);
-              dismissedSpotlightIdsRef.current.delete(newR.id);
-              setSpotlightReading(newR);
+              updateConsumerBannerState(viewerKey, (prev) => ({
+                ...prev,
+                seenBills: [...prev.seenBills, newR.id],
+              }));
+              if (!dismissedSpotlightIdsRef.current.has(newR.id)) {
+                setSpotlightReading(newR);
+              }
               if (!newSt.isPaid) {
                 const presDial = newR.presentReading ?? newR.currentReading;
                 toast.info(
@@ -1178,45 +1372,73 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   6500
                 );
               }
+            } else if (isIssuedNow && !announcedIssuedBillIdsRef.current.has(newR.id)) {
+              announcedIssuedBillIdsRef.current.add(newR.id);
             }
 
             if (oldSt) {
               if (!oldSt.isPaid && newSt.isPaid) {
-                setPaymentConfirmationToast({
-                  period: newR.billingPeriod,
-                  amount: newSt.paidAmount || newSt.grossTotal,
-                  remaining: 0,
-                  isPartial: false,
-                  reference: newR.orNumber || newR.paymentReference || `OR-${Math.floor(100000 + Math.random() * 900000)}`,
-                  date: newR.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                });
+                const payKey = buildPaymentBannerKey(newR.id, newSt.paidAmount || newSt.grossTotal, newR.orNumber || newR.paymentReference);
+                if (!seenPaymentKeysRef.current.has(payKey) && !isPaymentNotificationAlreadyRead(newR)) {
+                  seenPaymentKeysRef.current.add(payKey);
+                  updateConsumerBannerState(viewerKey, (prev) => ({
+                    ...prev,
+                    seenPayments: [...prev.seenPayments, payKey],
+                  }));
+                  setPaymentConfirmationToast({
+                    period: newR.billingPeriod,
+                    amount: newSt.paidAmount || newSt.grossTotal,
+                    remaining: 0,
+                    isPartial: false,
+                    reference: newR.orNumber || newR.paymentReference || 'OR-ISSUED',
+                    date: newR.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                  });
+                }
               } else if (!newSt.isPaid && newSt.isPartial && newSt.paidAmount > oldSt.paidAmount + 0.009) {
-                setPaymentConfirmationToast({
-                  period: newR.billingPeriod,
-                  amount: newSt.paidAmount,
-                  remaining: newSt.remainingBalance,
-                  isPartial: true,
-                  reference: newR.orNumber || newR.paymentReference || `OR-${Math.floor(100000 + Math.random() * 900000)}`,
-                  date: newR.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                });
+                const payKey = buildPaymentBannerKey(newR.id, newSt.paidAmount, newR.orNumber || newR.paymentReference);
+                if (!seenPaymentKeysRef.current.has(payKey) && !isPaymentNotificationAlreadyRead(newR)) {
+                  seenPaymentKeysRef.current.add(payKey);
+                  updateConsumerBannerState(viewerKey, (prev) => ({
+                    ...prev,
+                    seenPayments: [...prev.seenPayments, payKey],
+                  }));
+                  setPaymentConfirmationToast({
+                    period: newR.billingPeriod,
+                    amount: newSt.paidAmount,
+                    remaining: newSt.remainingBalance,
+                    isPartial: true,
+                    reference: newR.orNumber || newR.paymentReference || 'OR-ISSUED',
+                    date: newR.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                  });
+                }
               }
-            } else if (isIssuedNow && newSt.isPaid) {
-              setPaymentConfirmationToast({
-                period: newR.billingPeriod,
-                amount: newSt.paidAmount || newSt.grossTotal,
-                remaining: 0,
-                isPartial: false,
-                reference: newR.orNumber || newR.paymentReference || `OR-${Math.floor(100000 + Math.random() * 900000)}`,
-                date: newR.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-              });
+            } else if (newSt.isPaid || newSt.isPartial) {
+              const payKey = buildPaymentBannerKey(newR.id, newSt.paidAmount || newSt.grossTotal, newR.orNumber || newR.paymentReference);
+              seenPaymentKeysRef.current.add(payKey);
             }
           });
         } else {
+          const seededBillIds: string[] = [];
+          const seededPayKeys: string[] = [];
           verifiedReads.forEach(r => {
             if (isOfficialBillIssued(r)) {
               announcedIssuedBillIdsRef.current.add(r.id);
+              seededBillIds.push(r.id);
+            }
+            const st = getCanonicalBillSettlement(r, record.consumerType);
+            if (st.isPaid || st.isPartial) {
+              const pk = buildPaymentBannerKey(r.id, st.paidAmount || st.grossTotal, r.orNumber || r.paymentReference);
+              seenPaymentKeysRef.current.add(pk);
+              seededPayKeys.push(pk);
             }
           });
+          if (seededBillIds.length > 0 || seededPayKeys.length > 0) {
+            updateConsumerBannerState(viewerKey, (prev) => ({
+              ...prev,
+              seenBills: [...prev.seenBills, ...seededBillIds],
+              seenPayments: [...prev.seenPayments, ...seededPayKeys],
+            }));
+          }
           hasHydratedReadingsOnceRef.current = true;
         }
         
@@ -1250,15 +1472,22 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           return refreshed && JSON.stringify(refreshed) !== JSON.stringify(prevBillModal) ? refreshed : prevBillModal;
         });
 
-        // Keep spotlightReading synchronized with live updates (e.g. when Admin clears or partially credits payment)
+        // Keep spotlightReading synchronized with live updates, respecting persisted dismissals & read notifications
         setSpotlightReading(prevSpot => {
           if (prevSpot) {
+            if (dismissedSpotlightIdsRef.current.has(prevSpot.id)) {
+              return null;
+            }
             const refreshedSpot = verifiedReads.find(v => v.id === prevSpot.id);
             if (refreshedSpot) {
               return JSON.stringify(refreshedSpot) !== JSON.stringify(prevSpot) ? refreshedSpot : prevSpot;
             }
           }
-          if (unpaidList.length > 0 && !dismissedSpotlightIdsRef.current.has(unpaidList[0].id)) {
+          if (
+            unpaidList.length > 0 &&
+            !dismissedSpotlightIdsRef.current.has(unpaidList[0].id) &&
+            !isBillNotificationAlreadyRead(unpaidList[0])
+          ) {
             return unpaidList[0];
           }
           return prevSpot;
@@ -1415,6 +1644,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
   // Initial Load & Real-Time Sync Event Listeners
   useEffect(() => {
+    const viewerKey = getViewerBannerStorageKey();
+    const persisted = readConsumerBannerState(viewerKey);
+
     // Clear notifications and active cache on user identity switch to prevent cross-account display
     setNotifications([]);
     notifsRef.current = [];
@@ -1425,10 +1657,61 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     setReadings([]);
     readingsRef.current = [];
     prevReadingsRef.current = [];
+    setIdConfirmedBanner(null);
+    setPaymentConfirmationToast(null);
+    setSpotlightReading(null);
+
     alertedOverdueRef.current.clear();
+    announcedIssuedBillIdsRef.current = new Set(persisted.seenBills);
+    dismissedSpotlightIdsRef.current = new Set(persisted.dismissedSpotlights);
+    seenPaymentKeysRef.current = new Set(persisted.seenPayments);
+    seenLiveNotifKeysRef.current = new Set(persisted.seenLiveNotifs);
+    hasHydratedReadingsOnceRef.current = false;
+    hasCompletedFirstRemoteBillSyncRef.current = false;
     confirmedIssuedAccRef.current = '';
+    reconciledIssuedAccRef.current = '';
     lastAccountResolveRef.current = 0;
     lastReportsSyncRef.current = 0;
+
+    // Synchronously seed local account & reading baselines BEFORE attaching async Firestore/WS listeners
+    // so existing active accounts never falsely pop "Official Account Confirmed" or historical bill/payment banners on load!
+    const localConsumersOnMount = mockDb.getConsumers();
+    const myEmailLower = String(currentUser.email || '').trim().toLowerCase();
+    const myLinkedAccUpper = String(currentUser.linkedAccountNumber || '').replace(/^#/, '').trim().toUpperCase();
+    const matchedOnMount = localConsumersOnMount
+      .filter((c) => {
+        const cAcc = String(c.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+        const cEmail = String(c.email || '').trim().toLowerCase();
+        return (
+          (myLinkedAccUpper && !myLinkedAccUpper.startsWith('PENDING') && cAcc === myLinkedAccUpper) ||
+          (currentUser.id && c.linkedUserId === currentUser.id) ||
+          (myEmailLower && cEmail === myEmailLower)
+        );
+      })
+      .sort((a, b) => (isConsumerRecordIssued(b) ? 1 : 0) - (isConsumerRecordIssued(a) ? 1 : 0))[0];
+
+    if (matchedOnMount && isConsumerRecordIssued(matchedOnMount)) {
+      const mountAccUpper = matchedOnMount.accountNumber.replace(/^#/, '').trim().toUpperCase();
+      consumerRecordRef.current = matchedOnMount;
+      wasAccountPendingRef.current = false;
+      confirmedIssuedAccRef.current = mountAccUpper;
+      lastAnnouncedAccountRef.current = mountAccUpper;
+      updateConsumerBannerState(viewerKey, (prev) => ({
+        ...prev,
+        seenAccounts: [...prev.seenAccounts, mountAccUpper],
+      }));
+    } else if (isRealIssuedAccountNumber(currentUser.linkedAccountNumber)) {
+      const mountAccUpper = String(currentUser.linkedAccountNumber).replace(/^#/, '').trim().toUpperCase();
+      wasAccountPendingRef.current = false;
+      confirmedIssuedAccRef.current = mountAccUpper;
+      lastAnnouncedAccountRef.current = mountAccUpper;
+      updateConsumerBannerState(viewerKey, (prev) => ({
+        ...prev,
+        seenAccounts: [...prev.seenAccounts, mountAccUpper],
+      }));
+    } else if (persisted.seenAccounts.length > 0) {
+      lastAnnouncedAccountRef.current = persisted.seenAccounts[persisted.seenAccounts.length - 1];
+    }
 
     ensureRealtimeFirestoreListeners();
     loadConsumerInfo();
@@ -1448,8 +1731,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         if (resolved.isIssued && resolved.consumer && isConsumerRecordIssued(resolved.consumer)) {
           const prevAcc = (consumerRecordRef.current?.accountNumber || '').trim().toUpperCase();
           const nextAcc = resolved.consumer.accountNumber.trim().toUpperCase();
-          const wasUnissued = !isConsumerRecordIssued(consumerRecordRef.current);
-          const isAccChanged = Boolean(prevAcc && prevAcc !== nextAcc);
+          const wasUnissued = wasAccountPendingRef.current === true && !isConsumerRecordIssued(consumerRecordRef.current);
+          const isAccChanged = Boolean(prevAcc && !prevAcc.startsWith('PENDING') && prevAcc !== nextAcc);
           const issuanceNotif = resolved.notifications?.find(
             (n) =>
               n.type === 'account_issue' &&
@@ -1458,6 +1741,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           if (wasUnissued || isAccChanged) {
             applyAutomaticIdConfirmation(resolved.consumer, issuanceNotif, isAccChanged, true);
           } else {
+            applyAutomaticIdConfirmation(resolved.consumer, issuanceNotif, false, false);
             loadConsumerInfo(true);
           }
         }
@@ -1536,11 +1820,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         if (doesPayloadBelongToCurrentUser(payload)) {
           const incomingConsumer = payload?.consumer;
           if (incomingConsumer && isConsumerRecordIssued(incomingConsumer)) {
+            const prevAcc = (consumerRecordRef.current?.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+            const nextAcc = incomingConsumer.accountNumber.replace(/^#/, '').trim().toUpperCase();
+            const wasUnissued = !isConsumerRecordIssued(consumerRecordRef.current);
+            const isAccChanged = Boolean(prevAcc && prevAcc !== nextAcc);
+            const shouldTriggerBanner =
+              data.type === 'CONSUMER_IDS_ISSUED' ||
+              data.type === 'CONSUMER_ACTIVATED_FOR_READER' ||
+              wasUnissued ||
+              isAccChanged;
             applyAutomaticIdConfirmation(
               incomingConsumer,
               payload?.notification,
-              Boolean(payload?.isUpdate),
-              true
+              Boolean(payload?.isUpdate) || isAccChanged,
+              shouldTriggerBanner
             );
             return;
           }
@@ -1549,32 +1842,44 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       } else if (data.type === 'CONSUMER_NOTIFICATION_CREATED') {
         const notif = data.payload?.notification;
         if (notif && doesPayloadBelongToCurrentUser(notif)) {
-          const alreadyHad = notifsRef.current.some(existing => existing.id === notif.id);
+          const notifSemKey = getNotificationSemanticKey(notif);
+          const alreadyHad =
+            notifsRef.current.some(existing => existing.id === notif.id || getNotificationSemanticKey(existing) === notifSemKey) ||
+            seenLiveNotifKeysRef.current.has(notifSemKey) ||
+            Boolean(notif.read) ||
+            isNotificationReadPersistently(notif);
           mockDb.mergeExternalNotifications([notif]);
           const refreshedNotifs = getConsumerNotificationsFromLocal();
           if (JSON.stringify(notifsRef.current) !== JSON.stringify(refreshedNotifs)) {
             notifsRef.current = refreshedNotifs;
             setNotifications(refreshedNotifs);
           }
-          if (!alreadyHad && inferNotificationType(notif) === 'meter_status') {
-            const statusNorm = normalizeMeterStatus(notif.meterStatus);
-            const statusText = formatMeterStatusLabel(statusNorm);
-            if (statusNorm === 'active') {
-              toast.success(
-                'Water Meter Status Update',
-                `Your water meter status has been updated to ${statusText}. Check your Notification Center for details.`
-              );
-            } else {
-              toast.warning(
-                'Important Notice Regarding Your Water Meter',
-                `Your water meter status has been marked as ${statusText}. Open your Notification Center for full details.`
+          if (!alreadyHad) {
+            seenLiveNotifKeysRef.current.add(notifSemKey);
+            updateConsumerBannerState(viewerKey, (prev) => ({
+              ...prev,
+              seenLiveNotifs: [...prev.seenLiveNotifs, notifSemKey],
+            }));
+            if (inferNotificationType(notif) === 'meter_status') {
+              const statusNorm = normalizeMeterStatus(notif.meterStatus);
+              const statusText = formatMeterStatusLabel(statusNorm);
+              if (statusNorm === 'active') {
+                toast.success(
+                  'Water Meter Status Update',
+                  `Your water meter status has been updated to ${statusText}. Check your Notification Center for details.`
+                );
+              } else {
+                toast.warning(
+                  'Important Notice Regarding Your Water Meter',
+                  `Your water meter status has been marked as ${statusText}. Open your Notification Center for full details.`
+                );
+              }
+            } else if (inferNotificationType(notif) === 'installation') {
+              toast.info(
+                notif.title || 'Water Meter Installation Update',
+                'A new update on your water meter installation request is available in your Notification Center.'
               );
             }
-          } else if (!alreadyHad && inferNotificationType(notif) === 'installation') {
-            toast.info(
-              notif.title || 'Water Meter Installation Update',
-              'A new update on your water meter installation request is available in your Notification Center.'
-            );
           }
         }
       } else if (
@@ -1613,16 +1918,25 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               applyAutomaticIdConfirmation(payload.consumer, payload?.notification, false, true);
               return;
             }
-            if (effectiveStatus === 'Installed') {
-              toast.success(
-                'Your Water Meter Has Been Installed!',
-                `Application ${effectiveReq?.applicationNumber || payload?.applicationNumber || ''} is now awaiting administrative validation. Please wait while we update your account and issue your official Account & Meter Tag Numbers.`
-              );
-            } else {
-              toast.info(
-                `Installation Update — ${effectiveStatus}`,
-                `Application ${effectiveReq?.applicationNumber || payload?.applicationNumber || ''} status updated to ${effectiveStatus}.`
-              );
+            const instKey = `inst:${effectiveReq?.applicationNumber || effectiveReq?.id || ''}::${effectiveStatus}`;
+            const notifAlreadyRead = payload?.notification && (payload.notification.read || isNotificationReadPersistently(payload.notification));
+            if (!seenLiveNotifKeysRef.current.has(instKey) && !notifAlreadyRead) {
+              seenLiveNotifKeysRef.current.add(instKey);
+              updateConsumerBannerState(viewerKey, (prev) => ({
+                ...prev,
+                seenLiveNotifs: [...prev.seenLiveNotifs, instKey],
+              }));
+              if (effectiveStatus === 'Installed') {
+                toast.success(
+                  'Your Water Meter Has Been Installed!',
+                  `Application ${effectiveReq?.applicationNumber || payload?.applicationNumber || ''} is now awaiting administrative validation. Please wait while we update your account and issue your official Account & Meter Tag Numbers.`
+                );
+              } else {
+                toast.info(
+                  `Installation Update — ${effectiveStatus}`,
+                  `Application ${effectiveReq?.applicationNumber || payload?.applicationNumber || ''} status updated to ${effectiveStatus}.`
+                );
+              }
             }
           }
         }
@@ -1634,7 +1948,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           doesPayloadBelongToCurrentUser(payload) ||
           (notif && doesPayloadBelongToCurrentUser(notif));
         if (belongsToMe && notif) {
-          const alreadyHad = notifsRef.current.some(existing => existing.id === notif.id);
+          const notifSemKey = getNotificationSemanticKey(notif);
+          const alreadyHad =
+            notifsRef.current.some(existing => existing.id === notif.id || getNotificationSemanticKey(existing) === notifSemKey) ||
+            seenLiveNotifKeysRef.current.has(notifSemKey) ||
+            Boolean(notif.read) ||
+            isNotificationReadPersistently(notif);
           mockDb.mergeExternalNotifications([notif]);
           const refreshedNotifs = getConsumerNotificationsFromLocal();
           if (JSON.stringify(notifsRef.current) !== JSON.stringify(refreshedNotifs)) {
@@ -1642,6 +1961,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             setNotifications(refreshedNotifs);
           }
           if (!alreadyHad) {
+            seenLiveNotifKeysRef.current.add(notifSemKey);
+            updateConsumerBannerState(viewerKey, (prev) => ({
+              ...prev,
+              seenLiveNotifs: [...prev.seenLiveNotifs, notifSemKey],
+            }));
             const statusNorm = normalizeMeterStatus(notif.meterStatus || payload?.newStatus);
             const statusText = formatMeterStatusLabel(statusNorm);
             if (statusNorm === 'active') {
@@ -1743,14 +2067,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         }
         if (belongsToMe && incomingBills[0]) {
           const bill = incomingBills[0] as MeterReading;
-          announcedIssuedBillIdsRef.current.add(bill.id);
-          dismissedSpotlightIdsRef.current.delete(bill.id);
-          setSpotlightReading(bill);
-          toast.info(
-            `Water Bill Issued — ${bill.billingPeriod}`,
-            `Meter reading: ${bill.consumption} m³ (Dial: ${formatOdometerReading(bill.currentReading)}). Total Due: ₱${calculateCostOf(bill, consumerRecordRef.current?.consumerType).toFixed(2)}.`,
-            6500
-          );
+          if (!announcedIssuedBillIdsRef.current.has(bill.id) && !isBillNotificationAlreadyRead(bill)) {
+            announcedIssuedBillIdsRef.current.add(bill.id);
+            dismissedSpotlightIdsRef.current.delete(bill.id);
+            updateConsumerBannerState(viewerKey, (prev) => ({
+              ...prev,
+              seenBills: [...prev.seenBills, bill.id],
+              dismissedSpotlights: prev.dismissedSpotlights.filter((id) => id !== bill.id),
+            }));
+            setSpotlightReading(bill);
+            toast.info(
+              `Water Bill Issued — ${bill.billingPeriod}`,
+              `Meter reading: ${bill.consumption} m³ (Dial: ${formatOdometerReading(bill.currentReading)}). Total Due: ₱${calculateCostOf(bill, consumerRecordRef.current?.consumerType).toFixed(2)}.`,
+              6500
+            );
+          }
         }
         loadConsumerInfo(true);
       } else if (
@@ -1793,39 +2124,51 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           const primaryBill = incomingPaid[0] as MeterReading | undefined;
           if (primaryBill) {
             announcedIssuedBillIdsRef.current.add(primaryBill.id);
-            setSpotlightReading(primaryBill);
+            if (!dismissedSpotlightIdsRef.current.has(primaryBill.id)) {
+              setSpotlightReading(primaryBill);
+            }
             setReceiptDetailModal(prev => (prev && prev.id === primaryBill.id ? primaryBill : prev));
           }
           const st = primaryBill
             ? getCanonicalBillSettlement(primaryBill, consumerRecordRef.current?.consumerType)
             : null;
           const isPartial = st ? st.isPartial : (payload?.remainingBalance || 0) > 0;
-          setPaymentConfirmationToast({
-            period: primaryBill?.billingPeriod || payload?.billingPeriod || 'Water Bill',
-            amount: payload?.amountPaid ?? st?.paidAmount ?? primaryBill?.paidAmount ?? 0,
-            remaining: st ? st.remainingBalance : (payload?.remainingBalance ?? primaryBill?.remainingBalance ?? 0),
-            isPartial,
-            reference: payload?.orNumber || primaryBill?.orNumber || 'OR-ISSUED',
-            date: payload?.paymentDate || primaryBill?.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-          });
+          const paidAmtVal = payload?.amountPaid ?? st?.paidAmount ?? primaryBill?.paidAmount ?? 0;
+          const refVal = payload?.orNumber || primaryBill?.orNumber || 'OR-ISSUED';
+          const payKey = buildPaymentBannerKey(primaryBill?.id || payload?.billingPeriod, paidAmtVal, refVal);
+          if (!seenPaymentKeysRef.current.has(payKey) && !isPaymentNotificationAlreadyRead(primaryBill, refVal)) {
+            seenPaymentKeysRef.current.add(payKey);
+            updateConsumerBannerState(viewerKey, (prev) => ({
+              ...prev,
+              seenPayments: [...prev.seenPayments, payKey],
+            }));
+            setPaymentConfirmationToast({
+              period: primaryBill?.billingPeriod || payload?.billingPeriod || 'Water Bill',
+              amount: paidAmtVal,
+              remaining: st ? st.remainingBalance : (payload?.remainingBalance ?? primaryBill?.remainingBalance ?? 0),
+              isPartial,
+              reference: refVal,
+              date: payload?.paymentDate || primaryBill?.paymentDate || new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+            });
+          }
         }
         loadConsumerInfo(true);
       }
     });
 
-    // 5a. Fast 2-second lightweight live sync for Reports, Replies, Billings & Notifications
+    // 5a. Lightweight background live sync for Reports, Replies, Billings & Notifications (throttled to avoid HTTP 429)
     const reportSyncInterval = setInterval(() => {
       if (typeof document !== 'undefined' && !document.hidden) {
         syncConsumerReportsAndNotifications(true);
       }
-    }, 2000);
+    }, 12000);
 
-    // 5b. Full consumer account & billing sync every 5 seconds
+    // 5b. Full consumer account & billing sync every 15 seconds (instant updates already arrive via WS & Firestore)
     const interval = setInterval(() => {
       if (typeof document !== 'undefined' && !document.hidden) {
         loadConsumerInfo(true);
       }
-    }, 5000);
+    }, 15000);
 
     const handleVisibility = () => {
       if (typeof document !== 'undefined' && !document.hidden) {
@@ -2006,13 +2349,83 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     });
   };
 
+  // Synchronize banner dismissal state whenever one or more notifications are marked as read
+  const acknowledgeNotificationBanners = (notifsToAck: ConsumerNotification[]) => {
+    if (!Array.isArray(notifsToAck) || notifsToAck.length === 0) return;
+    markNotificationsReadPersistently(notifsToAck, notifications);
+    const viewerKey = getViewerBannerStorageKey();
+    const seenAccsToAdd: string[] = [];
+    const seenBillsToAdd: string[] = [];
+    const dismissedSpotsToAdd: string[] = [];
+    const seenPaysToAdd: string[] = [];
+    const seenLiveToAdd: string[] = [];
+
+    for (const notif of notifsToAck) {
+      if (!notif) continue;
+      const sem = getNotificationSemanticKey(notif);
+      seenLiveNotifKeysRef.current.add(sem);
+      seenLiveToAdd.push(sem);
+
+      const effType = inferNotificationType(notif);
+      if (effType === 'account_issue') {
+        const cleanAcc = String(notif.accountNumber || consumerRecord?.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+        if (cleanAcc && !cleanAcc.startsWith('PENDING')) {
+          lastAnnouncedAccountRef.current = cleanAcc;
+          seenAccsToAdd.push(cleanAcc);
+        }
+        setIdConfirmedBanner(null);
+      } else if (effType === 'payment' || effType === 'receipt_upload') {
+        const linked = resolveNotificationLinkedReading(notif);
+        if (linked) {
+          const st = getCanonicalBillSettlement(linked, consumerRecord?.consumerType);
+          const pk = buildPaymentBannerKey(linked.id, st.paidAmount || st.grossTotal, linked.orNumber || linked.paymentReference);
+          seenPaymentKeysRef.current.add(pk);
+          seenPaysToAdd.push(pk);
+        }
+        setPaymentConfirmationToast(null);
+      } else if (effType === 'billing' || effType === 'balance' || effType === 'disconnection') {
+        const linked = resolveNotificationLinkedReading(notif);
+        const billId = notif.readingId || linked?.id;
+        if (billId) {
+          announcedIssuedBillIdsRef.current.add(billId);
+          dismissedSpotlightIdsRef.current.add(billId);
+          seenBillsToAdd.push(billId);
+          dismissedSpotsToAdd.push(billId);
+          setSpotlightReading((prev) => (prev && prev.id === billId ? null : prev));
+          const titleLower = String(notif.title || '').toLowerCase();
+          if (effType === 'disconnection' || titleLower.includes('overdue') || titleLower.includes('urgent')) {
+            markOverdueBannerDismissedForBill(
+              consumerRecord?.accountNumber || consumerRecord?.email || currentUser.email || 'anon',
+              billId
+            );
+          }
+        }
+      }
+    }
+
+    updateConsumerBannerState(viewerKey, (prev) => ({
+      ...prev,
+      seenAccounts: [...prev.seenAccounts, ...seenAccsToAdd],
+      seenBills: [...prev.seenBills, ...seenBillsToAdd],
+      dismissedSpotlights: [...prev.dismissedSpotlights, ...dismissedSpotsToAdd],
+      seenPayments: [...prev.seenPayments, ...seenPaysToAdd],
+      seenLiveNotifs: [...prev.seenLiveNotifs, ...seenLiveToAdd],
+    }));
+  };
+
   // Action: Open Notification Detail Pop-Up Modal (marks notification as read and closes bell popover)
   const handleOpenNotificationDetailModal = (notif: ConsumerNotification) => {
-    if (!notif.read && notif.id && !notif.id.startsWith('ADVISORY-PREVIEW-')) {
-      mockDb.markNotificationRead(notif.id);
-      const updated = notifications.map(n => (n.id === notif.id ? { ...n, read: true } : n));
-      notifsRef.current = updated;
-      setNotifications(updated);
+    if (notif.id && !notif.id.startsWith('ADVISORY-PREVIEW-')) {
+      acknowledgeNotificationBanners([notif]);
+      if (!notif.read) {
+        mockDb.markNotificationRead(notif.id);
+        const targetSem = getNotificationSemanticKey(notif);
+        const updated = notifications.map(n =>
+          n.id === notif.id || getNotificationSemanticKey(n) === targetSem ? { ...n, read: true } : n
+        );
+        notifsRef.current = updated;
+        setNotifications(updated);
+      }
     }
     setShowNotifDropdown(false);
     setSelectedBellNotification({ ...notif, read: true });
@@ -2023,12 +2436,18 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     notif: ConsumerNotification,
     targetPreference?: 'dashboard' | 'installation' | 'bills' | 'announcements' | 'profile' | 'reports'
   ) => {
-    // 1. Mark as read in storage and state
-    if (!notif.read && notif.id && !notif.id.startsWith('ADVISORY-PREVIEW-')) {
-      mockDb.markNotificationRead(notif.id);
-      const updated = notifications.map(n => (n.id === notif.id ? { ...n, read: true } : n));
-      notifsRef.current = updated;
-      setNotifications(updated);
+    // 1. Mark as read in storage and state & silence recurring banners
+    if (notif.id && !notif.id.startsWith('ADVISORY-PREVIEW-')) {
+      acknowledgeNotificationBanners([notif]);
+      if (!notif.read) {
+        mockDb.markNotificationRead(notif.id);
+        const targetSem = getNotificationSemanticKey(notif);
+        const updated = notifications.map(n =>
+          n.id === notif.id || getNotificationSemanticKey(n) === targetSem ? { ...n, read: true } : n
+        );
+        notifsRef.current = updated;
+        setNotifications(updated);
+      }
     }
     setShowNotifDropdown(false);
     setSelectedBellNotification(null);
@@ -2157,7 +2576,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   };
 
   const handleMarkAllNotifsRead = () => {
-    const unreadIds = notifications.filter(n => !n.read).map(n => n.id);
+    const unreadItems = notifications.filter(n => !n.read);
+    const unreadIds = unreadItems.map(n => n.id);
+    acknowledgeNotificationBanners(notifications);
+    overdueBills.forEach((ob) => {
+      markOverdueBannerDismissedForBill(
+        consumerRecord?.accountNumber || consumerRecord?.email || currentUser.email || 'anon',
+        ob.id
+      );
+    });
     mockDb.markAllNotificationsRead(unreadIds);
     const updatedNotifs = notifications.map(n => ({ ...n, read: true }));
     notifsRef.current = updatedNotifs;
@@ -3306,6 +3733,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
               <button
                 onClick={() => {
+                  if (idConfirmedBanner?.accountNumber) {
+                    const cleanAcc = idConfirmedBanner.accountNumber.replace(/^#/, '').trim().toUpperCase();
+                    lastAnnouncedAccountRef.current = cleanAcc;
+                    updateConsumerBannerState(getViewerBannerStorageKey(), (prev) => ({
+                      ...prev,
+                      seenAccounts: [...prev.seenAccounts, cleanAcc],
+                    }));
+                  }
                   setActiveTab('notifications');
                   setNotifFilter('account_issue');
                   setIdConfirmedBanner(null);
@@ -3315,7 +3750,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 View Notification
               </button>
               <button
-                onClick={() => setIdConfirmedBanner(null)}
+                onClick={() => {
+                  if (idConfirmedBanner?.accountNumber) {
+                    const cleanAcc = idConfirmedBanner.accountNumber.replace(/^#/, '').trim().toUpperCase();
+                    lastAnnouncedAccountRef.current = cleanAcc;
+                    updateConsumerBannerState(getViewerBannerStorageKey(), (prev) => ({
+                      ...prev,
+                      seenAccounts: [...prev.seenAccounts, cleanAcc],
+                    }));
+                  }
+                  setIdConfirmedBanner(null);
+                }}
                 className="text-white/80 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition cursor-pointer"
                 aria-label="Dismiss confirmation banner"
               >
@@ -3382,7 +3827,26 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 );
               })()}
               <button
-                onClick={() => setPaymentConfirmationToast(null)}
+                onClick={() => {
+                  const matchedBill = billedReadings.find(
+                    b =>
+                      (paymentConfirmationToast.reference &&
+                        (b.orNumber || b.paymentReference || '').toUpperCase() ===
+                          paymentConfirmationToast.reference.toUpperCase()) ||
+                      b.billingPeriod === paymentConfirmationToast.period
+                  );
+                  const pk = buildPaymentBannerKey(
+                    matchedBill?.id || paymentConfirmationToast.period,
+                    paymentConfirmationToast.amount,
+                    paymentConfirmationToast.reference
+                  );
+                  seenPaymentKeysRef.current.add(pk);
+                  updateConsumerBannerState(getViewerBannerStorageKey(), (prev) => ({
+                    ...prev,
+                    seenPayments: [...prev.seenPayments, pk],
+                  }));
+                  setPaymentConfirmationToast(null);
+                }}
                 className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition cursor-pointer"
               >
                 <X className="h-5 w-5" />
@@ -3412,25 +3876,41 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           </div>
         )}
 
-        {/* AUTOMATED OVERDUE BILL NOTIFICATION BANNER */}
-        {consumerRecord && overdueBills.length > 0 && !isAccountPending && (
-          <OverdueBillBanner
-            overdueBills={overdueBills}
-            consumerRecord={consumerRecord}
-            onPayNow={(reading, mode) => handleOpenSimulatedPayment(reading, mode || 'full')}
-            onViewBillDetails={(reading) => {
-              setActiveTab('bills');
-              setBillFilter('unpaid');
-              setHighlightedReadingId(reading.id);
-              setSpotlightReading(reading);
-            }}
-            onUploadReceipt={(reading) => {
-              setUploadReceiptReading(reading);
-              setIsUploadReceiptOpen(true);
-            }}
-            calculateCostOf={calculateCostOf}
-          />
-        )}
+        {/* AUTOMATED OVERDUE BILL NOTIFICATION BANNER (non-Dashboard tabs; Dashboard renders DynamicDueAlert) */}
+        {consumerRecord && overdueBills.length > 0 && !isAccountPending && activeTab !== 'dashboard' && (() => {
+          const primaryOverdue = overdueBills[0];
+          const primaryBpLower = String(primaryOverdue.billingPeriod || '').trim().toLowerCase();
+          const hasReadOverdueNotif = notifications.some((n) => {
+            if (!n || (!n.read && !isNotificationReadPersistently(n))) return false;
+            const t = inferNotificationType(n);
+            if (t !== 'billing' && t !== 'disconnection' && t !== 'balance') return false;
+            const titleLower = String(n.title || '').toLowerCase();
+            const isOverdueNotice = t === 'disconnection' || titleLower.includes('overdue') || titleLower.includes('urgent') || titleLower.includes('disconnection');
+            if (!isOverdueNotice) return false;
+            if (n.readingId && n.readingId === primaryOverdue.id) return true;
+            if (primaryBpLower && String(n.billingPeriod || '').trim().toLowerCase() === primaryBpLower) return true;
+            return t === 'disconnection';
+          });
+          return (
+            <OverdueBillBanner
+              overdueBills={overdueBills}
+              consumerRecord={consumerRecord}
+              hasReadOverdueNotification={hasReadOverdueNotif}
+              onPayNow={(reading, mode) => handleOpenSimulatedPayment(reading, mode || 'full')}
+              onViewBillDetails={(reading) => {
+                setActiveTab('bills');
+                setBillFilter('unpaid');
+                setHighlightedReadingId(reading.id);
+                setSpotlightReading(reading);
+              }}
+              onUploadReceipt={(reading) => {
+                setUploadReceiptReading(reading);
+                setIsUploadReceiptOpen(true);
+              }}
+              calculateCostOf={calculateCostOf}
+            />
+          );
+        })()}
 
         {/* ACCOUNT STATUS: ONLY DISPLAYED IN DASHBOARD MODULE */}
         {activeTab === 'dashboard' && (
@@ -3705,7 +4185,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     <button
                       onClick={() => {
                         if (spotlightReading?.id) {
-                          dismissedSpotlightIdsRef.current.add(spotlightReading.id);
+                          const spotId = spotlightReading.id;
+                          dismissedSpotlightIdsRef.current.add(spotId);
+                          updateConsumerBannerState(getViewerBannerStorageKey(), (prev) => ({
+                            ...prev,
+                            dismissedSpotlights: [...prev.dismissedSpotlights, spotId],
+                          }));
                         }
                         setSpotlightReading(null);
                       }}
@@ -6500,8 +6985,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
+                                acknowledgeNotificationBanners([n]);
                                 mockDb.markNotificationRead(n.id);
-                                setNotifications(prev => prev.map(item => item.id === n.id ? { ...item, read: true } : item));
+                                const targetSem = getNotificationSemanticKey(n);
+                                const updated = notifications.map(item =>
+                                  item.id === n.id || getNotificationSemanticKey(item) === targetSem
+                                    ? { ...item, read: true }
+                                    : item
+                                );
+                                notifsRef.current = updated;
+                                setNotifications(updated);
                               }}
                               className="text-xs font-bold text-slate-400 hover:text-white hover:underline shrink-0 cursor-pointer px-2 py-1"
                             >

@@ -1987,14 +1987,22 @@ function getPortalNotifSemanticKey(n: Partial<PortalNotification> & Record<strin
   if (type === "meter_status") {
     const meterKey = String(n.meterNumber || "").trim().toLowerCase();
     const statusKey = String(n.meterStatus || "").trim().toLowerCase();
-    const eventStamp = String(n.statusUpdateDate || n.id || n.timestamp || "").trim();
+    const eventStamp = String(n.statusUpdateDate || "").trim().slice(0, 16);
     return `meter_status::${target}::${meterKey}::${statusKey}::${eventStamp}`;
+  }
+  if (type === "installation") {
+    const reqKey = String((n as any).installationRequestId || (n as any).applicationNumber || "").trim().toLowerCase();
+    const instStatus = String((n as any).installationStatus || normTitle).trim().toLowerCase();
+    return `installation::${target}::${reqKey}::${instStatus}`;
   }
   if (type === "report") {
     return `report::${target}::${String(n.reportId || n.ticketNumber || "").trim().toLowerCase()}::${normTitle}::${normMsg.slice(0, 140)}`;
   }
   return `${type}::${target}::${normTitle}::${normMsg.slice(0, 140)}`;
 }
+
+const readPortalNotifIds = new Set<string>();
+const readPortalNotifSemKeys = new Set<string>();
 
 function dedupePortalNotifications(list: PortalNotification[], maxTotal = 120): PortalNotification[] {
   if (!Array.isArray(list) || list.length === 0) return [];
@@ -2017,16 +2025,25 @@ function dedupePortalNotifications(list: PortalNotification[], maxTotal = 120): 
       continue;
     }
 
-    const item: PortalNotification = {
+    const itemId = String(raw.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`);
+    const baseItem: PortalNotification = {
       ...raw,
       type: inferredType,
-      id: String(raw.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`),
+      id: itemId,
       accountNumber: cleanAcc || raw.accountNumber || "PENDING",
       ...(raw.consumerEmail ? { consumerEmail: String(raw.consumerEmail).trim().toLowerCase() } : {}),
       timestamp: raw.timestamp || "2026-01-01T08:00:00.000Z",
       read: Boolean(raw.read),
     };
-    const semKey = getPortalNotifSemanticKey(item);
+    const semKey = getPortalNotifSemanticKey(baseItem);
+    const isRead =
+      !isBroadcast &&
+      (Boolean(baseItem.read) || readPortalNotifIds.has(itemId) || readPortalNotifSemKeys.has(semKey));
+    if (isRead) {
+      readPortalNotifIds.add(itemId);
+      readPortalNotifSemKeys.add(semKey);
+    }
+    const item: PortalNotification = { ...baseItem, read: isBroadcast ? Boolean(baseItem.read) : isRead };
     const existingId = byId.has(item.id) ? item.id : bySem.get(semKey);
     if (existingId && byId.has(existingId)) {
       const prev = byId.get(existingId)!;
@@ -2177,8 +2194,11 @@ app.post("/api/notifications", async (req, res) => {
 
 app.post("/api/notifications/mark-all-read", async (req, res) => {
   try {
-    const { ids, accountNumber, email, userId } = req.body || {};
+    const { ids, semanticKeys, accountNumber, email, userId } = req.body || {};
     const idSet = Array.isArray(ids) && ids.length > 0 ? new Set(ids.map(String)) : null;
+    const semSet = Array.isArray(semanticKeys) && semanticKeys.length > 0 ? new Set(semanticKeys.map(String)) : null;
+    if (idSet) idSet.forEach((k) => readPortalNotifIds.add(k));
+    if (semSet) semSet.forEach((k) => readPortalNotifSemKeys.add(k));
     const cleanAcc = String(accountNumber || "").replace(/^#/, "").trim().toUpperCase();
     const cleanEmail = String(email || "").trim().toLowerCase();
     const cleanUid = String(userId || "").trim();
@@ -2187,20 +2207,25 @@ app.post("/api/notifications/mark-all-read", async (req, res) => {
     syncedNotifications.forEach((n) => {
       const nAcc = String(n.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
       if (nAcc === "ALL" || nAcc === "BROADCAST" || nAcc === "DISTRICT") return;
+      const semKey = getPortalNotifSemanticKey(n);
       const matchesId = idSet ? idSet.has(n.id) : false;
+      const matchesSem = semSet ? semSet.has(semKey) : false;
       const matchesIdentity =
-        !idSet &&
         ((cleanAcc && isRealAccountNumber(cleanAcc) && nAcc === cleanAcc) ||
           (cleanEmail && String(n.consumerEmail || "").trim().toLowerCase() === cleanEmail) ||
           (cleanUid && String(n.userId || "").trim() === cleanUid));
-      if ((matchesId || matchesIdentity) && !n.read) {
-        n.read = true;
-        updatedIds.push(n.id);
+      if (matchesId || matchesSem || (!idSet && matchesIdentity)) {
+        readPortalNotifIds.add(n.id);
+        readPortalNotifSemKeys.add(semKey);
+        if (!n.read) {
+          n.read = true;
+          updatedIds.push(n.id);
+        }
       }
     });
 
     if (canWriteFs()) {
-      const targetDocs = (idSet ? Array.from(idSet) : updatedIds).slice(0, 20);
+      const targetDocs = Array.from(new Set([...(idSet ? Array.from(idSet) : []), ...updatedIds])).slice(0, 20);
       await Promise.all(
         targetDocs.map((docId) =>
           setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(docId)), { read: true }, { merge: true }).catch(
@@ -2216,18 +2241,41 @@ app.post("/api/notifications/mark-all-read", async (req, res) => {
   }
 });
 
-app.patch("/api/notifications/:id/read", async (req, res) => {
+app.all("/api/notifications/:id/read", async (req, res) => {
   try {
-    const { id } = req.params;
-    const found = syncedNotifications.find((n) => n.id === id);
-    const isBroadcast = found && String(found.accountNumber || "").trim().toUpperCase() === "ALL";
-    if (found && !isBroadcast) {
-      found.read = true;
+    if (req.method !== "PATCH" && req.method !== "POST" && req.method !== "PUT") {
+      return res.status(405).json({ success: false });
     }
-    if (!isBroadcast && canWriteFs()) {
-      await setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(id)), { read: true }, { merge: true }).catch(
-        (err) => recordFsErr(err, "write")
-      );
+    const { id } = req.params;
+    const bodySemKey = typeof req.body?.semanticKey === "string" ? req.body.semanticKey.trim() : "";
+    const bodyNotif = req.body?.notification && typeof req.body.notification === "object" ? req.body.notification : null;
+    const found = syncedNotifications.find((n) => n.id === id);
+    const refNotif = found || bodyNotif;
+    const isBroadcast = refNotif && ["ALL", "BROADCAST", "DISTRICT"].includes(String(refNotif.accountNumber || "").trim().toUpperCase());
+    const resolvedSemKey = bodySemKey || (refNotif ? getPortalNotifSemanticKey(refNotif) : "");
+
+    if (!isBroadcast) {
+      readPortalNotifIds.add(id);
+      if (resolvedSemKey) readPortalNotifSemKeys.add(resolvedSemKey);
+      const matchedDocIds = new Set<string>([id]);
+      syncedNotifications.forEach((n) => {
+        const nAcc = String(n.accountNumber || "").trim().toUpperCase();
+        if (nAcc === "ALL" || nAcc === "BROADCAST" || nAcc === "DISTRICT") return;
+        if (n.id === id || (resolvedSemKey && getPortalNotifSemanticKey(n) === resolvedSemKey)) {
+          n.read = true;
+          readPortalNotifIds.add(n.id);
+          matchedDocIds.add(n.id);
+        }
+      });
+      if (canWriteFs()) {
+        await Promise.all(
+          Array.from(matchedDocIds).slice(0, 5).map((docId) =>
+            setDoc(doc(fsDb, FS_COLLECTIONS.NOTIFICATIONS, sanitizeDocId(docId)), { read: true }, { merge: true }).catch(
+              (err) => recordFsErr(err, "write")
+            )
+          )
+        );
+      }
     }
     res.json({ success: true });
   } catch {

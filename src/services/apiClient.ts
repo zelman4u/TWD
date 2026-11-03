@@ -67,9 +67,11 @@ function recordLog(entry: ApiLogEntry) {
   }
 }
 
-// Track API endpoints that returned 404 on static-only deployments to prevent console polling spam
+// Track API endpoints that returned 404 on static-only deployments or 429 rate-limit cooldowns
 const unavailableApiRoutes = new Map<string, number>();
+const rateLimitedRoutes = new Map<string, number>();
 let backendStaticOnlyUntil = 0;
+let globalRateLimitedUntil = 0;
 
 const CORE_BACKEND_ROUTES = new Set([
   '/api/readings',
@@ -102,6 +104,27 @@ function isRouteTemporarilyUnavailable(url: string): boolean {
   return Boolean(cooldownUntil && cooldownUntil > now);
 }
 
+function isRouteRateLimited(url: string): boolean {
+  if (!url.startsWith('/api')) return false;
+  const now = Date.now();
+  if (globalRateLimitedUntil > now) return true;
+  const routeKey = normalizeApiRouteKey(url);
+  const routeCooldown = rateLimitedRoutes.get(routeKey);
+  return Boolean(routeCooldown && routeCooldown > now);
+}
+
+function markRouteRateLimited(url: string, retryAfterHeader?: string | null) {
+  const parsedSec = retryAfterHeader ? Number(retryAfterHeader) : NaN;
+  const cooldownMs =
+    Number.isFinite(parsedSec) && parsedSec > 0
+      ? Math.min(30000, Math.max(5000, Math.ceil(parsedSec * 1000)))
+      : 12000;
+  const until = Date.now() + cooldownMs;
+  const routeKey = normalizeApiRouteKey(url);
+  rateLimitedRoutes.set(routeKey, until);
+  globalRateLimitedUntil = Math.max(globalRateLimitedUntil, until);
+}
+
 function markRoute404(url: string, contentType: string) {
   // If the server returned a JSON 404 response, the backend API is alive and routing properly
   // (e.g. resource ID not found). Never trip static-host circuit breaking on JSON 404s.
@@ -117,22 +140,28 @@ function markRoute404(url: string, contentType: string) {
 }
 
 /**
- * Safe wrapper around fetch('/api/...') that respects static-host 404 circuit breaking
- * so background sync falls back silently to Cloud Firestore without spamming 404 errors.
+ * Safe wrapper around fetch('/api/...') that respects static-host 404 & 429 cooldown circuit breaking
+ * so background sync falls back silently to Cloud Firestore without spamming console errors.
  */
 export async function safeBackendFetch(url: string, options?: RequestInit): Promise<Response | null> {
   if (typeof window === 'undefined' || typeof fetch !== 'function') return null;
-  if (isRouteTemporarilyUnavailable(url)) {
+  if (isRouteTemporarilyUnavailable(url) || isRouteRateLimited(url)) {
     return null;
   }
   try {
     const res = await fetch(url, options);
+    if (res.status === 429) {
+      markRouteRateLimited(url, res.headers.get('retry-after'));
+      return null;
+    }
     if (res.status === 404) {
       markRoute404(url, res.headers.get('content-type') || '');
       return null;
     }
     if (res.ok && url.startsWith('/api')) {
-      unavailableApiRoutes.delete(normalizeApiRouteKey(url));
+      const routeKey = normalizeApiRouteKey(url);
+      unavailableApiRoutes.delete(routeKey);
+      rateLimitedRoutes.delete(routeKey);
       backendStaticOnlyUntil = 0;
     }
     return res;
@@ -142,6 +171,7 @@ export async function safeBackendFetch(url: string, options?: RequestInit): Prom
 }
 
 const inFlightGetRequests = new Map<string, Promise<any>>();
+const inFlightReconcileRequests = new Map<string, Promise<any>>();
 
 /**
  * Executes an HTTP fetch request with timeout, retries, and exponential backoff
@@ -163,6 +193,14 @@ async function executeRequestWithRetry<T = any>(url: string, options: RequestOpt
     cachedErr.status = 404;
     cachedErr.noRetry = true;
     throw cachedErr;
+  }
+
+  if (isRouteRateLimited(url)) {
+    const rateErr: any = new Error('Endpoint cooling down after HTTP 429');
+    rateErr.status = 429;
+    rateErr.isRateLimited = true;
+    rateErr.noRetry = true;
+    throw rateErr;
   }
 
   const startTime = Date.now();
@@ -208,6 +246,7 @@ async function executeRequestWithRetry<T = any>(url: string, options: RequestOpt
       // Success
       if (response.ok) {
         unavailableApiRoutes.delete(routeKey);
+        rateLimitedRoutes.delete(routeKey);
         if (url.startsWith('/api')) {
           backendStaticOnlyUntil = 0;
         }
@@ -227,6 +266,16 @@ async function executeRequestWithRetry<T = any>(url: string, options: RequestOpt
         return data as T;
       }
 
+      if (response.status === 429) {
+        markRouteRateLimited(url, response.headers.get('retry-after'));
+        const rateErr: any = new Error(`HTTP 429: ${data?.message || 'Too Many Requests'}`);
+        rateErr.status = 429;
+        rateErr.isRateLimited = true;
+        rateErr.noRetry = true;
+        rateErr.data = data;
+        throw rateErr;
+      }
+
       if (response.status === 404) {
         markRoute404(url, contentType);
       }
@@ -239,7 +288,7 @@ async function executeRequestWithRetry<T = any>(url: string, options: RequestOpt
 
       if (!isRetryable || attempt >= retries) {
         (lastError as any).noRetry = true;
-        if (!skipLogging && response.status !== 404) {
+        if (!skipLogging && response.status !== 404 && response.status !== 429) {
           recordLog({
             id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             timestamp: new Date().toISOString(),
@@ -308,6 +357,18 @@ async function requestWithRetry<T = any>(url: string, options: RequestOptions = 
     });
     inFlightGetRequests.set(url, promise);
     return promise;
+  }
+  if (method === 'POST' && !options.signal && normalizeApiRouteKey(url).endsWith('/reconcile')) {
+    const reconcileKey = `${method}:${normalizeApiRouteKey(url)}`;
+    const existingReconcile = inFlightReconcileRequests.get(reconcileKey);
+    if (existingReconcile) {
+      return existingReconcile as Promise<T>;
+    }
+    const reconcilePromise = executeRequestWithRetry<T>(url, options).finally(() => {
+      inFlightReconcileRequests.delete(reconcileKey);
+    });
+    inFlightReconcileRequests.set(reconcileKey, reconcilePromise);
+    return reconcilePromise;
   }
   return executeRequestWithRetry<T>(url, options);
 }

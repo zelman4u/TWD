@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   AlertTriangle, 
   CreditCard, 
@@ -15,11 +15,42 @@ import {
   Upload,
   AlertOctagon,
   FileWarning,
-  Flame
+  Flame,
+  X
 } from 'lucide-react';
 import { Consumer, MeterReading } from '../../types';
 import { calculateLatePenalty, getReadingEffectiveBillAmount } from '../../utils/tariffCalculator';
 import { formatOdometerReading } from '../../utils/odometer';
+import { safeStorageGetItem, safeStorageSetStructured } from '../../services/storageSafe';
+
+export const OVERDUE_BANNER_STORAGE_KEY = 'twd_live_v4_overdue_banner_state';
+
+type OverdueBannerPersistedMode = 'minimized' | 'dismissed' | 'expanded';
+
+function readOverdueBannerMap(): Record<string, OverdueBannerPersistedMode> {
+  try {
+    const raw = safeStorageGetItem(OVERDUE_BANNER_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeOverdueBannerMode(bannerKey: string, mode: OverdueBannerPersistedMode): void {
+  if (!bannerKey) return;
+  const map = readOverdueBannerMap();
+  map[bannerKey] = mode;
+  safeStorageSetStructured(OVERDUE_BANNER_STORAGE_KEY, map);
+}
+
+export function markOverdueBannerDismissedForBill(accountOrEmail: string, billId: string): void {
+  const owner = String(accountOrEmail || 'anon').replace(/^#/, '').trim().toUpperCase();
+  const id = String(billId || '').trim();
+  if (!id) return;
+  writeOverdueBannerMode(`${owner}::${id}`, 'dismissed');
+}
 
 interface OverdueBillBannerProps {
   overdueBills: MeterReading[];
@@ -28,6 +59,7 @@ interface OverdueBillBannerProps {
   onViewBillDetails: (reading: MeterReading) => void;
   onUploadReceipt?: (reading: MeterReading) => void;
   calculateCostOf: (usageOrReading: number | MeterReading, classification?: 'Residential' | 'Commercial') => number;
+  hasReadOverdueNotification?: boolean;
 }
 
 export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
@@ -37,13 +69,47 @@ export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
   onViewBillDetails,
   onUploadReceipt,
   calculateCostOf,
+  hasReadOverdueNotification = false,
 }) => {
+  const primaryBillId = overdueBills?.[0]?.id || '';
+  const ownerKey = String(consumerRecord?.accountNumber || consumerRecord?.email || 'anon')
+    .replace(/^#/, '')
+    .trim()
+    .toUpperCase();
+  const bannerStateKey = primaryBillId ? `${ownerKey}::${primaryBillId}` : '';
+
   const [isExpanded, setIsExpanded] = useState(false);
-  const [isMinimized, setIsMinimized] = useState(false);
+  const [bannerMode, setBannerMode] = useState<OverdueBannerPersistedMode | null>(() => {
+    if (!bannerStateKey) return null;
+    return readOverdueBannerMap()[bannerStateKey] || null;
+  });
+
+  useEffect(() => {
+    if (!bannerStateKey) return;
+    setBannerMode(readOverdueBannerMap()[bannerStateKey] || null);
+  }, [bannerStateKey]);
+
+  const handleSetMinimized = (minimized: boolean) => {
+    const nextMode: OverdueBannerPersistedMode = minimized ? 'minimized' : 'expanded';
+    setBannerMode(nextMode);
+    writeOverdueBannerMode(bannerStateKey, nextMode);
+  };
+
+  const handleDismiss = () => {
+    setBannerMode('dismissed');
+    writeOverdueBannerMode(bannerStateKey, 'dismissed');
+  };
 
   if (!overdueBills || overdueBills.length === 0) {
     return null;
   }
+
+  // Stop re-popping once dismissed or once the consumer has already read the overdue notification
+  if (bannerMode === 'dismissed' || (hasReadOverdueNotification && bannerMode !== 'expanded')) {
+    return null;
+  }
+
+  const isMinimized = bannerMode === 'minimized';
 
   const primaryBill = overdueBills[0];
   const grossCost = calculateCostOf(primaryBill, consumerRecord.consumerType);
@@ -131,11 +197,19 @@ export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
             <span>Pay ₱{netDue.toFixed(2)}</span>
           </button>
           <button
-            onClick={() => setIsMinimized(false)}
+            onClick={() => handleSetMinimized(false)}
             className="p-1.5 hover:bg-rose-800 rounded-lg text-rose-300 hover:text-white transition cursor-pointer"
             title="Expand Overdue Details"
           >
             <Maximize2 className="h-4 w-4" />
+          </button>
+          <button
+            onClick={handleDismiss}
+            className="p-1.5 hover:bg-rose-800 rounded-lg text-rose-300 hover:text-white transition cursor-pointer"
+            title="Dismiss Overdue Banner"
+            aria-label="Dismiss Overdue Banner"
+          >
+            <X className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -172,15 +246,25 @@ export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
               </span>
             </div>
 
-            {/* Minimize toggle */}
-            <button
-              onClick={() => setIsMinimized(true)}
-              className="text-red-200 hover:text-white p-1 rounded-lg hover:bg-white/10 transition text-xs flex items-center space-x-1 cursor-pointer"
-              title="Minimize alert to compact bar"
-            >
-              <Minimize2 className="h-3.5 w-3.5" />
-              <span className="text-[10px] font-bold uppercase tracking-wider hidden sm:inline">Minimize</span>
-            </button>
+            {/* Minimize & Dismiss toggles */}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => handleSetMinimized(true)}
+                className="text-red-200 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition text-xs flex items-center space-x-1 cursor-pointer"
+                title="Minimize alert to compact bar"
+              >
+                <Minimize2 className="h-3.5 w-3.5" />
+                <span className="text-[10px] font-bold uppercase tracking-wider hidden sm:inline">Minimize</span>
+              </button>
+              <button
+                onClick={handleDismiss}
+                className="text-red-200 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition text-xs flex items-center space-x-1 cursor-pointer"
+                title="Dismiss banner"
+                aria-label="Dismiss banner"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           {/* Disconnection Warning Content Grid */}
@@ -349,15 +433,25 @@ export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
             )}
           </div>
 
-          {/* Minimize toggle */}
-          <button
-            onClick={() => setIsMinimized(true)}
-            className="text-rose-200 hover:text-white p-1 rounded-lg hover:bg-white/10 transition text-xs flex items-center space-x-1 cursor-pointer"
-            title="Minimize alert to compact bar"
-          >
-            <Minimize2 className="h-3.5 w-3.5" />
-            <span className="text-[10px] font-bold uppercase tracking-wider hidden sm:inline">Minimize</span>
-          </button>
+          {/* Minimize & Dismiss toggles */}
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => handleSetMinimized(true)}
+              className="text-rose-200 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition text-xs flex items-center space-x-1 cursor-pointer"
+              title="Minimize alert to compact bar"
+            >
+              <Minimize2 className="h-3.5 w-3.5" />
+              <span className="text-[10px] font-bold uppercase tracking-wider hidden sm:inline">Minimize</span>
+            </button>
+            <button
+              onClick={handleDismiss}
+              className="text-rose-200 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition text-xs flex items-center space-x-1 cursor-pointer"
+              title="Dismiss banner"
+              aria-label="Dismiss banner"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Main Content Info Grid */}

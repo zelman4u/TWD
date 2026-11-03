@@ -791,6 +791,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   // Initial Load & State Sync (Local Store + Backend API Live Sync)
   const lastAdminRemoteSyncRef = useRef<number>(0);
+  const lastAdminReportsSyncRef = useRef<number>(0);
+  const lastPushedBillingsSigRef = useRef<string>('');
 
   const loadAllDataFromStore = (withDelay = false) => {
     if (withDelay) {
@@ -822,7 +824,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     }
 
     const nowMs = Date.now();
-    if (!withDelay && lastAdminRemoteSyncRef.current > 0 && nowMs - lastAdminRemoteSyncRef.current < 4000) {
+    if (!withDelay && lastAdminRemoteSyncRef.current > 0 && nowMs - lastAdminRemoteSyncRef.current < 10000) {
       return;
     }
     lastAdminRemoteSyncRef.current = nowMs;
@@ -1107,25 +1109,40 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       });
 
     // 4. Reconcile & Fetch Reports from Backend API (bi-directional sync without wiping local/Firestore reports)
-    apiClient
-      .reconcileReports({ reports: mockDb.getReports().slice(0, 30) }, { skipLogging: true })
-      .then(res => {
-        if (res?.reports && Array.isArray(res.reports) && res.reports.length > 0) {
-          const merged = mockDb.mergeExternalReports(res.reports);
-          applyIfChanged(setReports, merged);
-        }
-      })
-      .catch(() => {
-        apiClient
-          .getReports(undefined, { skipLogging: true })
-          .then(res => {
-            if (res?.reports && Array.isArray(res.reports) && res.reports.length > 0) {
-              const merged = mockDb.mergeExternalReports(res.reports);
-              applyIfChanged(setReports, merged);
-            }
-          })
-          .catch(() => {});
-      });
+    const adminLocalReports = mockDb.getReports();
+    lastAdminReportsSyncRef.current = nowMs;
+    if (adminLocalReports.length > 0) {
+      apiClient
+        .reconcileReports({ reports: adminLocalReports.slice(0, 30) }, { skipLogging: true })
+        .then(res => {
+          if (res?.reports && Array.isArray(res.reports) && res.reports.length > 0) {
+            const merged = mockDb.mergeExternalReports(res.reports);
+            applyIfChanged(setReports, merged);
+          }
+        })
+        .catch((err: any) => {
+          if (err?.status === 429 || err?.isRateLimited) return;
+          apiClient
+            .getReports(undefined, { skipLogging: true })
+            .then(res => {
+              if (res?.reports && Array.isArray(res.reports) && res.reports.length > 0) {
+                const merged = mockDb.mergeExternalReports(res.reports);
+                applyIfChanged(setReports, merged);
+              }
+            })
+            .catch(() => {});
+        });
+    } else {
+      apiClient
+        .getReports(undefined, { skipLogging: true })
+        .then(res => {
+          if (res?.reports && Array.isArray(res.reports) && res.reports.length > 0) {
+            const merged = mockDb.mergeExternalReports(res.reports);
+            applyIfChanged(setReports, merged);
+          }
+        })
+        .catch(() => {});
+    }
 
     // 4b. Sync Announcements & Tariff Config from Backend API
     apiClient.getAnnouncements({ skipLogging: true })
@@ -1166,25 +1183,43 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         .getReadings()
         .filter(r => r.status === 'verified' || isOfficialBillIssued(r));
 
-      apiClient
-        .reconcileBillings({ readings: verifiedAndBilledLocal }, { skipLogging: true })
-        .then((res) => {
-          if (res?.readings && Array.isArray(res.readings) && res.readings.length > 0) {
-            const merged = mockDb.mergeExternalReadings(res.readings);
-            applyIfChanged(setReadings, [...merged]);
-          }
-        })
-        .catch(() => {
-          apiClient
-            .getBillings(undefined, { skipLogging: true })
-            .then((res) => {
-              if (res?.readings && Array.isArray(res.readings) && res.readings.length > 0) {
-                const merged = mockDb.mergeExternalReadings(res.readings);
-                applyIfChanged(setReadings, [...merged]);
-              }
-            })
-            .catch(() => {});
-        });
+      const billingsSig = verifiedAndBilledLocal
+        .map(r => `${r.id}:${r.status}:${r.isBillingIssued ? 1 : 0}:${r.paymentStatus || 'unpaid'}:${r.paidAmount || 0}:${r.remainingBalance ?? ''}`)
+        .join('|');
+
+      if (verifiedAndBilledLocal.length > 0 && (withDelay || billingsSig !== lastPushedBillingsSigRef.current)) {
+        lastPushedBillingsSigRef.current = billingsSig;
+        apiClient
+          .reconcileBillings({ readings: verifiedAndBilledLocal }, { skipLogging: true })
+          .then((res) => {
+            if (res?.readings && Array.isArray(res.readings) && res.readings.length > 0) {
+              const merged = mockDb.mergeExternalReadings(res.readings);
+              applyIfChanged(setReadings, [...merged]);
+            }
+          })
+          .catch((err: any) => {
+            if (err?.status === 429 || err?.isRateLimited) return;
+            apiClient
+              .getBillings(undefined, { skipLogging: true })
+              .then((res) => {
+                if (res?.readings && Array.isArray(res.readings) && res.readings.length > 0) {
+                  const merged = mockDb.mergeExternalReadings(res.readings);
+                  applyIfChanged(setReadings, [...merged]);
+                }
+              })
+              .catch(() => {});
+          });
+      } else {
+        apiClient
+          .getBillings(undefined, { skipLogging: true })
+          .then((res) => {
+            if (res?.readings && Array.isArray(res.readings) && res.readings.length > 0) {
+              const merged = mockDb.mergeExternalReadings(res.readings);
+              applyIfChanged(setReadings, [...merged]);
+            }
+          })
+          .catch(() => {});
+      }
     };
 
     safeBackendFetch('/api/readings')
@@ -1345,25 +1380,43 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const syncAdminReportsLive = () => {
     const localReports = mockDb.getReports();
     applyIfChanged(setReports, localReports);
-    apiClient
-      .reconcileReports({ reports: localReports.slice(0, 30) }, { skipLogging: true })
-      .then(res => {
-        if (res?.reports && Array.isArray(res.reports)) {
-          const merged = mockDb.mergeExternalReports(res.reports);
-          applyIfChanged(setReports, merged);
-        }
-      })
-      .catch(() => {
-        apiClient
-          .getReports(undefined, { skipLogging: true })
-          .then(res => {
-            if (res?.reports && Array.isArray(res.reports)) {
-              const merged = mockDb.mergeExternalReports(res.reports);
-              applyIfChanged(setReports, merged);
-            }
-          })
-          .catch(() => {});
-      });
+    const nowMs = Date.now();
+    if (nowMs - lastAdminReportsSyncRef.current < 10000) {
+      return;
+    }
+    lastAdminReportsSyncRef.current = nowMs;
+    if (localReports.length > 0) {
+      apiClient
+        .reconcileReports({ reports: localReports.slice(0, 30) }, { skipLogging: true })
+        .then(res => {
+          if (res?.reports && Array.isArray(res.reports)) {
+            const merged = mockDb.mergeExternalReports(res.reports);
+            applyIfChanged(setReports, merged);
+          }
+        })
+        .catch((err: any) => {
+          if (err?.status === 429 || err?.isRateLimited) return;
+          apiClient
+            .getReports(undefined, { skipLogging: true })
+            .then(res => {
+              if (res?.reports && Array.isArray(res.reports)) {
+                const merged = mockDb.mergeExternalReports(res.reports);
+                applyIfChanged(setReports, merged);
+              }
+            })
+            .catch(() => {});
+        });
+    } else {
+      apiClient
+        .getReports(undefined, { skipLogging: true })
+        .then(res => {
+          if (res?.reports && Array.isArray(res.reports)) {
+            const merged = mockDb.mergeExternalReports(res.reports);
+            applyIfChanged(setReports, merged);
+          }
+        })
+        .catch(() => {});
+    }
   };
 
   useEffect(() => {
@@ -1404,14 +1457,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       if (typeof document !== 'undefined' && !document.hidden) {
         loadAllDataFromStore(false);
       }
-    }, 10000);
+    }, 15000);
 
-    // 3b. Dedicated fast 2-second Customer Service Reports & Replies sync across devices/serverless
+    // 3b. Customer Service Reports & Replies background sync (throttled; instant push via WS & Firestore)
     const reportPollTimer = setInterval(() => {
       if (typeof document !== 'undefined' && !document.hidden) {
         syncAdminReportsLive();
       }
-    }, 2000);
+    }, 12000);
 
     const handleVisibilityChange = () => {
       if (typeof document !== 'undefined' && !document.hidden) {

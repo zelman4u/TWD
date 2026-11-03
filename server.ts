@@ -151,6 +151,7 @@ interface RateLimitBucket {
   resetTime: number;
 }
 const rateLimitMap = new Map<string, RateLimitBucket>();
+const authRateLimitMap = new Map<string, RateLimitBucket>();
 let totalServedRequests = 0;
 let totalThrottledRequests = 0;
 
@@ -162,7 +163,36 @@ setInterval(() => {
       rateLimitMap.delete(ip);
     }
   }
+  for (const [ip, bucket] of authRateLimitMap.entries()) {
+    if (now > bucket.resetTime) {
+      authRateLimitMap.delete(ip);
+    }
+  }
 }, 60000);
+
+// Core portal & mobile synchronization prefixes exempt from tight per-IP rate gating
+// (Render proxies multiple clients behind shared egress IPs)
+const RATE_LIMIT_EXEMPT_PREFIXES = [
+  "/api/health",
+  "/api/status",
+  "/api/ping",
+  "/api/survival",
+  "/api/mobile-bridge",
+  "/api/ws",
+  "/api/billings",
+  "/api/reports",
+  "/api/notifications",
+  "/api/consumers",
+  "/api/installations",
+  "/api/announcements",
+  "/api/tariff-config",
+  "/api/readers",
+  "/api/staff",
+  "/api/readings",
+  "/api/meters",
+  "/api/sync",
+  "/api/barangays",
+];
 
 // Anti-flood rate limiting middleware
 app.use((req, res, next) => {
@@ -173,49 +203,43 @@ app.use((req, res, next) => {
     return next();
   }
 
-  // Exempt survival, bridge telemetry, and health check probes
-  if (
-    req.path === "/api/health" ||
-    req.path === "/api/status" ||
-    req.path === "/api/ping" ||
-    req.path === "/api/survival" ||
-    req.path === "/api/mobile-bridge/status"
-  ) {
+  // Exempt portal telemetry, synchronization, and health check routes
+  if (RATE_LIMIT_EXEMPT_PREFIXES.some((prefix) => req.path === prefix || req.path.startsWith(`${prefix}/`))) {
     return next();
   }
 
   const forwarded = req.headers["x-forwarded-for"];
   const clientIp = (typeof forwarded === "string" ? forwarded.split(",")[0].trim() : null) || req.socket.remoteAddress || "127.0.0.1";
   const now = Date.now();
-  const windowMs = 60 * 1000; // 1 minute sliding window
+  const windowMs = 60 * 1000; // 1 minute window
 
-  // Stricter limit on credential authentication routes (max 25/min), wider limit for general reads (max 200/min)
-  const isAuthRoute = req.path.includes("/auth") || req.path.includes("/login") || req.path.includes("/verify");
-  const maxAllowed = isAuthRoute ? 25 : 200;
+  // Separate bucket for credential authentication routes (max 60/min) vs general anti-DDoS shield (max 3000/min)
+  const isAuthRoute = req.path.includes("/auth") || req.path.includes("/login");
+  const maxAllowed = isAuthRoute ? 60 : 3000;
+  const activeMap = isAuthRoute ? authRateLimitMap : rateLimitMap;
 
-  let bucket = rateLimitMap.get(clientIp);
+  let bucket = activeMap.get(clientIp);
   if (!bucket || now > bucket.resetTime) {
     bucket = { count: 1, resetTime: now + windowMs };
-    rateLimitMap.set(clientIp, bucket);
-  } else {
+    activeMap.set(clientIp, bucket);
+  } else if (bucket.count <= maxAllowed) {
     bucket.count++;
   }
 
   const remaining = Math.max(0, maxAllowed - bucket.count);
-  const retryAfterSec = Math.ceil((bucket.resetTime - now) / 1000);
+  const retryAfterSec = Math.max(1, Math.ceil((bucket.resetTime - now) / 1000));
 
   res.setHeader("X-RateLimit-Limit", maxAllowed);
   res.setHeader("X-RateLimit-Remaining", remaining);
   res.setHeader("X-RateLimit-Reset", retryAfterSec);
 
-  // If a bot sends 10,000 requests, it triggers HTTP 429
   if (bucket.count > maxAllowed) {
     totalThrottledRequests++;
     res.setHeader("Retry-After", retryAfterSec);
     return res.status(429).json({
       success: false,
       error: "Too Many Requests",
-      message: `TWD Rate Limiter: Maximum limit of ${maxAllowed} requests/min exceeded. Your IP (${clientIp}) is temporarily throttled to safeguard municipal water telemetry.`,
+      message: `TWD Rate Limiter: Maximum limit of ${maxAllowed} requests/min exceeded. Please retry in ${retryAfterSec}s.`,
       retryAfterSeconds: retryAfterSec,
       timestamp: new Date().toISOString()
     });
@@ -5026,14 +5050,13 @@ function getServerNotifSemanticKey(n: Partial<ServerConsumerNotification> & Reco
   if (type === "meter_status") {
     const meterKey = String(n.meterNumber || "").trim().toLowerCase();
     const statusKey = String(n.meterStatus || "").trim().toLowerCase();
-    const eventStamp = String(n.statusUpdateDate || n.id || n.timestamp || "").trim();
+    const eventStamp = String(n.statusUpdateDate || "").trim().slice(0, 16);
     return `meter_status::${target}::${meterKey}::${statusKey}::${eventStamp}`;
   }
   if (type === "installation") {
     const reqKey = String(n.installationRequestId || n.applicationNumber || "").trim().toLowerCase();
-    const instStatus = String(n.installationStatus || "").trim().toLowerCase();
-    const eventId = String(n.id || n.confirmedDate || n.timestamp || "").trim();
-    return `installation::${target}::${reqKey}::${instStatus}::${eventId}`;
+    const instStatus = String(n.installationStatus || normTitle).trim().toLowerCase();
+    return `installation::${target}::${reqKey}::${instStatus}`;
   }
   if (type === "report") {
     const repKey = String(n.reportId || n.ticketNumber || "").trim().toLowerCase();
@@ -5044,6 +5067,19 @@ function getServerNotifSemanticKey(n: Partial<ServerConsumerNotification> & Reco
     return `report::${target}::${repKey}::${normTitle}::${normMsg.slice(0, 140)}`;
   }
   return `${type}::${target}::${normTitle}::${normMsg.slice(0, 140)}`;
+}
+
+const readServerNotifIds = new Set<string>();
+const readServerNotifSemKeys = new Set<string>();
+
+function recordServerNotifRead(n?: Partial<ServerConsumerNotification> | null, explicitId?: string, explicitSemKey?: string) {
+  if (explicitId) readServerNotifIds.add(String(explicitId));
+  if (explicitSemKey) readServerNotifSemKeys.add(String(explicitSemKey));
+  if (n) {
+    if (n.id) readServerNotifIds.add(String(n.id));
+    const sem = getServerNotifSemanticKey(n);
+    if (sem) readServerNotifSemKeys.add(sem);
+  }
 }
 
 function dedupeServerNotifications(list: ServerConsumerNotification[], maxTotal = 250): ServerConsumerNotification[] {
@@ -5067,19 +5103,34 @@ function dedupeServerNotifications(list: ServerConsumerNotification[], maxTotal 
       continue;
     }
 
-    const item: ServerConsumerNotification = {
+    const itemId = String(raw.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`);
+    const baseItem: ServerConsumerNotification = {
       ...raw,
       type: inferredType as ServerConsumerNotification["type"],
-      id: String(raw.id || `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`),
+      id: itemId,
       accountNumber: cleanAcc || raw.accountNumber || "PENDING",
       ...(raw.consumerEmail ? { consumerEmail: String(raw.consumerEmail).trim().toLowerCase() } : {}),
       timestamp: raw.timestamp || "2026-01-01T08:00:00.000Z",
       read: Boolean(raw.read),
     };
-    const semKey = getServerNotifSemanticKey(item);
+    const semKey = getServerNotifSemanticKey(baseItem);
+    const isAlreadyRead =
+      !isBroadcast &&
+      (Boolean(baseItem.read) || readServerNotifIds.has(itemId) || readServerNotifSemKeys.has(semKey));
+    if (isAlreadyRead) {
+      recordServerNotifRead(baseItem, itemId, semKey);
+    }
+    const item: ServerConsumerNotification = {
+      ...baseItem,
+      read: isBroadcast ? Boolean(baseItem.read) : isAlreadyRead,
+    };
     const existingId = byId.has(item.id) ? item.id : bySem.get(semKey);
     if (existingId && byId.has(existingId)) {
       const prev = byId.get(existingId)!;
+      const mergedRead = Boolean(prev.read || item.read);
+      if (mergedRead && !isBroadcast) {
+        recordServerNotifRead(prev, prev.id, semKey);
+      }
       const merged: ServerConsumerNotification = {
         ...prev,
         ...item,
@@ -5092,7 +5143,7 @@ function dedupeServerNotifications(list: ServerConsumerNotification[], maxTotal 
         consumerEmail: item.consumerEmail || prev.consumerEmail,
         userId: item.userId || prev.userId,
         timestamp: item.type === "account_issue" && prev.timestamp ? prev.timestamp : item.timestamp || prev.timestamp,
-        read: Boolean(prev.read || item.read),
+        read: mergedRead,
       };
       byId.set(prev.id, merged);
       bySem.set(semKey, prev.id);
@@ -5122,6 +5173,13 @@ function pushServerNotification(
     consumerEmail: cleanEmail || undefined,
   });
 
+  const isBroadcast = cleanAcc === "ALL" || cleanAcc === "BROADCAST" || cleanAcc === "DISTRICT";
+  const alreadyReadOnServer =
+    !isBroadcast &&
+    (Boolean(input.read) ||
+      (input.id ? readServerNotifIds.has(String(input.id)) : false) ||
+      readServerNotifSemKeys.has(targetSemKey));
+
   // Deduplicate semantically identical notifications permanently
   const existing = inMemoryNotifications.find(n => {
     if (input.id && n.id === input.id) return true;
@@ -5136,8 +5194,9 @@ function pushServerNotification(
     if (cleanEmail && !existing.consumerEmail) {
       existing.consumerEmail = cleanEmail;
     }
-    if (input.read) {
+    if (alreadyReadOnServer || existing.read) {
       existing.read = true;
+      recordServerNotifRead(existing, existing.id, targetSemKey);
     }
     return existing;
   }
@@ -5149,8 +5208,11 @@ function pushServerNotification(
     ...(cleanEmail ? { consumerEmail: cleanEmail } : {}),
     id: input.id || `notif-${nowMs}-${Math.floor(Math.random() * 1000)}`,
     timestamp: input.timestamp || new Date().toISOString(),
-    read: input.read ?? false
+    read: alreadyReadOnServer
   };
+  if (created.read && !isBroadcast) {
+    recordServerNotifRead(created, created.id, targetSemKey);
+  }
 
   inMemoryNotifications = dedupeServerNotifications([created, ...inMemoryNotifications]);
 
@@ -5246,8 +5308,12 @@ app.post("/api/notifications", (req, res) => {
 
 app.post("/api/notifications/mark-all-read", (req, res) => {
   try {
-    const { ids, accountNumber, email, userId } = req.body || {};
+    const { ids, semanticKeys, accountNumber, email, userId } = req.body || {};
     const idSet = Array.isArray(ids) && ids.length > 0 ? new Set(ids.map(String)) : null;
+    const semSet = Array.isArray(semanticKeys) && semanticKeys.length > 0 ? new Set(semanticKeys.map(String)) : null;
+    if (idSet) idSet.forEach((k) => readServerNotifIds.add(k));
+    if (semSet) semSet.forEach((k) => readServerNotifSemKeys.add(k));
+
     const cleanAcc = String(accountNumber || "").replace(/^#/, "").trim().toLowerCase();
     const cleanEmail = String(email || "").trim().toLowerCase();
     const cleanUid = String(userId || "").trim().toLowerCase();
@@ -5256,15 +5322,19 @@ app.post("/api/notifications/mark-all-read", (req, res) => {
     inMemoryNotifications.forEach(n => {
       const nAcc = String(n.accountNumber || "").replace(/^#/, "").trim().toLowerCase();
       if (nAcc === "all" || nAcc === "broadcast" || nAcc === "district") return;
+      const semKey = getServerNotifSemanticKey(n);
       const matchesId = idSet ? idSet.has(n.id) : false;
+      const matchesSem = semSet ? semSet.has(semKey) : false;
       const matchesIdentity =
-        !idSet &&
         ((cleanAcc && isIssuedAccountNumberServer(cleanAcc) && nAcc === cleanAcc) ||
           (cleanEmail && String(n.consumerEmail || "").trim().toLowerCase() === cleanEmail) ||
           (cleanUid && String(n.userId || "").trim().toLowerCase() === cleanUid));
-      if ((matchesId || matchesIdentity) && !n.read) {
-        n.read = true;
-        updatedCount++;
+      if (matchesId || matchesSem || (!idSet && matchesIdentity)) {
+        recordServerNotifRead(n, n.id, semKey);
+        if (!n.read) {
+          n.read = true;
+          updatedCount++;
+        }
       }
     });
     if (updatedCount > 0) {
@@ -5276,13 +5346,35 @@ app.post("/api/notifications/mark-all-read", (req, res) => {
   }
 });
 
-app.patch("/api/notifications/:id/read", (req, res) => {
+app.all("/api/notifications/:id/read", (req, res) => {
+  if (req.method !== "PATCH" && req.method !== "POST" && req.method !== "PUT") {
+    return res.status(405).json({ success: false });
+  }
   const { id } = req.params;
+  const bodySemKey = typeof req.body?.semanticKey === "string" ? req.body.semanticKey.trim() : "";
+  const bodyNotif = req.body?.notification && typeof req.body.notification === "object" ? req.body.notification : null;
   const found = inMemoryNotifications.find(n => n.id === id);
-  const isBroadcast = found && (found.accountNumber || "").trim().toUpperCase() === "ALL";
-  if (found && !isBroadcast) {
-    found.read = true;
-    savePortalSyncStore();
+  const refNotif = found || bodyNotif;
+  const isBroadcast = refNotif && ["ALL", "BROADCAST", "DISTRICT"].includes(String(refNotif.accountNumber || "").trim().toUpperCase());
+
+  if (!isBroadcast) {
+    const resolvedSemKey = bodySemKey || (refNotif ? getServerNotifSemanticKey(refNotif) : "");
+    recordServerNotifRead(refNotif, id, resolvedSemKey);
+    let changed = false;
+    inMemoryNotifications.forEach(n => {
+      const nAcc = String(n.accountNumber || "").trim().toUpperCase();
+      if (nAcc === "ALL" || nAcc === "BROADCAST" || nAcc === "DISTRICT") return;
+      if (n.id === id || (resolvedSemKey && getServerNotifSemanticKey(n) === resolvedSemKey)) {
+        recordServerNotifRead(n, n.id, resolvedSemKey);
+        if (!n.read) {
+          n.read = true;
+          changed = true;
+        }
+      }
+    });
+    if (changed) {
+      savePortalSyncStore();
+    }
   }
   res.json({ success: true });
 });
