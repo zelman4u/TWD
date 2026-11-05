@@ -133,9 +133,21 @@ export function evaluateAccountGracePeriod(
     totalOverdueAmount += Math.max(0, gross - paid);
   });
 
-  const unpaidCycles = unpaidBills.length;
-  // 3 months grace period check: >= 90 days overdue OR >= 3 unpaid cycles OR explicit notice issued
-  const isExceeded = maxDaysOverdue >= 90 || unpaidCycles >= 3 || unpaidBills.some(r => r.isDisconnectionNoticeIssued === true);
+  // Check if consumer has an active partial payment on any bill
+  const hasPartialPayment = unpaidBills.some(b => b.paymentStatus === 'partial' || (b.paidAmount && b.paidAmount > 0));
+  if (hasPartialPayment) {
+    unpaidBills.forEach(b => {
+      b.isDisconnectionNoticeIssued = false;
+    });
+  }
+
+  // Count only completely unpaid cycles without partial payments for strict disconnection threshold
+  const fullyUnpaidBills = unpaidBills.filter(b => b.paymentStatus !== 'partial' && (!b.paidAmount || b.paidAmount <= 0));
+  const unpaidCycles = fullyUnpaidBills.length;
+
+  // 3 months grace period check: >= 90 days overdue OR >= 3 fully unpaid cycles OR explicit notice issued
+  // When a consumer makes a partial payment, the disconnection order is suspended (halted) while maintaining the remaining balance!
+  const isExceeded = !hasPartialPayment && (maxDaysOverdue >= 90 || unpaidCycles >= 3 || unpaidBills.some(r => r.isDisconnectionNoticeIssued === true));
 
   return {
     isExceeded,

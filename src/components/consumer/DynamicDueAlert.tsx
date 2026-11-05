@@ -92,12 +92,17 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
 
   const totalOverdueWithPenalty = overdueTotalNet + totalPenalties;
 
+  // Check if consumer has an active partial payment
+  const hasPartialGoodwill = (overdueBills && overdueBills.some(r => r.paymentStatus === 'partial' || (r.paidAmount && r.paidAmount > 0))) ||
+    (latestSt.isPartial || (latestReading.paidAmount && latestReading.paidAmount > 0));
+
   // Check 3-month / 90-day critical disconnection criteria
-  const isCriticalDisconnection = overdueBills.length >= 3 || overdueBills.some(r => {
+  // When a consumer has made a partial payment, the critical disconnection warning HALTS!
+  const isCriticalDisconnection = !hasPartialGoodwill && (overdueBills.length >= 3 || overdueBills.some(r => {
     let d = r.dueDate ? new Date(r.dueDate) : (r.readingDate ? new Date(r.readingDate) : new Date());
     const diff = (now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24);
     return diff >= 90 || r.isDisconnectionNoticeIssued;
-  });
+  }));
 
   const formattedDueDate = currentDueDateObj.toLocaleDateString('en-US', {
     month: 'short',
@@ -106,10 +111,12 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
   });
 
   // Calculate urgency styling tier
-  let alertTier: 'critical_overdue' | 'overdue' | 'due_today' | 'due_soon' | 'upcoming' | 'all_settled';
+  let alertTier: 'critical_overdue' | 'partial_halt' | 'overdue' | 'due_today' | 'due_soon' | 'upcoming' | 'all_settled';
 
   if (isCriticalDisconnection) {
     alertTier = 'critical_overdue';
+  } else if (hasPartialGoodwill && (overdueTotalNet > 0 || netLatestDue > 0)) {
+    alertTier = 'partial_halt';
   } else if (hasOverdue) {
     alertTier = 'overdue';
   } else if (!isLatestPaid && remainingDays <= 0) {
@@ -160,6 +167,91 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
             >
               <ReceiptText className="h-4 w-4 text-emerald-200" />
               <span>View Latest Receipt</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 1b. PARTIAL PAYMENT ACKNOWLEDGED · DISCONNECTION HALTED STATE
+  if (alertTier === 'partial_halt') {
+    const activeTargetBill = overdueBills && overdueBills.length > 0 ? overdueBills[0] : latestReading;
+    const activeSettlement = getCanonicalBillSettlement(activeTargetBill, consumerRecord.consumerType);
+    const activeRemaining = overdueTotalNet > 0 ? overdueTotalNet : netLatestDue;
+    const activePaid = activeSettlement.paidAmount || (consumerRecord.outstandingBalance ? Math.max(0, activeSettlement.grossTotal - activeRemaining) : 0);
+
+    return (
+      <div 
+        id="dynamic-due-alert-partial"
+        className="rounded-3xl p-5 sm:p-6 text-white shadow-xl relative overflow-hidden border-2 border-emerald-500/50 bg-gradient-to-r from-slate-900 via-emerald-950/80 to-slate-900 animate-fade-in ring-4 ring-emerald-500/10"
+      >
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 relative z-10">
+          <div className="space-y-3 max-w-3xl">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="px-3 py-1 font-black text-xs uppercase tracking-wider rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center space-x-1.5 shadow-xs">
+                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                <span>Partial Payment Credited · Disconnection Halted</span>
+              </span>
+
+              <span className="px-2.5 py-0.5 bg-black/40 text-amber-300 border border-amber-400/40 font-mono font-bold text-[10px] uppercase tracking-wider rounded-lg">
+                Account #{consumerRecord.accountNumber}
+              </span>
+
+              <span className="px-2.5 py-0.5 bg-slate-800 text-slate-300 text-[10px] font-bold uppercase tracking-wider rounded-lg">
+                Billing: {activeTargetBill.billingPeriod}
+              </span>
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-xl sm:text-2xl font-black tracking-tight text-white flex flex-wrap items-center gap-2">
+                <span>Remaining Balance: ₱{activeRemaining.toFixed(2)}</span>
+                <span className="text-xs font-semibold text-emerald-300 bg-emerald-950/80 px-2.5 py-0.5 rounded-md border border-emerald-700/60">
+                  Paid to Date: ₱{activePaid.toFixed(2)}
+                </span>
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                Your partial payment was verified and officially recorded. Disconnection procedures are <strong className="text-emerald-400 font-bold">halted</strong>. You can settle the remaining balance at any municipal cashier or upload an additional receipt anytime.
+              </p>
+            </div>
+
+            {/* Itemized Outstanding Details Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1 text-xs">
+              <div className="bg-black/30 border border-slate-700/60 rounded-xl p-2.5">
+                <span className="text-slate-400 text-[10px] block">Total Assessment</span>
+                <span className="font-mono font-bold text-white text-sm">₱{activeSettlement.grossTotal.toFixed(2)}</span>
+              </div>
+              <div className="bg-black/30 border border-emerald-800/40 rounded-xl p-2.5">
+                <span className="text-emerald-400 text-[10px] block">Amount Credited</span>
+                <span className="font-mono font-bold text-emerald-300 text-sm">₱{activePaid.toFixed(2)}</span>
+              </div>
+              <div className="bg-black/30 border border-amber-800/40 rounded-xl p-2.5">
+                <span className="text-amber-400 text-[10px] block">Net Remaining</span>
+                <span className="font-mono font-black text-amber-300 text-sm">₱{activeRemaining.toFixed(2)}</span>
+              </div>
+              <div className="bg-black/30 border border-slate-700/60 rounded-xl p-2.5">
+                <span className="text-slate-400 text-[10px] block">Target Statement</span>
+                <span className="font-bold text-slate-200 text-xs truncate block">{activeTargetBill.billingPeriod}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Action CTAs */}
+          <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 shrink-0 w-full lg:w-auto">
+            <button
+              onClick={() => onUploadReceipt(activeTargetBill)}
+              className="px-6 py-3.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl transition flex items-center justify-center space-x-2 cursor-pointer"
+            >
+              <Upload className="h-4 w-4" />
+              <span>Upload Additional OR Slip</span>
+            </button>
+
+            <button
+              onClick={() => onViewBillDetails(activeTargetBill)}
+              className="px-4 py-2.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center space-x-1.5 cursor-pointer"
+            >
+              <FileText className="h-3.5 w-3.5 text-blue-300" />
+              <span>View Remaining Breakdown</span>
             </button>
           </div>
         </div>

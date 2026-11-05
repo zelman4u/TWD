@@ -131,9 +131,14 @@ export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
   const diffTime = Math.max(0, now.getTime() - dueDateObj.getTime());
   const daysOverdue = Math.max(1, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
 
+  // Check if consumer has an active partial payment on primary bill or overdue list
+  const hasPartialPayment = primaryBill.paymentStatus === 'partial' || (paidAmt > 0 && netDue > 0) ||
+    overdueBills.some(b => b.paymentStatus === 'partial' || (b.paidAmount && b.paidAmount > 0));
+
   // Check 3-month disconnection notice criteria:
   // (a) 3 or more unpaid billing cycles OR (b) Overdue for 90+ days OR (c) flagged by system
-  const isThreeMonthsOverdue = daysOverdue >= 90 || overdueBills.length >= 3 || primaryBill.isDisconnectionNoticeIssued;
+  // When a consumer makes a partial payment, the critical disconnection notice HALTS!
+  const isThreeMonthsOverdue = !hasPartialPayment && (daysOverdue >= 90 || overdueBills.length >= 3 || primaryBill.isDisconnectionNoticeIssued);
   
   // Standard Tagoloan Water District 10% Late Surcharge on Basic Water Charge
   const basicForPenalty = getReadingEffectiveBillAmount(

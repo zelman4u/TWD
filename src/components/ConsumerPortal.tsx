@@ -1693,11 +1693,27 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         });
 
         // 2. Official 3-Month Disconnection & Cutting Notice Check (3+ cycles or 90+ days of past unpaid approved bills)
-        const has3MonthsOverdue = unpaidList.length >= 3 || unpaidList.some(r => {
+        // CRITICAL: When a consumer makes a partial payment, the critical disconnection warning HALTS!
+        const hasPartialGoodwill = unpaidList.some(r => r.paymentStatus === 'partial' || (r.paidAmount && r.paidAmount > 0));
+        const genuineUnpaidCycles = unpaidList.filter(r => r.paymentStatus !== 'partial' && (!r.paidAmount || r.paidAmount <= 0));
+        const has3MonthsOverdue = !hasPartialGoodwill && (genuineUnpaidCycles.length >= 3 || genuineUnpaidCycles.some(r => {
           let d = r.dueDate ? new Date(r.dueDate) : (r.readingDate ? new Date(r.readingDate) : new Date());
           const diff = (new Date().getTime() - d.getTime()) / (1000 * 60 * 60 * 24);
           return diff >= 90 || r.isDisconnectionNoticeIssued;
-        });
+        }));
+
+        if (hasPartialGoodwill && (record.status === 'Disconnection Notice' || (record.status as string) === 'disconnection_notice')) {
+          record = {
+            ...record,
+            status: 'active',
+            disconnectionNoticeDate: undefined,
+            blockReason: undefined,
+          };
+          consumerRecordRef.current = record;
+          setConsumerRecord(record);
+          const allC = mockDb.getConsumers().map(c => c.accountNumber === record.accountNumber ? record : c);
+          mockDb.saveConsumers(allC);
+        }
 
         if (has3MonthsOverdue && unpaidList.length > 0) {
           const existingNotifs = mockDb.getNotifications(record.accountNumber, {
@@ -3267,7 +3283,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             ) : (
               <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                 <span className="h-1 w-1 rounded-full bg-emerald-400 animate-ping"></span>
-                <span>Confirmed • {consumerRecord.status === 'active' ? 'Active' : consumerRecord.status}</span>
+                <span>
+                  Confirmed • {
+                    consumerRecord.status === 'active' || !consumerRecord.status || consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
+                      ? 'Line Active'
+                      : consumerRecord.status
+                  }
+                </span>
               </span>
             )}
           </div>
@@ -7737,6 +7759,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           onSuccess={(updatedReading) => {
             setSpotlightReading(updatedReading);
             setReceiptDetailModal(updatedReading);
+            const allLocalR = mockDb.getReadings().filter(r => r.accountNumber === consumerRecord.accountNumber);
+            setReadings(allLocalR);
+            readingsRef.current = allLocalR;
+            setConsumerRecord(prev => {
+              const currentBal = computeAccountOutstandingBalance(mockDb.getReadings(), prev.accountNumber, prev.consumerType);
+              const next: Consumer = {
+                ...prev,
+                status: 'active',
+                outstandingBalance: currentBal,
+                disconnectionNoticeDate: undefined,
+                blockReason: undefined,
+              };
+              consumerRecordRef.current = next;
+              return next;
+            });
             loadConsumerInfo(true);
           }}
           onReceiptValidated={(receipt) => {
@@ -7747,6 +7784,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               isPartial: receipt.isPartial,
               reference: receipt.orNumber,
               date: receipt.paymentDate
+            });
+            const allLocalR = mockDb.getReadings().filter(r => r.accountNumber === consumerRecord.accountNumber);
+            setReadings(allLocalR);
+            readingsRef.current = allLocalR;
+            setConsumerRecord(prev => {
+              const currentBal = computeAccountOutstandingBalance(mockDb.getReadings(), prev.accountNumber, prev.consumerType);
+              const next: Consumer = {
+                ...prev,
+                status: 'active',
+                outstandingBalance: currentBal,
+                disconnectionNoticeDate: undefined,
+                blockReason: undefined,
+              };
+              consumerRecordRef.current = next;
+              return next;
             });
             loadConsumerInfo(true);
           }}

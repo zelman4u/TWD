@@ -513,7 +513,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
             receiptUploadDate: nowIso,
             receiptStatus: 'verified' as const,
             receiptNotes: receiptNotes || `Validated via Smart Photo Scanner at ${cashierCounter}`,
-            isDisconnectionNoticeIssued: isFullSettlement ? false : r.isDisconnectionNoticeIssued,
+            isDisconnectionNoticeIssued: false,
             penaltyAmount: isFullSettlement ? 0 : r.penaltyAmount,
           };
         }
@@ -534,7 +534,12 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
           const nextC: Consumer = {
             ...c,
             outstandingBalance: newTotalArrears,
-            status: c.status === 'blocked' && newTotalArrears === 0 ? 'active' : c.status,
+            // When payment (partial or full) is recorded, halt any disconnection notice and restore to 'active'
+            status: (c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice' || (c.status === 'blocked' && newTotalArrears === 0))
+              ? 'active'
+              : c.status,
+            disconnectionNoticeDate: undefined,
+            blockReason: undefined,
           };
           updatedConsumerObj = nextC;
           return nextC;
@@ -542,6 +547,14 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
         return c;
       });
       mockDb.saveConsumers(updatedConsumers);
+
+      // Dismiss/resolve any active disconnection notices for this account since payment has been made
+      const activeNotifs = mockDb.getNotifications(consumerRecord.accountNumber);
+      activeNotifs.forEach(n => {
+        if (n.type === 'disconnection' || (n.title || '').toLowerCase().includes('disconnection')) {
+          mockDb.markNotificationRead(n.id);
+        }
+      });
 
       // 3. Create Official Real-time Notification
       const createdNotif = mockDb.addNotification({
@@ -554,7 +567,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
           : `Receipt Validated: Partial Payment (₱${numericPayment.toFixed(2)}) Recorded`,
         message: isFullSettlement
           ? `Your official physical cashier receipt (OR #${cleanOr}) was verified via Smart Photo Scanner! Account balance for ${activeReading.billingPeriod} is cleared in full (₱0.00). Active due alerts stopped.`
-          : `Your official cashier receipt (OR #${cleanOr}) was verified. Partial payment of ₱${numericPayment.toFixed(2)} credited against ₱${lockedGross.toFixed(2)}. Remaining balance of ₱${newRemainingBalance.toFixed(2)} is now reflected on your statement and account ledger.`,
+          : `Your official cashier receipt (OR #${cleanOr}) was verified. Partial payment of ₱${numericPayment.toFixed(2)} credited against ₱${lockedGross.toFixed(2)}. Disconnection notice has been halted. Remaining balance of ₱${newRemainingBalance.toFixed(2)} is now reflected on your statement and account ledger.`,
         type: 'receipt_upload',
         orNumber: cleanOr,
         amountPaid: numericPayment,
