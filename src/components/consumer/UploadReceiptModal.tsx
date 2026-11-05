@@ -33,6 +33,7 @@ import {
   computeAccountOutstandingBalance,
   OFFICIAL_TARIFF_BASELINE_SCHEMA,
   computeDefaultDueDate,
+  allocatePaymentOldestFirst,
 } from '../../utils/tariffCalculator';
 import { stripOversizedImagesForSync } from '../../services/storageSafe';
 
@@ -474,52 +475,46 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
     setValidationError(null);
 
     setTimeout(() => {
-      const settlement = getCanonicalBillSettlement(activeReading, consumerRecord.consumerType);
-      const lockedGross = settlement.grossTotal;
-      const newTotalPaid = Math.min(lockedGross, Math.round((settlement.paidAmount + numericPayment) * 100) / 100);
-      const newRemainingBalance = Math.max(0, Math.round((lockedGross - newTotalPaid) * 100) / 100);
-      const isFullSettlement = newRemainingBalance <= 0.01;
-      const newPaymentStatus: 'paid' | 'partial' = isFullSettlement ? 'paid' : 'partial';
       const cleanOr = orNumber.trim();
       const nowIso = new Date().toISOString();
-
-      // 1. Update reading in mockDb with full locked official assessment fields so merges never shift amounts
       const allReadings = mockDb.getReadings();
-      const updatedReadings = allReadings.map(r => {
+
+      // Allocate payment oldest-first (arrears first) across all unpaid/partial bills for this customer
+      const allocResult = allocatePaymentOldestFirst(
+        allReadings,
+        consumerRecord.accountNumber,
+        numericPayment,
+        {
+          orNumber: cleanOr,
+          paymentMethod: `TWD Office Cashier (${cashierCounter})`,
+          cashierName: cashierCounter,
+          paymentDate: paymentDate,
+        }
+      );
+
+      // Attach receipt image & scan notes to activeReading and ensure clean official verification metadata
+      const updatedReadings = allocResult.updatedReadings.map(r => {
         if (r.id === activeReading.id) {
+          const settlement = getCanonicalBillSettlement(r, consumerRecord.consumerType);
           return {
             ...r,
-            status: 'verified' as const,
-            isBillingIssued: true,
-            billingIssuedAt: r.billingIssuedAt || nowIso,
-            invoiceNumber: r.invoiceNumber || `INV-${r.accountNumber}-${Date.now().toString().slice(-4)}`,
-            dueDate: r.dueDate || computeDefaultDueDate(r.readingDate || nowIso.split('T')[0]),
-            classification: r.classification || consumerRecord.consumerType,
-            billAmount: settlement.basicCharge,
-            franchiseTax: settlement.franchiseTax,
-            arrears: settlement.arrears,
-            totalAmount: lockedGross,
-            tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
-            paymentStatus: newPaymentStatus,
-            paymentDate: paymentDate,
-            paymentMethod: `TWD Office Cashier (${cashierCounter})`,
-            cashierName: cashierCounter,
-            orNumber: cleanOr,
-            paymentReference: cleanOr,
-            transactionId: r.transactionId || `TXN-${Date.now().toString().slice(-6)}`,
-            paidAmount: isFullSettlement ? lockedGross : newTotalPaid,
-            remainingBalance: isFullSettlement ? 0 : newRemainingBalance,
             paymentReceiptUrl: receiptPhotoUrl,
             receiptUploadDate: nowIso,
             receiptStatus: 'verified' as const,
             receiptNotes: receiptNotes || `Validated via Smart Photo Scanner at ${cashierCounter}`,
             isDisconnectionNoticeIssued: false,
-            penaltyAmount: isFullSettlement ? 0 : r.penaltyAmount,
+            penaltyAmount: settlement.isCleared ? 0 : r.penaltyAmount,
           };
         }
         return r;
       });
       mockDb.saveReadings(updatedReadings);
+
+      const updatedItem = updatedReadings.find(r => r.id === activeReading.id) || activeReading;
+      const activeSettlement = getCanonicalBillSettlement(updatedItem, consumerRecord.consumerType);
+      const isFullSettlement = activeSettlement.isCleared;
+      const newRemainingBalance = activeSettlement.remainingBalance;
+      const newPaymentStatus = activeSettlement.paymentStatus;
 
       // 2. Update Consumer Master Outstanding Balance & forward arrears computation
       const newTotalArrears = computeAccountOutstandingBalance(
@@ -567,7 +562,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
           : `Receipt Validated: Partial Payment (₱${numericPayment.toFixed(2)}) Recorded`,
         message: isFullSettlement
           ? `Your official physical cashier receipt (OR #${cleanOr}) was verified via Smart Photo Scanner! Account balance for ${activeReading.billingPeriod} is cleared in full (₱0.00). Active due alerts stopped.`
-          : `Your official cashier receipt (OR #${cleanOr}) was verified. Partial payment of ₱${numericPayment.toFixed(2)} credited against ₱${lockedGross.toFixed(2)}. Disconnection notice has been halted. Remaining balance of ₱${newRemainingBalance.toFixed(2)} is now reflected on your statement and account ledger.`,
+          : `Your official cashier receipt (OR #${cleanOr}) was verified. Partial payment of ₱${numericPayment.toFixed(2)} credited against ₱${activeSettlement.grossTotal.toFixed(2)}. Disconnection notice has been halted. Remaining balance of ₱${newRemainingBalance.toFixed(2)} is now reflected on your statement and account ledger.`,
         type: 'receipt_upload',
         orNumber: cleanOr,
         amountPaid: numericPayment,
@@ -586,7 +581,6 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
       );
 
       // Find updated reading object
-      const updatedItem = updatedReadings.find(r => r.id === activeReading.id) || activeReading;
       const syncSafeItem = stripOversizedImagesForSync(updatedItem);
 
       // 5. Reconcile immediately with Backend API + Realtime WebSocket so Admin & Consumer portals stay 100% in sync

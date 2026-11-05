@@ -79,6 +79,7 @@ import { MonthlyUsageReportModal, downloadConsumerUsageReportPdf } from './consu
 import { BillDetails } from './consumer/BillDetails';
 import { ConsumerReportsSection } from './consumer/ConsumerReportsSection';
 import { ConsumerInstallationSection } from './consumer/ConsumerInstallationSection';
+import { downloadOfficialReceiptPdf, printCleanElement } from '../utils/receiptPdfGenerator';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
 import {
@@ -284,8 +285,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const toast = useToast();
   const { showLoading, hideLoading } = useLoading();
 
-  // Navigation Modules: Dashboard, Installation, My Bills, My Usage, Reports & Inquiries, Notifications, My Profile
+  // Navigation Modules: Dashboard, My Bills, My Usage (includes Installation Tracker), Reports & Inquiries, Notifications, My Profile
   const [activeTab, setActiveTab] = useState<'dashboard' | 'installation' | 'bills' | 'usage' | 'reports' | 'notifications' | 'profile'>('dashboard');
+  const [usageSubTab, setUsageSubTab] = useState<'consumption' | 'installation'>('consumption');
+  const [isDownloadingReceiptPdf, setIsDownloadingReceiptPdf] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Loading States
@@ -295,6 +298,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
   // Tab switching with data readiness indicator
   const handleConsumerTabChange = (tab: typeof activeTab) => {
+    if (tab === 'installation') {
+      setActiveTab('usage');
+      setUsageSubTab('installation');
+      if (mobileSidebarOpen) setMobileSidebarOpen(false);
+      return;
+    }
     if (tab === activeTab) return;
     setIsTabLoading(true);
     setActiveTab(tab);
@@ -3341,42 +3350,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               <ChevronRight className={`h-3.5 w-3.5 shrink-0 transition-transform ${activeTab === 'dashboard' ? 'rotate-90 text-white' : 'text-slate-600 group-hover:text-slate-400'}`} />
             </button>
 
-            {/* Module: Water Meter Installation (shown when pending/unscheduled or has installation history) */}
-            {(isAccountPending || consumerRecord.hasExistingMeter === false || installationRequests.length > 0) && (
-              <button
-                onClick={() => handleConsumerTabChange('installation')}
-                className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-left transition cursor-pointer group ${
-                  activeTab === 'installation'
-                    ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/30'
-                    : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-                }`}
-                id="sidebar-mod-installation"
-              >
-                <div className="flex items-center space-x-3 min-w-0">
-                  <div className={`p-1.5 rounded-lg ${activeTab === 'installation' ? 'bg-white/20' : 'bg-slate-800 text-cyan-400 group-hover:text-cyan-300'}`}>
-                    <Wrench className="h-4 w-4" />
-                  </div>
-                  <div className="truncate">
-                    <div className="text-xs font-bold leading-tight">Meter Installation</div>
-                    <div className={`text-[10px] truncate ${activeTab === 'installation' ? 'text-blue-100' : 'text-slate-400'}`}>
-                      Schedule & activation tracker
-                    </div>
-                  </div>
-                </div>
-                {isAccountPending ? (
-                  <span className="px-2 py-0.5 bg-amber-400 text-slate-950 text-[9px] font-black rounded-md whitespace-nowrap shrink-0">
-                    {installationRequests[0] && installationRequests[0].status !== 'Cancelled'
-                      ? installationRequests[0].status === 'Installed'
-                        ? 'Validate'
-                        : 'Tracked'
-                      : 'Schedule'}
-                  </span>
-                ) : (
-                  <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${activeTab === 'installation' ? 'rotate-90 text-white' : 'text-slate-600 group-hover:text-slate-400'}`} />
-                )}
-              </button>
-            )}
-
             {/* Module 2: My Bills */}
             <button
               onClick={() => handleConsumerTabChange('bills')}
@@ -4220,20 +4193,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           />
         ) : (
           <>
-            {/* ------------------------------------------------------------- */}
-            {/* MODULE: WATER METER INSTALLATION & ACCOUNT ACTIVATION         */}
-            {/* ------------------------------------------------------------- */}
-            {activeTab === 'installation' && (
-              <div className="space-y-6 animate-fade-in" id="consumer-tab-installation">
-                <ConsumerInstallationSection
-                  user={currentUser}
-                  consumerRecord={consumerRecord}
-                  installationRequests={installationRequests}
-                  onRefresh={() => loadConsumerInfo(true)}
-                />
-              </div>
-            )}
-
             {/* ------------------------------------------------------------- */}
             {/* MODULE 1: DASHBOARD                                          */}
             {/* ------------------------------------------------------------- */}
@@ -6132,14 +6091,82 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         {/* ------------------------------------------------------------- */}
         {/* MODULE 3: MY USAGE                                           */}
         {/* ------------------------------------------------------------- */}
-        {activeTab === 'usage' && (
+        {(activeTab === 'usage' || activeTab === 'installation') && (
           <div className="space-y-6 animate-fade-in" id="consumer-tab-usage">
-            
-            {/* Header & Usage Summary Statistics */}
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-lg space-y-6 text-slate-100">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-base font-bold text-white">
+            {/* Top Sub-Navigation Selector for My Usage Module */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900 border border-slate-800 p-2 sm:p-2.5 rounded-2xl shadow-lg">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUsageSubTab('consumption');
+                    if (activeTab === 'installation') setActiveTab('usage');
+                  }}
+                  className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                    usageSubTab === 'consumption' && activeTab !== 'installation'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                  }`}
+                  id="usage-subtab-consumption-btn"
+                >
+                  <BarChart3 className="h-4 w-4" />
+                  <span>Monthly Consumption Telemetry</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setUsageSubTab('installation')}
+                  className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                    usageSubTab === 'installation' || activeTab === 'installation'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                  }`}
+                  id="usage-subtab-installation-btn"
+                >
+                  <Wrench className="h-4 w-4 text-cyan-300" />
+                  <span>Meter Installation Schedule & Activation Tracker</span>
+                </button>
+              </div>
+
+              {usageSubTab === 'consumption' && activeTab !== 'installation' && (
+                <button
+                  type="button"
+                  onClick={handleDirectDownloadUsagePdf}
+                  disabled={isDownloadingUsagePdf}
+                  className={`px-3.5 py-2 bg-blue-600/90 hover:bg-blue-500 text-white font-bold text-xs rounded-xl flex items-center space-x-2 transition shadow-sm cursor-pointer ${
+                    isDownloadingUsagePdf ? 'opacity-70 cursor-wait' : ''
+                  }`}
+                  id="usage-direct-download-pdf-btn"
+                >
+                  {isDownloadingUsagePdf ? (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      <span>Downloading PDF...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="h-3.5 w-3.5" />
+                      <span>Download Usage (PDF)</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+
+            {usageSubTab === 'installation' || activeTab === 'installation' ? (
+              <ConsumerInstallationSection
+                user={currentUser}
+                consumerRecord={consumerRecord}
+                installationRequests={installationRequests}
+                onRefresh={() => loadConsumerInfo(true)}
+              />
+            ) : (
+              <>
+                {/* Header & Usage Summary Statistics */}
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-lg space-y-6 text-slate-100">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <h3 className="text-base font-bold text-white">
                     Meter Reading History & Usage Analytics
                   </h3>
                   <p className="text-xs text-slate-400 mt-0.5">
@@ -6507,6 +6534,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 </div>
               );
             })()}
+              </>
+            )}
 
           </div>
         )}
@@ -7596,6 +7625,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           onClick={() => setReceiptDetailModal(null)}
         >
           <div 
+            id="consumer-receipt-slip-area"
             className="bg-slate-900 border border-slate-800 text-slate-100 print:bg-white print:text-slate-900 print:border-slate-200 rounded-3xl w-full max-w-sm p-6 sm:p-7 space-y-5 relative overflow-hidden shadow-2xl animate-scale-up"
             onClick={(e) => e.stopPropagation()}
           >
@@ -7707,15 +7737,55 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             <div className="flex gap-2 print:hidden">
               <button 
-                onClick={() => window.print()}
+                type="button"
+                onClick={async () => {
+                  if (!consumerRecord || isDownloadingReceiptPdf) return;
+                  setIsDownloadingReceiptPdf(true);
+                  try {
+                    const st = getCanonicalBillSettlement(receiptDetailModal, consumerRecord.consumerType);
+                    await downloadOfficialReceiptPdf({
+                      orNumber: receiptDetailModal.orNumber || receiptDetailModal.paymentReference || `OR-${receiptDetailModal.id}`,
+                      cashierName: receiptDetailModal.cashierName || 'Official TWD Cashier',
+                      paymentDate: receiptDetailModal.paymentDate,
+                      paymentMethod: receiptDetailModal.paymentMethod || 'Online Gateway',
+                      transactionId: receiptDetailModal.transactionId,
+                      accountNumber: receiptDetailModal.accountNumber || consumerRecord.accountNumber,
+                      consumerName: consumerRecord.name,
+                      address: consumerRecord.address,
+                      barangay: consumerRecord.barangay,
+                      meterNumber: receiptDetailModal.meterNumber || consumerRecord.meterNumber,
+                      basicCharge: st.basicCharge,
+                      franchiseTax: st.franchiseTax,
+                      arrears: st.arrears,
+                      grossTotal: st.grossTotal,
+                      amountPaid: st.isPaid ? Math.max(st.grossTotal, st.paidAmount) : st.paidAmount,
+                      remainingBalance: st.remainingBalance,
+                    });
+                  } finally {
+                    setIsDownloadingReceiptPdf(false);
+                  }
+                }}
+                disabled={isDownloadingReceiptPdf}
+                className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5 cursor-pointer shadow-md shadow-blue-600/20"
+                id="consumer-download-receipt-pdf-btn"
+              >
+                <Download className="h-4 w-4" />
+                <span>{isDownloadingReceiptPdf ? 'Downloading...' : 'Download (PDF)'}</span>
+              </button>
+
+              <button 
+                type="button"
+                onClick={() => printCleanElement('consumer-receipt-slip-area')}
                 className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                id="consumer-print-receipt-btn"
               >
                 <Printer className="h-4 w-4" />
                 <span>Print</span>
               </button>
               <button 
+                type="button"
                 onClick={() => setReceiptDetailModal(null)}
-                className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl text-xs font-bold transition cursor-pointer"
               >
                 Close
               </button>

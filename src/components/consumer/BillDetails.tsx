@@ -42,6 +42,7 @@ import {
   WaterTariffConfig
 } from '../../utils/tariffCalculator';
 import { computeOdometerConsumption, formatOdometerReading } from '../../utils/odometer';
+import { downloadWaterBillingNoticePdf, printCleanElement } from '../../utils/receiptPdfGenerator';
 
 export interface BillDetailsProps {
   reading: MeterReading | null;
@@ -241,6 +242,21 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'notice' | 'itemized' | 'tiers' | 'regulatory'>('notice');
   const [showFormulaHelper, setShowFormulaHelper] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+
+  const handleDownloadPdf = async () => {
+    if (!reading || !consumer || isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    try {
+      await downloadWaterBillingNoticePdf({ reading, consumer });
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
+  const handlePrintNotice = () => {
+    printCleanElement('official-billing-notice-print-area');
+  };
 
   if (!isOpen) return null;
 
@@ -395,9 +411,23 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
 
             <div className="flex items-center space-x-2 self-stretch sm:self-auto">
               <button
-                onClick={() => window.print()}
-                className="px-4 py-2.5 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-white font-bold text-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                type="button"
+                onClick={handleDownloadPdf}
+                disabled={isDownloadingPdf}
+                className="px-3.5 py-2.5 bg-blue-600 hover:bg-blue-500 border border-blue-500 rounded-xl text-white font-bold text-xs transition flex items-center justify-center space-x-1.5 cursor-pointer shadow-sm"
+                title="Download Official Water Billing Notice (PDF)"
+                id="bill-details-download-pdf-btn"
+              >
+                <Download className="h-4 w-4" />
+                <span>{isDownloadingPdf ? 'Downloading...' : 'Download (PDF)'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePrintNotice}
+                className="px-3.5 py-2.5 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-white font-bold text-xs transition flex items-center justify-center space-x-1.5 cursor-pointer"
                 title="Print Official Water Billing Notice"
+                id="bill-details-print-btn"
               >
                 <Printer className="h-4 w-4" />
                 <span>Print Notice</span>
@@ -476,7 +506,7 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
       {/* TAB 1: AUTHENTIC WATER BILLING NOTICE SLIP (DARK SLATE SCREEN + PRINT SAFE) */}
       {activeTab === 'notice' && (
         <div className="space-y-4 animate-fade-in">
-          <div className="bg-slate-950 border-2 border-slate-800 rounded-2xl p-6 shadow-xl max-w-2xl mx-auto font-sans text-slate-100 print:bg-white print:text-slate-900 print:border-slate-300 print:shadow-none">
+          <div id="official-billing-notice-print-area" className="bg-slate-950 border-2 border-slate-800 rounded-2xl p-6 shadow-xl max-w-2xl mx-auto font-sans text-slate-100 print:bg-white print:text-slate-900 print:border-slate-300 print:shadow-none">
             {/* Header / Seal */}
             <div className="text-center pb-4 border-b-2 border-dashed border-slate-800 print:border-slate-300 space-y-1">
               <div className="flex items-center justify-center space-x-2">

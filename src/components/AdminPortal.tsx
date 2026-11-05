@@ -107,6 +107,7 @@ import {
   calculateFranchiseTax,
   calculateLatePenalty,
   computeAccountOutstandingBalance,
+  computeHistoricalArrearsForReading,
   computeDefaultDueDate,
   getActiveTariffConfig,
   getCanonicalBillSettlement,
@@ -119,6 +120,7 @@ import {
   saveActiveTariffConfig,
   WaterTariffConfig
 } from '../utils/tariffCalculator';
+import { downloadOfficialReceiptPdf, printCleanElement } from '../utils/receiptPdfGenerator';
 import { 
   checkDuplicateAccountNumber, 
   checkDuplicateMeterTag 
@@ -3536,8 +3538,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       const prevVal = odoCalc.previousReading;
       const usageVal = odoCalc.consumption;
 
-      // Each issued monthly billing statement tracks its own cycle charges cleanly while prior unpaid bills remain separate active rows
-      const computedArrears = 0;
+      // Compute official arrears representing the customer's unpaid balance from previous billing periods
+      const computedArrears = computeHistoricalArrearsForReading(
+        workingReadings,
+        r.accountNumber,
+        r.readingDate || r.billingPeriod,
+        r.id,
+        cls
+      );
 
       const waterCharge = calculateWaterTariff(usageVal, cls, activeCfg);
       const fTax = calculateFranchiseTax(waterCharge, activeCfg);
@@ -3867,7 +3875,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           };
 
     const activeCfg = getActiveTariffConfig();
-    const computedArrears = 0;
+    const computedArrears = computeHistoricalArrearsForReading(
+      readings,
+      targetConsumer.accountNumber,
+      baseRecord.readingDate || baseRecord.billingPeriod,
+      baseRecord.id,
+      cls
+    );
 
     const waterCharge = calculateWaterTariff(usage, cls, activeCfg);
     const fTax = calculateFranchiseTax(waterCharge, activeCfg);
@@ -9617,7 +9631,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               {/* Official Receipt (OR) Printable Modal */}
               {generatedReceipt && (
                 <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-fade-in overflow-y-auto">
-                  <div className="bg-white rounded-3xl p-8 max-w-lg w-full border border-slate-200 shadow-2xl space-y-6 my-auto">
+                  <div id="admin-official-receipt-card" className="bg-white rounded-3xl p-8 max-w-lg w-full border border-slate-200 shadow-2xl space-y-6 my-auto">
                     {/* Receipt Header */}
                     <div className="text-center space-y-1.5 border-b border-slate-150 pb-5">
                       <div className="flex justify-center items-center space-x-2">
@@ -9704,17 +9718,52 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     </div>
 
                     {/* Modal Actions */}
-                    <div className="flex space-x-3 pt-2">
+                    <div className="flex flex-wrap sm:flex-nowrap gap-3 pt-2">
                       <button
+                        type="button"
+                        onClick={async () => {
+                          if (!generatedReceipt) return;
+                          const totalBasic = generatedReceipt.bills.reduce((s: number, b: any) => s + (b.grossTotal ? b.grossTotal * 0.98 : 0), 0);
+                          const totalTax = generatedReceipt.bills.reduce((s: number, b: any) => s + (b.grossTotal ? b.grossTotal * 0.02 : 0), 0);
+                          const totalArr = generatedReceipt.remainingArrears;
+                          await downloadOfficialReceiptPdf({
+                            orNumber: generatedReceipt.orNumber,
+                            cashierName: generatedReceipt.cashier,
+                            paymentDate: generatedReceipt.date,
+                            paymentMethod: 'Cash (TWD Office Cashier)',
+                            accountNumber: generatedReceipt.accountNumber,
+                            consumerName: generatedReceipt.consumerName,
+                            address: generatedReceipt.address,
+                            meterNumber: generatedReceipt.meterNumber,
+                            basicCharge: totalBasic,
+                            franchiseTax: totalTax,
+                            arrears: totalArr,
+                            grossTotal: generatedReceipt.totalApplied + generatedReceipt.remainingArrears,
+                            amountPaid: generatedReceipt.totalApplied,
+                            remainingBalance: generatedReceipt.remainingArrears,
+                          });
+                        }}
+                        className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition flex items-center justify-center space-x-2 cursor-pointer shadow-md shadow-blue-600/30"
+                        id="admin-download-receipt-pdf-btn"
+                      >
+                        <Download className="h-4 w-4" />
+                        <span>Download (PDF)</span>
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => {
-                          window.print();
+                          printCleanElement('admin-official-receipt-card');
                         }}
                         className="flex-1 py-3 bg-slate-900 hover:bg-black text-white font-bold rounded-xl text-xs uppercase tracking-wider transition flex items-center justify-center space-x-2 cursor-pointer"
+                        id="admin-print-receipt-btn"
                       >
                         <Printer className="h-4 w-4" />
                         <span>Print Official Receipt</span>
                       </button>
+
                       <button
+                        type="button"
                         onClick={() => setGeneratedReceipt(null)}
                         className="px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs uppercase transition cursor-pointer"
                       >

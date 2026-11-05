@@ -1112,6 +1112,169 @@ export function computeAccountOutstandingBalance(
 }
 
 /**
+ * Computes official historical arrears for an account strictly prior to a target reading / cycle.
+ * Arrears represent the customer's unpaid balance from previous billing periods.
+ * Carries forward until fully paid, without double-counting previous cycles.
+ */
+export function computeHistoricalArrearsForReading(
+  allReadings: any[],
+  accountNumber?: string | null,
+  targetReadingDateOrPeriod?: string | null,
+  targetReadingId?: string | null,
+  fallbackClassification: 'Residential' | 'Commercial' | string = 'Residential'
+): number {
+  if (!Array.isArray(allReadings) || allReadings.length === 0 || !accountNumber) return 0;
+  const cleanTargetAcc = String(accountNumber).replace(/^#/, '').trim().toUpperCase();
+
+  const sanitized = sanitizeMultiBillDuplicateArrears(allReadings);
+
+  // Parse target date/timestamp
+  let targetTime = Infinity;
+  if (targetReadingDateOrPeriod) {
+    const parsed = new Date(targetReadingDateOrPeriod).getTime();
+    if (!isNaN(parsed)) {
+      targetTime = parsed;
+    } else {
+      const monthParsed = Date.parse(targetReadingDateOrPeriod + ' 1');
+      if (!isNaN(monthParsed)) targetTime = monthParsed;
+    }
+  }
+
+  let totalArrears = 0;
+  for (const r of sanitized) {
+    if (!r || r.status === 'cancelled' || !isOfficialBillIssued(r)) continue;
+    if (targetReadingId && String(r.id) === String(targetReadingId)) continue;
+    const rAcc = String(r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+    if (rAcc !== cleanTargetAcc) continue;
+
+    const rDate = r.readingDate || r.billingIssuedAt;
+    const rTime = rDate ? new Date(rDate).getTime() : 0;
+    if (targetTime !== Infinity && rTime && !isNaN(rTime) && rTime >= targetTime) {
+      continue; // Only strictly prior cycles count as arrears
+    }
+
+    const settlement = getCanonicalBillSettlement(r, r.classification || fallbackClassification);
+    if (!settlement.isCleared && settlement.remainingBalance > 0) {
+      totalArrears += settlement.remainingBalance;
+    }
+  }
+
+  return Math.round(totalArrears * 100) / 100;
+}
+
+export interface PaymentAllocationResult {
+  allocations: Array<{
+    readingId: string;
+    allocatedAmount: number;
+    newPaidAmount: number;
+    newRemainingBalance: number;
+    newPaymentStatus: 'paid' | 'partial';
+  }>;
+  totalAllocated: number;
+  excessCash: number;
+  updatedReadings: any[];
+}
+
+/**
+ * Allocates a payment across an account's bills, oldest outstanding bill first.
+ * If payment is greater than oldest bill, cascades to the next oldest until payment is exhausted.
+ */
+export function allocatePaymentOldestFirst(
+  allReadings: any[],
+  accountNumber: string,
+  paymentAmount: number,
+  paymentMeta: {
+    orNumber?: string;
+    paymentMethod?: string;
+    cashierName?: string;
+    paymentDate?: string;
+  } = {}
+): PaymentAllocationResult {
+  const cleanTargetAcc = String(accountNumber).replace(/^#/, '').trim().toUpperCase();
+  const nowIso = new Date().toISOString();
+  const payDateStr = paymentMeta.paymentDate || nowIso.split('T')[0];
+  const orNo = paymentMeta.orNumber || `OR-2026-${Math.floor(100000 + Math.random() * 900000)}`;
+
+  // Find all unpaid or partially paid issued bills for this account, sorted oldest to newest
+  const accountBills = allReadings
+    .filter((r) => {
+      if (!r || r.status === 'cancelled' || !isOfficialBillIssued(r)) return false;
+      const rAcc = String(r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+      if (rAcc !== cleanTargetAcc) return false;
+      const settlement = getCanonicalBillSettlement(r, r.classification);
+      return !settlement.isCleared && settlement.remainingBalance > 0;
+    })
+    .sort((a, b) => {
+      const timeA = new Date(a.readingDate || a.billingIssuedAt || 0).getTime();
+      const timeB = new Date(b.readingDate || b.billingIssuedAt || 0).getTime();
+      return timeA - timeB;
+    });
+
+  let remainingCash = Math.max(0, Math.round(paymentAmount * 100) / 100);
+  const allocations: PaymentAllocationResult['allocations'] = [];
+  const allocationMap = new Map<string, (typeof allocations)[0]>();
+
+  for (const bill of accountBills) {
+    if (remainingCash <= 0) break;
+    const settlement = getCanonicalBillSettlement(bill, bill.classification);
+    const dueOnBill = settlement.remainingBalance;
+    const allocAmount = Math.min(dueOnBill, remainingCash);
+
+    remainingCash = Math.max(0, Math.round((remainingCash - allocAmount) * 100) / 100);
+
+    const prevPaid = settlement.paidAmount;
+    const newPaid = Math.round((prevPaid + allocAmount) * 100) / 100;
+    const newRem = Math.max(0, Math.round((settlement.grossTotal - newPaid) * 100) / 100);
+    const newStatus: 'paid' | 'partial' = newRem <= 0.01 ? 'paid' : 'partial';
+
+    const allocRecord = {
+      readingId: String(bill.id),
+      allocatedAmount: allocAmount,
+      newPaidAmount: newStatus === 'paid' ? settlement.grossTotal : newPaid,
+      newRemainingBalance: newStatus === 'paid' ? 0 : newRem,
+      newPaymentStatus: newStatus,
+    };
+    allocations.push(allocRecord);
+    allocationMap.set(String(bill.id), allocRecord);
+  }
+
+  const totalAllocated = Math.round((paymentAmount - remainingCash) * 100) / 100;
+
+  const updatedReadings = allReadings.map((r) => {
+    if (!r || !allocationMap.has(String(r.id))) return r;
+    const alloc = allocationMap.get(String(r.id))!;
+    const settlement = getCanonicalBillSettlement(r, r.classification);
+    return {
+      ...r,
+      status: 'verified',
+      isBillingIssued: true,
+      tariffBaselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
+      billAmount: settlement.basicCharge,
+      franchiseTax: settlement.franchiseTax,
+      arrears: settlement.arrears,
+      totalAmount: settlement.grossTotal,
+      paidAmount: alloc.newPaidAmount,
+      remainingBalance: alloc.newRemainingBalance,
+      paymentStatus: alloc.newPaymentStatus,
+      paymentDate: payDateStr,
+      paymentMethod: paymentMeta.paymentMethod || r.paymentMethod || 'Cash',
+      orNumber: orNo,
+      paymentReference: orNo,
+      cashierName: paymentMeta.cashierName || r.cashierName || 'TWD Cashier',
+      isDisconnectionNoticeIssued: false,
+      penaltyAmount: alloc.newPaymentStatus === 'paid' ? 0 : r.penaltyAmount,
+    };
+  });
+
+  return {
+    allocations,
+    totalAllocated,
+    excessCash: remainingCash,
+    updatedReadings,
+  };
+}
+
+/**
  * Merges two snapshots of the same MeterReading (e.g. local vs server/Firestore) without ever
  * dropping 2% Franchise Tax, losing partial payments, or causing sudden number jumps.
  */
