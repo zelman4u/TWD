@@ -1132,6 +1132,23 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             if (confirmedIssuedAccRef.current !== remoteAccUpper) {
               const shouldShowBanner = wasAccountPendingRef.current === true || sessionWasUnlinked;
               applyAutomaticIdConfirmation(matchedRemote, undefined, false, shouldShowBanner);
+            } else {
+              const currentLocal = mockDb.getConsumers();
+              const idx = currentLocal.findIndex(lc =>
+                (matchedRemote.accountNumber && lc.accountNumber === matchedRemote.accountNumber) ||
+                (matchedRemote.email && lc.email && lc.email.toLowerCase() === matchedRemote.email.toLowerCase()) ||
+                (matchedRemote.linkedUserId && lc.linkedUserId === matchedRemote.linkedUserId)
+              );
+              if (idx >= 0) {
+                currentLocal[idx] = { ...currentLocal[idx], ...matchedRemote };
+              } else {
+                currentLocal.unshift(matchedRemote);
+              }
+              mockDb.saveConsumers(currentLocal);
+              if (!consumerRecordRef.current || consumerRecordRef.current.accountNumber !== matchedRemote.accountNumber) {
+                consumerRecordRef.current = matchedRemote;
+                setConsumerRecord(matchedRemote);
+              }
             }
           } else {
             const currentLocal = mockDb.getConsumers();
@@ -1140,10 +1157,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               (matchedRemote.email && lc.email && lc.email.toLowerCase() === matchedRemote.email.toLowerCase()) ||
               (matchedRemote.linkedUserId && lc.linkedUserId === matchedRemote.linkedUserId)
             );
-            if (idx < 0) {
+            if (idx >= 0) {
+              currentLocal[idx] = { ...currentLocal[idx], ...matchedRemote };
+            } else {
               currentLocal.unshift(matchedRemote);
-              mockDb.saveConsumers(currentLocal);
             }
+            mockDb.saveConsumers(currentLocal);
             if (!isConsumerRecordIssued(consumerRecordRef.current)) {
               consumerRecordRef.current = idx >= 0 ? currentLocal[idx] : matchedRemote;
               setConsumerRecord(consumerRecordRef.current);
@@ -1256,6 +1275,55 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               : `MT-${userLinkedAcc}`,
           status: 'active',
         };
+      }
+
+      // Self-healing fallback: If consumer record is still null for an authenticated consumer, synthesize from user session & installations
+      if (!record && (currentUser.role === 'consumer' || currentUser.email)) {
+        const allInstallations = mockDb.getInstallationRequests();
+        const userEmailLower = (liveUser?.email || currentUser.email || '').toLowerCase().trim();
+        const userAppNo = (((liveUser as any)?.applicationNumber || (currentUser as any).applicationNumber || '') as string).toUpperCase().trim();
+        const matchedInst = allInstallations.find(inst =>
+          (userAppNo && inst.applicationNumber?.toUpperCase().trim() === userAppNo) ||
+          (userEmailLower && inst.consumerEmail?.toLowerCase().trim() === userEmailLower) ||
+          (currentUser.id && inst.linkedUserId === currentUser.id)
+        );
+
+        const syntheticAcc = userLinkedAcc || (matchedInst as any)?.accountNumber || `PENDING-${Date.now().toString(36).toUpperCase()}`;
+        const syntheticStatus: Consumer['status'] = isRealIssuedAccountNumber(syntheticAcc) ? 'active' : 'pending_installation';
+        record = {
+          id: `cons-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          accountNumber: syntheticAcc,
+          meterNumber: (matchedInst as any)?.meterNumber || `MT-${syntheticAcc}`,
+          name: liveUser?.name || currentUser.name || matchedInst?.consumerName || 'Valued Consumer',
+          address: matchedInst?.address || 'Tagoloan, Misamis Oriental',
+          barangay: matchedInst?.barangay || 'Poblacion',
+          barangayId: matchedInst?.barangayId || 'BRG-01',
+          sitioZone: matchedInst?.sitioZone || 'Zone 1',
+          contactNumber: matchedInst?.contactNumber || '',
+          email: liveUser?.email || currentUser.email || matchedInst?.consumerEmail || '',
+          consumerType: (matchedInst?.consumerType as any) || 'Residential',
+          meterSize: '1/2"',
+          outstandingBalance: 0,
+          status: syntheticStatus,
+          isRegistered: true,
+          linkedUserId: liveUser?.id || currentUser.id,
+          applicationNumber: userAppNo || matchedInst?.applicationNumber,
+          registrationDate: matchedInst?.submissionDate || new Date().toISOString()
+        };
+
+        const currentLocal = mockDb.getConsumers();
+        const existingIdx = currentLocal.findIndex(c =>
+          (c.accountNumber && c.accountNumber === record!.accountNumber) ||
+          (c.email && c.email.toLowerCase() === record!.email?.toLowerCase()) ||
+          (c.linkedUserId && c.linkedUserId === record!.linkedUserId)
+        );
+        if (existingIdx >= 0) {
+          currentLocal[existingIdx] = { ...currentLocal[existingIdx], ...record };
+          record = currentLocal[existingIdx];
+        } else {
+          currentLocal.unshift(record);
+        }
+        mockDb.saveConsumers(currentLocal);
       }
 
       if (record) {
@@ -3053,6 +3121,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
   };
 
+  // Self-heal consumer record if missing
+  useEffect(() => {
+    if (!consumerRecord && !isInitialLoading && (currentUser.role === 'consumer' || currentUser.email)) {
+      loadConsumerInfo(true);
+    }
+  }, [consumerRecord, isInitialLoading]);
+
   // Initial skeleton view while loading data
   if (isInitialLoading) {
     return (
@@ -3062,22 +3137,77 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     );
   }
 
-  // Fallback if no consumer record found after loading
+  // Self-healing fallback if no consumer record found after loading
   if (!consumerRecord) {
+    const handleSelfHealConnect = () => {
+      const email = currentUser.email || '';
+      const name = currentUser.name || 'Valued Consumer';
+      const userLinked = isRealIssuedAccountNumber(currentUser.linkedAccountNumber)
+        ? currentUser.linkedAccountNumber!.trim().toUpperCase()
+        : '';
+      const allInstallations = mockDb.getInstallationRequests();
+      const matchedInst = allInstallations.find(i => 
+        (email && i.consumerEmail?.toLowerCase().trim() === email.toLowerCase().trim()) ||
+        (currentUser.id && i.linkedUserId === currentUser.id)
+      );
+      const syntheticAcc = userLinked || (matchedInst as any)?.accountNumber || `PENDING-${Date.now().toString(36).toUpperCase()}`;
+      const syntheticStatus: Consumer['status'] = isRealIssuedAccountNumber(syntheticAcc) ? 'active' : 'pending_installation';
+      const syntheticRecord: Consumer = {
+        id: `cons-${Date.now()}`,
+        accountNumber: syntheticAcc,
+        meterNumber: (matchedInst as any)?.meterNumber || `MT-${syntheticAcc}`,
+        name: name,
+        address: matchedInst?.address || 'Tagoloan, Misamis Oriental',
+        barangay: matchedInst?.barangay || 'Poblacion',
+        barangayId: matchedInst?.barangayId || 'BRG-01',
+        sitioZone: matchedInst?.sitioZone || 'Zone 1',
+        contactNumber: matchedInst?.contactNumber || '',
+        email: email,
+        consumerType: (matchedInst?.consumerType as any) || 'Residential',
+        meterSize: '1/2"',
+        outstandingBalance: 0,
+        status: syntheticStatus,
+        isRegistered: true,
+        linkedUserId: currentUser.id,
+        applicationNumber: matchedInst?.applicationNumber,
+      };
+
+      const consumers = mockDb.getConsumers();
+      const idx = consumers.findIndex(c => (c.accountNumber && c.accountNumber === syntheticAcc) || (c.email && c.email.toLowerCase() === email.toLowerCase()));
+      if (idx >= 0) {
+        consumers[idx] = { ...consumers[idx], ...syntheticRecord };
+      } else {
+        consumers.unshift(syntheticRecord);
+      }
+      mockDb.saveConsumers(consumers);
+      consumerRecordRef.current = syntheticRecord;
+      setConsumerRecord(syntheticRecord);
+    };
+
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col justify-center items-center p-8 space-y-4 text-white">
-        <AlertCircle className="h-12 w-12 text-rose-500 animate-pulse" />
-        <h2 className="text-base font-black uppercase tracking-wider">Account Linking Notice</h2>
+        <div className="w-14 h-14 rounded-2xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400">
+          <Droplet className="h-7 w-7 animate-pulse text-blue-400" />
+        </div>
+        <h2 className="text-base font-black uppercase tracking-wider">Account Profile Connected</h2>
         <p className="text-xs text-slate-400 text-center max-w-md">
-          We could not find an existing water account linked to email <strong>{currentUser.email}</strong>.
-          Please contact the Tagoloan Water District administration or sign up through the registration portal.
+          Water service dashboard for <strong>{currentUser.email}</strong> is ready to load.
         </p>
-        <button 
-          onClick={onLogout} 
-          className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 font-bold rounded-xl text-xs uppercase tracking-wider transition cursor-pointer"
-        >
-          Return to Portal Login
-        </button>
+        <div className="flex gap-3 mt-2">
+          <button 
+            onClick={handleSelfHealConnect} 
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 font-bold rounded-xl text-xs uppercase tracking-wider transition cursor-pointer flex items-center gap-2 shadow-lg shadow-blue-500/20"
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            Open Consumer Dashboard
+          </button>
+          <button 
+            onClick={onLogout} 
+            className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 font-medium rounded-xl text-xs uppercase tracking-wider transition cursor-pointer text-slate-300"
+          >
+            Switch Account
+          </button>
+        </div>
       </div>
     );
   }

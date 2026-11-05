@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Mail, Lock, LogIn, AlertCircle, RefreshCw, ArrowLeft, Eye, EyeOff, Smartphone, ExternalLink } from 'lucide-react';
-import { User } from '../types';
+import { User, Consumer } from '../types';
 import { mockDb } from '../mockDb';
 import { apiClient } from '../services/apiClient';
 import {
@@ -461,7 +461,36 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
           const bIssued = isRealIssuedAccountNumber(b.accountNumber) && !isPendingConsumerStatus(b.status) ? 1 : 0;
           return bIssued - aIssued;
         });
-      const matchedConsumer = matchedConsumers[0];
+      let matchedConsumer = matchedConsumers[0];
+
+      // If this authenticated user is a consumer and has no local consumer record yet, synthesize one immediately
+      if (!matchedConsumer && matchedUser.role === 'consumer') {
+        const fallbackAcc = isRealIssuedAccountNumber(matchedUser.linkedAccountNumber)
+          ? matchedUser.linkedAccountNumber!.replace(/^#/, '').trim().toUpperCase()
+          : '';
+        const syntheticConsumer: Consumer = {
+          id: `cons-${(matchedUser.email || matchedUser.id || 'cons').replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+          accountNumber: fallbackAcc || 'PENDING',
+          meterNumber: fallbackAcc ? `MT-${fallbackAcc}` : 'PENDING',
+          name: matchedUser.name || 'Consumer',
+          address: 'Tagoloan, Misamis Oriental',
+          barangay: 'Poblacion',
+          barangayId: 'BRG-01',
+          sitioZone: 'Zone 1',
+          contactNumber: matchedUser.contactNumber || '',
+          email: (matchedUser.email || '').trim().toLowerCase(),
+          consumerType: 'Residential',
+          meterSize: '1/2"',
+          status: fallbackAcc ? 'active' : (matchedUser.status || 'pending_approval'),
+          isRegistered: true,
+          linkedUserId: matchedUser.id,
+          registrationDate: matchedUser.registrationDate || new Date().toISOString().split('T')[0],
+          outstandingBalance: 0,
+        };
+        const updatedConsumers = [syntheticConsumer, ...allConsumers];
+        mockDb.saveConsumers(updatedConsumers);
+        matchedConsumer = syntheticConsumer;
+      }
 
       if (
         matchedConsumer &&

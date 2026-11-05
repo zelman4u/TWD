@@ -45,12 +45,14 @@ function ensureBroadcastBus() {
       broadcastBus.onmessage = (event) => {
         const data = event?.data;
         if (!data || !data.type || data.__senderTab === CLIENT_INSTANCE_ID) return;
-        messageListeners.forEach((cb) => {
-          try {
-            cb(data);
-          } catch (err) {
-            console.warn('[Realtime Bus] Subscriber error:', err);
-          }
+        queueMicrotask(() => {
+          messageListeners.forEach((cb) => {
+            try {
+              cb(data);
+            } catch (err) {
+              console.warn('[Realtime Bus] Subscriber error:', err);
+            }
+          });
         });
       };
     } catch {
@@ -224,11 +226,13 @@ function connect() {
           return;
         }
 
-        // Notify subscribers
-        messageListeners.forEach(cb => {
-          try { cb(data); } catch {
-            // Ignore subscriber errors
-          }
+        // Notify subscribers asynchronously to avoid blocking websocket frame pump
+        queueMicrotask(() => {
+          messageListeners.forEach(cb => {
+            try { cb(data); } catch {
+              // Ignore subscriber errors
+            }
+          });
         });
       } catch {
         // Non-JSON frame ignored
