@@ -178,6 +178,12 @@ export function sendRealtimeMessage(type: string, payload?: any): boolean {
 function connect() {
   if (isManuallyClosed) return;
 
+  // Do not attempt to establish WebSocket connections while offline
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    updateState('disconnected');
+    return;
+  }
+
   const url = getRealtimeSocketUrl();
   if (!url) {
     updateState('disconnected');
@@ -185,6 +191,12 @@ function connect() {
   }
 
   if (activeSocket && (activeSocket.readyState === WebSocket.OPEN || activeSocket.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  // If too many consecutive failures occurred, pause until visibility change or online event
+  if (reconnectAttempts > 15) {
+    updateState('disconnected');
     return;
   }
 
@@ -250,9 +262,19 @@ function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (isManuallyClosed) return;
 
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    updateState('disconnected');
+    return;
+  }
+
   reconnectAttempts++;
-  const maxDelay = reconnectAttempts > 4 ? 60000 : 15000;
-  const backoff = Math.min(1500 * Math.pow(1.8, Math.min(reconnectAttempts, 8)) + Math.random() * 500, maxDelay);
+  if (reconnectAttempts > 15) {
+    updateState('disconnected');
+    return;
+  }
+
+  const maxDelay = reconnectAttempts > 5 ? 60000 : 20000;
+  const backoff = Math.min(2000 * Math.pow(1.8, Math.min(reconnectAttempts, 8)) + Math.random() * 800, maxDelay);
 
   reconnectTimer = setTimeout(() => {
     connect();

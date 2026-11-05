@@ -824,6 +824,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     }
 
     const nowMs = Date.now();
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return;
+    }
     if (!withDelay && lastAdminRemoteSyncRef.current > 0 && nowMs - lastAdminRemoteSyncRef.current < 10000) {
       return;
     }

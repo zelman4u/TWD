@@ -687,6 +687,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       setNotifications(localNotifs);
     }
 
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return;
+    }
+
     const nowMs = Date.now();
     const shouldPollReportsAndNotifs = !silent || nowMs - lastReportsSyncRef.current >= 10000;
 
@@ -1029,7 +1033,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     const alreadySeenAcc =
       lastAnnouncedAccountRef.current === accNum ||
       persistedBanners.seenAccounts.includes(accNum) ||
-      alreadyReadAccountNotif;
+      alreadyReadAccountNotif ||
+      wasAccountPendingRef.current === false;
 
     if (alreadySeenAcc) {
       lastAnnouncedAccountRef.current = accNum;
@@ -1039,7 +1044,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           seenAccounts: [...prev.seenAccounts, accNum],
         }));
       }
-    } else if (triggerBanner) {
+    } else if (triggerBanner && wasAccountPendingRef.current === true) {
       lastAnnouncedAccountRef.current = accNum;
       updateConsumerBannerState(viewerKey, (prev) => ({
         ...prev,
@@ -1280,7 +1285,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             confirmedIssuedAccRef.current !== normalizedAccUpper &&
             (wasPendingBefore === true || sessionWasUnlinked || !hasIssuanceNotif)
           ) {
-            applyAutomaticIdConfirmation(record, undefined, false, wasPendingBefore === true || sessionWasUnlinked);
+            applyAutomaticIdConfirmation(record, undefined, false, wasPendingBefore === true);
           } else {
             confirmedIssuedAccRef.current = normalizedAccUpper;
             wasAccountPendingRef.current = false;
@@ -1475,11 +1480,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         // Keep spotlightReading synchronized with live updates, respecting persisted dismissals & read notifications
         setSpotlightReading(prevSpot => {
           if (prevSpot) {
-            if (dismissedSpotlightIdsRef.current.has(prevSpot.id)) {
+            if (
+              dismissedSpotlightIdsRef.current.has(prevSpot.id) ||
+              isBillNotificationAlreadyRead(prevSpot)
+            ) {
               return null;
             }
             const refreshedSpot = verifiedReads.find(v => v.id === prevSpot.id);
             if (refreshedSpot) {
+              if (
+                dismissedSpotlightIdsRef.current.has(refreshedSpot.id) ||
+                isBillNotificationAlreadyRead(refreshedSpot)
+              ) {
+                return null;
+              }
               return JSON.stringify(refreshedSpot) !== JSON.stringify(prevSpot) ? refreshedSpot : prevSpot;
             }
           }
@@ -1490,7 +1504,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           ) {
             return unpaidList[0];
           }
-          return prevSpot;
+          return null;
         });
         
         // 1. Per-bill overdue alert (only for past Admin-issued unpaid bills)
@@ -2579,6 +2593,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     const unreadItems = notifications.filter(n => !n.read);
     const unreadIds = unreadItems.map(n => n.id);
     acknowledgeNotificationBanners(notifications);
+    setIdConfirmedBanner(null);
+    setSpotlightReading(null);
+    setPaymentConfirmationToast(null);
     overdueBills.forEach((ob) => {
       markOverdueBannerDismissedForBill(
         consumerRecord?.accountNumber || consumerRecord?.email || currentUser.email || 'anon',

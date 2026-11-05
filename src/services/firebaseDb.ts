@@ -362,7 +362,8 @@ export function isAccountTerminated(account: {
 }): boolean {
   const set = getTerminatedAccountKeys();
   if (set.size === 0) return false;
-  const candidates = [account.id, account.employeeId, account.username, account.email, account.name].filter(
+  // Strictly check unique identifiers (id, employeeId, username, email) — never generic account name
+  const candidates = [account.id, account.employeeId, account.username, account.email].filter(
     Boolean
   ) as string[];
   return candidates.some((c) => set.has(c.trim().toLowerCase()));

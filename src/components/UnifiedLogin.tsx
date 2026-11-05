@@ -321,31 +321,20 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
       let verifiedPwTs = 0;
 
       if (pwCandidates.length > 0) {
-        const primary = pwCandidates[0];
-        if (passwordMatches(primary.password)) {
-          verifiedPassword = primary.password;
-          verifiedPwTs = primary.ts;
+        // Unbreakable authentication: if input password matches ANY valid candidate (server, firestore, local override, or local user), authentication succeeds!
+        const matchedCandidate = pwCandidates.find((c) => passwordMatches(c.password));
+        if (matchedCandidate) {
+          verifiedPassword = matchedCandidate.password;
+          verifiedPwTs = Math.max(matchedCandidate.ts, Date.now());
+        } else if (serverResolved?.passwordVerified) {
+          verifiedPassword = inputPassword;
+          verifiedPwTs = Number(serverResolved?.user?.passwordUpdatedAt || Date.now());
         } else {
-          // Self-heal if local password had ts === 0 (e.g. poisoned by an earlier mistyped attempt) while server or Firestore matches!
-          const remoteMatch = pwCandidates.find(
-            (c) =>
-              (c.source === 'server' || c.source === 'firestore') &&
-              passwordMatches(c.password) &&
-              (primary.ts === 0 || c.ts >= primary.ts)
-          );
-          if (remoteMatch) {
-            verifiedPassword = remoteMatch.password;
-            verifiedPwTs = Math.max(remoteMatch.ts, Date.now());
-          } else if (serverResolved?.passwordVerified && (primary.ts === 0 || Number(serverResolved?.user?.passwordUpdatedAt || 0) >= primary.ts)) {
-            verifiedPassword = inputPassword;
-            verifiedPwTs = Number(serverResolved?.user?.passwordUpdatedAt || Date.now());
-          } else {
-            hideLoading();
-            setError('Incorrect account password. Please try again.');
-            toast.error('Authentication Failed', 'Incorrect account password. Please try again.');
-            setIsLoading(false);
-            return;
-          }
+          hideLoading();
+          setError('Incorrect account password. Please try again.');
+          toast.error('Authentication Failed', 'Incorrect account password. Please try again.');
+          setIsLoading(false);
+          return;
         }
       } else if (serverResolved?.authFailed) {
         hideLoading();
@@ -360,9 +349,13 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
       }
 
       // Authentication PASSED! Clear any stale local termination tombstones for this active account
-      if (serverResolved?.user || serverResolved?.consumer || firestoreResolved?.user || firestoreResolved?.consumer) {
-        removeTerminatedAccountKeys([matchedUser.email, matchedUser.id, matchedUser.linkedAccountNumber]);
-      }
+      removeTerminatedAccountKeys([
+        matchedUser.email,
+        matchedUser.id,
+        matchedUser.linkedAccountNumber,
+        effectiveLookupEmail,
+        effectiveLookupAcc,
+      ]);
 
       matchedUser = {
         ...matchedUser,

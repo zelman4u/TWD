@@ -72,6 +72,15 @@ const unavailableApiRoutes = new Map<string, number>();
 const rateLimitedRoutes = new Map<string, number>();
 let backendStaticOnlyUntil = 0;
 let globalRateLimitedUntil = 0;
+let serverOverloadedUntil = 0;
+
+export function isServerOverloaded(): boolean {
+  return serverOverloadedUntil > Date.now();
+}
+
+export function markServerOverloaded(durationMs = 25000) {
+  serverOverloadedUntil = Math.max(serverOverloadedUntil, Date.now() + durationMs);
+}
 
 const CORE_BACKEND_ROUTES = new Set([
   '/api/readings',
@@ -145,13 +154,23 @@ function markRoute404(url: string, contentType: string) {
  */
 export async function safeBackendFetch(url: string, options?: RequestInit): Promise<Response | null> {
   if (typeof window === 'undefined' || typeof fetch !== 'function') return null;
-  if (isRouteTemporarilyUnavailable(url) || isRouteRateLimited(url)) {
+
+  // Immediately fast-fail background sync if client is offline or server is overloaded
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
     return null;
   }
+  if (isRouteTemporarilyUnavailable(url) || isRouteRateLimited(url) || (url.startsWith('/api') && isServerOverloaded())) {
+    return null;
+  }
+
   try {
     const res = await fetch(url, options);
     if (res.status === 429) {
       markRouteRateLimited(url, res.headers.get('retry-after'));
+      return null;
+    }
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      markServerOverloaded(25000);
       return null;
     }
     if (res.status === 404) {
@@ -163,6 +182,7 @@ export async function safeBackendFetch(url: string, options?: RequestInit): Prom
       unavailableApiRoutes.delete(routeKey);
       rateLimitedRoutes.delete(routeKey);
       backendStaticOnlyUntil = 0;
+      serverOverloadedUntil = 0;
     }
     return res;
   } catch {
@@ -188,6 +208,13 @@ async function executeRequestWithRetry<T = any>(url: string, options: RequestOpt
   const method = (fetchOptions.method || 'GET').toUpperCase();
   const routeKey = normalizeApiRouteKey(url);
 
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    const offErr: any = new Error('Device is currently offline');
+    offErr.isOffline = true;
+    offErr.noRetry = true;
+    throw offErr;
+  }
+
   if (isRouteTemporarilyUnavailable(url)) {
     const cachedErr: any = new Error('Endpoint temporarily unavailable on static host');
     cachedErr.status = 404;
@@ -201,6 +228,13 @@ async function executeRequestWithRetry<T = any>(url: string, options: RequestOpt
     rateErr.isRateLimited = true;
     rateErr.noRetry = true;
     throw rateErr;
+  }
+
+  if (url.startsWith('/api') && isServerOverloaded()) {
+    const busyErr: any = new Error('Server temporarily waking up or cooling down');
+    busyErr.status = 502;
+    busyErr.noRetry = true;
+    throw busyErr;
   }
 
   const startTime = Date.now();
@@ -278,6 +312,10 @@ async function executeRequestWithRetry<T = any>(url: string, options: RequestOpt
 
       if (response.status === 404) {
         markRoute404(url, contentType);
+      }
+
+      if (response.status === 502 || response.status === 503 || response.status === 504) {
+        markServerOverloaded(25000);
       }
 
       // HTTP Error status
