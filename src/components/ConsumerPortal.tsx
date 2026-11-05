@@ -208,6 +208,73 @@ function updateConsumerBannerState(
   }
 }
 
+function resolveImmediateConsumer(user: UserType): Consumer {
+  const allConsumers = mockDb.getConsumers();
+  const userEmail = (user.email || '').trim().toLowerCase();
+  const userAcc = isRealIssuedAccountNumber(user.linkedAccountNumber)
+    ? user.linkedAccountNumber!.trim().toUpperCase()
+    : '';
+
+  // 1. Try to find existing consumer in local DB
+  const matched = allConsumers.find(c =>
+    (userAcc && c.accountNumber && c.accountNumber.trim().toUpperCase() === userAcc) ||
+    (c.linkedUserId && c.linkedUserId === user.id) ||
+    (userEmail && c.email && c.email.trim().toLowerCase() === userEmail)
+  );
+
+  if (matched) {
+    if (userAcc && (!matched.accountNumber || matched.accountNumber.toUpperCase().startsWith('PENDING'))) {
+      const updated: Consumer = {
+        ...matched,
+        accountNumber: userAcc,
+        meterNumber: matched.meterNumber && !matched.meterNumber.toUpperCase().startsWith('PENDING')
+          ? matched.meterNumber
+          : `MT-${userAcc}`,
+        status: 'active'
+      };
+      return updated;
+    }
+    return matched;
+  }
+
+  // 2. Try to find matching installation request
+  const allInstallations = mockDb.getInstallationRequests();
+  const userAppNo = (((user as any)?.applicationNumber || '') as string).toUpperCase().trim();
+  const matchedInst = allInstallations.find(inst =>
+    (userAppNo && inst.applicationNumber?.toUpperCase().trim() === userAppNo) ||
+    (userEmail && inst.consumerEmail?.toLowerCase().trim() === userEmail) ||
+    (user.id && inst.linkedUserId === user.id)
+  );
+
+  const syntheticAcc = userAcc || (matchedInst as any)?.accountNumber || 'PENDING';
+  const syntheticStatus: Consumer['status'] = isRealIssuedAccountNumber(syntheticAcc) ? 'active' : 'pending_installation';
+  const fallbackRecord: Consumer = {
+    id: `cons-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    accountNumber: syntheticAcc,
+    meterNumber: (matchedInst as any)?.meterNumber || (isRealIssuedAccountNumber(syntheticAcc) ? `MT-${syntheticAcc}` : 'PENDING'),
+    name: user.name || matchedInst?.consumerName || 'Consumer',
+    address: matchedInst?.address || 'Tagoloan, Misamis Oriental',
+    barangay: matchedInst?.barangay || 'Poblacion',
+    barangayId: matchedInst?.barangayId || 'BRG-01',
+    sitioZone: matchedInst?.sitioZone || 'Zone 1',
+    contactNumber: user.contactNumber || matchedInst?.contactNumber || '',
+    email: user.email || matchedInst?.consumerEmail || '',
+    consumerType: (matchedInst?.consumerType as any) || 'Residential',
+    meterSize: '1/2"',
+    outstandingBalance: 0,
+    status: syntheticStatus,
+    isRegistered: true,
+    linkedUserId: user.id,
+    applicationNumber: userAppNo || matchedInst?.applicationNumber,
+    registrationDate: matchedInst?.submissionDate || new Date().toISOString()
+  };
+
+  const consumers = mockDb.getConsumers();
+  consumers.unshift(fallbackRecord);
+  mockDb.saveConsumers(consumers);
+  return fallbackRecord;
+}
+
 interface ConsumerPortalProps {
   currentUser: UserType;
   onLogout: () => void;
@@ -251,7 +318,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   };
 
   // Core Data States
-  const [consumerRecord, setConsumerRecord] = useState<Consumer | null>(null);
+  const [consumerRecord, setConsumerRecord] = useState<Consumer>(() => resolveImmediateConsumer(currentUser));
   const [readings, setReadings] = useState<MeterReading[]>([]);
   const [allHistoryReadings, setAllHistoryReadings] = useState<MeterReading[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -358,7 +425,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
   // Track previous readings to detect admin payment modifications
   const prevReadingsRef = useRef<MeterReading[]>([]);
-  const consumerRecordRef = useRef<Consumer | null>(null);
+  const consumerRecordRef = useRef<Consumer>(resolveImmediateConsumer(currentUser));
   const readingsRef = useRef<MeterReading[]>([]);
   const notifsRef = useRef<any[]>([]);
   const installationsRef = useRef<WaterMeterInstallationRequest[]>([]);
@@ -1734,8 +1801,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     notifsRef.current = [];
     setInstallationRequests([]);
     installationsRef.current = [];
-    setConsumerRecord(null);
-    consumerRecordRef.current = null;
+    const initialRec = resolveImmediateConsumer(currentUser);
+    setConsumerRecord(initialRec);
+    consumerRecordRef.current = initialRec;
     setReadings([]);
     readingsRef.current = [];
     prevReadingsRef.current = [];
@@ -3121,93 +3189,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
   };
 
-  // Self-heal consumer record if missing
-  useEffect(() => {
-    if (!consumerRecord && !isInitialLoading && (currentUser.role === 'consumer' || currentUser.email)) {
-      loadConsumerInfo(true);
-    }
-  }, [consumerRecord, isInitialLoading]);
-
   // Initial skeleton view while loading data
   if (isInitialLoading) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100">
         <ConsumerPortalSkeleton />
-      </div>
-    );
-  }
-
-  // Self-healing fallback if no consumer record found after loading
-  if (!consumerRecord) {
-    const handleSelfHealConnect = () => {
-      const email = currentUser.email || '';
-      const name = currentUser.name || 'Valued Consumer';
-      const userLinked = isRealIssuedAccountNumber(currentUser.linkedAccountNumber)
-        ? currentUser.linkedAccountNumber!.trim().toUpperCase()
-        : '';
-      const allInstallations = mockDb.getInstallationRequests();
-      const matchedInst = allInstallations.find(i => 
-        (email && i.consumerEmail?.toLowerCase().trim() === email.toLowerCase().trim()) ||
-        (currentUser.id && i.linkedUserId === currentUser.id)
-      );
-      const syntheticAcc = userLinked || (matchedInst as any)?.accountNumber || `PENDING-${Date.now().toString(36).toUpperCase()}`;
-      const syntheticStatus: Consumer['status'] = isRealIssuedAccountNumber(syntheticAcc) ? 'active' : 'pending_installation';
-      const syntheticRecord: Consumer = {
-        id: `cons-${Date.now()}`,
-        accountNumber: syntheticAcc,
-        meterNumber: (matchedInst as any)?.meterNumber || `MT-${syntheticAcc}`,
-        name: name,
-        address: matchedInst?.address || 'Tagoloan, Misamis Oriental',
-        barangay: matchedInst?.barangay || 'Poblacion',
-        barangayId: matchedInst?.barangayId || 'BRG-01',
-        sitioZone: matchedInst?.sitioZone || 'Zone 1',
-        contactNumber: matchedInst?.contactNumber || '',
-        email: email,
-        consumerType: (matchedInst?.consumerType as any) || 'Residential',
-        meterSize: '1/2"',
-        outstandingBalance: 0,
-        status: syntheticStatus,
-        isRegistered: true,
-        linkedUserId: currentUser.id,
-        applicationNumber: matchedInst?.applicationNumber,
-      };
-
-      const consumers = mockDb.getConsumers();
-      const idx = consumers.findIndex(c => (c.accountNumber && c.accountNumber === syntheticAcc) || (c.email && c.email.toLowerCase() === email.toLowerCase()));
-      if (idx >= 0) {
-        consumers[idx] = { ...consumers[idx], ...syntheticRecord };
-      } else {
-        consumers.unshift(syntheticRecord);
-      }
-      mockDb.saveConsumers(consumers);
-      consumerRecordRef.current = syntheticRecord;
-      setConsumerRecord(syntheticRecord);
-    };
-
-    return (
-      <div className="min-h-screen bg-slate-900 flex flex-col justify-center items-center p-8 space-y-4 text-white">
-        <div className="w-14 h-14 rounded-2xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400">
-          <Droplet className="h-7 w-7 animate-pulse text-blue-400" />
-        </div>
-        <h2 className="text-base font-black uppercase tracking-wider">Account Profile Connected</h2>
-        <p className="text-xs text-slate-400 text-center max-w-md">
-          Water service dashboard for <strong>{currentUser.email}</strong> is ready to load.
-        </p>
-        <div className="flex gap-3 mt-2">
-          <button 
-            onClick={handleSelfHealConnect} 
-            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 font-bold rounded-xl text-xs uppercase tracking-wider transition cursor-pointer flex items-center gap-2 shadow-lg shadow-blue-500/20"
-          >
-            <CheckCircle2 className="w-4 h-4" />
-            Open Consumer Dashboard
-          </button>
-          <button 
-            onClick={onLogout} 
-            className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 font-medium rounded-xl text-xs uppercase tracking-wider transition cursor-pointer text-slate-300"
-          >
-            Switch Account
-          </button>
-        </div>
       </div>
     );
   }

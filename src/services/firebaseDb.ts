@@ -2305,12 +2305,27 @@ export function subscribeToConsumerIdentityInFirestore(
     notifications: ConsumerNotification[];
   }) => void
 ): () => void {
-  if (isFirestoreReadQuotaExceeded()) return () => {};
+  if (isFirestoreReadQuotaExceeded() || isFirestoreTransportPaused()) return () => {};
 
   const cleanEmail = (params.email || '').trim().toLowerCase();
   const cleanUid = (params.userId || '').trim();
   const unsubs: Unsubscribe[] = [];
   let resolveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const safeSnapError = (err: any) => {
+    const msg = String(err?.message || err || '');
+    if (
+      msg.includes('ERR_BLOCKED_BY_CLIENT') ||
+      msg.includes('unavailable') ||
+      (err as any)?.code === 'unavailable' ||
+      (err as any)?.code === 'failed-precondition'
+    ) {
+      markFirestoreTransportPaused(180_000);
+      try {
+        disableNetwork(db).catch(() => {});
+      } catch {}
+    }
+  };
 
   const triggerResolve = () => {
     if (resolveTimer) clearTimeout(resolveTimer);
@@ -2331,7 +2346,7 @@ export function subscribeToConsumerIdentityInFirestore(
           (snap) => {
             if (snap.exists()) triggerResolve();
           },
-          () => {}
+          safeSnapError
         )
       );
       unsubs.push(
@@ -2340,7 +2355,7 @@ export function subscribeToConsumerIdentityInFirestore(
           (snap) => {
             if (snap.exists()) triggerResolve();
           },
-          () => {}
+          safeSnapError
         )
       );
       unsubs.push(
@@ -2349,7 +2364,7 @@ export function subscribeToConsumerIdentityInFirestore(
           (snap) => {
             if (!snap.empty) triggerResolve();
           },
-          () => {}
+          safeSnapError
         )
       );
     }
@@ -2362,7 +2377,7 @@ export function subscribeToConsumerIdentityInFirestore(
           (snap) => {
             if (snap.exists()) triggerResolve();
           },
-          () => {}
+          safeSnapError
         )
       );
       unsubs.push(
@@ -2371,7 +2386,7 @@ export function subscribeToConsumerIdentityInFirestore(
           (snap) => {
             if (snap.exists()) triggerResolve();
           },
-          () => {}
+          safeSnapError
         )
       );
       unsubs.push(
@@ -2380,7 +2395,7 @@ export function subscribeToConsumerIdentityInFirestore(
           (snap) => {
             if (!snap.empty) triggerResolve();
           },
-          () => {}
+          safeSnapError
         )
       );
       unsubs.push(
@@ -2389,7 +2404,7 @@ export function subscribeToConsumerIdentityInFirestore(
           (snap) => {
             if (!snap.empty) triggerResolve();
           },
-          () => {}
+          safeSnapError
         )
       );
       unsubs.push(
@@ -2422,7 +2437,7 @@ export function subscribeToConsumerIdentityInFirestore(
               triggerResolve();
             }
           },
-          () => {}
+          safeSnapError
         )
       );
     }
