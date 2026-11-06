@@ -9,11 +9,65 @@ import { Consumer, MeterReading } from '../types';
 import {
   getReadingTotalAssessment,
   getCanonicalBillSettlement,
-  formatOdometerReading,
-  OFFICIAL_LOGO_URL,
-  FALLBACK_LOGO_URL,
-  getBase64ImageWithTimeout,
 } from './tariffCalculator';
+import { formatOdometerReading } from './odometer';
+
+const OFFICIAL_LOGO_URL = 'https://lh3.googleusercontent.com/d/1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg';
+const FALLBACK_LOGO_URL = 'https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w500';
+
+const getBase64ImageWithTimeout = async (url: string, fallbackUrl?: string, timeoutMs = 1500): Promise<string | null> => {
+  const loadAttempt = async (targetUrl: string, allowFallback: boolean): Promise<string | null> => {
+    try {
+      const controller = new AbortController();
+      const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
+      const res = await fetch(targetUrl, { mode: 'cors', signal: controller.signal });
+      clearTimeout(abortTimer);
+      if (res.ok) {
+        const blob = await res.blob();
+        const dataUrl = await new Promise<string | null>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(blob);
+        });
+        if (dataUrl) return dataUrl;
+      }
+    } catch {
+      // Fallback to Image + Canvas
+    }
+
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth || 200;
+          canvas.height = img.naturalHeight || 200;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0);
+            resolve(canvas.toDataURL('image/png'));
+            return;
+          }
+        } catch {
+          // Ignore
+        }
+        resolve(null);
+      };
+      img.onerror = () => {
+        if (allowFallback && fallbackUrl && fallbackUrl !== targetUrl) {
+          loadAttempt(fallbackUrl, false).then(resolve);
+        } else {
+          resolve(null);
+        }
+      };
+      img.src = targetUrl;
+    });
+  };
+
+  return loadAttempt(url, true);
+};
 
 /**
  * Downloads official Tagoloan Water District Water Billing Notice PDF.

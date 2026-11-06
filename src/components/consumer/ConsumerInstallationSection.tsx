@@ -137,24 +137,21 @@ export const ConsumerInstallationSection: React.FC<ConsumerInstallationSectionPr
       const newReq = mockDb.createInstallationRequest({
         applicationNumber: defaultApplicationNumber,
         consumerName: cleanName,
+        consumerEmail: user.email,
         contactNumber: cleanContact,
         barangay: cleanBarangay,
         address: cleanAddress,
         preferredInstallationDate: preferredDate,
         consumerRemarks: consumerRemarks.trim() || undefined,
-        submittedByUserId: user.id,
-        submittedByUserEmail: user.email,
-        assignedAccountNumber: consumerRecord?.accountNumber,
+        userId: user.id,
+        linkedUserId: user.id,
       });
 
-      sendRealtimeMessage({
-        type: 'INSTALLATION_REQUEST_SUBMITTED',
-        payload: {
-          applicationNumber: newReq.applicationNumber,
-          consumerName: newReq.consumerName,
-          preferredDate: newReq.preferredInstallationDate,
-          barangay: newReq.barangay,
-        },
+      sendRealtimeMessage('INSTALLATION_REQUEST_SUBMITTED', {
+        applicationNumber: newReq.applicationNumber,
+        consumerName: newReq.consumerName,
+        preferredDate: newReq.preferredInstallationDate,
+        barangay: newReq.barangay,
       });
 
       mockDb.addNotification({
@@ -163,8 +160,7 @@ export const ConsumerInstallationSection: React.FC<ConsumerInstallationSectionPr
         message: `Your water meter installation request under Application #${newReq.applicationNumber} has been received for ${formatInstallationDateDisplay(
           newReq.preferredInstallationDate
         )}. Tagoloan Water District staff will inspect your premises.`,
-        type: 'system',
-        priority: 'high',
+        type: 'installation',
       });
 
       setJustSubmittedReq(newReq);
