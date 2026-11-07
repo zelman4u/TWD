@@ -548,7 +548,8 @@ export async function downloadOfficialReceiptPdf(params: {
 
 /**
  * Cleanly prints a receipt or notice DOM element using an isolated hidden iframe.
- * Avoids modal overlays, scrollbar clipping, or printing surrounding page elements.
+ * Clones parent document stylesheets and injects robust print CSS to ensure consistent,
+ * pixel-perfect text alignment, grid structures, tabular figures, and borders.
  */
 export function printCleanElement(elementId: string): void {
   const targetEl = document.getElementById(elementId);
@@ -565,6 +566,8 @@ export function printCleanElement(elementId: string): void {
     iframe.style.width = '0';
     iframe.style.height = '0';
     iframe.style.border = '0';
+    iframe.style.visibility = 'hidden';
+    iframe.setAttribute('aria-hidden', 'true');
     document.body.appendChild(iframe);
 
     const doc = iframe.contentWindow?.document;
@@ -573,45 +576,291 @@ export function printCleanElement(elementId: string): void {
       return;
     }
 
+    // Collect parent stylesheets and link tags to preserve custom fonts and core styles
+    const styleTags = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
+      .map(node => node.outerHTML)
+      .join('\n');
+
     doc.open();
     doc.write(`
       <!DOCTYPE html>
-      <html>
+      <html lang="en">
         <head>
-          <title>Tagoloan Water District - Print</title>
+          <meta charset="utf-8" />
+          <title>Tagoloan Water District - Official Document</title>
+          ${styleTags}
           <style>
             @page {
               size: A4 portrait;
-              margin: 12mm;
+              margin: 10mm 12mm;
             }
-            body {
-              font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-              color: #0f172a;
-              background: #ffffff;
-              margin: 0;
-              padding: 0;
-              -webkit-print-color-adjust: exact;
-              print-color-adjust: exact;
+            *, *::before, *::after {
+              box-sizing: border-box !important;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
             }
-            * {
-              box-sizing: border-box;
+            html, body {
+              background: #ffffff !important;
+              color: #0f172a !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+              font-size: 11px !important;
+              line-height: 1.4 !important;
             }
-            .no-print, button {
+            .no-print, button, .print\\:hidden, input, select {
               display: none !important;
             }
+            
+            /* Root print notice card styling */
+            #official-billing-notice-print-area,
+            #consumer-receipt-slip-area,
+            #admin-official-receipt-card {
+              background: #ffffff !important;
+              color: #0f172a !important;
+              border: 1.5px solid #0f172a !important;
+              border-radius: 6px !important;
+              box-shadow: none !important;
+              max-width: 100% !important;
+              width: 100% !important;
+              margin: 0 auto !important;
+              padding: 18px !important;
+              page-break-inside: avoid !important;
+              break-inside: avoid !important;
+            }
+
+            /* Flexbox utilities */
+            .flex {
+              display: flex !important;
+            }
+            .inline-flex {
+              display: inline-flex !important;
+            }
+            .flex-col {
+              flex-direction: column !important;
+            }
+            .flex-row {
+              flex-direction: row !important;
+            }
+            .justify-between {
+              justify-content: space-between !important;
+            }
+            .justify-center {
+              justify-content: center !important;
+            }
+            .justify-start {
+              justify-content: flex-start !important;
+            }
+            .justify-end {
+              justify-content: flex-end !important;
+            }
+            .items-center {
+              align-items: center !important;
+            }
+            .items-baseline {
+              align-items: baseline !important;
+            }
+            .items-start {
+              align-items: flex-start !important;
+            }
+            .shrink-0 {
+              flex-shrink: 0 !important;
+            }
+
+            /* Grid utilities for 2-column key-value alignment */
+            .grid {
+              display: grid !important;
+            }
+            .grid-cols-1 {
+              grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+            }
+            .grid-cols-2, .sm\\:grid-cols-2, .md\\:grid-cols-2, .print\\:grid-cols-2 {
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+            .col-span-1 {
+              grid-column: span 1 / span 1 !important;
+            }
+            .col-span-2, .sm\\:col-span-2, .md\\:col-span-2 {
+              grid-column: span 2 / span 2 !important;
+            }
+            .gap-x-6 {
+              column-gap: 1.5rem !important;
+            }
+            .gap-x-8 {
+              column-gap: 2rem !important;
+            }
+            .gap-y-1 {
+              row-gap: 0.25rem !important;
+            }
+            .gap-y-1\\.5 {
+              row-gap: 0.375rem !important;
+            }
+            .gap-y-2 {
+              row-gap: 0.5rem !important;
+            }
+            .gap-y-2\\.5 {
+              row-gap: 0.625rem !important;
+            }
+            .gap-2 {
+              gap: 0.5rem !important;
+            }
+            .gap-3 {
+              gap: 0.75rem !important;
+            }
+
+            /* Text alignment & numbers */
+            .text-left {
+              text-align: left !important;
+            }
+            .text-center {
+              text-align: center !important;
+            }
+            .text-right {
+              text-align: right !important;
+            }
+            .font-mono {
+              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+            }
+            .tabular-nums {
+              font-variant-numeric: tabular-nums !important;
+            }
+            .font-bold {
+              font-weight: 700 !important;
+            }
+            .font-black {
+              font-weight: 900 !important;
+            }
+            .font-semibold {
+              font-weight: 600 !important;
+            }
+            .font-medium {
+              font-weight: 500 !important;
+            }
+            .uppercase {
+              text-transform: uppercase !important;
+            }
+            .truncate {
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+              white-space: nowrap !important;
+            }
+
+            /* Widths */
+            .w-full {
+              width: 100% !important;
+            }
+            .w-1\\/4 {
+              width: 25% !important;
+            }
+            .w-1\\/2 {
+              width: 50% !important;
+            }
+            .w-28 {
+              width: 7rem !important;
+              min-width: 7rem !important;
+            }
+
+            /* Tables */
             table {
-              width: 100%;
-              border-collapse: collapse;
+              width: 100% !important;
+              border-collapse: collapse !important;
+              table-layout: fixed !important;
+              margin: 4px 0 !important;
+            }
+            th {
+              font-weight: 700 !important;
+              color: #475569 !important;
+              border-bottom: 2px solid #0f172a !important;
+              padding: 6px 4px !important;
+              font-size: 10px !important;
+              text-transform: uppercase !important;
+              letter-spacing: 0.025em !important;
+            }
+            td {
+              padding: 6px 4px !important;
+              border-bottom: 1px solid #e2e8f0 !important;
+              color: #0f172a !important;
+              vertical-align: middle !important;
+            }
+            th.text-left, td.text-left {
+              text-align: left !important;
+            }
+            th.text-center, td.text-center {
+              text-align: center !important;
+            }
+            th.text-right, td.text-right {
+              text-align: right !important;
+            }
+
+            /* High contrast color overrides for crisp printing */
+            .text-white, .text-slate-100, .text-slate-200 {
+              color: #0f172a !important;
+            }
+            .text-slate-300, .text-slate-400 {
+              color: #334155 !important;
+            }
+            .text-slate-500, .text-slate-600 {
+              color: #475569 !important;
+            }
+            .text-sky-400, .text-blue-600, .text-blue-700, .text-blue-800 {
+              color: #1d4ed8 !important;
+            }
+            .text-emerald-400, .text-emerald-500, .text-emerald-700, .text-emerald-800 {
+              color: #047857 !important;
+            }
+            .text-rose-400, .text-rose-500, .text-rose-700 {
+              color: #b91c1c !important;
+            }
+            .text-amber-300, .text-amber-400, .text-amber-700, .text-amber-800 {
+              color: #b45309 !important;
+            }
+
+            /* Neutralize dark box backgrounds and convert to print borders */
+            .bg-slate-950, .bg-slate-900, .bg-slate-900\\/80, .bg-slate-900\\/60, .bg-slate-950\\/60, .bg-slate-950\\/70 {
+              background-color: #f8fafc !important;
+              border-color: #cbd5e1 !important;
+              color: #0f172a !important;
+            }
+            .bg-emerald-950\\/60, .bg-emerald-950 {
+              background-color: #ecfdf5 !important;
+              border-color: #a7f3d0 !important;
+              color: #065f46 !important;
+            }
+            .bg-amber-950\\/60, .bg-amber-950 {
+              background-color: #fffbeb !important;
+              border-color: #fde68a !important;
+              color: #92400e !important;
+            }
+            .bg-blue-600, .bg-blue-700 {
+              background-color: #1e40af !important;
+              color: #ffffff !important;
+            }
+
+            /* Dividers and borders */
+            .border-slate-800, .border-slate-700, .border-slate-900 {
+              border-color: #cbd5e1 !important;
+            }
+            .border-dashed {
+              border-style: dashed !important;
+            }
+            .border-b {
+              border-bottom-width: 1px !important;
+            }
+            .border-b-2 {
+              border-bottom-width: 2px !important;
             }
           </style>
         </head>
         <body>
-          ${targetEl.outerHTML}
+          <div style="padding: 10px; max-width: 100%;">
+            ${targetEl.outerHTML}
+          </div>
         </body>
       </html>
     `);
     doc.close();
 
+    // Give the iframe time to load all cloned stylesheets and fonts before printing
     setTimeout(() => {
       try {
         iframe.contentWindow?.focus();
@@ -623,9 +872,9 @@ export function printCleanElement(elementId: string): void {
           if (iframe.parentNode) {
             iframe.parentNode.removeChild(iframe);
           }
-        }, 1000);
+        }, 1500);
       }
-    }, 250);
+    }, 350);
   } catch {
     window.print();
   }

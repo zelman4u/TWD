@@ -255,7 +255,12 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
   };
 
   const handlePrintNotice = () => {
-    printCleanElement('official-billing-notice-print-area');
+    if (activeTab !== 'notice') {
+      setActiveTab('notice');
+    }
+    setTimeout(() => {
+      printCleanElement('official-billing-notice-print-area');
+    }, 60);
   };
 
   if (!isOpen) return null;
@@ -504,174 +509,214 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
       </div>
 
       {/* TAB 1: AUTHENTIC WATER BILLING NOTICE SLIP (DARK SLATE SCREEN + PRINT SAFE) */}
-      {activeTab === 'notice' && (
-        <div className="space-y-4 animate-fade-in">
-          <div id="official-billing-notice-print-area" className="bg-slate-950 border-2 border-slate-800 rounded-2xl p-6 shadow-xl max-w-2xl mx-auto font-sans text-slate-100 print:bg-white print:text-slate-900 print:border-slate-300 print:shadow-none">
-            {/* Header / Seal */}
-            <div className="text-center pb-4 border-b-2 border-dashed border-slate-800 print:border-slate-300 space-y-1">
-              <div className="flex items-center justify-center space-x-2">
-                <Droplets className="h-5 w-5 text-sky-400 print:text-blue-700" />
-                <h2 className="text-lg font-black text-white print:text-slate-900 tracking-wide uppercase">
-                  TAGOLOAN WATER DISTRICT
-                </h2>
-              </div>
-              <p className="text-[11px] text-slate-300 print:text-slate-600 font-medium">
-                Zone 1, Poblacion, Tagoloan, Misamis Oriental
-              </p>
-              <p className="text-[10px] text-slate-400 print:text-slate-500">
-                Tel. No.: (088) 890-4946 • TIN: 002-841-992-000
-              </p>
-              <div className="pt-2">
-                <span className="inline-block px-3 py-1 bg-blue-600 text-white font-black text-xs uppercase tracking-widest rounded">
-                  WATER BILLING NOTICE
-                </span>
-              </div>
+      <div className={activeTab === 'notice' ? 'space-y-4 animate-fade-in' : 'hidden print:block'}>
+        <div id="official-billing-notice-print-area" className="bg-slate-950 border-2 border-slate-800 rounded-2xl p-6 shadow-xl max-w-2xl mx-auto font-sans text-slate-100 print:bg-white print:text-slate-900 print:border-slate-300 print:shadow-none">
+          {/* Official Letterhead / Header */}
+          <div className="text-center pb-4 border-b-2 border-dashed border-slate-800 print:border-slate-300 space-y-1">
+            <p className="text-[10px] font-black tracking-widest text-slate-400 print:text-slate-600 uppercase">
+              Republic of the Philippines
+            </p>
+            <div className="flex items-center justify-center space-x-2">
+              <Droplets className="h-5 w-5 text-sky-400 print:text-blue-700" />
+              <h2 className="text-lg font-black text-white print:text-slate-900 tracking-wide uppercase">
+                TAGOLOAN WATER DISTRICT
+              </h2>
             </div>
-
-            {/* Customer & Account Details Grid */}
-            <div className="py-4 border-b-2 border-dashed border-slate-800 print:border-slate-300 grid grid-cols-1 sm:grid-cols-2 gap-y-2.5 gap-x-6 text-xs">
-              <div className="flex justify-between sm:justify-start sm:space-x-2">
-                <span className="font-bold text-slate-400 print:text-slate-600">Customer:</span>
-                <span className="font-black text-white print:text-slate-900 uppercase">{consumer.name}</span>
-              </div>
-              <div className="flex justify-between sm:justify-start sm:space-x-2">
-                <span className="font-bold text-slate-400 print:text-slate-600">Seq. No.:</span>
-                <span className="font-mono font-black text-white print:text-slate-900">{breakdown.sequenceNo}</span>
-              </div>
-
-              <div className="flex justify-between sm:justify-start sm:space-x-2">
-                <span className="font-bold text-slate-400 print:text-slate-600">Address:</span>
-                <span className="font-semibold text-slate-200 print:text-slate-800 uppercase">{breakdown.addressFull}</span>
-              </div>
-              <div className="flex justify-between sm:justify-start sm:space-x-2">
-                <span className="font-bold text-slate-400 print:text-slate-600">Type:</span>
-                <span className="font-black text-sky-400 print:text-blue-700 uppercase">{breakdown.typeAbbrev} ({breakdown.consumerType})</span>
-              </div>
-
-              <div className="flex justify-between sm:justify-start sm:space-x-2">
-                <span className="font-bold text-slate-400 print:text-slate-600">Account No.:</span>
-                <span className="font-mono font-black text-amber-300 print:text-slate-900">{consumer.accountNumber || 'PENDING'}</span>
-              </div>
-              <div className="flex justify-between sm:justify-start sm:space-x-2">
-                <span className="font-bold text-slate-400 print:text-slate-600">Meter:</span>
-                <span className="font-mono font-bold text-slate-200 print:text-slate-800">{breakdown.meterBrand} – {breakdown.meterNumber}</span>
-              </div>
-
-              <div className="flex justify-between sm:justify-start sm:space-x-2">
-                <span className="font-bold text-slate-400 print:text-slate-600">Billing Month:</span>
-                <span className="font-bold text-white print:text-slate-900">{breakdown.billingPeriod}</span>
-              </div>
-              <div className="flex justify-between sm:justify-start sm:space-x-2">
-                <span className="font-bold text-slate-400 print:text-slate-600">Due Date:</span>
-                <span className="font-bold text-rose-400 print:text-rose-700">{breakdown.dueDate}</span>
-              </div>
-
-              <div className="flex justify-between sm:justify-start sm:space-x-2 col-span-1 sm:col-span-2 pt-1">
-                <span className="font-bold text-slate-400 print:text-slate-600">Meter Reader:</span>
-                <span className="font-medium text-slate-200 print:text-slate-800 uppercase">{breakdown.meterReaderName} / {breakdown.meterReaderDate}</span>
-              </div>
-            </div>
-
-            {/* Meter Reading & Consumption Box */}
-            <div className="py-3.5 border-b-2 border-dashed border-slate-800 print:border-slate-300">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-slate-400 print:text-slate-600 font-bold border-b border-slate-800 print:border-slate-300">
-                    <th className="text-left pb-1.5">Previous Reading (Baseline)</th>
-                    <th className="text-center pb-1.5">Present Reading (Inspection)</th>
-                    <th className="text-center pb-1.5">Current Index</th>
-                    <th className="text-right pb-1.5">Net Usage (cu.m)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="font-mono tabular-nums font-bold text-sm text-white print:text-slate-900">
-                    <td className="py-2 text-left">{formatOdometerReading(breakdown.previousReading)}</td>
-                    <td className="py-2 text-center">{formatOdometerReading(breakdown.presentReading)}</td>
-                    <td className="py-2 text-center">{formatOdometerReading(reading?.currentReading ?? breakdown.presentReading)}</td>
-                    <td className="py-2 text-right font-black text-sky-400 print:text-blue-700">{breakdown.consumption} m³</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            {/* Itemized Financial Charges */}
-            <div className="py-3.5 border-b-2 border-dashed border-slate-800 print:border-slate-300 space-y-2 text-xs">
-              <div className="flex justify-between text-slate-300 print:text-slate-700">
-                <span className="font-medium">Bill Amount ({breakdown.consumption} m³ @ ₱{breakdown.ratePerM3.toFixed(2)}/m³ Basic Water Charge):</span>
-                <span className="font-mono font-bold text-white print:text-slate-900">₱{breakdown.billAmount.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between text-slate-300 print:text-slate-700">
-                <span className="font-medium">Franchise Tax (2% LFT):</span>
-                <span className="font-mono font-bold text-white print:text-slate-900">₱{breakdown.franchiseTax.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between text-slate-300 print:text-slate-700">
-                <span className="font-medium">Arrears (Unpaid Previous Balance):</span>
-                <span className={`font-mono font-bold ${breakdown.arrears > 0 ? 'text-rose-400 print:text-rose-700' : 'text-white print:text-slate-900'}`}>
-                  ₱{breakdown.arrears.toFixed(2)}
-                </span>
-              </div>
-            </div>
-
-            {/* Totals Box */}
-            <div className="py-3.5 border-b-2 border-dashed border-slate-800 print:border-slate-300 space-y-2 text-xs">
-              <div className="flex justify-between items-center bg-slate-900 border border-slate-800 print:bg-slate-100 print:border-slate-200 p-3 rounded-xl">
-                <span className="font-black text-white print:text-slate-900 text-sm uppercase">
-                  {breakdown.paidAmount > 0 ? 'GROSS STATEMENT TOTAL:' : 'TOTAL AMOUNT DUE:'}
-                </span>
-                <span className="font-mono font-black text-sky-400 print:text-blue-800 text-lg">
-                  ₱{breakdown.totalAmount.toFixed(2)}
-                </span>
-              </div>
-
-              {breakdown.paidAmount > 0 && (
-                <>
-                  <div className="flex justify-between items-center px-1 text-emerald-400 print:text-emerald-700">
-                    <span className="font-bold">
-                      Less Payment Credited {reading?.orNumber ? `(OR #${reading.orNumber})` : ''}:
-                    </span>
-                    <span className="font-mono font-black text-sm">
-                      -₱{breakdown.paidAmount.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className={`flex justify-between items-center p-3 rounded-xl border ${
-                    isPaid
-                      ? 'bg-emerald-950/60 border-emerald-700/60 print:bg-emerald-50 print:border-emerald-300'
-                      : 'bg-amber-950/60 border-amber-700/60 print:bg-amber-50 print:border-amber-300'
-                  }`}>
-                    <span className={`font-black text-sm uppercase ${
-                      isPaid ? 'text-emerald-300 print:text-emerald-800' : 'text-amber-300 print:text-amber-800'
-                    }`}>
-                      {isPaid ? 'NET REMAINING BALANCE (CLEARED):' : 'NET REMAINING BALANCE DUE:'}
-                    </span>
-                    <span className={`font-mono font-black text-lg ${
-                      isPaid ? 'text-emerald-400 print:text-emerald-800' : 'text-amber-300 print:text-amber-800'
-                    }`}>
-                      ₱{(isPaid ? 0 : breakdown.netRemainingDue).toFixed(2)}
-                    </span>
-                  </div>
-                </>
-              )}
-
-              <div className="flex justify-between items-center px-1">
-                <span className="font-bold text-rose-400 print:text-rose-700">Amount After Due Date (+10% Penalty):</span>
-                <span className="font-mono font-black text-rose-400 print:text-rose-700 text-sm">
-                  ₱{breakdown.amountAfterDueDate.toFixed(2)}
-                </span>
-              </div>
-            </div>
-
-            {/* Instructions / Footer Notice */}
-            <div className="pt-3 text-[10px] text-slate-400 print:text-slate-600 space-y-1 text-center sm:text-left leading-relaxed">
-              <p className="font-bold text-amber-300 print:text-slate-800">
-                IMPORTANT REMINDER:
-              </p>
-              <p>
-                Please pay on or before <strong className="text-white print:text-slate-900">{breakdown.dueDate}</strong> to avoid the 10% penalty charge and water service disconnection. Present this notice when paying at the Tagoloan Water District Main Office or upload your official receipt online.
-              </p>
+            <p className="text-[11px] text-slate-300 print:text-slate-600 font-medium">
+              Zone 1, Poblacion, Tagoloan, Misamis Oriental 9001
+            </p>
+            <p className="text-[10px] text-slate-400 print:text-slate-500">
+              Hotline: (088) 890-4946 • TIN: 002-841-992-000 • Provincial Water Utilities Act (PD 198)
+            </p>
+            <div className="pt-2">
+              <span className="inline-block px-3.5 py-1 bg-blue-600 text-white font-black text-xs uppercase tracking-widest rounded shadow-sm">
+                OFFICIAL WATER BILLING NOTICE
+              </span>
             </div>
           </div>
+
+          {/* Customer & Account Details Grid (Structured 2-Column Key-Value) */}
+          <div className="py-3.5 border-b-2 border-dashed border-slate-800 print:border-slate-300">
+            <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-x-8 gap-y-1.5 text-xs">
+              {/* Column 1: Customer Information */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-baseline border-b border-slate-800/40 print:border-slate-200 pb-1">
+                  <span className="font-bold text-slate-400 print:text-slate-600 w-28 shrink-0 text-left">Customer:</span>
+                  <span className="font-black text-white print:text-slate-900 text-right uppercase truncate" title={consumer.name}>
+                    {consumer.name}
+                  </span>
+                </div>
+                <div className="flex justify-between items-baseline border-b border-slate-800/40 print:border-slate-200 pb-1">
+                  <span className="font-bold text-slate-400 print:text-slate-600 w-28 shrink-0 text-left">Service Address:</span>
+                  <span className="font-semibold text-slate-200 print:text-slate-800 text-right uppercase truncate" title={breakdown.addressFull}>
+                    {breakdown.addressFull}
+                  </span>
+                </div>
+                <div className="flex justify-between items-baseline border-b border-slate-800/40 print:border-slate-200 pb-1">
+                  <span className="font-bold text-slate-400 print:text-slate-600 w-28 shrink-0 text-left">Classification:</span>
+                  <span className="font-black text-sky-400 print:text-blue-700 text-right uppercase">
+                    {breakdown.typeAbbrev} ({breakdown.consumerType})
+                  </span>
+                </div>
+                <div className="flex justify-between items-baseline border-b border-slate-800/40 print:border-slate-200 pb-1">
+                  <span className="font-bold text-slate-400 print:text-slate-600 w-28 shrink-0 text-left">Billing Period:</span>
+                  <span className="font-bold text-white print:text-slate-900 text-right">
+                    {breakdown.billingPeriod}
+                  </span>
+                </div>
+              </div>
+
+              {/* Column 2: Account & Meter Details */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-baseline border-b border-slate-800/40 print:border-slate-200 pb-1">
+                  <span className="font-bold text-slate-400 print:text-slate-600 w-28 shrink-0 text-left">Account No.:</span>
+                  <span className="font-mono font-black text-amber-300 print:text-slate-900 text-right">
+                    {consumer.accountNumber || 'PENDING'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-baseline border-b border-slate-800/40 print:border-slate-200 pb-1">
+                  <span className="font-bold text-slate-400 print:text-slate-600 w-28 shrink-0 text-left">Sequence No.:</span>
+                  <span className="font-mono font-black text-white print:text-slate-900 text-right">
+                    {breakdown.sequenceNo}
+                  </span>
+                </div>
+                <div className="flex justify-between items-baseline border-b border-slate-800/40 print:border-slate-200 pb-1">
+                  <span className="font-bold text-slate-400 print:text-slate-600 w-28 shrink-0 text-left">Meter Tag:</span>
+                  <span className="font-mono font-bold text-slate-200 print:text-slate-800 text-right">
+                    {breakdown.meterBrand} – {breakdown.meterNumber}
+                  </span>
+                </div>
+                <div className="flex justify-between items-baseline border-b border-slate-800/40 print:border-slate-200 pb-1">
+                  <span className="font-bold text-slate-400 print:text-slate-600 w-28 shrink-0 text-left">Payment Due:</span>
+                  <span className="font-bold text-rose-400 print:text-rose-700 text-right">
+                    {breakdown.dueDate}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Meter Reader / Field Inspection Row */}
+            <div className="mt-2.5 pt-1.5 border-t border-slate-800/40 print:border-slate-200 flex justify-between items-baseline text-xs">
+              <span className="font-bold text-slate-400 print:text-slate-600 text-left">
+                Meter Reader / Inspection:
+              </span>
+              <span className="font-medium text-slate-200 print:text-slate-800 text-right uppercase">
+                {breakdown.meterReaderName} • {breakdown.meterReaderDate}
+              </span>
+            </div>
+          </div>
+
+          {/* Meter Reading & Consumption Box with Explicit Column Widths */}
+          <div className="py-3.5 border-b-2 border-dashed border-slate-800 print:border-slate-300">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-slate-400 print:text-slate-600 font-bold border-b border-slate-800 print:border-slate-300">
+                  <th className="text-left pb-1.5 w-1/4">Previous Reading</th>
+                  <th className="text-center pb-1.5 w-1/4">Present Reading</th>
+                  <th className="text-center pb-1.5 w-1/4">Current Index</th>
+                  <th className="text-right pb-1.5 w-1/4">Net Usage</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="font-mono tabular-nums font-bold text-sm text-white print:text-slate-900">
+                  <td className="py-2 text-left w-1/4">{formatOdometerReading(breakdown.previousReading)}</td>
+                  <td className="py-2 text-center w-1/4">{formatOdometerReading(breakdown.presentReading)}</td>
+                  <td className="py-2 text-center w-1/4">{formatOdometerReading(reading?.currentReading ?? breakdown.presentReading)}</td>
+                  <td className="py-2 text-right w-1/4 font-black text-sky-400 print:text-blue-700">{breakdown.consumption} m³</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Itemized Financial Charges with Tabular Alignments */}
+          <div className="py-3.5 border-b-2 border-dashed border-slate-800 print:border-slate-300 space-y-1.5 text-xs">
+            <div className="flex justify-between items-baseline py-1 border-b border-dashed border-slate-800/30 print:border-slate-200 text-slate-300 print:text-slate-700">
+              <span className="font-medium text-left">
+                Basic Water Charge ({breakdown.consumption} m³ @ ₱{breakdown.ratePerM3.toFixed(2)}/m³):
+              </span>
+              <span className="font-mono font-bold text-white print:text-slate-900 text-right tabular-nums">
+                ₱{breakdown.billAmount.toFixed(2)}
+              </span>
+            </div>
+            <div className="flex justify-between items-baseline py-1 border-b border-dashed border-slate-800/30 print:border-slate-200 text-slate-300 print:text-slate-700">
+              <span className="font-medium text-left">
+                Franchise Tax (2% Local Franchise Tax):
+              </span>
+              <span className="font-mono font-bold text-white print:text-slate-900 text-right tabular-nums">
+                ₱{breakdown.franchiseTax.toFixed(2)}
+              </span>
+            </div>
+            <div className="flex justify-between items-baseline py-1 border-b border-dashed border-slate-800/30 print:border-slate-200 text-slate-300 print:text-slate-700">
+              <span className="font-medium text-left">
+                Arrears (Unpaid Balance Carried Forward):
+              </span>
+              <span className={`font-mono font-bold text-right tabular-nums ${breakdown.arrears > 0 ? 'text-rose-400 print:text-rose-700' : 'text-white print:text-slate-900'}`}>
+                ₱{breakdown.arrears.toFixed(2)}
+              </span>
+            </div>
+          </div>
+
+          {/* Totals Box */}
+          <div className="py-3.5 border-b-2 border-dashed border-slate-800 print:border-slate-300 space-y-2 text-xs">
+            <div className="flex justify-between items-center bg-slate-900/90 border border-slate-800 print:bg-slate-100 print:border-slate-300 p-3 rounded-xl">
+              <span className="font-black text-white print:text-slate-900 text-sm uppercase text-left">
+                {breakdown.paidAmount > 0 ? 'GROSS STATEMENT TOTAL:' : 'TOTAL AMOUNT DUE:'}
+              </span>
+              <span className="font-mono font-black text-sky-400 print:text-blue-800 text-lg text-right tabular-nums">
+                ₱{breakdown.totalAmount.toFixed(2)}
+              </span>
+            </div>
+
+            {breakdown.paidAmount > 0 && (
+              <>
+                <div className="flex justify-between items-center px-1 text-emerald-400 print:text-emerald-700">
+                  <span className="font-bold text-left">
+                    Less Payment Credited {reading?.orNumber ? `(OR #${reading.orNumber})` : ''}:
+                  </span>
+                  <span className="font-mono font-black text-sm text-right tabular-nums">
+                    -₱{breakdown.paidAmount.toFixed(2)}
+                  </span>
+                </div>
+                <div className={`flex justify-between items-center p-3 rounded-xl border ${
+                  isPaid
+                    ? 'bg-emerald-950/60 border-emerald-700/60 print:bg-emerald-50 print:border-emerald-300'
+                    : 'bg-amber-950/60 border-amber-700/60 print:bg-amber-50 print:border-amber-300'
+                }`}>
+                  <span className={`font-black text-sm uppercase text-left ${
+                    isPaid ? 'text-emerald-300 print:text-emerald-800' : 'text-amber-300 print:text-amber-800'
+                  }`}>
+                    {isPaid ? 'NET REMAINING BALANCE (CLEARED):' : 'NET REMAINING BALANCE DUE:'}
+                  </span>
+                  <span className={`font-mono font-black text-lg text-right tabular-nums ${
+                    isPaid ? 'text-emerald-400 print:text-emerald-800' : 'text-amber-300 print:text-amber-800'
+                  }`}>
+                    ₱{(isPaid ? 0 : breakdown.netRemainingDue).toFixed(2)}
+                  </span>
+                </div>
+              </>
+            )}
+
+            <div className="flex justify-between items-center px-1">
+              <span className="font-bold text-rose-400 print:text-rose-700 text-left">
+                Amount After Due Date (+10% Penalty):
+              </span>
+              <span className="font-mono font-black text-rose-400 print:text-rose-700 text-sm text-right tabular-nums">
+                ₱{breakdown.amountAfterDueDate.toFixed(2)}
+              </span>
+            </div>
+          </div>
+
+          {/* Instructions / Footer Notice */}
+          <div className="pt-3 text-[10px] text-slate-400 print:text-slate-600 space-y-1 text-center sm:text-left leading-relaxed">
+            <p className="font-bold text-amber-300 print:text-slate-800">
+              IMPORTANT REMINDER:
+            </p>
+            <p>
+              Please pay on or before <strong className="text-white print:text-slate-900">{breakdown.dueDate}</strong> to avoid the 10% penalty charge and water service disconnection. Present this notice when paying at the Tagoloan Water District Main Office or upload your official receipt online.
+            </p>
+          </div>
         </div>
-      )}
+      </div>
 
       {/* TAB 2: ITEMIZED TARIFF BREAKDOWN */}
       {activeTab === 'itemized' && (

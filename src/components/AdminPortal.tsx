@@ -3835,8 +3835,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       ? readings.findIndex(r => r.id === createBillModal.sourceReadingId)
       : -1;
 
+    // Only promote if this is an unbilled pending reading from a meter reader (not already an issued bill)
+    // If it's already an issued bill or new cycle, we MUST create a new record while retaining all unpaid legacy bills!
+    const isPromotingUnissuedReading =
+      existingIdx >= 0 && !readings[existingIdx].isBillingIssued;
+
     const baseRecord: MeterReading =
-      existingIdx >= 0
+      isPromotingUnissuedReading
         ? {
             ...readings[existingIdx],
             previousReading: prevVal,
@@ -3916,7 +3921,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     };
 
     const nextReadings = (
-      existingIdx >= 0
+      isPromotingUnissuedReading
         ? readings.map((r, i) => (i === existingIdx ? finalizedBill : r))
         : [finalizedBill, ...readings]
     ).sort(compareReadingsCanonical);

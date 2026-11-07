@@ -1017,7 +1017,11 @@ export function getCanonicalBillSettlement(
 /**
  * Strips duplicate rolled-over `arrears` on newer cycle bills when prior issued cycle bills
  * for the same account ALREADY exist as separate rows in the ledger, preventing 2x double-counting
- * or sudden jumps when a consumer pays partial/full on one bill.
+/**
+ * Harmonizes multi-bill ledgers for accounts so that:
+ * 1. Historical legacy bills remain intact as their own historical records.
+ * 2. Unpaid balances from previous billing periods correctly carry forward into subsequent bills as 'Arrears'.
+ * 3. Total amounts and remaining balances reconcile cleanly without data duplication or loss.
  */
 export function sanitizeMultiBillDuplicateArrears<T extends Record<string, any>>(readings: T[]): T[] {
   if (!Array.isArray(readings) || readings.length <= 1) return readings;
@@ -1041,11 +1045,10 @@ export function sanitizeMultiBillDuplicateArrears<T extends Record<string, any>>
         new Date(a.readingDate || a.billingIssuedAt || 0).getTime() -
         new Date(b.readingDate || b.billingIssuedAt || 0).getTime()
     );
-    // Any subsequent bill (index >= 1) that rolled over `arrears > 0` while older bills are present as their own rows:
-    for (let i = 1; i < chronological.length; i++) {
+
+    // Track cumulative carried forward arrears across bills
+    for (let i = 0; i < chronological.length; i++) {
       const item = chronological[i];
-      const itemArrears = Number(item.arrears || 0);
-      if (itemArrears <= 0 || item.paymentStatus === 'paid') continue;
       const cls =
         item.classification === 'Commercial' || item.classification === 'COMM'
           ? 'Commercial'
@@ -1055,27 +1058,49 @@ export function sanitizeMultiBillDuplicateArrears<T extends Record<string, any>>
         typeof item.franchiseTax === 'number' && !Number.isNaN(item.franchiseTax)
           ? Math.round(item.franchiseTax * 100) / 100
           : calculateFranchiseTax(basic);
-      const cycleOnlyTotal = Math.round((basic + fTax) * 100) / 100;
+
       const paidSoFar = Math.max(0, Math.round((Number(item.paidAmount) || 0) * 100) / 100);
-      // Only strip duplicate rolled-over arrears if paidSoFar fits within this cycle's own charge
-      if (paidSoFar <= cycleOnlyTotal + 0.01) {
-        const pen =
-          typeof item.penaltyAmount === 'number' && !Number.isNaN(item.penaltyAmount)
-            ? Math.round(item.penaltyAmount * 100) / 100
-            : calculateLatePenalty(basic);
-        const rem = Math.max(0, Math.round((cycleOnlyTotal - paidSoFar) * 100) / 100);
-        const isNowCleared = cycleOnlyTotal > 0 && rem <= 0.01;
-        adjustedById.set(String(item.id), {
-          ...item,
-          arrears: 0,
-          billAmount: basic,
-          franchiseTax: fTax,
-          totalAmount: cycleOnlyTotal,
-          amountAfterDueDate: Math.round((cycleOnlyTotal + pen) * 100) / 100,
-          remainingBalance: isNowCleared ? 0 : rem,
-          paymentStatus: isNowCleared ? 'paid' : paidSoFar > 0 ? 'partial' : item.paymentStatus || 'unpaid',
-        });
+
+      // For bill i, compute the unpaid legacy balance from prior bills (0 .. i-1)
+      let priorUnpaidArrears = 0;
+      if (i > 0) {
+        // Look at previous bills to calculate carried forward arrears
+        for (let j = 0; j < i; j++) {
+          const prior = adjustedById.get(String(chronological[j].id)) || chronological[j];
+          const priorSettlement = getCanonicalBillSettlement(prior, prior.classification || cls);
+          if (!priorSettlement.isCleared && priorSettlement.remainingBalance > 0) {
+            // Take the cycle remaining balance of the prior bill
+            const priorCycle = Math.round((priorSettlement.basicCharge + priorSettlement.franchiseTax) * 100) / 100;
+            const priorCycleRem = Math.max(0, Math.round((priorCycle - priorSettlement.paidAmount) * 100) / 100);
+            priorUnpaidArrears += priorCycleRem;
+          }
+        }
       }
+
+      // Preserve explicitly recorded arrears or use computed prior unpaid arrears
+      const effectiveArrears = item.arrears !== undefined && Number(item.arrears) > 0
+        ? Math.round(Number(item.arrears) * 100) / 100
+        : Math.round(priorUnpaidArrears * 100) / 100;
+
+      const grossTotal = Math.round((basic + fTax + effectiveArrears) * 100) / 100;
+      const isNowCleared = item.paymentStatus === 'paid' || (grossTotal > 0 && grossTotal - paidSoFar <= 0.01);
+      const rem = isNowCleared ? 0 : Math.max(0, Math.round((grossTotal - paidSoFar) * 100) / 100);
+      const pen =
+        typeof item.penaltyAmount === 'number' && !Number.isNaN(item.penaltyAmount)
+          ? Math.round(item.penaltyAmount * 100) / 100
+          : calculateLatePenalty(basic);
+
+      adjustedById.set(String(item.id), {
+        ...item,
+        arrears: effectiveArrears,
+        billAmount: basic,
+        franchiseTax: fTax,
+        totalAmount: grossTotal,
+        amountAfterDueDate: Math.round((grossTotal + pen) * 100) / 100,
+        paidAmount: isNowCleared ? Math.max(paidSoFar, grossTotal) : paidSoFar,
+        remainingBalance: rem,
+        paymentStatus: isNowCleared ? 'paid' : paidSoFar > 0 ? 'partial' : item.paymentStatus || 'unpaid',
+      });
     }
   });
 
@@ -1084,7 +1109,9 @@ export function sanitizeMultiBillDuplicateArrears<T extends Record<string, any>>
 }
 
 /**
- * Computes exact total unsettled balance across all officially issued bills for an account (or across all accounts if accountNumber omitted).
+ * Computes exact total unsettled balance across an account's bills without double-counting.
+ * When the latest bill carries forward previous unpaid balances as 'Arrears',
+ * its remaining balance represents the cumulative total balance.
  */
 export function computeAccountOutstandingBalance(
   readings: any[],
@@ -1095,20 +1122,62 @@ export function computeAccountOutstandingBalance(
   const cleanTargetAcc = accountNumber
     ? String(accountNumber).replace(/^#/, '').trim().toUpperCase()
     : '';
-  const sanitized = sanitizeMultiBillDuplicateArrears(readings);
-  let total = 0;
-  for (const r of sanitized) {
-    if (!r || r.status === 'cancelled' || !isOfficialBillIssued(r)) continue;
+
+  // Filter valid officially issued bills
+  const validBills = readings.filter(r => {
+    if (!r || r.status === 'cancelled' || !isOfficialBillIssued(r)) return false;
     if (cleanTargetAcc) {
       const rAcc = String(r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
-      if (rAcc !== cleanTargetAcc) continue;
+      if (rAcc !== cleanTargetAcc) return false;
     }
-    const settlement = getCanonicalBillSettlement(r, r.classification || fallbackClassification);
-    if (!settlement.isCleared) {
-      total += settlement.remainingBalance;
+    return true;
+  });
+
+  if (validBills.length === 0) return 0;
+
+  // If calculating for a specific account:
+  if (cleanTargetAcc) {
+    const chronological = [...validBills].sort(
+      (a, b) =>
+        new Date(a.readingDate || a.billingIssuedAt || 0).getTime() -
+        new Date(b.readingDate || b.billingIssuedAt || 0).getTime()
+    );
+
+    const latest = chronological[chronological.length - 1];
+    const latestSettlement = getCanonicalBillSettlement(latest, latest.classification || fallbackClassification);
+
+    // If the latest bill carries forward prior arrears, its remainingBalance encapsulates the entire balance
+    if (latest.arrears !== undefined && Number(latest.arrears) > 0) {
+      return latestSettlement.isCleared ? 0 : latestSettlement.remainingBalance;
     }
+
+    // Otherwise, sum the cycle remaining balances across all unpaid bills
+    let totalUnsettled = 0;
+    for (const b of chronological) {
+      const settlement = getCanonicalBillSettlement(b, b.classification || fallbackClassification);
+      if (settlement.isCleared) continue;
+      const cycleCharge = Math.round((settlement.basicCharge + settlement.franchiseTax) * 100) / 100;
+      const cycleRem = Math.max(0, Math.round((cycleCharge - settlement.paidAmount) * 100) / 100);
+      totalUnsettled += cycleRem;
+    }
+    return Math.round(totalUnsettled * 100) / 100;
   }
-  return Math.round(total * 100) / 100;
+
+  // Across all accounts: group and aggregate per account
+  const byAccount = new Map<string, any[]>();
+  for (const b of validBills) {
+    const acc = String(b.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+    if (!acc) continue;
+    const bucket = byAccount.get(acc) || [];
+    bucket.push(b);
+    byAccount.set(acc, bucket);
+  }
+
+  let grandTotal = 0;
+  byAccount.forEach((bills, acc) => {
+    grandTotal += computeAccountOutstandingBalance(bills, acc, fallbackClassification);
+  });
+  return Math.round(grandTotal * 100) / 100;
 }
 
 /**
@@ -1126,8 +1195,6 @@ export function computeHistoricalArrearsForReading(
   if (!Array.isArray(allReadings) || allReadings.length === 0 || !accountNumber) return 0;
   const cleanTargetAcc = String(accountNumber).replace(/^#/, '').trim().toUpperCase();
 
-  const sanitized = sanitizeMultiBillDuplicateArrears(allReadings);
-
   // Parse target date/timestamp
   let targetTime = Infinity;
   if (targetReadingDateOrPeriod) {
@@ -1140,22 +1207,44 @@ export function computeHistoricalArrearsForReading(
     }
   }
 
+  // Filter bills strictly prior to targetTime
+  const priorBills = allReadings
+    .filter(r => {
+      if (!r || r.status === 'cancelled' || !isOfficialBillIssued(r)) return false;
+      if (targetReadingId && String(r.id) === String(targetReadingId)) return false;
+      const rAcc = String(r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+      if (rAcc !== cleanTargetAcc) return false;
+
+      const rDate = r.readingDate || r.billingIssuedAt;
+      const rTime = rDate ? new Date(rDate).getTime() : 0;
+      if (targetTime !== Infinity && rTime && !isNaN(rTime) && rTime >= targetTime) {
+        return false;
+      }
+      return true;
+    })
+    .sort(
+      (a, b) =>
+        new Date(a.readingDate || a.billingIssuedAt || 0).getTime() -
+        new Date(b.readingDate || b.billingIssuedAt || 0).getTime()
+    );
+
+  if (priorBills.length === 0) return 0;
+
+  // The latest prior bill, if it already carried forward older arrears, contains the cumulative balance
+  const latestPrior = priorBills[priorBills.length - 1];
+  const latestPriorSettlement = getCanonicalBillSettlement(latestPrior, latestPrior.classification || fallbackClassification);
+  if (latestPrior.arrears !== undefined && Number(latestPrior.arrears) > 0) {
+    return latestPriorSettlement.isCleared ? 0 : latestPriorSettlement.remainingBalance;
+  }
+
+  // Otherwise, sum the cycle remaining balances across all prior unpaid bills
   let totalArrears = 0;
-  for (const r of sanitized) {
-    if (!r || r.status === 'cancelled' || !isOfficialBillIssued(r)) continue;
-    if (targetReadingId && String(r.id) === String(targetReadingId)) continue;
-    const rAcc = String(r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
-    if (rAcc !== cleanTargetAcc) continue;
-
-    const rDate = r.readingDate || r.billingIssuedAt;
-    const rTime = rDate ? new Date(rDate).getTime() : 0;
-    if (targetTime !== Infinity && rTime && !isNaN(rTime) && rTime >= targetTime) {
-      continue; // Only strictly prior cycles count as arrears
-    }
-
+  for (const r of priorBills) {
     const settlement = getCanonicalBillSettlement(r, r.classification || fallbackClassification);
     if (!settlement.isCleared && settlement.remainingBalance > 0) {
-      totalArrears += settlement.remainingBalance;
+      const cycleTotal = Math.round((settlement.basicCharge + settlement.franchiseTax) * 100) / 100;
+      const cycleRem = Math.max(0, Math.round((cycleTotal - settlement.paidAmount) * 100) / 100);
+      totalArrears += cycleRem;
     }
   }
 
