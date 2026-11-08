@@ -234,6 +234,7 @@ const RATE_LIMIT_EXEMPT_PREFIXES = [
   "/api/sync",
   "/api/barangays",
   "/api/receipts",
+  "/api/ai",
 ];
 
 // Anti-flood rate limiting middleware
@@ -7965,6 +7966,374 @@ app.get(["/api/health", "/api/status", "/api/ping", "/api/survival"], (req, res)
     },
     timestamp: new Date().toISOString()
   });
+});
+
+// ==========================================
+// GEMINI MULTI-TURN AI CHAT SERVICE
+// Baymax 1.0 (Consumer Companion) & Baymax 2.0 (Admin Companion)
+// Multilingual: English, Tagalog (Filipino), Bisaya (Cebuano)
+// ==========================================
+
+function detectUserLanguage(text: string, requestedLang?: string): "ceb" | "tl" | "en" {
+  if (requestedLang === "ceb" || requestedLang === "tl" || requestedLang === "en") {
+    return requestedLang;
+  }
+  const lower = text.toLowerCase();
+  
+  // Bisaya / Cebuano markers
+  const bisayaWords = [
+    "maayong", "adlaw", "pila", "akong", "bayranan", "unsaon", "tulo", "tubig", 
+    "karon", "wala", "naay", "asa", "palihog", "dapit", "kinsa", "ganina", 
+    "kaayo", "nganong", "namo", "ninyo", "kanus-a", "kanus a", "metro", "pila bayad"
+  ];
+  if (bisayaWords.some(w => lower.includes(w))) {
+    return "ceb";
+  }
+
+  // Tagalog / Filipino markers
+  const tagalogWords = [
+    "magkano", "babayaran", "paano", "kailan", "po", "opo", "namin", "bakit", 
+    "tagas", "tubig ko", "aking", "magandang", "araw", "kamusta", "kumusta", 
+    "bayaran", "patakaran", "paki", "salamat", "meron", "wala po"
+  ];
+  if (tagalogWords.some(w => lower.includes(w))) {
+    return "tl";
+  }
+
+  return "en";
+}
+
+function generateBaymaxFallbackReply(
+  portal: string,
+  userMessage: string,
+  requestedLang: string,
+  context: any
+): string {
+  const isConsumer = portal === "consumer";
+  const lang = detectUserLanguage(userMessage, requestedLang);
+  const lower = userMessage.toLowerCase();
+
+  if (isConsumer) {
+    const name = context.name || context.consumerName || "Valued Consumer";
+    const bal = Number(context.outstandingBalance || 0);
+    const acc = context.accountNumber || "TWD-ACCOUNT";
+
+    if (lang === "ceb") {
+      if (lower.includes("pila") || lower.includes("bayranan") || lower.includes("balance") || lower.includes("bill")) {
+        return `Hello ${name}! Ako si **Baymax 1.0**, imong AI Consumer Companion. 
+
+Subay sa atong talaan sa Tagoloan Water District:
+- **Account Number:** \`${acc}\`
+- **Kasamtangang Bayranan (Total Balance):** ₱${bal.toFixed(2)}
+*(Kini naglakip sa imong konsumo karong bulana ug bisan unsang daang 'Arrears' nga gidala gikan sa miaging billing).*
+
+💡 **Pahinumdom:** Madawat sa atong Cashier ang **50% minimum partial payment** aron malikayan ang disconnection notice!`;
+      }
+      if (lower.includes("50%") || lower.includes("partial") || lower.includes("tunga") || lower.includes("bahin")) {
+        return `Maayong adlaw! Ako si **Baymax 1.0**. 
+
+Bahin sa **50% Partial Payment Rule** sa Tagoloan Water District:
+1. Pwede kang mobayad og labing menos **50% sa imong total balance** diretso sa TWD Cashier.
+2. Ang nahibilin nga kantidad awtomatikong dal-on isip **'Arrears'** sa sunod nga billing cycle nga walay doble nga paningil.
+3. Ang pagbayad sa 50% makapugong sa pag-isyu og **Disconnection Cutting Notice**.`;
+      }
+      if (lower.includes("disconnection") || lower.includes("maputol") || lower.includes("putol") || lower.includes("grace period")) {
+        return `Hello! Ako si **Baymax 1.0**. Ayaw kabalaka, ania ang patakaran sa Tagoloan Water District bahin sa disconnection:
+
+- **3 ka Sunod-sunod nga Bulan:** Ang mga account nga adunay 3 ka bulan nga wala mabayri makadawat og opisyal nga **Notice of Disconnection**.
+- **3 ka Adlaw nga Grace Period:** Gihatagan kamo og 3 ka adlaw aron makig-alayon sa TWD Commercial Division o makabayad og labing menos 50% sa balanse aron dili maputol ang linya sa tubig.`;
+      }
+      if (lower.includes("tulo") || lower.includes("leak") || lower.includes("hinay") || lower.includes("guba") || lower.includes("report")) {
+        return `Hello! Ako si **Baymax 1.0**, imong kauban sa serbisyo sa tubig. 
+
+Aron ma-report ang tulo sa tubo o hinay nga agas:
+1. Adto sa tab nga **"Service Reports & Inquiries"** sa imong portal.
+2. I-klik ang **"Submit New Report"**, pilia ang kategorya (pananglitan: *Water Leak* o *Low Pressure*), ug isulat ang lokasyon.
+3. O tawag dayon sa atong **Emergency Hotline: (088) 555-0145** alang sa dinalian nga pag-atiman sa atong maintenance team!`;
+      }
+      if (lower.includes("metro") || lower.includes("apply") || lower.includes("schedule") || lower.includes("install")) {
+        return `Hello! Ako si **Baymax 1.0**. 
+
+Alang sa aplikasyon o pag-instalar sa bag-ong water meter:
+- Sa panahon sa registration, mogawas ang usa ka **pop-up modal** alang sa water meter installation.
+- Makapili ka sa **"Schedule Installation Now"** (diin imong mapili ang gusto nimong petsa ug mga pahimangno sa lugar) o **"Schedule Later"**.
+- Mahimo usab nimong masusi ang kahimtang sa imong aplikasyon sa tab nga **"Water Meter Installation"**.`;
+      }
+      return `Maayong adlaw, ${name}! Ako si **Baymax 1.0**, ang imong opisyal nga AI Consumer Companion alang sa Tagoloan Water District. 
+
+Nakasabot ko sa **Bisaya, Tagalog, ug English**. Makatabang ko kanimo sa:
+- Pagsusi sa imong **Water Bill** ug gidala nga **Arrears**
+- Pagsabot sa **50% Partial Payment Rule** ug **Disconnection Grace Period**
+- Pag-upload ug pag-validate sa opisyal nga **Form 51 BIR Receipt**
+- Pag-report og **Tulo sa Tubo** o **Hinay nga Agas**
+- Pag-iskedyul sa **Water Meter Installation**
+
+Unsa man ang akong matabang kanimo karong adlawa?`;
+    }
+
+    if (lang === "tl") {
+      if (lower.includes("magkano") || lower.includes("babayaran") || lower.includes("balance") || lower.includes("bill")) {
+        return `Kumusta po ${name}! Ako si **Baymax 1.0**, ang inyong AI Consumer Companion.
+
+Ayon sa opisyal na talaan ng Tagoloan Water District:
+- **Account Number:** \`${acc}\`
+- **Kasalukuyang Babayaran (Total Balance):** ₱${bal.toFixed(2)}
+*(Kasama na rito ang inyong konsumo ngayong buwan at ang mga dating 'Arrears' mula sa mga nakaraang hindi pa bayad na buwan).*
+
+💡 **Paalala:** Tumatanggap ang ating Cashier ng **50% minimum partial payment** upang maiwasan ang disconnection notice!`;
+      }
+      if (lower.includes("50%") || lower.includes("partial") || lower.includes("kalahati") || lower.includes("hulog")) {
+        return `Magandang araw po! Ako si **Baymax 1.0**.
+
+Tungkol po sa **50% Minimum Partial Payment Rule** ng Tagoloan Water District:
+1. Maaari po kayong magbayad ng kahit **50% lamang ng inyong total balance** sa Cashier.
+2. Ang natitirang balanse ay ligtas na madadala bilang **'Arrears'** sa susunod na billing nang walang dobleng singil.
+3. Ang pagbabayad ng 50% ay agad na magpoprotekta sa inyong linya laban sa **Disconnection Cutting Notice**.`;
+      }
+      if (lower.includes("putol") || lower.includes("disconnection") || lower.includes("grace period")) {
+        return `Magandang araw po! Ako si **Baymax 1.0**. Narito po ang patakaran ng Tagoloan Water District:
+
+- **3 Buwang Hindi Nakakabayad:** Ang mga account na may 3 magkakasunod na buwang overdue ay bibigyan ng opisyal na **Disconnection Notice**.
+- **3 Araw na Grace Period:** Mayroon po kayong 3 araw upang magbayad ng kahit 50% sa cashier o makipag-ugnayan sa TWD Commercial Division upang hindi maputulan ng serbisyo.`;
+      }
+      if (lower.includes("tagas") || lower.includes("leak") || lower.includes("mahina") || lower.includes("sira") || lower.includes("report")) {
+        return `Kumusta po! Ako si **Baymax 1.0**, ang inyong kasama sa serbisyo sa tubig.
+
+Upang mag-report ng tagas o mahinang agas ng tubig:
+1. Pumunta sa tab na **"Service Reports & Inquiries"** sa inyong portal.
+2. I-click ang **"Submit New Report"**, piliin ang kategorya tulad ng *Water Leak* o *Low Pressure*, at ilagay ang lokasyon.
+3. O tumawag agad sa ating **Emergency Hotline: (088) 555-0145** para sa mabilisang aksyon ng maintenance crew!`;
+      }
+      return `Magandang araw po, ${name}! Ako si **Baymax 1.0**, ang inyong AI Consumer Companion sa Tagoloan Water District.
+
+Nauunawaan ko po ang **Tagalog, Bisaya, at English**. Maaari ko po kayong tulungan sa:
+- Pagsusuri ng inyong **Water Bill** at mga nakaraang **Arrears**
+- Pagpapaliwanag ng **50% Partial Payment Policy** at **Disconnection Grace Period**
+- Pag-upload ng inyong opisyal na **Form 51 BIR Receipt**
+- Pag-report ng **Tagas ng Tubig** o **Mahinang Presyon**
+- Pag-iskedyul ng **Water Meter Installation**
+
+Ano po ang maitutulong ko sa inyo ngayon?`;
+    }
+
+    // Default English
+    return `Hello ${name}! I am **Baymax 1.0**, Your AI Consumer Companion for Tagoloan Water District.
+
+I understand and communicate fluently in **English, Tagalog, and Bisaya**. Here is how I can assist you:
+- **Billing & Arrears:** Check your statement of ₱${bal.toFixed(2)} and learn how previous balances carry forward cleanly as Arrears.
+- **50% Partial Payment Rule:** Pay at least 50% of your bill at the TWD Cashier to protect your connection from disconnection notices.
+- **Disconnection Policy:** Accounts with 3 consecutive overdue cycles receive a Disconnection Notice with a 3-day grace period.
+- **Service Inquiries:** File reports for water leaks, low pressure, or request meter inspections.
+- **New Meter Scheduling:** Guide you through registration and installation scheduling modals.
+
+On a scale of 1 to 10, how can I assist you with your water service today?`;
+  } else {
+    // Admin Mode (Baymax 2.0)
+    const adminName = context.adminName || context.name || "Administrator";
+    const lang = detectUserLanguage(userMessage, requestedLang);
+
+    if (lang === "ceb") {
+      return `Maayong adlaw, ${adminName}! Ako si **Baymax 2.0**, imong opisyal nga **Admin Companion** alang sa Tagoloan Water District.
+
+Andam ko motabang sa mga buluhaton sa administrasyon sa **Bisaya, Tagalog, ug English**:
+- **Billing & Arrears Calculation:** Pagkwenta sa arrears nga gidala gikan sa miaging billing cycles nga walay pagka-wala sa datos.
+- **Disconnection & Grace Period Scanner:** Pagsusi sa mga account nga adunay 3 ka bulan nga overdue aron ma-isyu ang cutting notices nga adunay 3-day timer.
+- **Meter Reading & Field Sync:** Real-time WebSocket synchronization sa mga field meter reader sa 9 ka barangay sa Tagoloan.
+- **Tariff & Rates:** Pagdumala sa presyo sa tubig (Residential, Commercial, Industrial).
+- **Official Reports:** Pag-generate og collection summaries ug audit reports subay sa LWUA ug COA.
+
+Unsa nga operational task ang atong susihon karon?`;
+    }
+
+    if (lang === "tl") {
+      return `Magandang araw po, ${adminName}! Ako si **Baymax 2.0**, ang inyong opisyal na **Admin Companion** sa Tagoloan Water District.
+
+Handa po akong tumulong sa inyong pamamahala sa **Tagalog, Bisaya, at English**:
+- **Billing & Arrears Engine:** Wastong pagkalkula ng mga natitirang balanse (Arrears) mula sa mga nakaraang buwan nang walang data loss.
+- **Disconnection Scanner:** Awtomatikong pag-scan ng mga account na may 3 magkakasunod na buwang hindi bayad na may 3-day grace period.
+- **Field Meter Readers:** Pagsubaybay sa mga ruta at live telemetry ng mga reader sa 9 na barangay ng Tagoloan.
+- **Water Meter Inventory:** Pagpapatunay ng mga bagong ikinabit na metro at pag-isyu ng Account Numbers.
+- **Official Reports:** Pagbuo ng mga ulat para sa COA, LWUA, at BIR.
+
+Anong module o operasyon po ang nais ninyong talakayin?`;
+    }
+
+    // Default English for Admin
+    return `Greetings, ${adminName}! I am **Baymax 2.0**, Your Admin Companion for Tagoloan Water District.
+
+I provide operational assistance in **English, Tagalog, and Bisaya** across key district modules:
+- **Billing & Arrears Engine:** Automatically carrying forward unpaid balances as Arrears while preserving legacy billing records.
+- **Disconnection & Grace Period Scanner:** Identifying accounts with 3 consecutive overdue billing cycles and dispatching 3-day grace period notices.
+- **Meter Reading Synchronization:** Monitoring active field readers across all 9 Tagoloan service barangays.
+- **Water Meter Installations:** Validating physical serial numbers and issuing consumer Account Numbers.
+- **Compliance & Official Reports:** Generating collections, delinquency, and non-revenue water logs for LWUA & COA.
+
+How may I assist administrative operations today?`;
+  }
+}
+
+app.post("/api/ai/chat", async (req, res) => {
+  try {
+    const { portal = "consumer", messages = [], language = "auto", context = {} } = req.body;
+    const isConsumer = portal === "consumer";
+    const botName = isConsumer ? "Baymax 1.0" : "Baymax 2.0";
+    const botSubtitle = isConsumer ? "Your AI Consumer Companion." : "Your Admin Companion";
+
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Messages array is required."
+      });
+    }
+
+    const lastUserMessage = messages[messages.length - 1]?.text || "";
+
+    // Build context summary string
+    let contextStr = "";
+    if (isConsumer) {
+      contextStr = `Current Active Consumer Context:
+- Consumer Name: ${context.name || context.consumerName || "Valued Consumer"}
+- Account Number: ${context.accountNumber || "Not Linked / Pending"}
+- Service Address: ${context.address || context.barangay || "Tagoloan, Misamis Oriental"}
+- Meter Number: ${context.meterNumber || "Unassigned"}
+- Current Outstanding Balance: ₱${Number(context.outstandingBalance || 0).toFixed(2)}
+- Unpaid Bills Count: ${context.unpaidCount || 0}
+- Account Status: ${context.status || "Active"}`;
+    } else {
+      contextStr = `Current Administrator Session Context:
+- Admin Officer: ${context.adminName || context.name || "Administrator"}
+- Role: ${context.role || "System Admin / Supervisor"}
+- Total Consumers: ${syncedConsumers.length}
+- Registered Staff: ${registeredStaff.length}
+- Active Meters: ${syncedMeters.length || 1840}
+- System Status: Online & Synchronized`;
+    }
+
+    const consumerSystemInstruction = `You are Baymax 1.0, Your AI Consumer Companion for Tagoloan Water District (TWD) in Misamis Oriental, Philippines.
+Personality:
+- Warm, caring, gentle, courteous, and exceptionally helpful (inspired by the compassionate healthcare companion Baymax).
+- Greeting style: "Hello! I am Baymax 1.0, your AI consumer companion." / "Maayong adlaw! Ako si Baymax 1.0, imong kauban sa Tagoloan Water District." / "Magandang araw! Ako si Baymax 1.0, ang iyong kasama sa Tagoloan Water District."
+- On a scale of 1 to 10, always ready to rate and assist the consumer's comfort and satisfaction with their water service.
+
+CRITICAL Multilingual Capabilities:
+- You understand and speak English, Tagalog (Filipino), and Bisaya (Cebuano/Binisaya) fluently, as well as colloquial mixtures (Taglish, Bislish).
+- Always detect the language of the user's inquiry and answer in that EXACT same language (e.g., if the user writes in Bisaya, respond in clear, natural, warm Bisaya; if in Tagalog, respond in respectful Tagalog with po/opo; if in English, respond in clear, encouraging English).
+- Language requested by client setting: ${language}. (If "auto", match the user's message language. If "ceb", reply in Bisaya. If "tl", reply in Tagalog. If "en", reply in English).
+
+Tagoloan Water District (TWD) Consumer Rules & Knowledge Base:
+1. Billing & Arrears:
+   - Monthly bills are based on actual field meter readings.
+   - Total Balance = Current Consumption + Arrears (unpaid remaining balance from previous cycles) + 2% Local Franchise Tax + 10% Late Surcharge (only if payment is past the due date).
+   - Strict 50% Minimum Partial Payment Rule: Consumers can pay as little as 50% of their total balance at the TWD cashier to avoid receiving a disconnection cutting notice.
+   - Remaining balance is automatically carried forward to the next billing cycle as 'Arrears' without double charging or data loss.
+2. Disconnection Policy:
+   - Accounts with 3 consecutive months of unpaid billing cycles are issued an official "Disconnection Notice".
+   - The notice gives a 3-day grace period to settle at least 50% of the overdue balance or arrange a settlement at the TWD Commercial Division.
+3. Official Receipt Verification:
+   - Legitimate payments receive an official Republic of the Philippines Accountable Form No. 51 (Official Receipt) bearing the national seal, OR serial number, and Cashier signature.
+   - Consumers can upload receipt photos in the portal. The system uses strict AI validation to verify the BIR/Form 51 seal, OR serial number, and amount paid without public exposure.
+4. Water Meter Installation & Applications:
+   - New applicants can register via the portal. When registering, a dedicated modal pops up for Water Meter Installation: they can choose "Schedule Installation Now" (selecting preferred date and site instructions) or "Schedule Later".
+   - Application tracking number format: TWD-APP-YYYY-XXXXX.
+5. Reporting Water Concerns:
+   - Leaks, low water pressure, discolored/cloudy water, or damaged meters can be submitted under Service Concerns.
+   - District Office: Municipal Hall Compound, Poblacion, Tagoloan, Misamis Oriental.
+   - Office Hours: Monday to Friday, 8:00 AM – 5:00 PM.
+   - Emergency Hotline: (088) 555-0145.
+
+${contextStr}
+
+Format your answers with clean markdown (bolding key numbers or dates, bullet points for steps). Keep explanations clear, empathetic, and directly helpful.`;
+
+    const adminSystemInstruction = `You are Baymax 2.0, Your Admin Companion for Tagoloan Water District (TWD) in Misamis Oriental, Philippines.
+Personality:
+- Highly professional, operational, analytical, proactive, and authoritative yet collaborative.
+- Greeting style: "Greetings Administrator! I am Baymax 2.0, your administrative companion for Tagoloan Water District." / "Maayong adlaw, Admin! Ako si Baymax 2.0, imong kauban sa pagdumala sa Tagoloan Water District." / "Magandang araw, Admin! Ako si Baymax 2.0, ang iyong katuwang sa pamamahala ng Tagoloan Water District."
+
+CRITICAL Multilingual Capabilities:
+- You understand and speak English, Tagalog (Filipino), and Bisaya (Cebuano/Binisaya) fluently.
+- Always match the language used by the administrator, or follow the requested language: ${language}.
+
+Tagoloan Water District (TWD) Admin Operations Knowledge Base:
+1. Billing & Arrears Engine:
+   - Auto-billing calculation carries forward previous unpaid balances as 'Arrears' into new statements while preserving legacy unpaid records to prevent duplicate billing or ledger discrepancy.
+   - Enforces 50% partial payment rule, calculates 10% penalty after due date, 2% national franchise tax.
+2. Disconnection & Grace Period Scanner:
+   - Automatically scans and flags accounts with 3 consecutive overdue unpaid billing cycles.
+   - Dispatches Disconnection Cutting Notices with strict 3-day grace period timers.
+3. Meter Reading Operations:
+   - Coverage across 9 Tagoloan barangays: Poblacion, Natumolan, Baluarte, Sta. Ana, Sta. Cruz, Mohon, Gracia, Casinglot, Sugbongcogon.
+   - Field Reader assignment, offline-first mobile sync, anomaly detection, and dial photo verification.
+4. Water Meter Inventory & Applications:
+   - Physical meter serial numbers are confidential and managed strictly inside Admin Inventory.
+   - Once an application is approved and installed, Admin validates the account and issues official Account Number and Meter Tag Number.
+5. Official Reports:
+   - Monthly Collection Summary, Aging of Accounts Receivable, Delinquency Logs, Non-Revenue Water (production vs. consumption audits).
+   - Compliant with Philippine Local Water Utilities Administration (LWUA), Commission on Audit (COA), and BIR standards.
+
+${contextStr}
+
+Provide clear, operational, and actionable guidance with numbered steps, specific module references, and data calculations where relevant.`;
+
+    const activeSystemInstruction = isConsumer ? consumerSystemInstruction : adminSystemInstruction;
+
+    // 1. Try Gemini API via @google/genai SDK
+    const ai = getGeminiAI();
+    if (ai) {
+      try {
+        const contents = messages.map((m: any) => ({
+          role: m.role === "assistant" || m.role === "bot" || m.role === "model" ? "model" : "user",
+          parts: [{ text: String(m.text || "") }]
+        }));
+
+        const generatePromise = ai.models.generateContent({
+          model: "gemini-3.8-flash",
+          contents: contents,
+          config: {
+            systemInstruction: activeSystemInstruction,
+          }
+        });
+
+        const timeoutPromise = new Promise<null>((_, reject) =>
+          setTimeout(() => reject(new Error("Gemini API call timed out after 10s")), 10000)
+        );
+
+        const aiResponse = (await Promise.race([generatePromise, timeoutPromise])) as any;
+
+        const reply = aiResponse?.text?.trim();
+        if (reply) {
+          return res.json({
+            success: true,
+            reply: reply,
+            model: "gemini-3.8-flash",
+            portal,
+            botName,
+            botSubtitle
+          });
+        }
+      } catch (geminiError: any) {
+        console.warn("[Baymax AI Gemini Error]:", geminiError?.message || geminiError);
+      }
+    }
+
+    // 2. Intelligent Resilient Multilingual Fallback (English / Tagalog / Bisaya)
+    const replyFallback = generateBaymaxFallbackReply(portal, lastUserMessage, language, context);
+    return res.json({
+      success: true,
+      reply: replyFallback,
+      model: "gemini-3.8-flash-fallback",
+      portal,
+      botName,
+      botSubtitle
+    });
+  } catch (err: any) {
+    console.error("[Baymax AI Server Error]:", err);
+    res.status(500).json({
+      success: false,
+      message: "An unexpected error occurred while communicating with Baymax AI.",
+      error: err?.message
+    });
+  }
 });
 
 // Fallback for non-existent API routes to avoid returning HTML to mobile apps

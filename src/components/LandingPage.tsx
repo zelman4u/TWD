@@ -131,7 +131,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
     <div className="bg-slate-950 min-h-screen text-slate-200 font-sans" id="twd-landing-page">
       {/* Official Contact & Office Hours Top Bar */}
       <div className="bg-slate-900 text-slate-300 text-xs py-1.5 px-3 sm:px-4 border-b border-slate-800">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-y-1.5 gap-x-4 text-[11px]">
+        <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-12 flex flex-wrap items-center justify-between gap-y-1.5 gap-x-4 text-[11px]">
           <div className="flex flex-wrap items-center gap-x-4 sm:gap-x-5 gap-y-1">
             <div className="flex items-center space-x-1.5 whitespace-nowrap">
               <Clock className="h-3.5 w-3.5 text-blue-400 shrink-0" />
@@ -161,7 +161,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
 
       {/* Main Header / Navigation */}
       <header className="sticky top-0 bg-slate-950/95 backdrop-blur z-40 border-b border-slate-800 transition-all shadow-md">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 sm:h-20 flex items-center justify-between gap-x-2">
+        <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-12 h-16 sm:h-20 flex items-center justify-between gap-x-4">
           
           {/* Logo & District Branding */}
           <div className="flex items-center space-x-2.5 sm:space-x-3 shrink-0">
@@ -324,56 +324,91 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
       </header>
 
       {/* Hero Section */}
-      <section className="bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 pt-16 pb-24 overflow-hidden border-b border-slate-850">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
-            <div className="lg:col-span-7 space-y-6">
-              <div className="inline-flex items-center space-x-2 bg-blue-950/70 border border-blue-800/60 text-blue-300 px-3.5 py-1.5 rounded-full text-xs font-bold shadow-xs">
-                <Droplet className="h-3.5 w-3.5 fill-blue-400 text-blue-400" />
+      <section className="bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 py-16 sm:py-20 lg:py-24 overflow-hidden border-b border-slate-800">
+        <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-12">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
+            
+            {/* Left Column: Anchored Cleanly Along One Left Edge */}
+            <div className="lg:col-span-7 space-y-6 sm:space-y-8 text-left">
+              {/* Unboxed Kicker Metadata */}
+              <div className="flex items-center space-x-2.5 text-xs font-bold text-sky-400 tracking-wider uppercase">
+                <Droplet className="h-4 w-4 fill-sky-400 text-sky-400 shrink-0" />
                 <span>Clean & Sustained Commitment Since 2009</span>
-              </div>
-              <h2 className="text-4xl sm:text-5xl lg:text-6xl font-black text-slate-100 tracking-tight leading-none">
-                Empowering the Community of <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-sky-400">Tagoloan</span> with Abundant Water
-              </h2>
-              <p className="text-base sm:text-lg text-slate-300 max-w-2xl leading-relaxed">
-                Welcome to the official digital platform of Tagoloan Water District (TWD). We are dedicated to providing sustainable, clean, and reliable water distribution services. Register your consumer utility account online to view billing cycles, examine meter records, and inspect water usage analytics instantly.
-              </p>
-              <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4 pt-4">
-                <button
-                  id="hero-register-btn"
-                  onClick={() => onNavigate('register')}
-                  className="px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-950/60 transition flex items-center justify-center space-x-2 text-base cursor-pointer"
-                >
-                  <span>Register Your Account</span>
-                  <ArrowRight className="h-5 w-5" />
-                </button>
-                <button
-                  id="hero-login-btn"
-                  onClick={() => onNavigate('login')}
-                  className="px-8 py-4 bg-slate-900 border border-slate-700 text-slate-200 hover:text-blue-300 rounded-xl font-bold hover:bg-slate-800 transition flex items-center justify-center space-x-2 text-base cursor-pointer"
-                >
-                  <span>Access Unified Login</span>
-                </button>
+                <span className="text-slate-600">·</span>
+                <span className="text-slate-400 font-medium normal-case">Tagoloan, Misamis Oriental</span>
               </div>
 
-              {/* Statistical Banner */}
-              <div className="grid grid-cols-3 gap-6 pt-10 border-t border-slate-800 max-w-lg">
+              {/* Main Headline */}
+              <h2 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-black text-slate-100 tracking-tight leading-[1.08]">
+                Empowering the Community of{' '}
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-sky-300 to-blue-200">
+                  Tagoloan
+                </span>{' '}
+                with Abundant Water
+              </h2>
+
+              {/* Body Description */}
+              <p className="text-base sm:text-lg lg:text-xl text-slate-300 leading-relaxed">
+                Welcome to the official digital platform of Tagoloan Water District (TWD). We are dedicated to providing sustainable, clean, and reliable water distribution services. Monitor billing cycles, examine physical water meter records, and inspect water usage analytics seamlessly.
+              </p>
+
+              {/* Quick Services Navigation Tiles - Substantial & Beautiful Along the Left Edge */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                <a 
+                  href="#services" 
+                  className="bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-sky-500/50 p-4 rounded-2xl transition group flex flex-col justify-between"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-sky-400 uppercase tracking-wider">Tariff Baseline</span>
+                    <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-sky-400 group-hover:translate-x-0.5 transition" />
+                  </div>
+                  <span className="text-sm font-extrabold text-slate-100 group-hover:text-white block">Official Water Rates</span>
+                  <span className="text-xs text-slate-400 mt-0.5 block">₱10/m³ Residential Baseline</span>
+                </a>
+
+                <a 
+                  href="#calculator" 
+                  className="bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-sky-500/50 p-4 rounded-2xl transition group flex flex-col justify-between"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Estimation</span>
+                    <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-emerald-400 group-hover:translate-x-0.5 transition" />
+                  </div>
+                  <span className="text-sm font-extrabold text-slate-100 group-hover:text-white block">Bill Calculator</span>
+                  <span className="text-xs text-slate-400 mt-0.5 block">Real-time Tariff Simulation</span>
+                </a>
+
+                <a 
+                  href="#announcements" 
+                  className="bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-sky-500/50 p-4 rounded-2xl transition group flex flex-col justify-between"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-amber-400 uppercase tracking-wider">Advisories</span>
+                    <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-amber-400 group-hover:translate-x-0.5 transition" />
+                  </div>
+                  <span className="text-sm font-extrabold text-slate-100 group-hover:text-white block">Public Bulletins</span>
+                  <span className="text-xs text-slate-400 mt-0.5 block">Water Maintenance Logs</span>
+                </a>
+              </div>
+
+              {/* Statistical Banner - Left Edge Aligned, Full Column Breadth */}
+              <div className="grid grid-cols-3 gap-6 sm:gap-10 pt-6 sm:pt-8 border-t border-slate-800">
                 <div>
-                  <p className="text-2xl font-black text-slate-100">8,500+</p>
-                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Active Connections</p>
+                  <p className="text-3xl sm:text-4xl lg:text-5xl font-black text-white font-mono tabular-nums tracking-tight">8,500+</p>
+                  <p className="text-xs sm:text-sm font-bold text-slate-400 uppercase tracking-wider mt-1.5">Active Connections</p>
                 </div>
                 <div>
-                  <p className="text-2xl font-black text-slate-100">100%</p>
-                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Safe Standards</p>
+                  <p className="text-3xl sm:text-4xl lg:text-5xl font-black text-white font-mono tabular-nums tracking-tight">100%</p>
+                  <p className="text-xs sm:text-sm font-bold text-slate-400 uppercase tracking-wider mt-1.5">Safe Standards</p>
                 </div>
                 <div>
-                  <p className="text-2xl font-black text-slate-100">24/7</p>
-                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Line Maintenance</p>
+                  <p className="text-3xl sm:text-4xl lg:text-5xl font-black text-white font-mono tabular-nums tracking-tight">24/7</p>
+                  <p className="text-xs sm:text-sm font-bold text-slate-400 uppercase tracking-wider mt-1.5">Line Maintenance</p>
                 </div>
               </div>
             </div>
 
-            {/* Visual Vector Mockup Container */}
+            {/* Right Column: Visual Mockup Container */}
             <div className="lg:col-span-5 relative">
               <div className="absolute inset-0 bg-blue-500/10 rounded-3xl blur-3xl transform -rotate-6"></div>
               <div className="relative bg-slate-900 border border-slate-800 shadow-2xl rounded-3xl p-6 sm:p-8 text-slate-100">
@@ -388,7 +423,10 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                       <h3 className="text-sm font-extrabold text-slate-100">TWD Consumer Portal</h3>
                     </div>
                   </div>
-                  <span className="bg-emerald-950/80 text-emerald-300 border border-emerald-800/60 px-2 py-0.5 rounded text-[10px] font-bold">● SYSTEM STABLE</span>
+                  <span className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-400">
+                    <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>System Active</span>
+                  </span>
                 </div>
 
                 <div className="space-y-4">
@@ -452,38 +490,48 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
       <DistrictProfileSection id="profile" isDarkTheme={true} />
 
       {/* Services Information & Official Baseline Tariff Schedule */}
-      <section id="services" className="py-20 bg-slate-900/50 border-t border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
-            <div className="lg:col-span-5 space-y-6">
-              <h4 className="text-xs font-bold text-blue-400 uppercase tracking-widest">Official Price Baseline</h4>
-              <h3 className="text-3xl font-extrabold text-slate-100 leading-tight">
+      <section id="services" className="py-16 sm:py-20 lg:py-24 bg-slate-900/40 border-t border-slate-800">
+        <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-12">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-start">
+            <div className="lg:col-span-5 space-y-6 text-left">
+              <div className="flex items-center space-x-2.5 text-xs font-bold text-sky-400 tracking-wider uppercase">
+                <Droplet className="h-4 w-4 fill-sky-400 text-sky-400 shrink-0" />
+                <span>Official Price Baseline</span>
+                <span className="text-slate-600">·</span>
+                <span className="text-slate-400 font-medium normal-case">Standard Tariff</span>
+              </div>
+              <h3 className="text-3xl sm:text-4xl font-black text-slate-100 tracking-tight leading-tight">
                 Official Water Tariff Schedule
               </h3>
-              <p className="text-slate-300 leading-relaxed text-sm">
+              <p className="text-slate-300 leading-relaxed text-base sm:text-lg">
                 Tagoloan Water District implements a clear, straightforward per-cubic-meter tariff schedule for all metered connections. Initial baseline readings (0 m³) incur ₱0.00 charge, with statutory Franchise Tax (2%) and Late Payment Penalty (10% after due date) applied uniformly.
               </p>
 
-              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-sm space-y-3">
-                <div className="flex items-start space-x-3 text-xs text-slate-300">
-                  <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0" />
-                  <span><strong>Residential Rate:</strong> ₱10.00 per cubic meter (₱10/m³) • 0 m³ = ₱0.00.</span>
+              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-sm space-y-4">
+                <div className="flex items-start space-x-3 text-sm text-slate-300">
+                  <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
+                  <span><strong className="text-slate-100">Residential Rate:</strong> ₱10.00 per cubic meter (₱10/m³) · Baseline 0 m³ = ₱0.00.</span>
                 </div>
-                <div className="flex items-start space-x-3 text-xs text-slate-300">
-                  <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0" />
-                  <span><strong>Commercial Rate:</strong> ₱25.00 per cubic meter (₱25/m³) • 0 m³ = ₱0.00.</span>
+                <div className="flex items-start space-x-3 text-sm text-slate-300">
+                  <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
+                  <span><strong className="text-slate-100">Commercial Rate:</strong> ₱25.00 per cubic meter (₱25/m³) · Baseline 0 m³ = ₱0.00.</span>
                 </div>
-                <div className="flex items-start space-x-3 text-xs text-slate-300">
-                  <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0" />
-                  <span><strong>Franchise Tax &amp; Late Penalty:</strong> 2% Local Franchise Tax on basic water charge, and 10% penalty if settled after the monthly due date.</span>
+                <div className="flex items-start space-x-3 text-sm text-slate-300">
+                  <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
+                  <span><strong className="text-slate-100">Franchise Tax &amp; Late Penalty:</strong> 2% Local Franchise Tax on basic water charge, and 10% penalty if settled after the monthly due date.</span>
                 </div>
               </div>
             </div>
 
             <div className="lg:col-span-7 bg-slate-900 border border-slate-800 shadow-xl rounded-2xl p-6 sm:p-8 space-y-6">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h4 className="text-base font-extrabold text-slate-100">Official Price Baseline of Meter Readings</h4>
-                <span className="text-xs font-mono text-slate-400">0 m³ Baseline = ₱0.00</span>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-4">
+                <div>
+                  <h4 className="text-base font-extrabold text-slate-100">Official Price Baseline of Meter Readings</h4>
+                  <p className="text-xs text-slate-400 mt-0.5">Approved tariff matrix according to LWUA guidelines</p>
+                </div>
+                <span className="text-xs font-mono font-bold text-sky-400 bg-sky-950/60 px-2.5 py-1 rounded border border-sky-800/60">
+                  0 m³ Baseline = ₱0.00
+                </span>
               </div>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm text-left">
@@ -514,7 +562,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                   </tbody>
                 </table>
               </div>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-slate-400 leading-relaxed">
                 * Sample 10 m³ total includes basic water charge (Usage × Rate/m³) plus 2% Franchise Tax. Accounts paid after the due date incur an additional 10% penalty on the basic water charge.
               </p>
             </div>
@@ -523,37 +571,49 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
       </section>
 
       {/* Live Interactive Tariff Bill Calculator */}
-      <section id="calculator" className="py-20 bg-slate-950 border-t border-slate-800">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6">
-          <div className="bg-slate-900 text-slate-100 rounded-3xl p-8 sm:p-12 relative overflow-hidden shadow-2xl border border-slate-800">
-            <div className="absolute top-0 right-0 h-64 w-64 bg-blue-600/10 rounded-full blur-3xl pointer-events-none"></div>
+      <section id="calculator" className="py-16 sm:py-20 lg:py-24 bg-slate-950 border-t border-slate-800">
+        <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-12">
+          <div className="bg-slate-900 text-slate-100 rounded-3xl p-8 sm:p-12 lg:p-14 relative overflow-hidden shadow-2xl border border-slate-800">
+            <div className="absolute top-0 right-0 h-96 w-96 bg-blue-600/10 rounded-full blur-3xl pointer-events-none"></div>
             
-            <div className="relative grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
-              <div className="md:col-span-6 space-y-4">
-                <div className="flex items-center space-x-2 text-blue-400 text-xs font-bold uppercase tracking-wider">
-                  <Calculator className="h-4 w-4" />
+            <div className="relative grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
+              <div className="lg:col-span-6 space-y-5 text-left">
+                <div className="flex items-center space-x-2.5 text-sky-400 text-xs font-bold uppercase tracking-wider">
+                  <Calculator className="h-4 w-4 shrink-0" />
                   <span>Real-Time Estimation Utility</span>
+                  <span className="text-slate-600">·</span>
+                  <span className="text-slate-400 font-medium normal-case">Live Calculator</span>
                 </div>
-                <h3 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-100 font-sans">
+                <h3 className="text-3xl sm:text-4xl font-black tracking-tight text-slate-100 font-sans">
                   Forecast Your Monthly Bill
                 </h3>
-                <p className="text-slate-300 text-sm leading-relaxed">
+                <p className="text-slate-300 text-base sm:text-lg leading-relaxed">
                   Enter your expected cubic meter (m³) water consumption below to compute your exact monthly bill using the official TWD baseline rates (Residential ₱10/m³ · Commercial ₱25/m³), 2% Franchise Tax, and 10% late payment penalty preview.
                 </p>
+                <div className="pt-2 flex items-center space-x-6 text-xs sm:text-sm text-slate-300 font-medium">
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle className="h-4 w-4 text-emerald-400 shrink-0" />
+                    <span>Instant Calculation</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle className="h-4 w-4 text-emerald-400 shrink-0" />
+                    <span>Official Rate Schedule</span>
+                  </div>
+                </div>
               </div>
 
-              <div className="md:col-span-6 bg-slate-950/80 backdrop-blur-md rounded-2xl p-6 border border-slate-800 space-y-4">
+              <div className="lg:col-span-6 bg-slate-950/90 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-slate-800 space-y-5">
                 <form onSubmit={handleCalculate} className="space-y-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-300 uppercase tracking-widest mb-1.5">Customer Type</label>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-3">
                       <button 
                         type="button"
                         onClick={() => {
                           setCalcType('Residential');
                           setCalculatedBill(calculateWaterBill(calcUsage, 'Residential'));
                         }}
-                        className={`py-2 px-3 rounded-lg text-xs font-bold transition border cursor-pointer ${
+                        className={`py-2.5 px-3 rounded-lg text-xs font-bold transition border cursor-pointer ${
                           calcType === 'Residential' 
                             ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
                             : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
@@ -567,7 +627,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                           setCalcType('Commercial');
                           setCalculatedBill(calculateWaterBill(calcUsage, 'Commercial'));
                         }}
-                        className={`py-2 px-3 rounded-lg text-xs font-bold transition border cursor-pointer ${
+                        className={`py-2.5 px-3 rounded-lg text-xs font-bold transition border cursor-pointer ${
                           calcType === 'Commercial' 
                             ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
                             : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
@@ -593,16 +653,16 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                             setCalculatedBill(calculateWaterBill(nextVal, calcType));
                           }
                         }}
-                        className="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg py-2 pl-3 pr-12 text-sm text-slate-100 font-mono tabular-nums font-bold focus:outline-none"
+                        className="w-full bg-slate-900 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg py-2.5 pl-3 pr-12 text-sm text-slate-100 font-mono tabular-nums font-bold focus:outline-none"
                         required
                       />
-                      <span className="absolute right-3 top-2 text-xs font-bold text-slate-400">m³</span>
+                      <span className="absolute right-3 top-2.5 text-xs font-bold text-slate-400">m³</span>
                     </div>
                   </div>
 
                   <button 
                     type="submit"
-                    className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs uppercase tracking-widest transition shadow-md cursor-pointer"
+                    className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs uppercase tracking-widest transition shadow-md cursor-pointer"
                   >
                     Calculate Official Bill
                   </button>
@@ -635,28 +695,40 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
       </section>
 
       {/* Announcements Section */}
-      <section id="announcements" className="py-20 bg-slate-900/40 border-t border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-12">
-            <div>
-              <h4 className="text-sm font-bold text-blue-400 uppercase tracking-widest">Public Safety Bulletin</h4>
-              <h3 className="text-3xl font-extrabold text-slate-100 mt-1 tracking-tight">Active Announcements & Advisory Logs</h3>
+      <section id="announcements" className="py-16 sm:py-20 lg:py-24 bg-slate-900/40 border-t border-slate-800">
+        <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-12">
+          <div className="space-y-3 mb-12 text-left">
+            <div className="flex items-center space-x-2.5 text-xs font-bold text-sky-400 tracking-wider uppercase">
+              <Calendar className="h-4 w-4 text-sky-400 shrink-0" />
+              <span>Public Safety Bulletin</span>
+              <span className="text-slate-600">·</span>
+              <span className="text-slate-400 font-medium normal-case">Official Dispatches</span>
             </div>
-            <p className="text-slate-300 text-sm max-w-sm mt-3 md:mt-0 font-sans">
-              Stay fully updated with real-time operational broadcasts, plumbing maintenance alerts, and quality tests posted directly by District engineering leads.
+            <h3 className="text-3xl sm:text-4xl font-black text-slate-100 tracking-tight leading-tight">
+              Active Announcements & Advisory Logs
+            </h3>
+            <p className="text-slate-300 text-base sm:text-lg leading-relaxed max-w-4xl">
+              Stay fully updated with real-time operational broadcasts, plumbing maintenance alerts, and water quality reports posted directly by District engineering leads.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8">
             {sanitizeAnnouncements(announcements).map((ann, aIdx) => {
-              const categoryColors = {
-                disruption: 'bg-red-950/80 text-rose-300 border-rose-800/60 ring-red-500/10',
-                maintenance: 'bg-amber-950/80 text-amber-300 border-amber-800/60 ring-amber-500/10',
-                event: 'bg-indigo-950/80 text-indigo-300 border-indigo-800/60 ring-indigo-500/10',
-                info: 'bg-blue-950/80 text-blue-300 border-blue-800/60 ring-blue-500/10',
+              const categoryDot: Record<string, string> = {
+                disruption: 'bg-rose-500',
+                maintenance: 'bg-amber-500',
+                event: 'bg-indigo-400',
+                info: 'bg-sky-400',
+              };
+
+              const categoryText: Record<string, string> = {
+                disruption: 'text-rose-400',
+                maintenance: 'text-amber-400',
+                event: 'text-indigo-300',
+                info: 'text-sky-400',
               };
               
-              const categoryLabels = {
+              const categoryLabels: Record<string, string> = {
                 disruption: 'Service Interruption',
                 maintenance: 'Line Maintenance',
                 event: 'District Event',
@@ -664,23 +736,24 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
               };
 
               return (
-                <div key={`landing-ann-${ann.id || ''}-${aIdx}`} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-md hover:shadow-lg transition flex flex-col justify-between">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${categoryColors[ann.category] || categoryColors.info}`}>
-                        {categoryLabels[ann.category] || categoryLabels.info}
-                      </span>
+                <div key={`landing-ann-${ann.id || ''}-${aIdx}`} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-md hover:shadow-lg transition flex flex-col justify-between text-left">
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                      <div className="flex items-center space-x-2 text-xs font-mono font-bold uppercase tracking-wider">
+                        <span className={`inline-block h-2 w-2 rounded-full ${categoryDot[ann.category] || 'bg-sky-400'}`}></span>
+                        <span className={categoryText[ann.category] || 'text-sky-400'}>{categoryLabels[ann.category] || categoryLabels.info}</span>
+                      </div>
                       <span className="text-xs font-mono text-slate-400 flex items-center">
-                        <Calendar className="h-3 w-3 mr-1 text-slate-500" />
+                        <Calendar className="h-3.5 w-3.5 mr-1.5 text-slate-500" />
                         {ann.date}
                       </span>
                     </div>
-                    <h4 className="text-lg font-extrabold text-slate-100 leading-snug">{ann.title}</h4>
+                    <h4 className="text-lg sm:text-xl font-extrabold text-slate-100 leading-snug">{ann.title}</h4>
                     <p className="text-slate-300 text-sm leading-relaxed">{ann.content}</p>
                   </div>
-                  <div className="pt-4 border-t border-slate-800 mt-4 flex justify-between items-center text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  <div className="pt-4 border-t border-slate-800 mt-6 flex justify-between items-center text-[11px] font-bold uppercase tracking-wider text-slate-400">
                     <span>Issued: {ann.postedBy}</span>
-                    <span className="text-blue-400">Verified Advisory</span>
+                    <span className="text-sky-400 font-semibold">Verified Advisory</span>
                   </div>
                 </div>
               );
@@ -689,37 +762,44 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
         </div>
       </section>
 
-      {/* Frequently Asked Questions (FAQ) Section */}
-      <section id="faq" className="py-20 bg-slate-950 border-t border-slate-800">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6">
-          <div className="text-center space-y-4 mb-16">
-            <h4 className="text-xs font-bold uppercase tracking-widest text-blue-400">Assistance Matrix</h4>
-            <h3 className="text-3xl font-extrabold text-slate-100 tracking-tight">Frequently Asked Questions</h3>
-            <p className="text-slate-300 text-sm max-w-lg mx-auto leading-relaxed">
-              Find quick solutions to procedural aspects, registry guidelines, and tariff schedules for Tagoloan Water connection systems.
+      {/* Frequently Asked Questions (FAQ) Section - Expansive Left-Anchored Layout */}
+      <section id="faq" className="py-16 sm:py-20 lg:py-24 bg-slate-950 border-t border-slate-800">
+        <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-12">
+          <div className="space-y-3 mb-10 text-left">
+            <div className="flex items-center space-x-2.5 text-xs font-bold uppercase tracking-wider text-sky-400">
+              <HelpCircle className="h-4 w-4 text-sky-400 shrink-0" />
+              <span>Assistance Matrix</span>
+              <span className="text-slate-600">·</span>
+              <span className="text-slate-400 font-medium normal-case">Help & Guidance</span>
+            </div>
+            <h3 className="text-3xl sm:text-4xl font-black text-slate-100 tracking-tight leading-tight">
+              Frequently Asked Questions
+            </h3>
+            <p className="text-slate-300 text-base sm:text-lg leading-relaxed max-w-4xl">
+              Find clear answers to procedural aspects, customer registration steps, meter reading schedules, and baseline tariff computations for Tagoloan Water connection systems.
             </p>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-4 w-full">
             {faqs.map((faq, idx) => {
               const isOpen = openFaq === idx;
               return (
-                <div key={idx} className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden transition">
+                <div key={idx} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden transition">
                   <button
                     onClick={() => setOpenFaq(isOpen ? null : idx)}
-                    className="w-full px-6 py-4 flex items-center justify-between text-left focus:outline-none cursor-pointer"
+                    className="w-full px-6 sm:px-8 py-5 sm:py-6 flex items-center justify-between text-left focus:outline-none cursor-pointer group"
                     id={`faq-toggle-${idx}`}
                   >
-                    <span className="font-extrabold text-slate-100 text-sm flex items-center">
-                      <HelpCircle className="h-4 w-4 mr-2.5 text-blue-400 shrink-0" />
-                      {faq.q}
+                    <span className="font-bold text-slate-100 text-base sm:text-lg flex items-start gap-3.5">
+                      <span className="text-xs sm:text-sm font-mono font-bold text-sky-400 mt-1 shrink-0">0{idx + 1}.</span>
+                      <span className="group-hover:text-sky-300 transition">{faq.q}</span>
                     </span>
-                    <span className="text-blue-400 text-xs font-bold shrink-0 ml-2">
+                    <span className="text-sky-400 text-xs sm:text-sm font-bold shrink-0 ml-4">
                       {isOpen ? 'Collapse' : 'Expand'}
                     </span>
                   </button>
                   {isOpen && (
-                    <div className="px-6 pb-5 text-xs text-slate-300 leading-relaxed border-t border-slate-800/80 pt-3">
+                    <div className="px-6 sm:px-8 pb-6 sm:pb-7 text-sm sm:text-base text-slate-300 leading-relaxed border-t border-slate-800 pt-4 pl-12 sm:pl-14">
                       {faq.a}
                     </div>
                   )}
@@ -731,76 +811,86 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
       </section>
 
       {/* Contact Details, Office Location & Customer Service Request */}
-      <section id="contact" className="py-20 bg-slate-900/40 border-t border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
+      <section id="contact" className="py-16 sm:py-20 lg:py-24 bg-slate-900/40 border-t border-slate-800">
+        <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-12">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-start">
             
             {/* Contact cards */}
-            <div className="lg:col-span-5 space-y-6">
-              <h4 className="text-xs font-bold text-blue-400 uppercase tracking-widest">Connect With Us</h4>
-              <h3 className="text-3xl font-extrabold text-slate-100 tracking-tight">Main Office Location</h3>
-              <p className="text-slate-300 text-sm max-w-sm leading-relaxed">
-                Whether you wish to dispute billing metrics, apply for active connection expansion, or report leaks, TWD support desks are ready.
+            <div className="lg:col-span-5 space-y-6 text-left">
+              <div className="flex items-center space-x-2.5 text-xs font-bold text-sky-400 uppercase tracking-wider">
+                <MapPin className="h-4 w-4 text-sky-400 shrink-0" />
+                <span>Connect With Us</span>
+                <span className="text-slate-600">·</span>
+                <span className="text-slate-400 font-medium normal-case">Direct Assistance</span>
+              </div>
+              <h3 className="text-3xl sm:text-4xl font-black text-slate-100 tracking-tight leading-tight">
+                Main Office Location & Contacts
+              </h3>
+              <p className="text-slate-300 text-base leading-relaxed">
+                Whether you wish to clarify billing calculations, request service expansion, or report pipeline leaks, TWD support desks are ready to assist.
               </p>
 
               <div className="space-y-4 pt-2">
-                <div className="flex items-center space-x-4 bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-xs">
-                  <div className="h-10 w-10 bg-blue-950/80 rounded-lg flex items-center justify-center text-blue-400 shrink-0 border border-blue-800/50">
+                <div className="flex items-center space-x-4 bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-xs">
+                  <div className="h-11 w-11 bg-blue-950/80 rounded-xl flex items-center justify-center text-blue-400 shrink-0 border border-blue-800/50">
                     <MapPin className="h-5 w-5" />
                   </div>
                   <div>
                     <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Visit Our Office</h4>
-                    <p className="text-xs font-bold text-slate-200">Arellano St, Poblacion, Tagoloan, Misamis Oriental</p>
+                    <p className="text-xs sm:text-sm font-bold text-slate-200">Arellano St, Poblacion, Tagoloan, Misamis Oriental</p>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-4 bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-xs">
-                  <div className="h-10 w-10 bg-emerald-950/80 rounded-lg flex items-center justify-center text-emerald-400 shrink-0 border border-emerald-800/50">
+                <div className="flex items-center space-x-4 bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-xs">
+                  <div className="h-11 w-11 bg-emerald-950/80 rounded-xl flex items-center justify-center text-emerald-400 shrink-0 border border-emerald-800/50">
                     <Phone className="h-5 w-5" />
                   </div>
                   <div>
                     <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Call Us</h4>
-                    <p className="text-xs font-bold text-slate-200">
+                    <p className="text-xs sm:text-sm font-bold text-slate-200">
                       <a href="tel:0888904946" className="hover:text-blue-300 transition">(088) 890 – 4946</a>
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-4 bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-xs">
-                  <div className="h-10 w-10 bg-amber-950/80 rounded-lg flex items-center justify-center text-amber-400 shrink-0 border border-amber-800/50">
+                <div className="flex items-center space-x-4 bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-xs">
+                  <div className="h-11 w-11 bg-amber-950/80 rounded-xl flex items-center justify-center text-amber-400 shrink-0 border border-amber-800/50">
                     <Mail className="h-5 w-5" />
                   </div>
                   <div>
                     <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Email Us</h4>
-                    <p className="text-xs font-bold text-slate-200">
+                    <p className="text-xs sm:text-sm font-bold text-slate-200">
                       <a href="mailto:tagoloan_waterdistrict@yahoo.com" className="hover:text-blue-300 transition">tagoloan_waterdistrict@yahoo.com</a>
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-4 bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-xs">
-                  <div className="h-10 w-10 bg-sky-950/80 rounded-lg flex items-center justify-center text-sky-400 shrink-0 border border-sky-800/50">
+                <div className="flex items-center space-x-4 bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-xs">
+                  <div className="h-11 w-11 bg-sky-950/80 rounded-xl flex items-center justify-center text-sky-400 shrink-0 border border-sky-800/50">
                     <Clock className="h-5 w-5" />
                   </div>
                   <div>
                     <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Opening Hours</h4>
-                    <p className="text-xs font-bold text-slate-200">Mon-Fri: 8:00am – 5:00pm</p>
+                    <p className="text-xs sm:text-sm font-bold text-slate-200">Monday – Friday: 8:00am – 5:00pm</p>
                   </div>
                 </div>
               </div>
             </div>
 
             {/* Customer Inquiry Form */}
-            <div className="lg:col-span-7 bg-slate-900 border border-slate-800 shadow-xl rounded-3xl p-6 sm:p-8 space-y-6">
-              <h4 className="text-base font-extrabold text-slate-100 border-b border-slate-800 pb-3">Submit Customer Service Request</h4>
+            <div className="lg:col-span-7 bg-slate-900 border border-slate-800 shadow-xl rounded-3xl p-8 sm:p-10 space-y-6 text-left">
+              <div className="border-b border-slate-800 pb-4">
+                <h4 className="text-lg font-black text-slate-100">Submit Customer Service Request</h4>
+                <p className="text-xs text-slate-400 mt-1">Directly received and routed to TWD customer desk</p>
+              </div>
               
-              <form onSubmit={handleContactSubmit} className="space-y-4">
+              <form onSubmit={handleContactSubmit} className="space-y-5">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-extrabold text-slate-300 uppercase tracking-wider mb-1">Your Full Name</label>
+                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">Your Full Name</label>
                     <input 
                       type="text"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-blue-500 placeholder-slate-500"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-3 px-3.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 placeholder-slate-500"
                       placeholder="e.g. Maria Clara Santos"
                       value={contactName}
                       onChange={(e) => setContactName(e.target.value)}
@@ -808,10 +898,10 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-extrabold text-slate-300 uppercase tracking-wider mb-1">Account Number (Optional)</label>
+                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">Account Number (Optional)</label>
                     <input 
                       type="text"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-blue-500 placeholder-slate-500"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-3 px-3.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 placeholder-slate-500"
                       placeholder="e.g. 1001-A"
                       value={contactAccount}
                       onChange={(e) => setContactAccount(e.target.value)}
@@ -820,10 +910,10 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                 </div>
 
                 <div>
-                  <label className="block text-xs font-extrabold text-slate-300 uppercase tracking-wider mb-1">Detailed Inquiry Request Message</label>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">Detailed Inquiry Request Message</label>
                   <textarea 
                     rows={4}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-blue-500 placeholder-slate-500"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-3 px-3.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 placeholder-slate-500"
                     placeholder="Describe your maintenance inquiry, meter leakage or bill dispute parameters so TWD can review them..."
                     value={contactMsg}
                     onChange={(e) => setContactMsg(e.target.value)}
@@ -833,9 +923,10 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
 
                 <button 
                   type="submit"
-                  className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition shadow-md cursor-pointer"
+                  disabled={contactSent}
+                  className="px-8 py-3.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition shadow-md cursor-pointer"
                 >
-                  Send Inquiry Form
+                  {contactSent ? 'Submitting...' : 'Send Inquiry Form'}
                 </button>
               </form>
             </div>
@@ -843,74 +934,112 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
         </div>
       </section>
 
-      {/* Public Footer */}
-      <footer className="bg-slate-950 text-slate-400 py-12 border-t border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6">
-          <div className="flex items-center justify-center space-x-3 text-slate-100">
-            <div className="h-10 w-10 rounded-xl overflow-hidden bg-slate-900 border border-slate-700 shadow-md p-0.5">
-              <img 
-                src="https://lh3.googleusercontent.com/d/1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg"
-                alt="Tagoloan Water District Logo"
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = 'https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w500';
-                }}
-                className="w-full h-full object-cover rounded-lg"
-              />
+      {/* Public Footer - Unified Left-Edge Alignment */}
+      <footer className="bg-slate-950 text-slate-400 py-16 sm:py-20 border-t border-slate-800">
+        <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-12 text-left space-y-12">
+          
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-10 lg:gap-14">
+            {/* Col 1: Brand & Mandate */}
+            <div className="md:col-span-5 space-y-4">
+              <div className="flex items-center space-x-3 text-slate-100">
+                <div className="h-10 w-10 rounded-xl overflow-hidden bg-slate-900 border border-slate-700 shadow-md p-0.5 shrink-0">
+                  <img 
+                    src="https://lh3.googleusercontent.com/d/1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg"
+                    alt="Tagoloan Water District Logo"
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = 'https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w500';
+                    }}
+                    className="w-full h-full object-cover rounded-lg"
+                  />
+                </div>
+                <div>
+                  <span className="text-lg font-black tracking-tight text-slate-100 block">Tagoloan Water District</span>
+                  <span className="text-[10px] text-sky-400 font-bold uppercase tracking-wider block">Province of Misamis Oriental · GOCC</span>
+                </div>
+              </div>
+              <p className="text-xs leading-relaxed text-slate-400 max-w-md">
+                Government Owned and Controlled Corporation (GOCC) duly organized under Presidential Decree No. 198, dedicated to delivering clean, potable, and continuous water to the community of Tagoloan.
+              </p>
+              <div className="space-y-1.5 text-xs text-slate-400 pt-2">
+                <p className="flex items-center gap-2">
+                  <MapPin className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+                  <span>Arellano St, Poblacion, Tagoloan, Misamis Oriental</span>
+                </p>
+                <p className="flex items-center gap-2">
+                  <Clock className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                  <span>Mon-Fri: 8:00am – 5:00pm</span>
+                </p>
+                <p className="flex items-center gap-2">
+                  <Phone className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                  <a href="tel:0888904946" className="hover:text-blue-300 transition font-medium">(088) 890 – 4946</a>
+                </p>
+                <p className="flex items-center gap-2">
+                  <Mail className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                  <a href="mailto:tagoloan_waterdistrict@yahoo.com" className="hover:text-blue-300 transition font-medium">tagoloan_waterdistrict@yahoo.com</a>
+                </p>
+              </div>
             </div>
-            <span className="text-lg font-black tracking-tight text-slate-100">Tagoloan Water District</span>
+
+            {/* Col 2: Navigation Links */}
+            <div className="md:col-span-3 space-y-4">
+              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Quick Navigation</h4>
+              <ul className="space-y-2 text-xs font-medium text-slate-400">
+                <li><a href="#profile" className="hover:text-sky-300 transition">About Us & Mandate</a></li>
+                <li><a href="#org-structure" className="hover:text-sky-300 transition">Organizational Structure</a></li>
+                <li><a href="#services" className="hover:text-sky-300 transition">Water Tariff Schedule</a></li>
+                <li><a href="#calculator" className="hover:text-sky-300 transition">Tariff Bill Calculator</a></li>
+                <li><a href="#announcements" className="hover:text-sky-300 transition">Public Advisories & Notices</a></li>
+                <li><a href="#faq" className="hover:text-sky-300 transition">Frequently Asked Questions</a></li>
+                <li><a href="#contact" className="hover:text-sky-300 transition">Customer Service Desk</a></li>
+              </ul>
+            </div>
+
+            {/* Col 3: System Access & Portals */}
+            <div className="md:col-span-4 space-y-4">
+              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Connected Systems</h4>
+              <div className="space-y-2.5">
+                {typeof window !== 'undefined' && window.location.hostname.toLowerCase() !== 'twd-427m.onrender.com' && (
+                  <a
+                    href="https://twd-427m.onrender.com/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between p-3 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-800 text-xs font-bold text-blue-300 transition group"
+                  >
+                    <span>Official Live System Portal</span>
+                    <ExternalLink className="h-3.5 w-3.5 opacity-70 group-hover:opacity-100" />
+                  </a>
+                )}
+                <a
+                  href="https://mobile-li9q.onrender.com/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-between p-3 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-800 text-xs font-bold text-sky-300 transition group"
+                >
+                  <div className="flex items-center gap-2">
+                    <Smartphone className="h-3.5 w-3.5 text-sky-400" />
+                    <span>Field Meter Reader App</span>
+                  </div>
+                  <ExternalLink className="h-3.5 w-3.5 opacity-70 group-hover:opacity-100" />
+                </a>
+              </div>
+              <p className="text-[11px] text-slate-500 leading-relaxed pt-2">
+                All consumer transactions and meter reading logs are synchronized in accordance with Local Water Utilities Administration standards.
+              </p>
+            </div>
           </div>
 
-          <div className="flex flex-wrap justify-center items-center gap-x-6 gap-y-2 text-xs text-slate-300">
-            <span className="flex items-center gap-1.5">
-              <MapPin className="h-3.5 w-3.5 text-rose-400" />
-              Arellano St, Poblacion, Tagoloan, Misamis Oriental
-            </span>
-            <span className="text-slate-600 hidden sm:inline">•</span>
-            <span className="flex items-center gap-1.5">
-              <Clock className="h-3.5 w-3.5 text-blue-400" />
-              Mon-Fri: 8:00am – 5:00pm
-            </span>
-            <span className="text-slate-600 hidden sm:inline">•</span>
-            <span className="flex items-center gap-1.5">
-              <Phone className="h-3.5 w-3.5 text-emerald-400" />
-              <a href="tel:0888904946" className="hover:text-blue-300 transition">(088) 890 – 4946</a>
-            </span>
-            <span className="text-slate-600 hidden sm:inline">•</span>
-            <span className="flex items-center gap-1.5">
-              <Mail className="h-3.5 w-3.5 text-amber-400" />
-              <a href="mailto:tagoloan_waterdistrict@yahoo.com" className="hover:text-blue-300 transition">tagoloan_waterdistrict@yahoo.com</a>
-            </span>
-          </div>
-
-          <p className="text-xs max-w-xl mx-auto leading-relaxed text-slate-400">
-            Tagoloan Water District is committed to preserving environmental integrity while delivering continuous municipal services conforming to standard water quality guidelines.
-          </p>
-          <div className="pt-2 flex flex-wrap items-center justify-center gap-2.5">
-            {typeof window !== 'undefined' && window.location.hostname.toLowerCase() !== 'twd-427m.onrender.com' && (
-              <a
-                href="https://twd-427m.onrender.com/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-bold text-blue-300 transition"
-              >
-                <span>Official Live System Portal (twd-427m.onrender.com)</span>
-                <ExternalLink className="h-3 w-3 opacity-80" />
-              </a>
-            )}
-            <a
-              href="https://mobile-li9q.onrender.com/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-bold text-sky-300 transition"
-            >
-              <Smartphone className="h-3.5 w-3.5 text-sky-400" />
-              <span>Authorized Field Personnel: Open Mobile Meter Reader Terminal</span>
-              <ExternalLink className="h-3 w-3 opacity-80" />
-            </a>
-          </div>
-          <div className="text-[10px] text-slate-500">
-            &copy; 2026 Tagoloan Water District. All Rights Reserved. Province of Misamis Oriental.
+          <div className="pt-8 border-t border-slate-800/80 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-[11px] text-slate-500 font-medium">
+            <div>
+              &copy; 2026 Tagoloan Water District. All Rights Reserved. Province of Misamis Oriental.
+            </div>
+            <div className="flex items-center space-x-4">
+              <span>Presidential Decree No. 198</span>
+              <span>·</span>
+              <span>CCC No. 634</span>
+              <span>·</span>
+              <span>Category “D” LWD</span>
+            </div>
           </div>
         </div>
       </footer>

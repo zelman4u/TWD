@@ -38,21 +38,23 @@ export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({
   return (
     <section 
       id={id} 
-      className="py-20 bg-slate-950 text-slate-100 border-t border-slate-900 transition-colors"
+      className="py-20 sm:py-24 bg-slate-950 text-slate-100 border-t border-slate-900 transition-colors"
     >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-16">
+      <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-12 space-y-12">
         
-        {/* Section Header */}
-        <div className="text-center space-y-4 max-w-3xl mx-auto">
-          <div className="inline-flex items-center space-x-2 px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-widest bg-blue-500/15 text-blue-300 border border-blue-500/30">
-            <Building2 className="h-4 w-4" />
+        {/* Section Header - Expansive Left Edge Aligned */}
+        <div className="text-left space-y-3">
+          <div className="flex items-center space-x-2.5 text-xs font-bold uppercase tracking-wider text-sky-400">
+            <Building2 className="h-4 w-4 shrink-0 text-sky-400" />
             <span>Official Institutional Profile & Mandate</span>
+            <span className="text-slate-600">·</span>
+            <span className="text-slate-400 font-medium normal-case">Republic of the Philippines</span>
           </div>
           <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-slate-100">
             Tagoloan Water District
           </h2>
-          <p className="text-sm sm:text-base font-semibold leading-relaxed text-slate-300">
-            Province of Misamis Oriental • Government Owned and Controlled Corporation (GOCC)
+          <p className="text-base sm:text-lg font-medium leading-relaxed text-slate-300 max-w-4xl">
+            Province of Misamis Oriental · Government Owned and Controlled Corporation (GOCC)
           </p>
         </div>
 

@@ -72,7 +72,8 @@ import {
   MessageSquare,
   Smartphone,
   Bell,
-  Wrench
+  Wrench,
+  Bot
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerReport, WaterMeterInstallationRequest, MobileBridgeStatus } from '../types';
@@ -84,6 +85,7 @@ import {
 } from '../services/gracePeriodScannerService';
 import { DashboardSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import DataLoadingIndicator from './common/DataLoadingIndicator';
+import { BaymaxChatWidget } from './common/BaymaxChatWidget';
 import AdminAnalyticsSection from './charts/AdminAnalyticsSection';
 import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
@@ -308,6 +310,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isTabLoading, setIsTabLoading] = useState(false);
   const [isSubTabLoading, setIsSubTabLoading] = useState(false);
+  const [isAdminBaymaxChatOpen, setIsAdminBaymaxChatOpen] = useState(false);
 
   // Tab switching handler with data loading transition featuring official water district logo
   const handleTabChange = (tab: typeof activeTab) => {
@@ -4465,6 +4468,18 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           </div>
 
           <div className="flex items-center space-x-2 sm:space-x-3 shrink-0 ml-2">
+            {/* Baymax 2.0 Admin AI Companion Button */}
+            <button
+              type="button"
+              onClick={() => setIsAdminBaymaxChatOpen(prev => !prev)}
+              aria-label="Ask Baymax 2.0 - Admin Companion"
+              title="Baymax 2.0 • Your Admin Companion (English, Tagalog, Bisaya)"
+              className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-emerald-950/70 via-slate-900 to-emerald-950/70 hover:from-emerald-900/90 hover:to-slate-800 text-emerald-400 hover:text-white rounded-xl border border-emerald-500/50 text-xs font-bold transition shadow-sm cursor-pointer"
+            >
+              <Bot className="h-4 w-4 text-emerald-400" />
+              <span className="hidden sm:inline font-black tracking-tight">Baymax 2.0</span>
+            </button>
+
             {/* Admin Notification Bell for Consumer Replies, Notice Inquiries & Installation Requests */}
             {(() => {
               type CombinedAdminAlert =
@@ -13366,6 +13381,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           </div>
         </div>
       )}
+
+      {/* Baymax 2.0 AI Admin Companion Widget */}
+      <BaymaxChatWidget
+        mode="admin"
+        adminUser={currentUser}
+        stats={{
+          totalConsumers: consumers.length,
+          activeReaders: readers.length,
+          unbilledReadings: readings.filter(r => r.paymentStatus !== 'paid').length
+        }}
+        isOpen={isAdminBaymaxChatOpen}
+        onOpenChange={setIsAdminBaymaxChatOpen}
+      />
 
     </div>
   );
