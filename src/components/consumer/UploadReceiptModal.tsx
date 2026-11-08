@@ -62,6 +62,7 @@ export interface SmartScanResult {
   amountInWords?: string;
   confidence: number;
   isAiParsed: boolean;
+  isValidReceipt?: boolean;
   hasOfficialSeal?: boolean;
   hasBirOrForm51Header?: boolean;
   hasCollectingOfficerSignature?: boolean;
@@ -188,70 +189,58 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
 
       if (response.ok) {
         const json = await response.json();
-        if (json.success && json.detected) {
-          const detected: SmartScanResult = json.detected;
+        if (json.success && json.detected && json.isValidReceipt !== false) {
+          const detected: SmartScanResult = { ...json.detected, isValidReceipt: true };
           setSmartScanResult(detected);
-          // Auto-populate form
-          if (detected.orNumber) setOrNumber(detected.orNumber);
+          setValidationError(null);
+          // Auto-populate form from real OCR extracted fields
+          if (detected.serialNumber || detected.orNumber) {
+            setOrNumber(detected.serialNumber || detected.orNumber);
+          }
           if (detected.paymentDate) setPaymentDate(detected.paymentDate);
           if (detected.collector) setCashierCounter(detected.collector);
           
           if (detected.amountPaid) {
             setPaymentAmount(detected.amountPaid.toFixed(2));
-            setSettlementType(detected.settlementType);
+            setSettlementType(detected.settlementType || 'full');
           }
+        } else {
+          // Explicit failure to verify authentic official receipt - NO GUESSING
+          const unverified: SmartScanResult = {
+            orNumber: '',
+            amountPaid: 0,
+            paymentDate: '',
+            collector: '',
+            payorName: '',
+            accountNumber: '',
+            meterNumber: '',
+            paymentMethod: 'Cash',
+            confidence: 0,
+            isAiParsed: false,
+            isValidReceipt: false,
+            settlementType: 'full',
+            isLessThan50Percent: false,
+            remainingBalance: currentNetDue,
+            notes: json.message || 'Verification Failed: Unrecognized Document'
+          };
+          setSmartScanResult(unverified);
+          setValidationError(
+            json.message ||
+            'Official Receipt Verification Failed: The uploaded document does not match an authentic Tagoloan Water District Official Receipt or Accountable Form No. 51. Please upload a clear photo of your cashier payment receipt.'
+          );
         }
       } else {
-        // Fallback local heuristic extraction
-        performLocalFallbackScan(dataUrl);
+        setValidationError('Optical identification service encountered an issue. Please re-upload or ensure the receipt is clear.');
       }
-    } catch (err) {
+    } catch {
       clearInterval(progressInterval);
       setScanProgress(100);
-      performLocalFallbackScan(dataUrl);
+      setValidationError('Could not connect to receipt verification service. Please check your connection and re-upload.');
     } finally {
       setTimeout(() => {
         setIsScanning(false);
       }, 400);
     }
-  };
-
-  const performLocalFallbackScan = (dataUrl: string) => {
-    const fallbackSerial = `NO. A ${Math.floor(10000000 + Math.random() * 90000000)}`;
-    const fallbackPaid = numericPayment > 0 ? numericPayment : currentNetDue;
-    const fallback: SmartScanResult = {
-      orNumber: orNumber || fallbackSerial,
-      serialNumber: fallbackSerial,
-      amountPaid: fallbackPaid,
-      paymentDate: paymentDate || new Date().toISOString().split('T')[0],
-      collector: cashierCounter || 'TWD Collecting Officer - Cashier Desk',
-      payorName: consumerRecord.name,
-      accountNumber: consumerRecord.accountNumber,
-      meterNumber: consumerRecord.meterNumber,
-      agency: 'TAGOLOAN WATER DISTRICT',
-      paymentMethod: 'Cash',
-      amountInWords: '',
-      confidence: 0.98,
-      isAiParsed: true,
-      hasOfficialSeal: true,
-      hasBirOrForm51Header: true,
-      hasCollectingOfficerSignature: true,
-      isOfficialForm51: true,
-      detectedBreakdown: {
-        current: fallbackPaid,
-        arrears: 0,
-        total: fallbackPaid,
-        amountPaid: fallbackPaid,
-        balance: calculatedRemaining,
-        amountTendered: fallbackPaid,
-        change: 0,
-      },
-      settlementType: settlementType,
-      isLessThan50Percent: isLessThan50Percent,
-      remainingBalance: calculatedRemaining,
-      notes: 'Smart Optical Receipt Analysis: Republic of the Philippines Accountable Form No. 51 Seal & Official Cashier Stamp verified.'
-    };
-    setSmartScanResult(fallback);
   };
 
   // File Upload Handlers
@@ -262,15 +251,16 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
     }
   };
 
+  // High-fidelity image preprocessing to preserve sharp OCR text for fine serial numbers and government seals
   const compressReceiptDataUrl = (rawDataUrl: string): Promise<string> => {
     return new Promise((resolve) => {
       try {
         const img = new Image();
         img.onload = () => {
           try {
-            const maxDim = 640;
-            let width = img.width || 600;
-            let height = img.height || 800;
+            const maxDim = 1920;
+            let width = img.width || 800;
+            let height = img.height || 1000;
             if (width > maxDim || height > maxDim) {
               if (width > height) {
                 height = Math.round((height * maxDim) / width);
@@ -291,7 +281,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, width, height);
             ctx.drawImage(img, 0, 0, width, height);
-            resolve(canvas.toDataURL('image/jpeg', 0.68));
+            resolve(canvas.toDataURL('image/jpeg', 0.92));
           } catch {
             resolve(rawDataUrl);
           }
@@ -329,173 +319,6 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
     }
   };
 
-  // Load authentic Accountable Form No. 51 / Official Receipt sample
-  const handleLoadOfficialForm51 = async () => {
-    try {
-      const resp = await fetch('/assets/aistudio/download_bd5530e9.png');
-      const blob = await resp.blob();
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const rawResult = e.target?.result as string;
-        const compactResult = await compressReceiptDataUrl(rawResult);
-        setReceiptPhotoUrl(compactResult);
-        setOrNumber('NO. A 09024014');
-        setPaymentDate('2026-09-10');
-        setCashierCounter('TWD Collecting Officer - Cashier Desk');
-        setValidationError(null);
-        triggerSmartScan(compactResult);
-      };
-      reader.readAsDataURL(blob);
-    } catch {
-      handleGenerateSampleReceipt(false);
-    }
-  };
-
-  // Generate Sample Official Receipt (for convenient demonstration & testing)
-  const handleGenerateSampleReceipt = (isSamplePartial = false) => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 600;
-    canvas.height = 800;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const samplePaid = isSamplePartial ? minPartialAmount : currentNetDue;
-    const sampleRemaining = Math.max(0, currentNetDue - samplePaid);
-    const sampleOr = `OR-2024-${Math.floor(100000 + Math.random() * 900000)}`;
-
-    // Background
-    ctx.fillStyle = '#faf8f5';
-    ctx.fillRect(0, 0, 600, 800);
-
-    // Border
-    ctx.strokeStyle = '#1e3a8a';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(15, 15, 570, 770);
-
-    // Inner thin border
-    ctx.strokeStyle = '#93c5fd';
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(25, 25, 550, 750);
-
-    // Official Header
-    ctx.fillStyle = '#1e293b';
-    ctx.font = 'bold 18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('REPUBLIC OF THE PHILIPPINES', 300, 60);
-
-    ctx.fillStyle = '#1e3a8a';
-    ctx.font = 'bold 22px sans-serif';
-    ctx.fillText('TAGOLOAN WATER DISTRICT', 300, 90);
-
-    ctx.fillStyle = '#475569';
-    ctx.font = '12px sans-serif';
-    ctx.fillText('Poblacion, Tagoloan, Misamis Oriental 9001', 300, 110);
-    ctx.fillText('OFFICIAL RECEIPT / CASHIER SLIP', 300, 130);
-
-    // Divider
-    ctx.strokeStyle = '#cbd5e1';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(40, 145);
-    ctx.lineTo(560, 145);
-    ctx.stroke();
-
-    // Receipt Meta
-    ctx.textAlign = 'left';
-    ctx.font = 'bold 13px monospace';
-    ctx.fillStyle = '#dc2626';
-    ctx.fillText(`OR NO: ${sampleOr}`, 50, 175);
-
-    ctx.fillStyle = '#334155';
-    ctx.font = '12px sans-serif';
-    ctx.fillText(`DATE: ${paymentDate}`, 380, 175);
-    ctx.fillText(`COLLECTOR: ${cashierCounter}`, 50, 200);
-    ctx.fillText(`PAYOR: ${consumerRecord.name.toUpperCase()}`, 50, 225);
-    ctx.fillText(`ACCOUNT NO: ${consumerRecord.accountNumber}`, 50, 250);
-    ctx.fillText(`METER NO: ${activeReading?.meterNumber || consumerRecord.meterNumber}`, 50, 275);
-    ctx.fillText(`BILLING PERIOD: ${activeReading?.billingPeriod || 'Current Period'}`, 50, 300);
-
-    // Table Header
-    ctx.fillStyle = '#f1f5f9';
-    ctx.fillRect(45, 325, 510, 30);
-    ctx.fillStyle = '#0f172a';
-    ctx.font = 'bold 12px sans-serif';
-    ctx.fillText('PARTICULARS / NATURE OF COLLECTION', 60, 345);
-    ctx.fillText('AMOUNT (PHP)', 430, 345);
-
-    // Table Row
-    ctx.font = '13px sans-serif';
-    ctx.fillText('Water Tariff Consumption Charge', 60, 385);
-    ctx.fillText(`₱ ${samplePaid.toFixed(2)}`, 430, 385);
-
-    if (isSamplePartial) {
-      ctx.font = 'italic 11px sans-serif';
-      ctx.fillStyle = '#d97706';
-      ctx.fillText(`(Partial 50%+ Clearance — Forward Balance: ₱${sampleRemaining.toFixed(2)})`, 60, 405);
-    }
-
-    // Total Line
-    ctx.strokeStyle = '#0f172a';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(45, 460);
-    ctx.lineTo(555, 460);
-    ctx.stroke();
-
-    ctx.fillStyle = '#0f172a';
-    ctx.font = 'bold 15px sans-serif';
-    ctx.fillText('TOTAL AMOUNT PAID:', 220, 490);
-    ctx.fillStyle = isSamplePartial ? '#d97706' : '#15803d';
-    ctx.font = 'bold 18px monospace';
-    ctx.fillText(`₱ ${samplePaid.toFixed(2)}`, 420, 490);
-
-    // Payment Mode stamp
-    ctx.fillStyle = '#0284c7';
-    ctx.font = 'bold 12px sans-serif';
-    ctx.fillText('PAYMENT METHOD: OVER-THE-COUNTER CASH', 60, 540);
-    ctx.fillText(
-      isSamplePartial 
-        ? `STATUS: PARTIAL SETTLEMENT (₱${sampleRemaining.toFixed(2)} ARREARS TO NEXT CYCLE)` 
-        : 'STATUS: FULLY PROCESSED BY TWD TREASURY', 
-      60, 
-      565
-    );
-
-    // Stamp circle
-    ctx.save();
-    ctx.translate(450, 640);
-    ctx.rotate(-0.15);
-    ctx.strokeStyle = isSamplePartial ? '#d97706' : '#dc2626';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(-90, -35, 180, 70);
-    ctx.fillStyle = isSamplePartial ? '#d97706' : '#dc2626';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(isSamplePartial ? 'TWD PARTIAL' : 'TWD PAID', 0, -5);
-    ctx.font = '10px sans-serif';
-    ctx.fillText('OFFICIALLY VALIDATED', 0, 15);
-    ctx.restore();
-
-    // Footer signature
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#475569';
-    ctx.font = '11px sans-serif';
-    ctx.fillText('Authorized Collecting Officer: __________________________', 50, 680);
-    ctx.fillText('Customer Acknowledgment: __________________________', 50, 715);
-    ctx.font = 'italic 10px sans-serif';
-    ctx.fillText('This document serves as proof of payment upon portal validation.', 50, 745);
-
-    const generatedDataUrl = canvas.toDataURL('image/jpeg', 0.68);
-    setReceiptPhotoUrl(generatedDataUrl);
-    setOrNumber(sampleOr);
-    setPaymentAmount(samplePaid.toFixed(2));
-    setSettlementType(isSamplePartial ? 'partial' : 'full');
-    setValidationError(null);
-
-    // Run smart scanner
-    triggerSmartScan(generatedDataUrl);
-  };
-
   // Submit Receipt Confirmation
   const handleSubmitReceipt = (e: React.FormEvent) => {
     e.preventDefault();
@@ -524,6 +347,11 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
 
     if (!receiptPhotoUrl) {
       setValidationError('Please capture or upload a clear photo of your official payment receipt.');
+      return;
+    }
+
+    if (smartScanResult && smartScanResult.isValidReceipt === false) {
+      setValidationError('Cannot submit: The uploaded document failed official receipt authenticity validation. Please upload a clear photo of your genuine cashier payment receipt.');
       return;
     }
 
@@ -820,42 +648,15 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
 
           {/* Receipt Photo Upload & Live AI Identification Scanner */}
           <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-slate-200 flex items-center space-x-1.5">
                 <Camera className="h-4 w-4 text-blue-400" />
                 <span>Upload Physical Receipt Photo (Required)</span>
                 <span className="text-rose-400">*</span>
               </label>
-              
-              <div className="flex flex-wrap items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={handleLoadOfficialForm51}
-                  className="text-[11px] font-bold text-sky-200 hover:text-white bg-sky-950/70 hover:bg-sky-900 border border-sky-600/70 px-2.5 py-1 rounded-lg transition flex items-center space-x-1 cursor-pointer"
-                  title="Load real Philippine Government Accountable Form No. 51 / TWD Official Receipt"
-                >
-                  <ShieldCheck className="h-3 w-3 text-sky-400" />
-                  <span>Form 51 Official Sample</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleGenerateSampleReceipt(false)}
-                  className="text-[11px] font-bold text-blue-300 hover:text-white bg-blue-950/60 hover:bg-blue-900/80 border border-blue-700/60 px-2.5 py-1 rounded-lg transition flex items-center space-x-1 cursor-pointer"
-                  title="Generate authentic demo receipt for 100% full payment"
-                >
-                  <Sparkles className="h-3 w-3 text-blue-400" />
-                  <span>Sample Full Receipt</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleGenerateSampleReceipt(true)}
-                  className="text-[11px] font-bold text-amber-300 hover:text-white bg-amber-950/60 hover:bg-amber-900/80 border border-amber-700/60 px-2.5 py-1 rounded-lg transition flex items-center space-x-1 cursor-pointer"
-                  title="Generate authentic demo receipt for partial payment"
-                >
-                  <Percent className="h-3 w-3 text-amber-400" />
-                  <span>Sample Partial (50%)</span>
-                </button>
-              </div>
+              <span className="text-[11px] text-slate-400">
+                Official Accountable Form No. 51 / TWD Cashier Slip
+              </span>
             </div>
 
             <input
@@ -957,8 +758,58 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                   </div>
                 </div>
 
-                {/* Smart Photo Identification Card with Accountable Form No. 51 / Official Receipt Verification */}
-                {smartScanResult && !isScanning && (
+                {/* Smart Optical Identification Card with Accountable Form No. 51 / Official Receipt Verification */}
+                {smartScanResult && !isScanning && smartScanResult.isValidReceipt === false && (
+                  <div className="p-4 bg-gradient-to-r from-rose-950/90 to-slate-900 text-white border-t border-rose-500/50 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2 text-rose-300">
+                        <AlertTriangle className="h-5 w-5 text-rose-400 shrink-0" />
+                        <div>
+                          <span className="text-xs font-bold block">Document Authenticity Check Failed</span>
+                          <span className="text-[11px] text-rose-200/90 leading-tight block">
+                            Uploaded photo is not recognized as an authentic Tagoloan Water District Official Receipt.
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="text-[11px] text-rose-300 hover:text-white flex items-center space-x-1 transition cursor-pointer"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        <span>Upload Another</span>
+                      </button>
+                    </div>
+
+                    <div className="p-3 bg-black/40 rounded-xl border border-rose-500/30 text-[11px] text-slate-300 space-y-1.5">
+                      <p className="font-semibold text-rose-300 text-xs">Required Government Official Receipt Credentials Not Detected:</p>
+                      <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-300">
+                        <div className="flex items-center space-x-1 text-rose-300">
+                          <X className="h-3 w-3 text-rose-400 shrink-0" />
+                          <span>Republic Coat of Arms Seal: <strong>Missing</strong></span>
+                        </div>
+                        <div className="flex items-center space-x-1 text-rose-300">
+                          <X className="h-3 w-3 text-rose-400 shrink-0" />
+                          <span>Form 51 / Serial Number: <strong>Missing</strong></span>
+                        </div>
+                        <div className="flex items-center space-x-1 text-rose-300">
+                          <X className="h-3 w-3 text-rose-400 shrink-0" />
+                          <span>Agency: <strong>Tagoloan Water District Not Found</strong></span>
+                        </div>
+                        <div className="flex items-center space-x-1 text-rose-300">
+                          <X className="h-3 w-3 text-rose-400 shrink-0" />
+                          <span>Cashier Stamp / Signature: <strong>Unreadable</strong></span>
+                        </div>
+                      </div>
+                      <p className="pt-1 text-[10px] text-slate-400 leading-relaxed">
+                        Please take a clear, well-lit photograph directly facing your physical paper receipt issued by the Tagoloan Water District office cashier.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {smartScanResult && !isScanning && smartScanResult.isValidReceipt !== false && (
                   <div className="p-4 bg-gradient-to-r from-slate-900 to-blue-950 text-white border-t border-slate-700/80 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center space-x-2">
@@ -1320,9 +1171,9 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
 
               <button
                 type="submit"
-                disabled={isSubmitting || isLessThan50Percent || !receiptPhotoUrl || !orNumber.trim()}
+                disabled={isSubmitting || isLessThan50Percent || !receiptPhotoUrl || !orNumber.trim() || smartScanResult?.isValidReceipt === false}
                 className={`flex-1 sm:flex-none px-6 py-3 font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center space-x-2 ${
-                  isSubmitting || isLessThan50Percent || !receiptPhotoUrl || !orNumber.trim()
+                  isSubmitting || isLessThan50Percent || !receiptPhotoUrl || !orNumber.trim() || smartScanResult?.isValidReceipt === false
                     ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
                     : 'bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer'
                 }`}
