@@ -26,6 +26,12 @@ export default function GlobalLoadingSpinner({
 
   const content = (
     <div className={`flex flex-col items-center justify-center text-center p-6 sm:p-8 max-w-sm mx-auto ${className}`}>
+      {/* Official Municipal District Header Badge */}
+      <div className="mb-4 inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-blue-950/80 border border-blue-500/30 text-[10px] font-black uppercase tracking-wider text-blue-300 shadow-sm">
+        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+        <span>TAGOLOAN WATER DISTRICT</span>
+      </div>
+
       {/* Visual Animation Container with Image Logo */}
       <div className="relative mb-5 flex items-center justify-center">
         {/* Outer Glow & Ambient Rings */}
@@ -33,21 +39,20 @@ export default function GlobalLoadingSpinner({
         <div className="absolute -inset-1.5 rounded-3xl bg-linear-to-r from-blue-600 via-cyan-400 to-indigo-600 opacity-80 blur-sm animate-spin-slow"></div>
 
         {/* Outer Image Logo Frame */}
-        <div className="relative h-20 w-20 rounded-2xl bg-slate-900 border-2 border-white/30 shadow-2xl flex items-center justify-center backdrop-blur-md overflow-hidden p-0.5">
+        <div className="relative h-20 w-20 rounded-2xl bg-slate-950 border-2 border-white/30 shadow-2xl flex items-center justify-center backdrop-blur-md overflow-hidden p-1">
           {!imgError ? (
             <img 
               src={imgSrc}
-              alt="Tagoloan Water District"
+              alt="Tagoloan Water District Official Logo"
               referrerPolicy="no-referrer"
               onError={() => {
-                // Try fallback URL before hiding image
                 if (imgSrc.includes('lh3.googleusercontent.com')) {
                   setImgSrc('https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w500');
                 } else {
                   setImgError(true);
                 }
               }}
-              className="w-full h-full object-cover rounded-xl animate-pulse"
+              className="w-full h-full object-contain rounded-xl animate-pulse"
             />
           ) : (
             <div className="relative z-10 flex flex-col items-center justify-center">

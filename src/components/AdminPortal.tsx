@@ -309,25 +309,42 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const [isTabLoading, setIsTabLoading] = useState(false);
   const [isSubTabLoading, setIsSubTabLoading] = useState(false);
 
-  // Tab switching handler with data loading transition
+  // Tab switching handler with data loading transition featuring official water district logo
   const handleTabChange = (tab: typeof activeTab) => {
     if (tab === 'reports') {
       setIsTabLoading(true);
       setActiveTab('announcements');
       setAnnouncementsSubTab('customer_service');
       if (isMobileSidebarOpen) setIsMobileSidebarOpen(false);
+      mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
       setTimeout(() => {
         setIsTabLoading(false);
-      }, 220);
+      }, 350);
       return;
     }
-    if (tab === activeTab) return;
     setIsTabLoading(true);
     setActiveTab(tab);
     if (isMobileSidebarOpen) setIsMobileSidebarOpen(false);
+    mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
     setTimeout(() => {
       setIsTabLoading(false);
-    }, 220);
+    }, 350);
+  };
+
+  const handleMetersSubTabChange = (sub: 'inventory' | 'installations') => {
+    setIsTabLoading(true);
+    setMetersSubTab(sub);
+    setTimeout(() => {
+      setIsTabLoading(false);
+    }, 320);
+  };
+
+  const handleAnnouncementsSubTabChange = (sub: 'bulletin' | 'customer_service') => {
+    setIsTabLoading(true);
+    setAnnouncementsSubTab(sub);
+    setTimeout(() => {
+      setIsTabLoading(false);
+    }, 320);
   };
 
   // Helper to describe loading state for each tab
@@ -341,11 +358,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       case 'bills': return { title: 'Loading Invoicing & Billing Master Ledger...', subtitle: 'Computing tiered block consumption tariffs and overdue statements' };
       case 'payments': return { title: 'Initializing Cashier & Payment Gateway...', subtitle: 'Connecting to Tagoloan revenue counter and official receipt registers' };
       case 'readings': return { title: 'Loading Meter Readings History...', subtitle: 'Retrieving historical cubic meter index telemetry and photographic audit proofs' };
-      case 'meters': return { title: 'Loading Mechanical Water Meters Inventory...', subtitle: 'Syncing hardware serial registry, installation logs, and meter statuses' };
+      case 'meters': 
+        return metersSubTab === 'installations'
+          ? { title: 'Loading Meter Installation Requests & Activations...', subtitle: 'Querying connection application workflows, assigned meter tags, and field inspections' }
+          : { title: 'Loading Mechanical Water Meters Inventory...', subtitle: 'Syncing hardware serial registry, installation logs, and meter statuses' };
       case 'readers': return { title: 'Fetching Meter Readers & Route Registry...', subtitle: 'Loading field technician rosters, credentials, and geographic assignments' };
       case 'staff': return { title: 'Loading Staff & Permissions Directory...', subtitle: 'Verifying administrative access privileges and system security roles' };
       case 'barangays': return { title: 'Loading Service Area Zones...', subtitle: 'Fetching barangay zone schedules, assigned inspectors, and tariff parameters' };
-      case 'announcements': return { title: 'Retrieving Public Advisories & Notices...', subtitle: 'Fetching emergency broadcasts, maintenance schedules, and district bulletins' };
+      case 'announcements': 
+        return announcementsSubTab === 'customer_service'
+          ? { title: 'Loading Customer Service Inquiries...', subtitle: 'Synchronizing water leak reports, customer service inquiries, and reply threads' }
+          : { title: 'Retrieving Public Advisories & Notices...', subtitle: 'Fetching emergency broadcasts, maintenance schedules, and district bulletins' };
       case 'profile': return { title: 'Loading Administrator Settings...', subtitle: 'Retrieving municipal profile configuration and security preferences' };
       default: return { title: 'Fetching data from Tagoloan Water District...', subtitle: 'Synchronizing records with municipal database' };
     }
@@ -7228,7 +7251,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <div className="flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={() => setMetersSubTab('inventory')}
+                    onClick={() => handleMetersSubTabChange('inventory')}
                     className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 ${
                       metersSubTab === 'inventory'
                         ? 'bg-blue-600 text-white shadow-sm'
@@ -7242,7 +7265,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                   <button
                     type="button"
-                    onClick={() => setMetersSubTab('installations')}
+                    onClick={() => handleMetersSubTabChange('installations')}
                     className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 ${
                       metersSubTab === 'installations'
                         ? 'bg-blue-600 text-white shadow-sm'
@@ -8069,7 +8092,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 <div className="flex items-center space-x-2 bg-slate-100 p-1 rounded-xl shrink-0">
                   <button
                     type="button"
-                    onClick={() => setAnnouncementsSubTab('bulletin')}
+                    onClick={() => handleAnnouncementsSubTabChange('bulletin')}
                     className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       announcementsSubTab === 'bulletin'
                         ? 'bg-white text-blue-600 shadow-xs'
@@ -8085,7 +8108,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                   <button
                     type="button"
-                    onClick={() => setAnnouncementsSubTab('customer_service')}
+                    onClick={() => handleAnnouncementsSubTabChange('customer_service')}
                     className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       announcementsSubTab === 'customer_service'
                         ? 'bg-white text-blue-600 shadow-xs'

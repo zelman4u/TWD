@@ -296,21 +296,42 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const [isSyncing, setIsSyncing] = useState(false);
   const [isTabLoading, setIsTabLoading] = useState(false);
 
-  // Tab switching with data readiness indicator
+  const mainScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollMainToTop = (smooth = false) => {
+    mainScrollRef.current?.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'auto' });
+  };
+
+  // Tab switching with data readiness indicator featuring official water district logo
   const handleConsumerTabChange = (tab: typeof activeTab) => {
     if (tab === 'installation') {
+      setIsTabLoading(true);
       setActiveTab('usage');
       setUsageSubTab('installation');
       if (mobileSidebarOpen) setMobileSidebarOpen(false);
+      scrollMainToTop();
+      setTimeout(() => {
+        setIsTabLoading(false);
+      }, 350);
       return;
     }
-    if (tab === activeTab) return;
     setIsTabLoading(true);
     setActiveTab(tab);
     if (mobileSidebarOpen) setMobileSidebarOpen(false);
+    scrollMainToTop();
     setTimeout(() => {
       setIsTabLoading(false);
-    }, 220);
+    }, 350);
+  };
+
+  const handleUsageSubTabChange = (sub: 'consumption' | 'installation') => {
+    setIsTabLoading(true);
+    setUsageSubTab(sub);
+    if (activeTab === 'installation') setActiveTab('usage');
+    scrollMainToTop();
+    setTimeout(() => {
+      setIsTabLoading(false);
+    }, 320);
   };
 
   const getConsumerTabLoadingMessage = (tab: typeof activeTab) => {
@@ -318,7 +339,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       case 'dashboard': return { title: 'Compiling Water Service Dashboard...', subtitle: 'Fetching current cubic meter index, billing summary, and active notices' };
       case 'installation': return { title: 'Loading Water Meter Installation Tracker...', subtitle: 'Retrieving installation schedule, field progress, and account validation status' };
       case 'bills': return { title: 'Loading My Water Bills Ledger...', subtitle: 'Calculating itemized tariff breakdown, due dates, and official payment receipts' };
-      case 'usage': return { title: 'Querying Historical Consumption Telemetry...', subtitle: 'Aggregating monthly cubic meter trends and conservation metrics' };
+      case 'usage': 
+        return usageSubTab === 'installation'
+          ? { title: 'Loading Water Meter Installation Tracker...', subtitle: 'Retrieving installation schedule, field progress, and account validation status' }
+          : { title: 'Querying Historical Consumption Telemetry...', subtitle: 'Aggregating monthly cubic meter trends and conservation metrics' };
       case 'reports': return { title: 'Querying Consumer Service Reports...', subtitle: 'Retrieving water leak reports, pressure issues, and administrative reply threads' };
       case 'notifications': return { title: 'Retrieving Account Alerts & Bulletins...', subtitle: 'Loading water advisory notices, billing alerts, and payment confirmations' };
       case 'profile': return { title: 'Loading Consumer Profile Information...', subtitle: 'Fetching registered address, account credentials, and meter tag identifiers' };
@@ -457,7 +481,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   const confirmedIssuedAccRef = useRef<string>('');
   const reconciledIssuedAccRef = useRef<string>('');
   const notifDropdownRef = useRef<HTMLDivElement | null>(null);
-  const mainScrollRef = useRef<HTMLDivElement | null>(null);
 
   const getViewerBannerStorageKey = (): string => {
     return String(
@@ -2626,12 +2649,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     }
     setShowNotifDropdown(false);
     setSelectedBellNotification(null);
-
-    const scrollMainToTop = () => {
-      setTimeout(() => {
-        mainScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-      }, 60);
-    };
 
     // STRICT RULE: Report / Concern Reply notifications MUST ONLY route to Reports & Inquiries (never Dashboard or Profile)
     if (isReportNotification(notif)) {
@@ -6098,10 +6115,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setUsageSubTab('consumption');
-                    if (activeTab === 'installation') setActiveTab('usage');
-                  }}
+                  onClick={() => handleUsageSubTabChange('consumption')}
                   className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                     usageSubTab === 'consumption' && activeTab !== 'installation'
                       ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
@@ -6115,7 +6129,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                 <button
                   type="button"
-                  onClick={() => setUsageSubTab('installation')}
+                  onClick={() => handleUsageSubTabChange('installation')}
                   className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                     usageSubTab === 'installation' || activeTab === 'installation'
                       ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
