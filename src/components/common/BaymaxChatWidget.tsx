@@ -256,31 +256,52 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // Quick suggestions based on mode and language
+  // Quick suggestions based on mode, language, and conversation state
   const getSuggestions = () => {
+    const lastBotMsg = messages[messages.length - 1]?.text || '';
+    const hasAskedSatisfaction = lastBotMsg.includes('satisfied') || lastBotMsg.includes('care');
+
     if (isConsumer) {
       if (language === 'ceb') {
-        return [
+        const list = [
           'Pila akong bayranan karon?',
+          'Kinsa ka, Baymax?',
+          'Unsaon pagdaginot sa tubig?',
           'Unsa ang 50% partial payment rule?',
-          'Unsaon pag-report ug tulo sa tubig?',
-          'Kanus-a maputol akong linya kung dili mabayran?',
+          'Asa dapit inyong opisina ug hotline?',
+          'Joke bi, Baymax! 😄',
         ];
+        if (hasAskedSatisfaction) {
+          list.unshift('Satisfied na ko sa imong pag-atiman! ❤️');
+        }
+        return list;
       }
       if (language === 'tl') {
-        return [
-          'Magkano ang aking kasalukuyang bill?',
-          'Paano magbayad ng 50% partial payment?',
-          'Paano mag-report ng tagas ng tubig?',
-          'Ano ang patakaran sa disconnection?',
+        const list = [
+          'Magkano ang aking bill ngayon?',
+          'Sino ka, Baymax?',
+          'Tips sa pagtipid ng tubig',
+          'Paano ang 50% partial payment?',
+          'Saan po ang inyong opisina at hotline?',
+          'Mag-joke ka naman! 😄',
         ];
+        if (hasAskedSatisfaction) {
+          list.unshift('Satisfied na po ako sa inyong pag-aalaga! ❤️');
+        }
+        return list;
       }
-      return [
+      const list = [
         'How much is my current water bill?',
-        'What is the 50% partial payment rule?',
-        'How do I report a water leak or low pressure?',
-        'How to schedule water meter installation?',
+        'Who are you, Baymax?',
+        '5 tips to save water',
+        'Explain the 50% partial payment rule',
+        'Where is TWD office located?',
+        'Tell me a water joke! 😄',
       ];
+      if (hasAskedSatisfaction) {
+        list.unshift('I am satisfied with my care! ❤️');
+      }
+      return list;
     } else {
       if (language === 'ceb') {
         return [
@@ -288,6 +309,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
           'I-summarize ang collection ug billing status',
           'Unsaon pag-adjust sa water tariff rates?',
           'Ipakita ang route assignments sa mga meter reader',
+          'Unsay status sa mga water meters karon?',
         ];
       }
       if (language === 'tl') {
@@ -296,13 +318,15 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
           'Ipaliwanag ang arrears carryover calculation',
           'Paano mag-validate ng bagong installation request?',
           'Suriin ang delinquency rate ng mga barangay',
+          'Ipakita ang telemetry ng mga meter reader',
         ];
       }
       return [
         'Scan 3-month overdue accounts for cutting notices',
-        'How does Arrears carryover work?',
+        'How does Arrears carryover calculation work?',
         'Field meter readers route & sync status',
         'Generate compliance guidelines for COA & LWUA',
+        'Show active consumer & meter statistics',
       ];
     }
   };

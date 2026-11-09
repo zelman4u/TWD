@@ -66,8 +66,7 @@ import {
   UserCheck,
   Gauge,
   Wrench,
-  Building,
-  Bot
+  Building
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User as UserType, Consumer, MeterReading, Announcement, ConsumerNotification, ConsumerReport, WaterMeterInstallationRequest } from '../types';
@@ -3586,18 +3585,6 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
           {/* Quick Header Actions */}
           <div className="flex items-center space-x-2 sm:space-x-3 shrink-0">
-            {/* Baymax 1.0 AI Companion Button */}
-            <button
-              type="button"
-              onClick={() => setIsBaymaxChatOpen(prev => !prev)}
-              aria-label="Ask Baymax 1.0 - AI Consumer Companion"
-              title="Baymax 1.0 • Your AI Consumer Companion (Bisaya, Tagalog, English)"
-              className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-sky-600/25 to-blue-600/25 hover:from-sky-600/40 hover:to-blue-600/40 text-sky-300 hover:text-white rounded-xl border border-sky-500/40 text-xs font-bold transition shadow-xs cursor-pointer"
-            >
-              <Bot className="h-4 w-4 text-sky-400" />
-              <span className="hidden sm:inline font-black tracking-tight">Baymax 1.0</span>
-            </button>
-
             {outstandingSum > 0 && activeTab !== 'bills' && (
               <button
                 onClick={() => {

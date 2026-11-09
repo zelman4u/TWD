@@ -72,8 +72,7 @@ import {
   MessageSquare,
   Smartphone,
   Bell,
-  Wrench,
-  Bot
+  Wrench
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerReport, WaterMeterInstallationRequest, MobileBridgeStatus } from '../types';
@@ -4468,18 +4467,6 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           </div>
 
           <div className="flex items-center space-x-2 sm:space-x-3 shrink-0 ml-2">
-            {/* Baymax 2.0 Admin AI Companion Button */}
-            <button
-              type="button"
-              onClick={() => setIsAdminBaymaxChatOpen(prev => !prev)}
-              aria-label="Ask Baymax 2.0 - Admin Companion"
-              title="Baymax 2.0 • Your Admin Companion (English, Tagalog, Bisaya)"
-              className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-emerald-950/70 via-slate-900 to-emerald-950/70 hover:from-emerald-900/90 hover:to-slate-800 text-emerald-400 hover:text-white rounded-xl border border-emerald-500/50 text-xs font-bold transition shadow-sm cursor-pointer"
-            >
-              <Bot className="h-4 w-4 text-emerald-400" />
-              <span className="hidden sm:inline font-black tracking-tight">Baymax 2.0</span>
-            </button>
-
             {/* Admin Notification Bell for Consumer Replies, Notice Inquiries & Installation Requests */}
             {(() => {
               type CombinedAdminAlert =
