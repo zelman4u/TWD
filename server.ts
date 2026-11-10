@@ -3748,6 +3748,55 @@ app.post("/api/readings/:id/approve", (req, res) => {
   });
 });
 
+// 7.01 Admin Batch Approves Readings in a Single Atomic Request (POST /api/readings/batch-approve)
+app.post(["/api/readings/batch-approve", "/api/readings/approve-batch"], (req, res) => {
+  const ids: string[] = Array.isArray(req.body?.ids)
+    ? req.body.ids
+    : Array.isArray(req.body)
+      ? req.body
+      : [];
+  const approvedBy = req.body?.approvedBy || "TWD Admin";
+
+  if (!ids || ids.length === 0) {
+    return res.json({ success: true, count: 0, message: "No reading IDs provided." });
+  }
+
+  let approvedCount = 0;
+  const idSet = new Set(ids.map(id => String(id).trim()));
+
+  for (const item of pendingMobileReadings) {
+    if (idSet.has(item.id)) {
+      item.status = "approved";
+      item.approvedBy = approvedBy;
+      approvedCount++;
+
+      const cleanAcc = String(item.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+      const targetConsumer = syncedConsumers.find(
+        c => String(c.accountNumber || "").replace(/^#/, "").trim().toUpperCase() === cleanAcc
+      );
+      if (targetConsumer) {
+        targetConsumer.previousReading = normalizeOdometerServer(item.currentReading ?? item.presentReading ?? 0);
+        targetConsumer.lastReadingDate = item.readingDate;
+      }
+    }
+  }
+
+  if (approvedCount > 0) {
+    savePortalSyncStore();
+    broadcast("READINGS_BATCH_VERIFIED", {
+      count: approvedCount,
+      approvedBy,
+      message: `${approvedCount} meter readings have been verified and billed.`
+    });
+  }
+
+  res.json({
+    success: true,
+    count: approvedCount,
+    message: `${approvedCount} reading(s) approved successfully.`
+  });
+});
+
 // 7.05 Admin Rejects / Flags Reading for Field Re-inspection (POST / PATCH /api/readings/:id/reject)
 app.all("/api/readings/:id/reject", (req, res) => {
   const { id } = req.params;

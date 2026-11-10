@@ -3650,9 +3650,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       } else {
         workingReadings.unshift(billedRecord);
       }
-
-      apiClient.approveReading(r.id, currentUser.name).catch(() => {});
     });
+
+    // Notify backend in ONE batched request instead of spamming dozens of parallel requests!
+    const targetIdList = Array.from(targetIds);
+    if (targetIdList.length === 1) {
+      apiClient.approveReading(targetIdList[0], currentUser.name).catch(() => {});
+    } else if (targetIdList.length > 1) {
+      apiClient.approveReadingBatch(targetIdList, currentUser.name).catch(() => {});
+    }
 
     const updatedReadings = workingReadings
       .map(r => (targetIds.has(r.id) ? issuedMap.get(r.id) || r : r))

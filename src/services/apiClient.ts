@@ -197,15 +197,16 @@ const inFlightReconcileRequests = new Map<string, Promise<any>>();
  * Executes an HTTP fetch request with timeout, retries, and exponential backoff
  */
 async function executeRequestWithRetry<T = any>(url: string, options: RequestOptions = {}): Promise<T> {
+  const method = ((options as any).method || 'GET').toUpperCase();
+  const defaultRetries = method === 'GET' ? 2 : 0;
   const {
-    retries = 2,
+    retries = defaultRetries,
     retryDelayMs = 800,
     timeoutMs = 12000,
     skipLogging = false,
     ...fetchOptions
   } = options;
 
-  const method = (fetchOptions.method || 'GET').toUpperCase();
   const routeKey = normalizeApiRouteKey(url);
 
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -353,6 +354,13 @@ async function executeRequestWithRetry<T = any>(url: string, options: RequestOpt
       // Handle aborted/timeout
       if (err.name === 'AbortError') {
         lastError = new Error(`Request timed out after ${timeoutMs}ms for ${method} ${url}`);
+      } else if (err?.message === 'Failed to fetch' || err?.name === 'TypeError') {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          lastError = new Error('Device is currently offline');
+          (lastError as any).isOffline = true;
+          (lastError as any).noRetry = true;
+          throw lastError;
+        }
       }
 
       if (attempt >= retries) {
@@ -506,7 +514,17 @@ export const apiClient = {
   approveReading: async (id: string, approvedBy?: string) => {
     return apiClient.post<{ success: boolean; message?: string }>(
       `/api/readings/${encodeURIComponent(id)}/approve`,
-      approvedBy ? { approvedBy } : undefined
+      approvedBy ? { approvedBy } : undefined,
+      { retries: 0 }
+    );
+  },
+
+  approveReadingBatch: async (ids: string[], approvedBy?: string) => {
+    if (!ids || ids.length === 0) return { success: true, count: 0 };
+    return apiClient.post<{ success: boolean; count?: number; message?: string }>(
+      '/api/readings/batch-approve',
+      { ids, approvedBy },
+      { retries: 0 }
     );
   },
 
