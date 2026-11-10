@@ -10,23 +10,16 @@ import {
   Bell, 
   CheckCircle2, 
   AlertTriangle, 
-  Calculator, 
   RotateCcw, 
   ShieldCheck, 
-  Users, 
-  Radio, 
   Sliders, 
-  FileText, 
-  Calendar, 
   Building2, 
   Home, 
-  HelpCircle,
-  Clock,
   ArrowRight,
-  RefreshCw,
   Flame,
   Layers,
   Zap,
+  Percent,
   Check
 } from 'lucide-react';
 import { 
@@ -56,9 +49,7 @@ interface TariffRateManagerProps {
 export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
   currentUser,
   consumers,
-  setConsumers,
   readings,
-  setReadings,
   setAnnouncements,
   onTariffApplied
 }) => {
@@ -67,7 +58,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
   // Active saved tariff
   const [activeTariff, setActiveTariff] = useState<WaterTariffConfig>(() => getActiveTariffConfig());
 
-  // Form state for editing / proposing price hike
+  // Form state for proposed price hike
   const [formConfig, setFormConfig] = useState<WaterTariffConfig>(() => ({
     ...activeTariff,
     version: (activeTariff.version || 1) + 1,
@@ -78,29 +69,30 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
     memoNotes: 'Official Tagoloan Water District price hike adjustment to cover escalating electricity tariff, water treatment inputs, and municipal transmission pipeline maintenance.'
   }));
 
-  // Target classification state: 'Residential' (Regular community / single account) | 'Commercial' (Private high-consumption accounts) | 'both'
+  // Target classification state: 'Residential' | 'Commercial' | 'both'
   const [targetScope, setTargetScope] = useState<'Residential' | 'Commercial' | 'both'>('Residential');
 
-  // Options toggles (existing/historical readings are always protected and locked at their original billed rate)
-  const [protectHistoricalReadings] = useState(true);
+  // Adjustment mode: 'quick' | 'manual'
+  const [adjustmentMode, setAdjustmentMode] = useState<'quick' | 'manual'>('quick');
+
+  // Quick adjustment type: 'percentage' | 'flat_m3'
+  const [quickType, setQuickType] = useState<'percentage' | 'flat_m3'>('flat_m3');
+  const [quickFlatValue, setQuickFlatValue] = useState<number>(2.00);
+  const [quickPercentValue, setQuickPercentValue] = useState<number>(10);
+
+  // Notification options
   const [notifyAllConsumers, setNotifyAllConsumers] = useState(true);
   const [postAnnouncement, setPostAnnouncement] = useState(true);
   const [broadcastWebSocket, setBroadcastWebSocket] = useState(true);
 
-  // Quick hike preset helpers
-  const [percentageInput, setPercentageInput] = useState<number>(10);
-  const [perM3HikeInput, setPerM3HikeInput] = useState<number>(2.00);
-  const [baseHikeInput, setBaseHikeInput] = useState<number>(2.00);
-
   // Live impact simulator state
   const [simUsage, setSimUsage] = useState<number>(18);
-  const [simType, setSimType] = useState<'Residential' | 'Commercial'>('Residential');
 
   // Confirmation modal state
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
 
-  // Filtered account and statement counts
+  // Filtered account counts
   const residentialConsumersCount = consumers.filter(
     c => c.consumerType !== 'Commercial' && c.accountNumber && !c.accountNumber.toUpperCase().startsWith('PENDING')
   ).length;
@@ -108,250 +100,110 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
     c => c.consumerType === 'Commercial' && c.accountNumber && !c.accountNumber.toUpperCase().startsWith('PENDING')
   ).length;
 
-  const residentialUnpaidCount = readings.filter(
-    r => r.paymentStatus !== 'paid' && r.consumption > 0 && r.classification !== 'Commercial'
-  ).length;
-  const commercialUnpaidCount = readings.filter(
-    r => r.paymentStatus !== 'paid' && r.consumption > 0 && r.classification === 'Commercial'
-  ).length;
-
-  // Quick percentage adjuster respecting targetScope (Residential vs Commercial)
-  const handleApplyPercentageHike = (pct: number) => {
-    const multiplier = 1 + (pct / 100);
+  // Apply quick flat increase per m3
+  const applyQuickFlatHike = (hikePerM3: number) => {
+    setQuickFlatValue(hikePerM3);
     setFormConfig(prev => {
       const updated = { ...prev };
       if (targetScope === 'both' || targetScope === 'Residential') {
-        const resBase = Math.round((prev.residential.ratePerM3 ?? prev.residential.baseMinCharge) * multiplier * 100) / 100;
+        const nextResBase = Math.round(((activeTariff.residential.ratePerM3 ?? activeTariff.residential.baseMinCharge) + hikePerM3) * 100) / 100;
         updated.residential = {
-          ratePerM3: resBase,
-          baseMinCharge: resBase,
-          tier1_rate: Math.round(prev.residential.tier1_rate * multiplier * 100) / 100,
-          tier2_rate: Math.round(prev.residential.tier2_rate * multiplier * 100) / 100,
-          tier3_rate: Math.round(prev.residential.tier3_rate * multiplier * 100) / 100,
-          tier4_rate: Math.round(prev.residential.tier4_rate * multiplier * 100) / 100,
-        };
-      }
-      if (targetScope === 'both' || targetScope === 'Commercial') {
-        const commBase = Math.round((prev.commercial.ratePerM3 ?? prev.commercial.baseMinCharge) * multiplier * 100) / 100;
-        updated.commercial = {
-          ratePerM3: commBase,
-          baseMinCharge: commBase,
-          tier1_rate: Math.round(prev.commercial.tier1_rate * multiplier * 100) / 100,
-          tier2_rate: Math.round(prev.commercial.tier2_rate * multiplier * 100) / 100,
-          tier3_rate: Math.round(prev.commercial.tier3_rate * multiplier * 100) / 100,
-          tier4_rate: Math.round(prev.commercial.tier4_rate * multiplier * 100) / 100,
-          tier5_rate: Math.round(prev.commercial.tier5_rate * multiplier * 100) / 100,
-        };
-      }
-      return updated;
-    });
-
-    if (targetScope === 'Residential') {
-      toast.info(`Applied +${pct}% price hike to Residential (regular community / single-account) tiers only.`);
-    } else if (targetScope === 'Commercial') {
-      toast.info(`Applied +${pct}% price hike to Commercial (private high-consumption) tiers only.`);
-    } else {
-      toast.info(`Applied +${pct}% price hike across all meter reading tiers.`);
-    }
-  };
-
-  // Quick per-cubic-meter hike respecting targetScope (Residential vs Commercial)
-  const handleApplyPerM3Hike = (hikePerM3: number) => {
-    setFormConfig(prev => {
-      const updated = { ...prev };
-      if (targetScope === 'both' || targetScope === 'Residential') {
-        const nextResBase = Math.round(((prev.residential.ratePerM3 ?? prev.residential.baseMinCharge) + hikePerM3) * 100) / 100;
-        updated.residential = {
-          ...prev.residential,
+          ...activeTariff.residential,
           ratePerM3: nextResBase,
           baseMinCharge: nextResBase,
-          tier1_rate: Math.round((prev.residential.tier1_rate + hikePerM3) * 100) / 100,
-          tier2_rate: Math.round((prev.residential.tier2_rate + hikePerM3) * 100) / 100,
-          tier3_rate: Math.round((prev.residential.tier3_rate + hikePerM3) * 100) / 100,
-          tier4_rate: Math.round((prev.residential.tier4_rate + hikePerM3) * 100) / 100,
+          tier1_rate: Math.round((activeTariff.residential.tier1_rate + hikePerM3) * 100) / 100,
+          tier2_rate: Math.round((activeTariff.residential.tier2_rate + hikePerM3) * 100) / 100,
+          tier3_rate: Math.round((activeTariff.residential.tier3_rate + hikePerM3) * 100) / 100,
+          tier4_rate: Math.round((activeTariff.residential.tier4_rate + hikePerM3) * 100) / 100,
         };
       }
       if (targetScope === 'both' || targetScope === 'Commercial') {
         const commHike = targetScope === 'Commercial' ? hikePerM3 : Math.round((hikePerM3 * 1.5) * 100) / 100;
-        const nextCommBase = Math.round(((prev.commercial.ratePerM3 ?? prev.commercial.baseMinCharge) + commHike) * 100) / 100;
+        const nextCommBase = Math.round(((activeTariff.commercial.ratePerM3 ?? activeTariff.commercial.baseMinCharge) + commHike) * 100) / 100;
         updated.commercial = {
-          ...prev.commercial,
+          ...activeTariff.commercial,
           ratePerM3: nextCommBase,
           baseMinCharge: nextCommBase,
-          tier1_rate: Math.round((prev.commercial.tier1_rate + commHike) * 100) / 100,
-          tier2_rate: Math.round((prev.commercial.tier2_rate + commHike) * 100) / 100,
-          tier3_rate: Math.round((prev.commercial.tier3_rate + commHike) * 100) / 100,
-          tier4_rate: Math.round((prev.commercial.tier4_rate + commHike) * 100) / 100,
-          tier5_rate: Math.round((prev.commercial.tier5_rate + commHike) * 100) / 100,
+          tier1_rate: Math.round((activeTariff.commercial.tier1_rate + commHike) * 100) / 100,
+          tier2_rate: Math.round((activeTariff.commercial.tier2_rate + commHike) * 100) / 100,
+          tier3_rate: Math.round((activeTariff.commercial.tier3_rate + commHike) * 100) / 100,
+          tier4_rate: Math.round((activeTariff.commercial.tier4_rate + commHike) * 100) / 100,
+          tier5_rate: Math.round((activeTariff.commercial.tier5_rate + commHike) * 100) / 100,
         };
       }
       return updated;
     });
-
-    if (targetScope === 'Residential') {
-      toast.info(`Applied +₱${hikePerM3.toFixed(2)}/m³ hike to Residential (regular community / single-account) tiers only.`);
-    } else if (targetScope === 'Commercial') {
-      toast.info(`Applied +₱${hikePerM3.toFixed(2)}/m³ hike to Commercial (private high-consumption) tiers only.`);
-    } else {
-      toast.info(`Applied volumetric price hike (+₱${hikePerM3.toFixed(2)}/m³ Res, +₱${(hikePerM3 * 1.5).toFixed(2)}/m³ Comm).`);
-    }
   };
 
-  // Quick baseline per-m³ charge hike respecting targetScope
-  const handleApplyBaseHike = (baseHike: number) => {
+  // Apply quick percentage increase
+  const applyQuickPercentHike = (pct: number) => {
+    setQuickPercentValue(pct);
+    const multiplier = 1 + (pct / 100);
     setFormConfig(prev => {
       const updated = { ...prev };
       if (targetScope === 'both' || targetScope === 'Residential') {
-        const nextResBase = Math.round(((prev.residential.ratePerM3 ?? prev.residential.baseMinCharge) + baseHike) * 100) / 100;
+        const resBase = Math.round((activeTariff.residential.ratePerM3 ?? activeTariff.residential.baseMinCharge) * multiplier * 100) / 100;
         updated.residential = {
-          ...prev.residential,
-          ratePerM3: nextResBase,
-          baseMinCharge: nextResBase,
+          ratePerM3: resBase,
+          baseMinCharge: resBase,
+          tier1_rate: Math.round(activeTariff.residential.tier1_rate * multiplier * 100) / 100,
+          tier2_rate: Math.round(activeTariff.residential.tier2_rate * multiplier * 100) / 100,
+          tier3_rate: Math.round(activeTariff.residential.tier3_rate * multiplier * 100) / 100,
+          tier4_rate: Math.round(activeTariff.residential.tier4_rate * multiplier * 100) / 100,
         };
       }
       if (targetScope === 'both' || targetScope === 'Commercial') {
-        const commBaseHike = targetScope === 'Commercial' ? baseHike : Math.round((baseHike * 1.5) * 100) / 100;
-        const nextCommBase = Math.round(((prev.commercial.ratePerM3 ?? prev.commercial.baseMinCharge) + commBaseHike) * 100) / 100;
+        const commBase = Math.round((activeTariff.commercial.ratePerM3 ?? activeTariff.commercial.baseMinCharge) * multiplier * 100) / 100;
         updated.commercial = {
-          ...prev.commercial,
-          ratePerM3: nextCommBase,
-          baseMinCharge: nextCommBase,
+          ratePerM3: commBase,
+          baseMinCharge: commBase,
+          tier1_rate: Math.round(activeTariff.commercial.tier1_rate * multiplier * 100) / 100,
+          tier2_rate: Math.round(activeTariff.commercial.tier2_rate * multiplier * 100) / 100,
+          tier3_rate: Math.round(activeTariff.commercial.tier3_rate * multiplier * 100) / 100,
+          tier4_rate: Math.round(activeTariff.commercial.tier4_rate * multiplier * 100) / 100,
+          tier5_rate: Math.round(activeTariff.commercial.tier5_rate * multiplier * 100) / 100,
         };
       }
       return updated;
     });
-
-    if (targetScope === 'Residential') {
-      toast.info(`Applied +₱${baseHike.toFixed(2)}/m³ baseline rate hike to Residential community accounts only.`);
-    } else if (targetScope === 'Commercial') {
-      toast.info(`Applied +₱${baseHike.toFixed(2)}/m³ baseline rate hike to Commercial private accounts only.`);
-    } else {
-      toast.info(`Applied +₱${baseHike.toFixed(2)}/m³ baseline rate hike.`);
-    }
   };
 
   // Reset to default baseline
   const handleResetToBaseline = () => {
-    setFormConfig({
-      ...DEFAULT_TARIFF_CONFIG,
-      version: (activeTariff.version || 1) + 1,
-      updatedAt: new Date().toISOString(),
-      updatedBy: currentUser.name || 'Admin Operations Staff',
-      effectiveDate: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
-      resolutionNumber: 'TWD-LWUA-RESTORED',
-      memoNotes: 'Standard baseline rates under PD 198 and LWUA guidelines restored.'
-    });
-    toast.info('Reset form rates to Tagoloan standard baseline.');
+    setFormConfig(prev => ({
+      ...prev,
+      residential: { ...DEFAULT_TARIFF_CONFIG.residential },
+      commercial: { ...DEFAULT_TARIFF_CONFIG.commercial },
+      franchiseTaxRate: DEFAULT_TARIFF_CONFIG.franchiseTaxRate,
+      latePaymentSurchargeRate: DEFAULT_TARIFF_CONFIG.latePaymentSurchargeRate,
+    }));
+    toast.info('Rates reset to standard baseline (₱10.00/m³ Residential, ₱25.00/m³ Commercial).');
   };
 
-  // Calculation for live simulation
-  const currentSimBill = calculateWaterTariff(simUsage, simType, activeTariff);
-  const currentSimTax = calculateFranchiseTax(currentSimBill, activeTariff);
-  const currentSimTotal = Math.round((currentSimBill + currentSimTax) * 100) / 100;
-
-  const proposedSimBill = calculateWaterTariff(simUsage, simType, formConfig);
-  const proposedSimTax = calculateFranchiseTax(proposedSimBill, formConfig);
-  const proposedSimTotal = Math.round((proposedSimBill + proposedSimTax) * 100) / 100;
-
-  const simDiff = Math.round((proposedSimTotal - currentSimTotal) * 100) / 100;
-  const simPercentDiff = currentSimTotal > 0 ? Math.round(((proposedSimTotal - currentSimTotal) / currentSimTotal) * 100) : 0;
-
-  // Unpaid readings count according to current target scope
-  const isResTargeted = targetScope === 'both' || targetScope === 'Residential';
-  const isCommTargeted = targetScope === 'both' || targetScope === 'Commercial';
-
-  const targetedUnpaidReadingsCount = readings.filter(r => {
-    if (r.paymentStatus === 'paid' || r.consumption <= 0) return false;
-    const isComm = r.classification === 'Commercial';
-    return (isComm && isCommTargeted) || (!isComm && isResTargeted);
-  }).length;
-
-  const targetedConsumersCount = consumers.filter(c => {
-    if (!c.accountNumber || c.accountNumber.toUpperCase().startsWith('PENDING')) return false;
-    const isComm = c.consumerType === 'Commercial';
-    return (isComm && isCommTargeted) || (!isComm && isResTargeted);
-  }).length;
-
-  // Commit and Implement Price Hike (Strictly Forward-Only: Locks existing readings, applies new rates ONLY to NEW readings)
-  const handleCommitTariffHike = () => {
+  // Execute tariff save
+  const handleApplyTariff = async () => {
     setIsApplying(true);
-
     try {
-      const previousTariff = activeTariff;
       const finalConfig: WaterTariffConfig = {
         ...formConfig,
-        baselineSchema: OFFICIAL_TARIFF_BASELINE_SCHEMA,
-        residential: isResTargeted ? formConfig.residential : previousTariff.residential,
-        commercial: isCommTargeted ? formConfig.commercial : previousTariff.commercial,
-        version: (previousTariff.version || 1) + 1,
+        version: (activeTariff.version || 1) + 1,
         updatedAt: new Date().toISOString(),
-        updatedBy: currentUser.name || 'Administrator',
+        updatedBy: currentUser.name || 'Admin Operations Staff',
       };
 
-      // 1. Freeze any legacy un-stamped readings at their PREVIOUS tariff BEFORE saving the new rate hike
-      // so existing/old readings NEVER get retroactively altered by the new price adjustment.
-      let frozenHistoricalCount = 0;
-      const allReadings = mockDb.getReadings();
-      const lockedReadings = allReadings.map(r => {
-        if (r.billAmount === undefined && r.consumption >= 0) {
-          frozenHistoricalCount++;
-          const lockedBasic = calculateWaterTariff(
-            r.consumption || 0,
-            r.classification || 'Residential',
-            previousTariff
-          );
-          const lockedTax = r.franchiseTax !== undefined
-            ? r.franchiseTax
-            : calculateFranchiseTax(lockedBasic, previousTariff);
-          const lockedTotal = r.totalAmount !== undefined
-            ? r.totalAmount
-            : Math.round((lockedBasic + lockedTax + (r.arrears || 0)) * 100) / 100;
-          const lockedRemaining = r.remainingBalance !== undefined
-            ? r.remainingBalance
-            : Math.max(0, lockedTotal - (r.paidAmount || 0));
-          return {
-            ...r,
-            billAmount: lockedBasic,
-            franchiseTax: lockedTax,
-            totalAmount: lockedTotal,
-            remainingBalance: lockedRemaining,
-            appliedTariffVersion: r.appliedTariffVersion ?? (previousTariff.version || 1),
-          };
-        }
-        return r;
-      });
-
-      if (frozenHistoricalCount > 0) {
-        mockDb.saveReadings(lockedReadings);
-        setReadings(lockedReadings);
-      }
-
-      // 2. Save active tariff config in mockDb, localStorage, API (/api/tariff-config), and Firestore
-      // All NEW meter readings recorded from this moment forward will automatically use finalConfig!
+      // 1. Save to mockDb and active state
       mockDb.saveTariffConfig(finalConfig);
       setActiveTariff(finalConfig);
 
-      // 3. Dispatch a single district-wide notification (`accountNumber: 'ALL'`) instead of 50+ per-consumer writes
-      const notifiedConsumersCount = notifyAllConsumers ? targetedConsumersCount : 0;
-      const scopeLabel =
-        targetScope === 'Residential'
-          ? 'Residential Community'
-          : targetScope === 'Commercial'
-          ? 'Commercial Private'
-          : 'Residential & Commercial';
+      // 2. Persist to API
+      apiClient.saveTariffConfig(finalConfig).catch(() => {});
 
+      // 3. Issue notifications if selected
       if (notifyAllConsumers) {
+        const scopeLabel = targetScope === 'Residential' ? 'Residential' : targetScope === 'Commercial' ? 'Commercial' : 'District-Wide';
         const resBase = finalConfig.residential.ratePerM3 ?? finalConfig.residential.baseMinCharge;
         const commBase = finalConfig.commercial.ratePerM3 ?? finalConfig.commercial.baseMinCharge;
-        const oldResBase = previousTariff.residential.ratePerM3 ?? previousTariff.residential.baseMinCharge;
-        const oldCommBase = previousTariff.commercial.ratePerM3 ?? previousTariff.commercial.baseMinCharge;
-
-        const summaryMsg =
-          targetScope === 'Residential'
-            ? `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Residential water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Baseline: ₱${oldResBase.toFixed(2)}/m³ → ₱${resBase.toFixed(2)}/m³, 2% Franchise Tax, 10% Late Penalty). Previous billed statements remain unchanged.`
-            : targetScope === 'Commercial'
-            ? `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, Commercial water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Baseline: ₱${oldCommBase.toFixed(2)}/m³ → ₱${commBase.toFixed(2)}/m³, 2% Franchise Tax, 10% Late Penalty). Previous billed statements remain unchanged.`
-            : `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, updated water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (Residential: ₱${resBase.toFixed(2)}/m³, Commercial: ₱${commBase.toFixed(2)}/m³, 2% Franchise Tax, 10% Late Penalty). Previous billed statements remain unchanged.`;
+        const summaryMsg = `Pursuant to Board Resolution ${finalConfig.resolutionNumber}, water rates effective ${finalConfig.effectiveDate} apply to NEW meter readings going forward (${targetScope === 'Commercial' ? `Commercial: ₱${commBase.toFixed(2)}/m³` : `Residential: ₱${resBase.toFixed(2)}/m³`}, 2% Franchise Tax, 10% Late Penalty). Previous billed statements remain unchanged.`;
 
         const createdNotif = mockDb.addNotification({
           accountNumber: 'ALL',
@@ -364,38 +216,15 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
           notification: createdNotif,
           accountNumber: 'ALL',
         });
-        sendRealtimeMessage('notification:new', {
-          notification: createdNotif,
-          accountNumber: 'ALL',
-          title: createdNotif.title,
-          message: createdNotif.message,
-          type: 'announcement',
-        });
       }
 
-      // 4. Publish official public advisory announcement to mockDb, REST API, and WebSocket
+      // 4. Publish public announcement
       if (postAnnouncement) {
-        let annTitle = `District Advisory: Water Tariff Rate Adjustment (${finalConfig.resolutionNumber})`;
-        let annContent = '';
-        const resRateVal = finalConfig.residential.ratePerM3 ?? finalConfig.residential.baseMinCharge;
-        const commRateVal = finalConfig.commercial.ratePerM3 ?? finalConfig.commercial.baseMinCharge;
-        const prevResRateVal = previousTariff.residential.ratePerM3 ?? previousTariff.residential.baseMinCharge;
-        const prevCommRateVal = previousTariff.commercial.ratePerM3 ?? previousTariff.commercial.baseMinCharge;
-
-        if (targetScope === 'Residential') {
-          annTitle = `District Advisory: Residential Water Tariff Adjustment (${finalConfig.resolutionNumber})`;
-          annContent = `Notice to Tagoloan Residential Community Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for NEW Residential meter readings under Board Resolution ${finalConfig.resolutionNumber}. Residential Baseline Rate: ₱${resRateVal.toFixed(2)}/m³ (adjusted from ₱${prevResRateVal.toFixed(2)}/m³), plus ${(finalConfig.franchiseTaxRate * 100).toFixed(0)}% Franchise Tax and ${(finalConfig.latePaymentSurchargeRate * 100).toFixed(0)}% Late Penalty. Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
-        } else if (targetScope === 'Commercial') {
-          annTitle = `District Advisory: Commercial Private Account Tariff Adjustment (${finalConfig.resolutionNumber})`;
-          annContent = `Notice to Tagoloan Commercial & Private Enterprise Accounts: Effective ${finalConfig.effectiveDate}, an official water tariff adjustment has been implemented for NEW Commercial meter readings under Board Resolution ${finalConfig.resolutionNumber}. Commercial Baseline Rate: ₱${commRateVal.toFixed(2)}/m³ (adjusted from ₱${prevCommRateVal.toFixed(2)}/m³), plus ${(finalConfig.franchiseTaxRate * 100).toFixed(0)}% Franchise Tax and ${(finalConfig.latePaymentSurchargeRate * 100).toFixed(0)}% Late Penalty. Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
-        } else {
-          annContent = `Notice to all Tagoloan Water District Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff rate adjustment has been implemented for NEW meter readings under ${finalConfig.resolutionNumber}. Residential Baseline: ₱${resRateVal.toFixed(2)}/m³ | Commercial Baseline: ₱${commRateVal.toFixed(2)}/m³ | Franchise Tax: ${(finalConfig.franchiseTaxRate * 100).toFixed(0)}% | Late Penalty: ${(finalConfig.latePaymentSurchargeRate * 100).toFixed(0)}%. Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`;
-        }
-
+        const resBase = finalConfig.residential.ratePerM3 ?? finalConfig.residential.baseMinCharge;
         const newAnn: Announcement = {
           id: `ann-tariff-${Date.now()}`,
-          title: annTitle,
-          content: annContent,
+          title: `District Advisory: Water Tariff Rate Adjustment (${finalConfig.resolutionNumber})`,
+          content: `Notice to all Tagoloan Water District Consumers: Effective ${finalConfig.effectiveDate}, an official water tariff rate adjustment has been implemented under ${finalConfig.resolutionNumber}. Baseline rate: ₱${resBase.toFixed(2)}/m³ (Residential). Existing/prior billed readings remain unchanged. ${finalConfig.memoNotes}`,
           category: 'info',
           date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
           postedBy: currentUser.name || 'Board of Directors / General Manager',
@@ -403,16 +232,9 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
         const currentAnns = mockDb.getAnnouncements();
         mockDb.saveAnnouncements([newAnn, ...currentAnns]);
         setAnnouncements(prev => [newAnn, ...prev.filter(a => a.id !== newAnn.id)]);
-
-        apiClient.createAnnouncement(newAnn).catch(() => {});
-
-        sendRealtimeMessage('ANNOUNCEMENT_PUBLISHED', {
-          announcement: newAnn,
-          message: `Official Advisory Published: ${newAnn.title}`,
-        });
       }
 
-      // 5. Real-time WebSocket broadcast to all connected consumers and reader tabs
+      // 5. Broadcast WebSocket sync
       if (broadcastWebSocket) {
         sendRealtimeMessage('tariff:updated', {
           config: finalConfig,
@@ -420,23 +242,19 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
           targetScope,
           resolutionNumber: finalConfig.resolutionNumber,
           effectiveDate: finalConfig.effectiveDate,
-          residentialBase: finalConfig.residential.baseMinCharge,
-          commercialBase: finalConfig.commercial.baseMinCharge,
-          updatedBy: currentUser.name,
-          message: `Official price adjustment implemented for ${targetScope.toUpperCase()} under ${finalConfig.resolutionNumber} (applies to new readings going forward).`,
         });
       }
 
-      // 6. Record official System Audit Log
+      // 6. Audit log
       mockDb.addAuditLog(
         currentUser.id,
         currentUser.name,
         'admin',
         `Water Tariff Price Adjustment (${targetScope.toUpperCase()})`,
-        `Adjusted ${targetScope} water tariff under ${finalConfig.resolutionNumber} (Version v${finalConfig.version}). Res Base: ₱${finalConfig.residential.baseMinCharge}, Comm Base: ₱${finalConfig.commercial.baseMinCharge}. Effective ${finalConfig.effectiveDate} for NEW readings only (${allReadings.length} historical readings preserved).`
+        `Adjusted ${targetScope} water tariff under ${finalConfig.resolutionNumber} (v${finalConfig.version}). Effective ${finalConfig.effectiveDate} for NEW readings only.`
       );
 
-      // 7. Dispatch local cross-tab event
+      // 7. Dispatch events
       window.dispatchEvent(new CustomEvent('twd_database_updated'));
       window.dispatchEvent(new CustomEvent('twd_tariff_updated', { detail: finalConfig }));
 
@@ -445,15 +263,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
       }
 
       setShowConfirmModal(false);
-      const scopeSummary =
-        targetScope === 'Residential'
-          ? 'Residential (Regular Community)'
-          : targetScope === 'Commercial'
-          ? 'Commercial (Private Accounts)'
-          : 'All (Residential & Commercial)';
-      toast.success(
-        `Price adjustment applied for ${scopeSummary}! New rates will automatically apply to all NEW meter readings going forward while ${allReadings.length} existing readings remain locked at their original billed rates.`
-      );
+      toast.success(`Water tariff adjustment successfully saved and implemented! New rates will apply to NEW meter readings.`);
     } catch (err: any) {
       toast.error(`Failed to implement price hike: ${err?.message || 'Unknown error'}`);
     } finally {
@@ -461,29 +271,43 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
     }
   };
 
+  // Helper simulator calculations
+  const simClass: 'Residential' | 'Commercial' = targetScope === 'Commercial' ? 'Commercial' : 'Residential';
+  const oldBaseCost = calculateWaterTariff(simUsage, simClass, activeTariff);
+  const oldTax = calculateFranchiseTax(oldBaseCost, activeTariff);
+  const oldTotal = Math.round((oldBaseCost + oldTax) * 100) / 100;
+
+  const newBaseCost = calculateWaterTariff(simUsage, simClass, formConfig);
+  const newTax = calculateFranchiseTax(newBaseCost, formConfig);
+  const newTotal = Math.round((newBaseCost + newTax) * 100) / 100;
+
+  const simDiff = Math.round((newTotal - oldTotal) * 100) / 100;
+  const simPercentDiff = oldTotal > 0 ? Math.round(((newTotal - oldTotal) / oldTotal) * 1000) / 10 : 0;
+
+  const effectiveResRate = formConfig.residential.ratePerM3 ?? formConfig.residential.baseMinCharge;
+  const effectiveCommRate = formConfig.commercial.ratePerM3 ?? formConfig.commercial.baseMinCharge;
+  const activeResRate = activeTariff.residential.ratePerM3 ?? activeTariff.residential.baseMinCharge;
+  const activeCommRate = activeTariff.commercial.ratePerM3 ?? activeTariff.commercial.baseMinCharge;
+
   const formEffectiveDateId = useId();
   const formResolutionNumberId = useId();
   const formMemoNotesId = useId();
-  const formFranchiseTaxId = useId();
-  const formLatePenaltyId = useId();
 
   return (
     <div className="space-y-6 animate-fade-in" id="tariff-rate-manager">
       
-      {/* 1. Header Banner & Active Status */}
-      <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 rounded-3xl p-6 sm:p-8 text-white border border-blue-900/50 shadow-xl relative overflow-hidden">
-        <div className="absolute right-0 top-0 translate-x-8 -translate-y-8 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div>
-
-        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 relative z-10">
+      {/* 1. Header Banner */}
+      <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 rounded-3xl p-6 sm:p-7 text-white border border-blue-900/50 shadow-xl relative overflow-hidden">
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-5 relative z-10">
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="px-3 py-1 bg-blue-500/20 border border-blue-400/40 text-blue-300 font-black text-[10px] uppercase tracking-wider rounded-xl flex items-center space-x-1.5 shadow-xs">
                 <Sliders className="h-3.5 w-3.5 text-blue-400" />
-                <span>LWUA & PD 198 RATE ENGINE</span>
+                <span>WATER TARIFF & PRICE HIKE MANAGER</span>
               </span>
               <span className="px-3 py-1 bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 font-black text-[10px] uppercase tracking-wider rounded-xl flex items-center space-x-1.5">
                 <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span>Version {activeTariff.version || 1} Active</span>
+                <span>v{activeTariff.version || 1} Active</span>
               </span>
               <span className="px-3 py-1 bg-slate-800 text-slate-300 font-mono text-[10px] rounded-xl border border-slate-700">
                 {activeTariff.resolutionNumber}
@@ -491,1096 +315,594 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
             </div>
 
             <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white">
-              Water Tariff Schedule & Price Hike Implementation Center
+              Water Meter Reading Tariff Rate Adjustment
             </h2>
-            <p className="text-xs sm:text-sm text-slate-300 max-w-3xl leading-relaxed">
-              Authorized staff can configure baseline lifeline charges, progressive volumetric brackets, and statutory taxes. 
-              Price hike adjustments automatically recalculate active meter readings and dispatch instant official notifications to all consumer accounts.
+            <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
+              Easily adjust residential or commercial water rates in 3 simple steps. Adjustments apply strictly to new readings going forward; existing issued statements and payments remain protected.
             </p>
           </div>
 
-          <div className="flex flex-col sm:flex-row lg:flex-col gap-2 shrink-0 w-full sm:w-auto">
-            <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4 text-center min-w-[200px]">
-              <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400 block">Current Residential Rate</span>
-              <div className="text-2xl font-black text-emerald-400 font-mono mt-0.5">
-                ₱{(activeTariff.residential.ratePerM3 ?? activeTariff.residential.baseMinCharge).toFixed(2)} / m³
+          <div className="flex sm:flex-row lg:flex-col gap-2 shrink-0 w-full sm:w-auto">
+            <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-3 text-center min-w-[170px] flex-1 sm:flex-initial">
+              <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400 block">Current Residential</span>
+              <div className="text-xl font-black text-emerald-400 font-mono mt-0.5">
+                ₱{activeResRate.toFixed(2)} / m³
               </div>
-              <span className="text-[10px] text-slate-400">Official Baseline • {(activeTariff.franchiseTaxRate * 100).toFixed(0)}% Tax • {(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}% Penalty</span>
+              <span className="text-[10px] text-slate-400">Baseline (1-10 m³)</span>
             </div>
-            <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4 text-center min-w-[200px]">
-              <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400 block">Current Commercial Rate</span>
-              <div className="text-2xl font-black text-blue-400 font-mono mt-0.5">
-                ₱{(activeTariff.commercial.ratePerM3 ?? activeTariff.commercial.baseMinCharge).toFixed(2)} / m³
+            <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-3 text-center min-w-[170px] flex-1 sm:flex-initial">
+              <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400 block">Current Commercial</span>
+              <div className="text-xl font-black text-blue-400 font-mono mt-0.5">
+                ₱{activeCommRate.toFixed(2)} / m³
               </div>
-              <span className="text-[10px] text-slate-400">Official Baseline • {(activeTariff.franchiseTaxRate * 100).toFixed(0)}% Tax • {(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}% Penalty</span>
+              <span className="text-[10px] text-slate-400">Baseline (1-10 m³)</span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* 2. Meter Reading Price Hike Controller & Quick Surcharge Tools */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-5 text-slate-100">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-800">
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="p-1.5 bg-blue-950 text-blue-400 rounded-lg border border-blue-800/80">
-                <Flame className="h-4 w-4" />
-              </span>
-              <h3 className="text-sm font-black text-white uppercase tracking-wider">
-                Meter Reading Price Hike Controller & Quick Surcharge Tools
-              </h3>
-            </div>
-            <p className="text-xs text-slate-300 mt-1">
-              Set or adjust price hikes that directly apply to every consumer meter reading. Changes automatically recalculate active statements and notify all registered accounts.
-            </p>
-          </div>
-          <button
-            onClick={handleResetToBaseline}
-            className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition flex items-center space-x-1.5 self-start sm:self-auto cursor-pointer border border-slate-700"
-            title="Reset form values to standard LWUA base rates"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            <span>Reset to Standard Baseline</span>
-          </button>
-        </div>
-
-        {/* CLASSIFICATION IDENTIFIER: Residential vs Commercial */}
-        <div className="bg-slate-950 p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
+      {/* Main Adjustment Card */}
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-7 shadow-xl space-y-6 text-slate-100">
+        
+        {/* STEP 1: Select Target Scope */}
+        <div className="space-y-3 pb-5 border-b border-slate-800">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <div className="flex items-center space-x-2">
-                <Sliders className="h-4 w-4 text-sky-400" />
-                <h4 className="text-xs font-black uppercase text-white tracking-wider">
-                  Identify Target Account Classification for Price Adjustment
-                </h4>
+                <span className="h-6 w-6 rounded-full bg-blue-600 text-white font-black text-xs flex items-center justify-center">1</span>
+                <h3 className="text-sm font-black text-white uppercase tracking-wider">
+                  Select Target Classification to Adjust
+                </h3>
               </div>
-              <p className="text-[11px] text-slate-300 mt-0.5">
-                Residential and Commercial accounts do not share the same pricing. Commercial accounts are private entities with expensive, high-volume water consumption, while Residential is community use water consumption handled per single individual account holder.
+              <p className="text-xs text-slate-400 mt-1">
+                Choose whether this price adjustment applies to regular household consumers, commercial accounts, or both.
               </p>
             </div>
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-900 border border-slate-700 text-[10px] font-black uppercase tracking-wider text-slate-300 shrink-0 self-start sm:self-auto">
-              <span>Active Target:</span>
-              <strong className={targetScope === 'Residential' ? 'text-emerald-400' : targetScope === 'Commercial' ? 'text-blue-400' : 'text-purple-400'}>
-                {targetScope === 'Residential' ? 'Residential (Regular Community)' : targetScope === 'Commercial' ? 'Commercial (Private Accounts)' : 'Both Classifications'}
-              </strong>
-            </div>
+            <button
+              type="button"
+              onClick={handleResetToBaseline}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs rounded-xl transition flex items-center space-x-1.5 self-start sm:self-auto cursor-pointer border border-slate-700"
+              title="Reset form values to default baseline"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>Reset Baseline</span>
+            </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
-            {/* Option 1: Residential Only */}
+            {/* Residential */}
             <button
               type="button"
-              onClick={() => {
-                setTargetScope('Residential');
-                setSimType('Residential');
-              }}
-              className={`p-3.5 rounded-2xl border text-left transition cursor-pointer relative flex flex-col justify-between ${
+              onClick={() => setTargetScope('Residential')}
+              className={`p-4 rounded-2xl border text-left transition cursor-pointer flex flex-col justify-between ${
                 targetScope === 'Residential'
-                  ? 'bg-emerald-950/70 border-emerald-500 ring-2 ring-emerald-500/30 shadow-md'
-                  : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 opacity-80 hover:opacity-100'
+                  ? 'bg-emerald-950/70 border-emerald-500 ring-2 ring-emerald-500/40 shadow-lg'
+                  : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 opacity-75 hover:opacity-100'
               }`}
             >
               <div>
-                <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center justify-between mb-1">
                   <span className="inline-flex items-center space-x-1.5 text-xs font-black text-emerald-300">
                     <Home className="h-4 w-4 text-emerald-400" />
                     <span>Residential Accounts</span>
                   </span>
-                  <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-emerald-950 border border-emerald-700 text-emerald-300">
-                    Regular Price
-                  </span>
+                  {targetScope === 'Residential' && <Check className="h-4 w-4 text-emerald-400" />}
                 </div>
                 <p className="text-[11px] text-slate-300 leading-snug">
-                  Community use water consumption. Handled with single / individual account persons (not company or group based). Standard affordable domestic rate.
+                  Regular domestic community connections ({residentialConsumersCount} registered accounts).
                 </p>
               </div>
-              <div className="mt-3 pt-2.5 border-t border-emerald-900/60 flex items-center justify-between text-[10px] font-mono text-emerald-200">
-                <span>{residentialConsumersCount} accounts • {residentialUnpaidCount} unbilled</span>
-                <span className="font-bold text-white">₱{(formConfig.residential.ratePerM3 ?? formConfig.residential.baseMinCharge).toFixed(2)}/m³ Base</span>
+              <div className="mt-3 pt-2 border-t border-emerald-900/60 flex items-center justify-between text-xs font-mono font-bold text-emerald-300">
+                <span>Proposed Base:</span>
+                <span>₱{effectiveResRate.toFixed(2)}/m³</span>
               </div>
             </button>
 
-            {/* Option 2: Commercial Only */}
+            {/* Commercial */}
             <button
               type="button"
-              onClick={() => {
-                setTargetScope('Commercial');
-                setSimType('Commercial');
-              }}
-              className={`p-3.5 rounded-2xl border text-left transition cursor-pointer relative flex flex-col justify-between ${
+              onClick={() => setTargetScope('Commercial')}
+              className={`p-4 rounded-2xl border text-left transition cursor-pointer flex flex-col justify-between ${
                 targetScope === 'Commercial'
-                  ? 'bg-blue-950/70 border-blue-500 ring-2 ring-blue-500/30 shadow-md'
-                  : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 opacity-80 hover:opacity-100'
+                  ? 'bg-blue-950/70 border-blue-500 ring-2 ring-blue-500/40 shadow-lg'
+                  : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 opacity-75 hover:opacity-100'
               }`}
             >
               <div>
-                <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center justify-between mb-1">
                   <span className="inline-flex items-center space-x-1.5 text-xs font-black text-blue-300">
                     <Building2 className="h-4 w-4 text-blue-400" />
                     <span>Commercial Accounts</span>
                   </span>
-                  <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-blue-950 border border-blue-700 text-blue-300">
-                    Private / Heavy Use
-                  </span>
+                  {targetScope === 'Commercial' && <Check className="h-4 w-4 text-blue-400" />}
                 </div>
                 <p className="text-[11px] text-slate-300 leading-snug">
-                  Private commercial accounts with the most expensive water consumption rates. Designed for business operations and high volumetric demand.
+                  Private enterprises & high-volume commercial accounts ({commercialConsumersCount} registered accounts).
                 </p>
               </div>
-              <div className="mt-3 pt-2.5 border-t border-blue-900/60 flex items-center justify-between text-[10px] font-mono text-blue-200">
-                <span>{commercialConsumersCount} accounts • {commercialUnpaidCount} unbilled</span>
-                <span className="font-bold text-white">₱{(formConfig.commercial.ratePerM3 ?? formConfig.commercial.baseMinCharge).toFixed(2)}/m³ Base</span>
+              <div className="mt-3 pt-2 border-t border-blue-900/60 flex items-center justify-between text-xs font-mono font-bold text-blue-300">
+                <span>Proposed Base:</span>
+                <span>₱{effectiveCommRate.toFixed(2)}/m³</span>
               </div>
             </button>
 
-            {/* Option 3: Both Residential & Commercial */}
+            {/* Both */}
             <button
               type="button"
-              onClick={() => {
-                setTargetScope('both');
-              }}
-              className={`p-3.5 rounded-2xl border text-left transition cursor-pointer relative flex flex-col justify-between ${
+              onClick={() => setTargetScope('both')}
+              className={`p-4 rounded-2xl border text-left transition cursor-pointer flex flex-col justify-between ${
                 targetScope === 'both'
-                  ? 'bg-purple-950/70 border-purple-500 ring-2 ring-purple-500/30 shadow-md'
-                  : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 opacity-80 hover:opacity-100'
+                  ? 'bg-purple-950/70 border-purple-500 ring-2 ring-purple-500/40 shadow-lg'
+                  : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 opacity-75 hover:opacity-100'
               }`}
             >
               <div>
-                <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center justify-between mb-1">
                   <span className="inline-flex items-center space-x-1.5 text-xs font-black text-purple-300">
                     <Layers className="h-4 w-4 text-purple-400" />
                     <span>Both Classifications</span>
                   </span>
-                  <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-purple-950 border border-purple-700 text-purple-300">
-                    Dual Scope
-                  </span>
+                  {targetScope === 'both' && <Check className="h-4 w-4 text-purple-400" />}
                 </div>
                 <p className="text-[11px] text-slate-300 leading-snug">
-                  Configure and apply price adjustments across both Residential and Commercial tiers simultaneously with distinct rates for each.
+                  Apply proportional adjustment to both Residential and Commercial tiers simultaneously.
                 </p>
               </div>
-              <div className="mt-3 pt-2.5 border-t border-purple-900/60 flex items-center justify-between text-[10px] font-mono text-purple-200">
-                <span>{consumers.length} total accounts</span>
-                <span className="font-bold text-white">Separate Rates</span>
+              <div className="mt-3 pt-2 border-t border-purple-900/60 flex items-center justify-between text-xs font-mono font-bold text-purple-300">
+                <span>Dual Scope:</span>
+                <span>Res ₱{effectiveResRate.toFixed(2)} • Comm ₱{effectiveCommRate.toFixed(2)}</span>
               </div>
             </button>
           </div>
         </div>
 
-        {/* 3 Quick Action Blocks */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* A. Per-Cubic-Meter Hike */}
-          <div className="p-4 bg-slate-950/80 border border-blue-900/60 rounded-2xl space-y-3 flex flex-col justify-between">
+        {/* STEP 2: Adjustment Mode (Quick Hike vs Direct Bracket Tuning) */}
+        <div className="space-y-4 pb-5 border-b border-slate-800">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black text-blue-300 flex items-center space-x-1.5">
-                  <Zap className="h-3.5 w-3.5 text-blue-400" />
-                  <span>Price Hike on Reading (+₱/m³)</span>
-                </span>
-                <span className="text-[10px] font-bold uppercase text-blue-300 bg-blue-950 border border-blue-800 px-2 py-0.5 rounded">Per m³</span>
+              <div className="flex items-center space-x-2">
+                <span className="h-6 w-6 rounded-full bg-blue-600 text-white font-black text-xs flex items-center justify-center">2</span>
+                <h3 className="text-sm font-black text-white uppercase tracking-wider">
+                  Set Your Adjustment Values
+                </h3>
               </div>
-              <p className="text-[11px] text-slate-300 mt-1">
-                Adds flat amount per cubic meter to progressive tiers.
+              <p className="text-xs text-slate-400 mt-1">
+                Use the Quick Hike tool or switch to Manual Tier Tuning for precise bracket control.
               </p>
-              <div className="mt-2 text-[10px] font-mono font-bold text-slate-300 bg-slate-900 px-2 py-1 rounded border border-slate-800">
-                Target: <strong className={targetScope === 'Residential' ? 'text-emerald-400' : targetScope === 'Commercial' ? 'text-blue-400' : 'text-purple-400'}>
-                  {targetScope === 'Residential' ? 'Residential Only' : targetScope === 'Commercial' ? 'Commercial Only' : 'Both'}
-                </strong>
-              </div>
             </div>
 
-            <div className="space-y-2">
-              <div className="grid grid-cols-4 gap-1.5">
-                {[1.00, 1.50, 2.00, 3.00].map(amt => (
-                  <button
-                    key={`m3-${amt}`}
-                    type="button"
-                    onClick={() => handleApplyPerM3Hike(amt)}
-                    className="py-1.5 px-1 bg-slate-900 hover:bg-blue-600 hover:text-white border border-blue-800/80 text-blue-200 rounded-lg text-xs font-black transition cursor-pointer text-center"
-                  >
-                    +₱{amt.toFixed(amt % 1 === 0 ? 0 : 2)}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex items-center space-x-1.5 pt-1">
-                <div className="flex items-center bg-slate-900 border border-blue-700/80 rounded-xl px-2 py-1 flex-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.25"
-                    min="0.25"
-                    max="50"
-                    value={perM3HikeInput}
-                    onChange={(e) => setPerM3HikeInput(Number(e.target.value) || 0)}
-                    className="w-full text-xs font-mono font-bold text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 font-mono">/m³</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleApplyPerM3Hike(perM3HikeInput)}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap shadow-sm"
-                >
-                  Apply Hike
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* B. Baseline 1-10 m³ Per-Cubic-Meter Hike */}
-          <div className="p-4 bg-slate-950/80 border border-emerald-900/60 rounded-2xl space-y-3 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black text-emerald-300 flex items-center space-x-1.5">
-                  <DollarSign className="h-3.5 w-3.5 text-emerald-400" />
-                  <span>Baseline Rate Hike (+₱/m³)</span>
-                </span>
-                <span className="text-[10px] font-bold uppercase text-emerald-300 bg-emerald-950 border border-emerald-800 px-2 py-0.5 rounded">1-10 m³</span>
-              </div>
-              <p className="text-[11px] text-slate-300 mt-1">
-                Adjusts official per-m³ baseline rate for initial 1–10 m³.
-              </p>
-              <div className="mt-2 text-[10px] font-mono font-bold text-slate-300 bg-slate-900 px-2 py-1 rounded border border-slate-800">
-                Target: <strong className={targetScope === 'Residential' ? 'text-emerald-400' : targetScope === 'Commercial' ? 'text-blue-400' : 'text-purple-400'}>
-                  {targetScope === 'Residential' ? 'Residential Only' : targetScope === 'Commercial' ? 'Commercial Only' : 'Both'}
-                </strong>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="grid grid-cols-4 gap-1.5">
-                {[1.00, 2.00, 3.00, 5.00].map(amt => (
-                  <button
-                    key={`base-${amt}`}
-                    type="button"
-                    onClick={() => handleApplyBaseHike(amt)}
-                    className="py-1.5 px-1 bg-slate-900 hover:bg-emerald-600 hover:text-white border border-emerald-800/80 text-emerald-200 rounded-lg text-xs font-black transition cursor-pointer text-center"
-                  >
-                    +₱{amt.toFixed(0)}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex items-center space-x-1.5 pt-1">
-                <div className="flex items-center bg-slate-900 border border-emerald-700/80 rounded-xl px-2 py-1 flex-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="0.5"
-                    max="100"
-                    value={baseHikeInput}
-                    onChange={(e) => setBaseHikeInput(Number(e.target.value) || 0)}
-                    className="w-full text-xs font-mono font-bold text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 font-mono">/m³</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleApplyBaseHike(baseHikeInput)}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap shadow-sm"
-                >
-                  Apply Base
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* C. Percentage Price Hike */}
-          <div className="p-4 bg-slate-950/80 border border-indigo-900/60 rounded-2xl space-y-3 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black text-indigo-300 flex items-center space-x-1.5">
-                  <TrendingUp className="h-3.5 w-3.5 text-indigo-400" />
-                  <span>Percentage Price Hike (+% Tiers)</span>
-                </span>
-                <span className="text-[10px] font-bold uppercase text-indigo-300 bg-indigo-950 border border-indigo-800 px-2 py-0.5 rounded">Proportional</span>
-              </div>
-              <p className="text-[11px] text-slate-300 mt-1">
-                Escalates lifeline base and progressive volumetric brackets.
-              </p>
-              <div className="mt-2 text-[10px] font-mono font-bold text-slate-300 bg-slate-900 px-2 py-1 rounded border border-slate-800">
-                Target: <strong className={targetScope === 'Residential' ? 'text-emerald-400' : targetScope === 'Commercial' ? 'text-blue-400' : 'text-purple-400'}>
-                  {targetScope === 'Residential' ? 'Residential Only' : targetScope === 'Commercial' ? 'Commercial Only' : 'Both'}
-                </strong>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="grid grid-cols-4 gap-1.5">
-                {[5, 10, 15, 20].map(pct => (
-                  <button
-                    key={`pct-${pct}`}
-                    type="button"
-                    onClick={() => handleApplyPercentageHike(pct)}
-                    className="py-1.5 px-1 bg-slate-900 hover:bg-indigo-600 hover:text-white border border-indigo-800/80 text-indigo-200 rounded-lg text-xs font-black transition cursor-pointer text-center"
-                  >
-                    +{pct}%
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex items-center space-x-1.5 pt-1">
-                <div className="flex items-center bg-slate-900 border border-indigo-700/80 rounded-xl px-2 py-1 flex-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">+</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="100"
-                    value={percentageInput}
-                    onChange={(e) => setPercentageInput(Number(e.target.value) || 0)}
-                    className="w-full text-xs font-mono font-bold text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-xs font-bold text-slate-400 mr-1">%</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleApplyPercentageHike(percentageInput)}
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap shadow-sm"
-                >
-                  Apply %
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Live Reading Impact Matrix: Sample Consumers */}
-        <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-4 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <span className="text-xs font-black text-white uppercase tracking-wider flex items-center space-x-1.5">
-                <Layers className="h-3.5 w-3.5 text-blue-400" />
-                <span>Reading Impact Matrix: Before vs After Price Hike on Sample Meters</span>
-              </span>
-              <span className="text-[11px] text-slate-300">Live preview of how proposed rates alter bills across typical consumption volumes.</span>
-            </div>
-            <span className="text-[10px] font-bold text-slate-300 bg-slate-900 px-2.5 py-1 rounded-md border border-slate-700">
-              Includes 2% Franchise Tax • +10% Late Penalty After Due Date
-            </span>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-xs text-left">
-              <thead>
-                <tr className="border-b border-slate-800 text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-slate-900/60">
-                  <th className="py-2.5 px-3">Consumption Volume</th>
-                  <th className="py-2.5 px-3">Customer Category</th>
-                  <th className="py-2.5 px-3">Current Active Bill</th>
-                  <th className="py-2.5 px-3">Proposed Price Hike Bill</th>
-                  <th className="py-2.5 px-3 text-right">Net Price Increase</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800 font-mono text-[11px]">
-                {[
-                  { volume: 10, label: '10 m³ (Baseline Domestic)', type: 'Residential' as const },
-                  { volume: 16, label: '16 m³ (Average Domestic)', type: 'Residential' as const },
-                  { volume: 25, label: '25 m³ (Standard Household)', type: 'Residential' as const },
-                  { volume: 38, label: '38 m³ (High Domestic)', type: 'Residential' as const },
-                  { volume: 30, label: '30 m³ (Small Business)', type: 'Commercial' as const },
-                  { volume: 65, label: '65 m³ (Commercial Establishment)', type: 'Commercial' as const },
-                ].map((sample, idx) => {
-                  const currBasic = calculateWaterTariff(sample.volume, sample.type, activeTariff);
-                  const currTax = calculateFranchiseTax(currBasic, activeTariff);
-                  const currTotal = Math.round((currBasic + currTax) * 100) / 100;
-
-                  const propBasic = calculateWaterTariff(sample.volume, sample.type, formConfig);
-                  const propTax = calculateFranchiseTax(propBasic, formConfig);
-                  const propTotal = Math.round((propBasic + propTax) * 100) / 100;
-
-                  const diff = Math.round((propTotal - currTotal) * 100) / 100;
-                  const pctChange = currTotal > 0 ? Math.round(((propTotal - currTotal) / currTotal) * 100) : 0;
-
-                  return (
-                    <tr key={`sample-read-${idx}`} className="hover:bg-slate-900/70 transition">
-                      <td className="py-2.5 px-3 font-sans font-bold text-slate-100">{sample.label}</td>
-                      <td className="py-2.5 px-3 font-sans">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${
-                          sample.type === 'Commercial' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-emerald-950 text-emerald-300 border-emerald-800'
-                        }`}>
-                          {sample.type}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-300">₱{currTotal.toFixed(2)}</td>
-                      <td className="py-2.5 px-3 font-bold text-white">₱{propTotal.toFixed(2)}</td>
-                      <td className="py-2.5 px-3 text-right">
-                        <span className={`inline-flex items-center space-x-1 font-bold ${
-                          diff > 0 ? 'text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800/80' : 'text-slate-400'
-                        }`}>
-                          <span>{diff >= 0 ? `+₱${diff.toFixed(2)}` : `-₱${Math.abs(diff).toFixed(2)}`}</span>
-                          <span className="text-[10px] opacity-75">({pctChange >= 0 ? `+${pctChange}%` : `${pctChange}%`})</span>
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      {/* 3. Granular Tariff Brackets Form */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        
-        {/* RESIDENTIAL TARIFF SCHEDULE */}
-        <div className={`bg-slate-900 border rounded-3xl p-6 shadow-xl space-y-5 text-slate-100 transition-all ${
-          targetScope === 'Residential' ? 'border-emerald-500/80 ring-2 ring-emerald-500/20' : 'border-slate-800'
-        }`}>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-            <div className="flex items-center space-x-2.5">
-              <div className="p-2 bg-emerald-950 text-emerald-400 rounded-xl border border-emerald-800/80">
-                <Home className="h-5 w-5" />
-              </div>
-              <div>
-                <h4 className="text-sm font-black text-white uppercase tracking-wider">
-                  Residential Tariff Schedule (Regular Community)
-                </h4>
-                <p className="text-[11px] text-slate-300">Single individual / family community consumption</p>
-              </div>
-            </div>
-            <div className="flex items-center space-x-2">
-              <span className="px-2.5 py-1 bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-black uppercase rounded-lg">
-                Regular Price
-              </span>
+            <div className="inline-flex p-1 bg-slate-950 rounded-xl border border-slate-800 self-start sm:self-auto">
               <button
                 type="button"
-                onClick={() => {
-                  setTargetScope('Residential');
-                  setShowConfirmModal(true);
-                }}
-                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1 shadow-xs"
-                title="Apply changes to Residential community accounts only"
+                onClick={() => setAdjustmentMode('quick')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1.5 ${
+                  adjustmentMode === 'quick' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
+                }`}
               >
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                <span>Apply Residential</span>
+                <Zap className="h-3.5 w-3.5" />
+                <span>Quick Hike</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAdjustmentMode('manual')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1.5 ${
+                  adjustmentMode === 'manual' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Sliders className="h-3.5 w-3.5" />
+                <span>Manual Bracket Tuning</span>
               </button>
             </div>
           </div>
 
-          <div className="p-3 bg-emerald-950/40 border border-emerald-900/60 rounded-2xl text-[11px] text-emerald-200/90 leading-relaxed">
-            <strong className="text-emerald-300 font-bold block mb-0.5">Community Use Water Consumption:</strong>
-            Handled on an individual/single-account person basis (not based on a company or groups). Standard affordable regular pricing under municipal utility regulations.
-          </div>
-
-          <div className="space-y-4">
-            {/* Official Baseline Rate (1 – 10 m³) */}
-            <div className="p-3.5 bg-slate-950/80 border border-emerald-900/60 rounded-2xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-black text-white block">Baseline Rate (1 – 10 m³)</span>
-                <span className="text-[10px] text-slate-300">Official baseline rate per cubic meter</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">Current: ₱{(activeTariff.residential.ratePerM3 ?? activeTariff.residential.baseMinCharge).toFixed(2)}/m³</span>
-                <span className="text-slate-400">→</span>
-                <div className="flex items-center bg-slate-900 border border-emerald-700/80 rounded-xl px-2.5 py-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.25"
-                    min="1"
-                    value={formConfig.residential.ratePerM3 ?? formConfig.residential.baseMinCharge}
-                    onChange={(e) => {
-                      const val = Number(e.target.value) || 0;
-                      setFormConfig({
-                        ...formConfig,
-                        residential: { ...formConfig.residential, ratePerM3: val, baseMinCharge: val }
-                      });
+          {adjustmentMode === 'quick' ? (
+            /* Quick Hike Mode */
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold text-slate-300">Adjustment Type:</span>
+                <div className="inline-flex p-1 bg-slate-900 rounded-xl border border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickType('flat_m3');
+                      applyQuickFlatHike(quickFlatValue);
                     }}
-                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Tier 1: 11 - 20 m³ */}
-            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-bold text-white block">Tier 1: 11 – 20 m³</span>
-                <span className="text-[10px] text-slate-300">Incremental volumetric rate per m³</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">₱{activeTariff.residential.tier1_rate.toFixed(2)}</span>
-                <span className="text-slate-400">→</span>
-                <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.05"
-                    min="0"
-                    value={formConfig.residential.tier1_rate}
-                    onChange={(e) => setFormConfig({
-                      ...formConfig,
-                      residential: { ...formConfig.residential, tier1_rate: Number(e.target.value) || 0 }
-                    })}
-                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Tier 2: 21 - 30 m³ */}
-            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-bold text-white block">Tier 2: 21 – 30 m³</span>
-                <span className="text-[10px] text-slate-300">Incremental volumetric rate per m³</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">₱{activeTariff.residential.tier2_rate.toFixed(2)}</span>
-                <span className="text-slate-400">→</span>
-                <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.05"
-                    min="0"
-                    value={formConfig.residential.tier2_rate}
-                    onChange={(e) => setFormConfig({
-                      ...formConfig,
-                      residential: { ...formConfig.residential, tier2_rate: Number(e.target.value) || 0 }
-                    })}
-                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Tier 3: 31 - 40 m³ */}
-            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-bold text-white block">Tier 3: 31 – 40 m³</span>
-                <span className="text-[10px] text-slate-300">Incremental volumetric rate per m³</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">₱{activeTariff.residential.tier3_rate.toFixed(2)}</span>
-                <span className="text-slate-400">→</span>
-                <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.05"
-                    min="0"
-                    value={formConfig.residential.tier3_rate}
-                    onChange={(e) => setFormConfig({
-                      ...formConfig,
-                      residential: { ...formConfig.residential, tier3_rate: Number(e.target.value) || 0 }
-                    })}
-                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Tier 4: 41+ m³ */}
-            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-bold text-white block">Tier 4: 41+ m³</span>
-                <span className="text-[10px] text-slate-300">Heavy residential consumption per m³</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">₱{activeTariff.residential.tier4_rate.toFixed(2)}</span>
-                <span className="text-slate-400">→</span>
-                <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.05"
-                    min="0"
-                    value={formConfig.residential.tier4_rate}
-                    onChange={(e) => setFormConfig({
-                      ...formConfig,
-                      residential: { ...formConfig.residential, tier4_rate: Number(e.target.value) || 0 }
-                    })}
-                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* COMMERCIAL TARIFF SCHEDULE */}
-        <div className={`bg-slate-900 border rounded-3xl p-6 shadow-xl space-y-5 text-slate-100 transition-all ${
-          targetScope === 'Commercial' ? 'border-blue-500/80 ring-2 ring-blue-500/20' : 'border-slate-800'
-        }`}>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-            <div className="flex items-center space-x-2.5">
-              <div className="p-2 bg-blue-950 text-blue-400 rounded-xl border border-blue-800/80">
-                <Building2 className="h-5 w-5" />
-              </div>
-              <div>
-                <h4 className="text-sm font-black text-white uppercase tracking-wider">
-                  Commercial Tariff Schedule (Private Accounts)
-                </h4>
-                <p className="text-[11px] text-slate-300">Private business & heavy-volume water consumption</p>
-              </div>
-            </div>
-            <div className="flex items-center space-x-2">
-              <span className="px-2.5 py-1 bg-blue-950 text-blue-300 border border-blue-800 text-[10px] font-black uppercase rounded-lg">
-                Private / Premium
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setTargetScope('Commercial');
-                  setShowConfirmModal(true);
-                }}
-                className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1 shadow-xs"
-                title="Apply changes to Commercial private accounts only"
-              >
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                <span>Apply Commercial</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="p-3 bg-blue-950/40 border border-blue-900/60 rounded-2xl text-[11px] text-blue-200/90 leading-relaxed">
-            <strong className="text-blue-300 font-bold block mb-0.5">Private Commercial Accounts:</strong>
-            Commercial users are private accounts with the highest volume and most expensive water consumption rates. Progressive brackets reflect heavier volumetric usage.
-          </div>
-
-          <div className="space-y-4">
-            {/* Official Baseline Rate (1 – 10 m³) */}
-            <div className="p-3.5 bg-slate-950/80 border border-blue-900/60 rounded-2xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-black text-white block">Baseline Rate (1 – 10 m³)</span>
-                <span className="text-[10px] text-slate-300">Official baseline rate per cubic meter</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">Current: ₱{(activeTariff.commercial.ratePerM3 ?? activeTariff.commercial.baseMinCharge).toFixed(2)}/m³</span>
-                <span className="text-slate-400">→</span>
-                <div className="flex items-center bg-slate-900 border border-blue-700/80 rounded-xl px-2.5 py-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.50"
-                    min="1"
-                    value={formConfig.commercial.ratePerM3 ?? formConfig.commercial.baseMinCharge}
-                    onChange={(e) => {
-                      const val = Number(e.target.value) || 0;
-                      setFormConfig({
-                        ...formConfig,
-                        commercial: { ...formConfig.commercial, ratePerM3: val, baseMinCharge: val }
-                      });
+                    className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1 ${
+                      quickType === 'flat_m3' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <DollarSign className="h-3.5 w-3.5" />
+                    <span>Flat Increase (+₱/m³)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickType('percentage');
+                      applyQuickPercentHike(quickPercentValue);
                     }}
-                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
+                    className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1 ${
+                      quickType === 'percentage' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Percent className="h-3.5 w-3.5" />
+                    <span>Percentage (+%)</span>
+                  </button>
                 </div>
               </div>
-            </div>
 
-            {/* Tier 1: 11 - 20 m³ */}
-            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-bold text-white block">Tier 1: 11 – 20 m³</span>
-                <span className="text-[10px] text-slate-300">Incremental volumetric rate per m³</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">₱{activeTariff.commercial.tier1_rate.toFixed(2)}</span>
-                <span className="text-slate-400">→</span>
-                <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.10"
-                    min="0"
-                    value={formConfig.commercial.tier1_rate}
-                    onChange={(e) => setFormConfig({
-                      ...formConfig,
-                      commercial: { ...formConfig.commercial, tier1_rate: Number(e.target.value) || 0 }
-                    })}
-                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
-                </div>
-              </div>
-            </div>
+              {quickType === 'flat_m3' ? (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-slate-400">Quick Presets:</span>
+                    {[1.00, 1.50, 2.00, 3.00, 5.00].map(amt => (
+                      <button
+                        key={`preset-${amt}`}
+                        type="button"
+                        onClick={() => applyQuickFlatHike(amt)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition cursor-pointer border ${
+                          quickFlatValue === amt 
+                            ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs' 
+                            : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border-slate-700'
+                        }`}
+                      >
+                        +₱{amt.toFixed(2)}/m³
+                      </button>
+                    ))}
+                  </div>
 
-            {/* Tier 2: 21 - 30 m³ */}
-            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-bold text-white block">Tier 2: 21 – 30 m³</span>
-                <span className="text-[10px] text-slate-300">Incremental volumetric rate per m³</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">₱{activeTariff.commercial.tier2_rate.toFixed(2)}</span>
-                <span className="text-slate-400">→</span>
-                <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.10"
-                    min="0"
-                    value={formConfig.commercial.tier2_rate}
-                    onChange={(e) => setFormConfig({
-                      ...formConfig,
-                      commercial: { ...formConfig.commercial, tier2_rate: Number(e.target.value) || 0 }
-                    })}
-                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
+                  <div className="flex items-center space-x-2 max-w-xs">
+                    <span className="text-xs text-slate-400 font-bold whitespace-nowrap">Custom Amount:</span>
+                    <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 flex-1">
+                      <span className="text-xs font-bold text-slate-400 mr-1.5">₱</span>
+                      <input
+                        type="number"
+                        step="0.25"
+                        min="0"
+                        max="100"
+                        value={quickFlatValue}
+                        onChange={(e) => applyQuickFlatHike(Number(e.target.value) || 0)}
+                        className="w-full text-xs font-mono font-bold text-white bg-transparent focus:outline-hidden"
+                      />
+                      <span className="text-xs text-slate-400 font-mono">/m³</span>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-slate-400">Quick Presets:</span>
+                    {[5, 10, 15, 20, 25].map(pct => (
+                      <button
+                        key={`preset-pct-${pct}`}
+                        type="button"
+                        onClick={() => applyQuickPercentHike(pct)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition cursor-pointer border ${
+                          quickPercentValue === pct 
+                            ? 'bg-blue-600 text-white border-blue-500 shadow-xs' 
+                            : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border-slate-700'
+                        }`}
+                      >
+                        +{pct}%
+                      </button>
+                    ))}
+                  </div>
 
-            {/* Tier 3: 31 - 40 m³ */}
-            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-bold text-white block">Tier 3: 31 – 40 m³</span>
-                <span className="text-[10px] text-slate-300">Incremental volumetric rate per m³</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">₱{activeTariff.commercial.tier3_rate.toFixed(2)}</span>
-                <span className="text-slate-400">→</span>
-                <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.10"
-                    min="0"
-                    value={formConfig.commercial.tier3_rate}
-                    onChange={(e) => setFormConfig({
-                      ...formConfig,
-                      commercial: { ...formConfig.commercial, tier3_rate: Number(e.target.value) || 0 }
-                    })}
-                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
+                  <div className="flex items-center space-x-2 max-w-xs">
+                    <span className="text-xs text-slate-400 font-bold whitespace-nowrap">Custom Percentage:</span>
+                    <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 flex-1">
+                      <span className="text-xs font-bold text-slate-400 mr-1.5">+</span>
+                      <input
+                        type="number"
+                        step="1"
+                        min="1"
+                        max="100"
+                        value={quickPercentValue}
+                        onChange={(e) => applyQuickPercentHike(Number(e.target.value) || 0)}
+                        className="w-full text-xs font-mono font-bold text-white bg-transparent focus:outline-hidden"
+                      />
+                      <span className="text-xs text-slate-400 font-mono">%</span>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
+          ) : (
+            /* Manual Bracket Tuning Mode */
+            <div className="bg-slate-950 p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-4">
+              <div className="text-xs font-bold text-slate-300">
+                Direct Bracket Rates for <strong className="text-white uppercase">{targetScope}</strong>:
+              </div>
 
-            {/* Tier 4 & 5: 41+ m³ */}
-            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-bold text-white block">Tier 4: 41 – 50 m³</span>
-                <span className="text-[10px] text-slate-300">High-volume commercial rate</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-slate-400">₱{activeTariff.commercial.tier4_rate.toFixed(2)}</span>
-                <span className="text-slate-400">→</span>
-                <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1">
-                  <span className="text-xs font-bold text-slate-400 mr-1">₱</span>
-                  <input
-                    type="number"
-                    step="0.10"
-                    min="0"
-                    value={formConfig.commercial.tier4_rate}
-                    onChange={(e) => setFormConfig({
-                      ...formConfig,
-                      commercial: { ...formConfig.commercial, tier4_rate: Number(e.target.value) || 0 }
-                    })}
-                    className="w-16 font-mono font-black text-xs text-white bg-transparent focus:outline-hidden"
-                  />
-                  <span className="text-[10px] text-slate-400 ml-1">/m³</span>
+              {(targetScope === 'both' || targetScope === 'Residential') && (
+                <div className="space-y-2">
+                  <span className="text-[11px] font-black uppercase text-emerald-400 tracking-wider flex items-center gap-1.5">
+                    <Home className="h-3.5 w-3.5" />
+                    <span>Residential Rates (₱/m³)</span>
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 font-mono text-xs">
+                    <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">0–10 m³ Base</span>
+                      <input
+                        type="number"
+                        step="0.25"
+                        value={formConfig.residential.ratePerM3 ?? formConfig.residential.baseMinCharge}
+                        onChange={(e) => {
+                          const val = Number(e.target.value) || 0;
+                          setFormConfig({
+                            ...formConfig,
+                            residential: { ...formConfig.residential, ratePerM3: val, baseMinCharge: val }
+                          });
+                        }}
+                        className="w-full font-bold text-emerald-300 bg-transparent focus:outline-hidden mt-1"
+                      />
+                    </div>
+                    <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">11–20 m³</span>
+                      <input
+                        type="number"
+                        step="0.25"
+                        value={formConfig.residential.tier1_rate}
+                        onChange={(e) => setFormConfig({
+                          ...formConfig,
+                          residential: { ...formConfig.residential, tier1_rate: Number(e.target.value) || 0 }
+                        })}
+                        className="w-full font-bold text-emerald-300 bg-transparent focus:outline-hidden mt-1"
+                      />
+                    </div>
+                    <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">21–30 m³</span>
+                      <input
+                        type="number"
+                        step="0.25"
+                        value={formConfig.residential.tier2_rate}
+                        onChange={(e) => setFormConfig({
+                          ...formConfig,
+                          residential: { ...formConfig.residential, tier2_rate: Number(e.target.value) || 0 }
+                        })}
+                        className="w-full font-bold text-emerald-300 bg-transparent focus:outline-hidden mt-1"
+                      />
+                    </div>
+                    <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">31–40 m³</span>
+                      <input
+                        type="number"
+                        step="0.25"
+                        value={formConfig.residential.tier3_rate}
+                        onChange={(e) => setFormConfig({
+                          ...formConfig,
+                          residential: { ...formConfig.residential, tier3_rate: Number(e.target.value) || 0 }
+                        })}
+                        className="w-full font-bold text-emerald-300 bg-transparent focus:outline-hidden mt-1"
+                      />
+                    </div>
+                    <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">41+ m³</span>
+                      <input
+                        type="number"
+                        step="0.25"
+                        value={formConfig.residential.tier4_rate}
+                        onChange={(e) => setFormConfig({
+                          ...formConfig,
+                          residential: { ...formConfig.residential, tier4_rate: Number(e.target.value) || 0 }
+                        })}
+                        className="w-full font-bold text-emerald-300 bg-transparent focus:outline-hidden mt-1"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {(targetScope === 'both' || targetScope === 'Commercial') && (
+                <div className="space-y-2 pt-2">
+                  <span className="text-[11px] font-black uppercase text-blue-400 tracking-wider flex items-center gap-1.5">
+                    <Building2 className="h-3.5 w-3.5" />
+                    <span>Commercial Rates (₱/m³)</span>
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 font-mono text-xs">
+                    <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">0–10 m³ Base</span>
+                      <input
+                        type="number"
+                        step="0.50"
+                        value={formConfig.commercial.ratePerM3 ?? formConfig.commercial.baseMinCharge}
+                        onChange={(e) => {
+                          const val = Number(e.target.value) || 0;
+                          setFormConfig({
+                            ...formConfig,
+                            commercial: { ...formConfig.commercial, ratePerM3: val, baseMinCharge: val }
+                          });
+                        }}
+                        className="w-full font-bold text-blue-300 bg-transparent focus:outline-hidden mt-1"
+                      />
+                    </div>
+                    <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">11–20 m³</span>
+                      <input
+                        type="number"
+                        step="0.50"
+                        value={formConfig.commercial.tier1_rate}
+                        onChange={(e) => setFormConfig({
+                          ...formConfig,
+                          commercial: { ...formConfig.commercial, tier1_rate: Number(e.target.value) || 0 }
+                        })}
+                        className="w-full font-bold text-blue-300 bg-transparent focus:outline-hidden mt-1"
+                      />
+                    </div>
+                    <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">21–30 m³</span>
+                      <input
+                        type="number"
+                        step="0.50"
+                        value={formConfig.commercial.tier2_rate}
+                        onChange={(e) => setFormConfig({
+                          ...formConfig,
+                          commercial: { ...formConfig.commercial, tier2_rate: Number(e.target.value) || 0 }
+                        })}
+                        className="w-full font-bold text-blue-300 bg-transparent focus:outline-hidden mt-1"
+                      />
+                    </div>
+                    <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">31–40 m³</span>
+                      <input
+                        type="number"
+                        step="0.50"
+                        value={formConfig.commercial.tier3_rate}
+                        onChange={(e) => setFormConfig({
+                          ...formConfig,
+                          commercial: { ...formConfig.commercial, tier3_rate: Number(e.target.value) || 0 }
+                        })}
+                        className="w-full font-bold text-blue-300 bg-transparent focus:outline-hidden mt-1"
+                      />
+                    </div>
+                    <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">41+ m³</span>
+                      <input
+                        type="number"
+                        step="0.50"
+                        value={formConfig.commercial.tier4_rate}
+                        onChange={(e) => setFormConfig({
+                          ...formConfig,
+                          commercial: { ...formConfig.commercial, tier4_rate: Number(e.target.value) || 0 }
+                        })}
+                        className="w-full font-bold text-blue-300 bg-transparent focus:outline-hidden mt-1"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
+          )}
         </div>
-      </div>
 
-      {/* 4. Statutory Taxes & Regulatory Mandate Metadata */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4 text-slate-100">
-        <h4 className="text-xs font-black uppercase text-white tracking-wider flex items-center space-x-2">
-          <FileText className="h-4 w-4 text-blue-400" />
-          <span>Statutory Taxes & Board Resolution Mandate</span>
-        </h4>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div>
-            <label htmlFor={formEffectiveDateId} className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Effective Date</label>
-            <input
-              id={formEffectiveDateId}
-              type="text"
-              value={formConfig.effectiveDate}
-              onChange={(e) => setFormConfig({ ...formConfig, effectiveDate: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl py-2 px-3 text-xs font-bold text-white focus:border-blue-500 focus:outline-hidden"
-              placeholder="e.g. October 1, 2026"
-            />
-          </div>
-
-          <div>
-            <label htmlFor={formResolutionNumberId} className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Board Resolution / Memo No.</label>
-            <input
-              id={formResolutionNumberId}
-              type="text"
-              value={formConfig.resolutionNumber}
-              onChange={(e) => setFormConfig({ ...formConfig, resolutionNumber: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl py-2 px-3 text-xs font-mono font-bold text-white focus:border-blue-500 focus:outline-hidden"
-              placeholder="e.g. TWD-BR-2026-08"
-            />
-          </div>
-
-          <div>
-            <label htmlFor={formFranchiseTaxId} className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Local Franchise Tax Rate</label>
-            <div className="flex items-center bg-slate-950 border border-slate-700 rounded-xl px-3 py-2">
-              <input
-                id={formFranchiseTaxId}
-                type="number"
-                step="0.005"
-                min="0"
-                max="0.10"
-                value={formConfig.franchiseTaxRate}
-                onChange={(e) => setFormConfig({ ...formConfig, franchiseTaxRate: Number(e.target.value) || 0.02 })}
-                className="w-full bg-transparent font-mono text-xs font-bold text-white focus:outline-hidden"
-              />
-              <span className="text-xs font-bold text-slate-400">({(formConfig.franchiseTaxRate * 100).toFixed(1)}%)</span>
-            </div>
-          </div>
-
-          <div>
-            <label htmlFor={formLatePenaltyId} className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Late Payment Surcharge</label>
-            <div className="flex items-center bg-slate-950 border border-slate-700 rounded-xl px-3 py-2">
-              <input
-                id={formLatePenaltyId}
-                type="number"
-                step="0.01"
-                min="0"
-                max="0.50"
-                value={formConfig.latePaymentSurchargeRate}
-                onChange={(e) => setFormConfig({ ...formConfig, latePaymentSurchargeRate: Number(e.target.value) || 0.10 })}
-                className="w-full bg-transparent font-mono text-xs font-bold text-white focus:outline-hidden"
-              />
-              <span className="text-xs font-bold text-slate-400">({(formConfig.latePaymentSurchargeRate * 100).toFixed(1)}%)</span>
-            </div>
-          </div>
-
-          <div className="lg:col-span-4">
-            <label htmlFor={formMemoNotesId} className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Official Justification / Consumer Memo</label>
-            <textarea
-              id={formMemoNotesId}
-              rows={2}
-              value={formConfig.memoNotes}
-              onChange={(e) => setFormConfig({ ...formConfig, memoNotes: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-slate-200 focus:outline-hidden focus:border-blue-400"
-              placeholder="Provide the reason for the tariff hike to be displayed in consumer notifications and public advisories..."
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* 5. Interactive Impact Simulator & Consumer Calculation Preview */}
-      <div className="bg-slate-900 text-white border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
-          <div>
-            <h3 className="text-sm font-black text-white uppercase tracking-wider flex items-center space-x-2">
-              <Calculator className="h-4 w-4 text-emerald-400" />
-              <span>Interactive Consumer Bill Impact Simulator</span>
+        {/* STEP 3: Live Bill Impact Simulator & Comparison */}
+        <div className="space-y-3 pb-5 border-b border-slate-800">
+          <div className="flex items-center space-x-2">
+            <span className="h-6 w-6 rounded-full bg-blue-600 text-white font-black text-xs flex items-center justify-center">3</span>
+            <h3 className="text-sm font-black text-white uppercase tracking-wider">
+              Live Consumer Bill Impact Preview
             </h3>
-            <p className="text-xs text-slate-300 mt-0.5">
-              Simulate any consumer consumption volume to preview the exact Before vs After bill difference before saving.
-            </p>
           </div>
 
-          <div className="flex items-center space-x-2 p-1 bg-slate-800 rounded-2xl border border-slate-700">
-            <button
-              onClick={() => setSimType('Residential')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
-                simType === 'Residential' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-300 hover:text-white'
-              }`}
-            >
-              Residential
-            </button>
-            <button
-              onClick={() => setSimType('Commercial')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
-                simType === 'Commercial' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-300 hover:text-white'
-              }`}
-            >
-              Commercial
-            </button>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {[10, 18, 30].map(vol => {
+              const bOld = calculateWaterTariff(vol, simClass, activeTariff);
+              const tOld = calculateFranchiseTax(bOld, activeTariff);
+              const totOld = Math.round((bOld + tOld) * 100) / 100;
+
+              const bNew = calculateWaterTariff(vol, simClass, formConfig);
+              const tNew = calculateFranchiseTax(bNew, formConfig);
+              const totNew = Math.round((bNew + tNew) * 100) / 100;
+
+              const diff = Math.round((totNew - totOld) * 100) / 100;
+
+              return (
+                <div key={`sim-${vol}`} className="p-3.5 bg-slate-950 rounded-2xl border border-slate-800 space-y-2">
+                  <div className="flex justify-between items-baseline">
+                    <span className="text-xs font-bold text-white">
+                      {vol === 10 ? '10 m³ (Base Lifeline)' : vol === 18 ? '18 m³ (Avg Household)' : '30 m³ (Heavy Usage)'}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">{vol} m³</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-slate-400">Current: ₱{totOld.toFixed(2)}</span>
+                    <ArrowRight className="h-3.5 w-3.5 text-slate-500" />
+                    <span className="font-bold text-white">New: ₱{totNew.toFixed(2)}</span>
+                  </div>
+                  <div className="pt-1.5 border-t border-slate-800/80 flex justify-between items-center text-[11px]">
+                    <span className="text-slate-400">Net Difference:</span>
+                    <span className={`font-mono font-bold ${diff > 0 ? 'text-amber-400' : diff < 0 ? 'text-emerald-400' : 'text-slate-300'}`}>
+                      {diff >= 0 ? `+₱${diff.toFixed(2)}` : `-₱${Math.abs(diff).toFixed(2)}`}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-center">
-          
-          {/* Slider input */}
+        {/* Implementation Details & Options */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
           <div className="space-y-3">
-            <div className="flex justify-between items-center text-xs">
-              <span className="font-bold text-slate-300">Monthly Usage Volume:</span>
-              <span className="font-mono font-black text-emerald-400 text-sm">{simUsage} cu.m (m³)</span>
+            <div>
+              <label htmlFor={formEffectiveDateId} className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                Effective Date
+              </label>
+              <input
+                id={formEffectiveDateId}
+                type="text"
+                value={formConfig.effectiveDate}
+                onChange={(e) => setFormConfig({ ...formConfig, effectiveDate: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white focus:outline-hidden focus:border-blue-500"
+              />
             </div>
-            <input
-              type="range"
-              min="1"
-              max="100"
-              value={simUsage}
-              onChange={(e) => setSimUsage(Number(e.target.value))}
-              className="w-full accent-emerald-500 cursor-pointer"
-            />
-            <div className="flex justify-between text-[10px] font-mono text-slate-400">
-              <span>1 m³ (Min)</span>
-              <span>25 m³</span>
-              <span>50 m³</span>
-              <span>100 m³</span>
+
+            <div>
+              <label htmlFor={formResolutionNumberId} className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                Board Resolution Number
+              </label>
+              <input
+                id={formResolutionNumberId}
+                type="text"
+                value={formConfig.resolutionNumber}
+                onChange={(e) => setFormConfig({ ...formConfig, resolutionNumber: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono font-bold text-white focus:outline-hidden focus:border-blue-500"
+              />
             </div>
           </div>
 
-          {/* Before vs After Cards */}
-          <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Current Tariff Bill</span>
-              <div className="text-xl font-black text-slate-100 font-mono mt-1">
-                ₱{currentSimTotal.toFixed(2)}
-              </div>
-              <span className="text-[10px] text-slate-400 font-mono">
-                Basic: ₱{currentSimBill.toFixed(2)} + Tax: ₱{currentSimTax.toFixed(2)}
+          <div className="space-y-3">
+            <label className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-start space-x-2.5 cursor-pointer hover:border-slate-700 transition">
+              <input
+                type="checkbox"
+                checked={notifyAllConsumers}
+                onChange={(e) => setNotifyAllConsumers(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded-sm text-emerald-600 accent-emerald-600"
+              />
+              <span className="text-xs text-slate-300 leading-snug">
+                Send automatic in-app price adjustment notice to affected consumers ({targetScope === 'both' ? 'All' : targetScope}).
               </span>
-            </div>
+            </label>
 
-            <div className="bg-blue-950/70 border border-blue-800/80 rounded-2xl p-4">
-              <span className="text-[10px] font-bold text-blue-300 uppercase tracking-wider block">Proposed Price Hike Bill</span>
-              <div className="text-xl font-black text-emerald-400 font-mono mt-1">
-                ₱{proposedSimTotal.toFixed(2)}
-              </div>
-              <span className="text-[10px] text-blue-300 font-mono">
-                Basic: ₱{proposedSimBill.toFixed(2)} + Tax: ₱{proposedSimTax.toFixed(2)}
+            <label className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-start space-x-2.5 cursor-pointer hover:border-slate-700 transition">
+              <input
+                type="checkbox"
+                checked={postAnnouncement}
+                onChange={(e) => setPostAnnouncement(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded-sm text-blue-600 accent-blue-600"
+              />
+              <span className="text-xs text-slate-300 leading-snug">
+                Publish official public advisory on consumer portal announcements bulletin.
               </span>
-            </div>
-
-            <div className={`rounded-2xl p-4 border ${
-              simDiff > 0 ? 'bg-amber-950/60 border-amber-800/80 text-amber-300' : 'bg-slate-950 border-slate-800 text-slate-300'
-            }`}>
-              <span className="text-[10px] font-bold uppercase tracking-wider block opacity-90">Consumer Surcharge Impact</span>
-              <div className="text-xl font-black font-mono mt-1">
-                {simDiff >= 0 ? `+₱${simDiff.toFixed(2)}` : `-₱${Math.abs(simDiff).toFixed(2)}`}
-              </div>
-              <span className="text-[10px] font-bold">
-                {simPercentDiff > 0 ? `+${simPercentDiff}% adjustment` : 'No net change'}
-              </span>
-            </div>
+            </label>
           </div>
         </div>
-      </div>
 
-      {/* 6. Implementation & Notification Options */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4 text-slate-100">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800">
-          <h4 className="text-xs font-black uppercase text-white tracking-wider flex items-center space-x-2">
-            <Bell className="h-4 w-4 text-blue-400" />
-            <span>Automated Implementation & Notification Actions</span>
-          </h4>
-          <span className="text-[10px] font-bold text-slate-400">
-            Applying to: <strong className={targetScope === 'Residential' ? 'text-emerald-400' : targetScope === 'Commercial' ? 'text-blue-400' : 'text-purple-400'}>
-              {targetScope === 'Residential' ? 'Residential (Regular Community)' : targetScope === 'Commercial' ? 'Commercial (Private Accounts)' : 'Both Classifications'}
-            </strong>
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="p-4 bg-slate-950/80 border border-blue-900/60 rounded-2xl flex items-start space-x-3">
-            <input
-              type="checkbox"
-              checked={protectHistoricalReadings}
-              readOnly
-              className="mt-0.5 h-4 w-4 rounded-sm text-blue-600 accent-blue-600"
-            />
-            <div>
-              <span className="text-xs font-black text-white block">
-                Apply strictly to NEW meter readings only (Preserve Old Readings)
-              </span>
-              <span className="text-[11px] text-slate-300 leading-relaxed block mt-0.5">
-                All <strong className="text-blue-400">{readings.length} existing &amp; historical statements</strong> remain permanently locked at their original billed tariff. Only newly recorded readings from this point forward automatically use the updated schedule.
-              </span>
-            </div>
-          </div>
-
-          <label className="p-4 bg-slate-950/80 border border-emerald-900/60 rounded-2xl flex items-start space-x-3 cursor-pointer hover:border-emerald-700 transition">
-            <input
-              type="checkbox"
-              checked={notifyAllConsumers}
-              onChange={(e) => setNotifyAllConsumers(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded-sm text-emerald-600 accent-emerald-600"
-            />
-            <div>
-              <span className="text-xs font-black text-white block">
-                Notify targeted registered consumers with official Price Notice
-              </span>
-              <span className="text-[11px] text-slate-300 leading-relaxed block mt-0.5">
-                Dispatches a tailored notification to <strong className="text-emerald-400">{targetedConsumersCount} registered {targetScope === 'both' ? 'consumer accounts' : `${targetScope} accounts`}</strong> explaining new rates, effective date, and resolution number.
-              </span>
-            </div>
-          </label>
-
-          <label className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl flex items-start space-x-3 cursor-pointer hover:border-slate-700 transition">
-            <input
-              type="checkbox"
-              checked={postAnnouncement}
-              onChange={(e) => setPostAnnouncement(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded-sm text-blue-600 accent-blue-600"
-            />
-            <div>
-              <span className="text-xs font-black text-white block">
-                Publish Official Public Advisory Announcement
-              </span>
-              <span className="text-[11px] text-slate-300 leading-relaxed block mt-0.5">
-                Pins an announcement banner to the public district bulletin and consumer dashboards.
-              </span>
-            </div>
-          </label>
-
-          <label className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl flex items-start space-x-3 cursor-pointer hover:border-slate-700 transition">
-            <input
-              type="checkbox"
-              checked={broadcastWebSocket}
-              onChange={(e) => setBroadcastWebSocket(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded-sm text-blue-600 accent-blue-600"
-            />
-            <div>
-              <span className="text-xs font-black text-white block">
-                Broadcast live real-time WebSocket sync event
-              </span>
-              <span className="text-[11px] text-slate-300 leading-relaxed block mt-0.5">
-                Instantly refreshes connected consumer portals and mobile meter reader apps.
-              </span>
-            </div>
-          </label>
-        </div>
-
-        {/* Primary Commit Button */}
-        <div className="pt-4 flex flex-col sm:flex-row justify-between items-center gap-4 border-t border-slate-800">
+        {/* SINGLE UNIFIED SAVE BUTTON */}
+        <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="text-xs text-slate-400">
-            Resolution: <strong className="text-white font-mono">{formConfig.resolutionNumber}</strong> • Effective: <strong className="text-white">{formConfig.effectiveDate}</strong> • Target: <strong className="text-amber-300 uppercase">{targetScope}</strong>
+            Applying to: <strong className="text-white uppercase">{targetScope}</strong> • Effective: <strong className="text-white">{formConfig.effectiveDate}</strong>
           </div>
 
           <button
+            type="button"
             onClick={() => setShowConfirmModal(true)}
-            className={`w-full sm:w-auto px-8 py-3.5 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg transition flex items-center justify-center space-x-2 cursor-pointer ${
-              targetScope === 'Residential'
-                ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/30'
-                : targetScope === 'Commercial'
-                ? 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/30'
-                : 'bg-purple-600 hover:bg-purple-500 shadow-purple-600/30'
-            }`}
+            className="w-full sm:w-auto px-8 py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-blue-600/30 transition flex items-center justify-center space-x-2 cursor-pointer"
+            id="apply-tariff-adjustment-btn"
           >
-            <ShieldCheck className="h-4.5 w-4.5" />
-            <span>
-              {targetScope === 'Residential'
-                ? 'Apply Residential Price Adjustment (Community Accounts)'
-                : targetScope === 'Commercial'
-                ? 'Apply Commercial Price Adjustment (Private Accounts)'
-                : 'Implement Both Price Adjustments & Broadcast'}
-            </span>
+            <ShieldCheck className="h-4 w-4" />
+            <span>Review &amp; Apply Tariff Adjustment</span>
           </button>
         </div>
       </div>
 
-      {/* 7. Confirmation Modal with Scope Isolation Details */}
+      {/* Confirmation Modal */}
       {showConfirmModal && (
         <div 
-          className="fixed inset-0 z-[120] bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fade-in select-none"
+          className="fixed inset-0 z-[120] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto animate-fade-in"
           onClick={() => setShowConfirmModal(false)}
         >
           <div 
-            className="bg-slate-900 rounded-3xl max-w-lg w-full border border-slate-800 shadow-2xl p-6 sm:p-8 space-y-6 select-text text-slate-100"
+            className="bg-slate-900 rounded-3xl max-w-lg w-full border border-slate-800 shadow-2xl p-6 sm:p-7 space-y-5 text-slate-100"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center space-x-3 text-amber-400">
@@ -1588,121 +910,61 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
                 <AlertTriangle className="h-6 w-6" />
               </div>
               <div>
-                <h3 className="text-base font-black text-white tracking-tight">Confirm Water Tariff Price Adjustment</h3>
-                <p className="text-xs text-slate-400 font-mono">Mandate: {formConfig.resolutionNumber}</p>
+                <h3 className="text-base font-black text-white tracking-tight">Confirm Water Tariff Adjustment</h3>
+                <p className="text-xs text-slate-400 font-mono">{formConfig.resolutionNumber}</p>
               </div>
             </div>
 
-            {/* Scope Identifier Callout */}
-            <div className={`p-3.5 rounded-2xl border text-xs leading-relaxed ${
-              targetScope === 'Residential'
-                ? 'bg-emerald-950/60 border-emerald-800/80 text-emerald-200'
-                : targetScope === 'Commercial'
-                ? 'bg-blue-950/60 border-blue-800/80 text-blue-200'
-                : 'bg-purple-950/60 border-purple-800/80 text-purple-200'
-            }`}>
-              <div className="font-black uppercase tracking-wider text-[11px] mb-1 flex items-center space-x-1.5">
-                <span>Identified Scope:</span>
-                <span className="underline">
-                  {targetScope === 'Residential'
-                    ? 'Residential Only (Regular Community)'
-                    : targetScope === 'Commercial'
-                    ? 'Commercial Only (Private Accounts)'
-                    : 'Both Residential & Commercial'}
-                </span>
+            <div className="p-4 bg-slate-950 border border-slate-800 rounded-2xl space-y-2.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Target Classification:</span>
+                <span className="font-bold text-white uppercase">{targetScope}</span>
               </div>
-              {targetScope === 'Residential' && (
-                <p>
-                  This adjustment applies <strong>ONLY</strong> to regular Residential community water consumption (single/individual account persons). Commercial private accounts and their high-consumption pricing will <strong>remain completely unchanged</strong>.
-                </p>
-              )}
-              {targetScope === 'Commercial' && (
-                <p>
-                  This adjustment applies <strong>ONLY</strong> to Commercial private accounts (which have the most expensive water consumption rates). Regular Residential community households and their lifeline rates will <strong>remain completely unchanged</strong>.
-                </p>
-              )}
-              {targetScope === 'both' && (
-                <p>
-                  Both Residential community and Commercial private accounts will be updated under their respective distinct schedules.
-                </p>
-              )}
-            </div>
-
-            <div className="p-4 bg-slate-950 border border-slate-800 rounded-2xl space-y-3 text-xs">
               {(targetScope === 'both' || targetScope === 'Residential') && (
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Residential Baseline (1-10 m³):</span>
+                  <span className="text-slate-400">Residential Base (0–10 m³):</span>
                   <span className="font-mono font-bold text-emerald-400">
-                    ₱{(activeTariff.residential.ratePerM3 ?? activeTariff.residential.baseMinCharge).toFixed(2)}/m³ → ₱{(formConfig.residential.ratePerM3 ?? formConfig.residential.baseMinCharge).toFixed(2)}/m³
+                    ₱{activeResRate.toFixed(2)}/m³ → ₱{effectiveResRate.toFixed(2)}/m³
                   </span>
                 </div>
               )}
               {(targetScope === 'both' || targetScope === 'Commercial') && (
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Commercial Baseline (1-10 m³):</span>
+                  <span className="text-slate-400">Commercial Base (0–10 m³):</span>
                   <span className="font-mono font-bold text-blue-400">
-                    ₱{(activeTariff.commercial.ratePerM3 ?? activeTariff.commercial.baseMinCharge).toFixed(2)}/m³ → ₱{(formConfig.commercial.ratePerM3 ?? formConfig.commercial.baseMinCharge).toFixed(2)}/m³
+                    ₱{activeCommRate.toFixed(2)}/m³ → ₱{effectiveCommRate.toFixed(2)}/m³
                   </span>
                 </div>
               )}
-              <div className="flex justify-between">
-                <span className="text-slate-400">Franchise Tax &amp; Late Penalty:</span>
-                <span className="font-mono font-bold text-slate-200">
-                  {(formConfig.franchiseTaxRate * 100).toFixed(0)}% Tax • {(formConfig.latePaymentSurchargeRate * 100).toFixed(0)}% Penalty
-                </span>
-              </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Effective Date:</span>
                 <span className="font-bold text-white">{formConfig.effectiveDate}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Target Accounts to Notify:</span>
-                <span className="font-bold text-sky-400">{notifyAllConsumers ? `${targetedConsumersCount} accounts (${targetScope})` : 'None'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Historical / Existing Readings:</span>
-                <span className="font-bold text-emerald-400">Locked at Original Rate ({readings.length} preserved)</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Rate Application Rule:</span>
-                <span className="font-bold text-amber-300">Auto-applies to NEW Readings Only</span>
+                <span className="text-slate-400">Historical Readings:</span>
+                <span className="font-bold text-emerald-400">Preserved &amp; Locked ({readings.length} bills)</span>
               </div>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              This action updates the active water tariff schedule for all <strong>new meter readings recorded going forward</strong>. Previously recorded and billed statements are never retroactively altered.
+              New rates will automatically apply to all NEW water meter readings going forward. Existing and historical bills remain protected at their original rates.
             </p>
 
-            <div className="flex justify-end space-x-3 pt-2 border-t border-slate-800">
+            <div className="flex gap-3 pt-2">
               <button
+                type="button"
                 onClick={() => setShowConfirmModal(false)}
-                disabled={isApplying}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl cursor-pointer transition border border-slate-700"
+                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs uppercase rounded-xl transition cursor-pointer"
               >
                 Cancel
               </button>
               <button
-                onClick={handleCommitTariffHike}
+                type="button"
+                onClick={handleApplyTariff}
                 disabled={isApplying}
-                className={`px-6 py-2.5 disabled:opacity-50 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md cursor-pointer flex items-center space-x-2 ${
-                  targetScope === 'Residential'
-                    ? 'bg-emerald-600 hover:bg-emerald-500'
-                    : targetScope === 'Commercial'
-                    ? 'bg-blue-600 hover:bg-blue-500'
-                    : 'bg-purple-600 hover:bg-purple-500'
-                }`}
+                className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center space-x-2 cursor-pointer shadow-lg shadow-blue-600/30"
               >
-                {isApplying ? (
-                  <>
-                    <RefreshCw className="h-4 w-4 animate-spin" />
-                    <span>Implementing...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span>Confirm & Apply Price Adjustment</span>
-                  </>
-                )}
+                {isApplying ? <span>Applying...</span> : <span>Confirm &amp; Implement</span>}
               </button>
             </div>
           </div>
@@ -1711,3 +973,5 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
     </div>
   );
 };
+
+export default TariffRateManager;

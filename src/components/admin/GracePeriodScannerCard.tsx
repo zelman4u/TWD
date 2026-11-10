@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { Zap, RefreshCw, AlertOctagon, CheckCircle2 } from 'lucide-react';
+import { Zap, RefreshCw, AlertOctagon, CheckCircle2, Printer } from 'lucide-react';
 import { ScannerStatus } from '../../services/gracePeriodScannerService';
 
 interface GracePeriodScannerCardProps {
@@ -13,14 +13,15 @@ interface GracePeriodScannerCardProps {
   activeCount: number;
   isManualScanning: boolean;
   onRunScanNow: () => void;
+  onPrintNoticeSummary?: () => void;
 }
 
 /**
  * GracePeriodScannerCard
  * 
- * Visual administration monitor for the Automated 3-Month Payment Grace Period Service.
+ * Visual administration monitor for the Automated 2-Month Payment Grace Period Service.
  * Displays real-time heartbeat, scan cycle timestamps, disconnection notice metrics,
- * and provides on-demand manual trigger controls.
+ * on-demand manual trigger controls, and official Disconnection Notice Summary printing.
  */
 export const GracePeriodScannerCard: React.FC<GracePeriodScannerCardProps> = ({
   scannerStatus,
@@ -28,6 +29,7 @@ export const GracePeriodScannerCard: React.FC<GracePeriodScannerCardProps> = ({
   activeCount,
   isManualScanning,
   onRunScanNow,
+  onPrintNoticeSummary,
 }) => {
   return (
     <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-rose-950 border border-slate-700/80 rounded-2xl p-4 text-white shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
@@ -43,7 +45,7 @@ export const GracePeriodScannerCard: React.FC<GracePeriodScannerCardProps> = ({
         <div className="space-y-1 min-w-0">
           <div className="flex items-center space-x-2 flex-wrap gap-y-1">
             <h4 className="text-xs font-black uppercase tracking-wider text-white flex items-center gap-1.5">
-              <span>Background Service: 3-Month Grace Period Scanner</span>
+              <span>Background Service: 2-Month Grace Period Scanner</span>
             </h4>
             <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -57,13 +59,13 @@ export const GracePeriodScannerCard: React.FC<GracePeriodScannerCardProps> = ({
           </div>
           
           <p className="text-[11px] text-slate-300 leading-relaxed max-w-3xl">
-            Automated background service scans account statuses against Tagoloan Water District's 3-month (90 days) payment grace period. Delinquent accounts exceeding 90 days overdue or 3+ unpaid billing cycles are automatically updated to <strong className="text-rose-300 font-bold">Disconnection Notice</strong> status with cutting orders.
+            Automated service monitors account statuses against Tagoloan Water District's 2-month (60 days) payment grace period. Delinquent accounts exceeding 60 days overdue or 2+ unpaid cycles receive an official <strong className="text-rose-300 font-bold">Disconnection Notice</strong>. Consumers can request extensions; accounts still unpaid after extension expire are disconnected. Inactive lines (6+ months) become available for assumption.
           </p>
         </div>
       </div>
 
-      <div className="flex items-center gap-3 shrink-0 self-end md:self-center">
-        <div className="text-right hidden sm:block">
+      <div className="flex items-center gap-2.5 shrink-0 self-end md:self-center flex-wrap">
+        <div className="text-right hidden sm:block mr-1">
           <div className="text-xs font-black text-rose-400 font-mono flex items-center justify-end gap-1">
             <AlertOctagon className="h-3 w-3 text-rose-500" />
             <span>{disconnectionCount} Disconnection Notice{disconnectionCount !== 1 ? 's' : ''}</span>
@@ -74,11 +76,23 @@ export const GracePeriodScannerCard: React.FC<GracePeriodScannerCardProps> = ({
           </div>
         </div>
 
+        {onPrintNoticeSummary && (
+          <button
+            type="button"
+            onClick={onPrintNoticeSummary}
+            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-100 hover:text-white font-black text-xs uppercase tracking-wider rounded-xl flex items-center space-x-1.5 transition border border-slate-700 shadow-xs cursor-pointer"
+            title="Print Disconnection Notice Summary Report"
+          >
+            <Printer className="h-3.5 w-3.5 text-rose-400" />
+            <span>Print Summary</span>
+          </button>
+        )}
+
         <button
           type="button"
           onClick={onRunScanNow}
           disabled={isManualScanning}
-          className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white font-black text-xs uppercase tracking-wider rounded-xl flex items-center space-x-2 transition shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white font-black text-xs uppercase tracking-wider rounded-xl flex items-center space-x-1.5 transition shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           title="Manually trigger grace period scan right now"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${isManualScanning ? 'animate-spin' : ''}`} />

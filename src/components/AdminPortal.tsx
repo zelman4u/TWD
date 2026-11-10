@@ -39,6 +39,7 @@ import {
   Camera,
   CreditCard,
   ShieldCheck,
+  ShieldAlert,
   Download,
   Eye,
   EyeOff,
@@ -80,7 +81,11 @@ import {
   scanAndUpdateAccounts, 
   getScannerStatus, 
   subscribeToScanner, 
-  ScannerStatus 
+  ScannerStatus,
+  grantAccountExtension,
+  disconnectAccount,
+  reconnectAccount,
+  assumeAccount
 } from '../services/gracePeriodScannerService';
 import { DashboardSkeleton, TableSkeleton, CardsGridSkeleton } from './common/SkeletonLoader';
 import DataLoadingIndicator from './common/DataLoadingIndicator';
@@ -88,7 +93,16 @@ import { BaymaxChatWidget } from './common/BaymaxChatWidget';
 import AdminAnalyticsSection from './charts/AdminAnalyticsSection';
 import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
-import { OfficialReportsGenerator, RecordsArchiveView, GracePeriodScannerCard, TariffRateManager, ConsumerReportsManager, AdminInquiryReplyModal, WaterMeterInstallationsManager } from './admin';
+import { 
+  OfficialReportsGenerator, 
+  RecordsArchiveView, 
+  GracePeriodScannerCard, 
+  TariffRateManager, 
+  ConsumerReportsManager, 
+  AdminInquiryReplyModal, 
+  WaterMeterInstallationsManager,
+  DisconnectionNoticeSummaryModal
+} from './admin';
 import { TablePagination } from './common/TablePagination';
 import { SmartSearchBar } from './common/SmartSearchBar';
 import { smartMatch } from '../utils/smartSearch';
@@ -395,11 +409,27 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   // Filtering & Search states for Consumer Database
   const [consumerSearch, setConsumerSearch] = useState('');
-  const [consumerStatusFilter, setConsumerStatusFilter] = useState<'all' | 'active' | 'pending_approval' | 'inactive' | 'blocked' | 'archived' | 'Disconnection Notice'>('all');
+  const [consumerStatusFilter, setConsumerStatusFilter] = useState<'all' | 'active' | 'pending_approval' | 'inactive' | 'blocked' | 'archived' | 'Disconnection Notice' | 'disconnected'>('all');
   const [consumerTypeFilter, setConsumerTypeFilter] = useState<'all' | 'Residential' | 'Commercial'>('all');
   const [consumerBarangayFilter, setConsumerBarangayFilter] = useState<string>('all');
   const [consumerSortBy, setConsumerSortBy] = useState<'recent' | 'name_asc' | 'name_desc' | 'account_asc' | 'balance_desc'>('recent');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+
+  // Disconnection Notice Summary & Lifecycle Action States
+  const [isDisconnectionSummaryOpen, setIsDisconnectionSummaryOpen] = useState(false);
+  const [extensionModalConsumer, setExtensionModalConsumer] = useState<Consumer | null>(null);
+  const [extensionModalDays, setExtensionModalDays] = useState<number>(5);
+  const [extensionModalReason, setExtensionModalReason] = useState<string>('Promissory payment agreement');
+
+  const [disconnectModalConsumer, setDisconnectModalConsumer] = useState<Consumer | null>(null);
+  const [disconnectModalReason, setDisconnectModalReason] = useState<string>('Non-payment of delinquent water bill past notice and extension');
+
+  const [assumeModalConsumer, setAssumeModalConsumer] = useState<Consumer | null>(null);
+  const [assumeFormName, setAssumeFormName] = useState<string>('');
+  const [assumeFormPhone, setAssumeFormPhone] = useState<string>('');
+  const [assumeFormEmail, setAssumeFormEmail] = useState<string>('');
+  const [assumeFormAddress, setAssumeFormAddress] = useState<string>('');
+  const [assumeFormNewAccount, setAssumeFormNewAccount] = useState<string>('');
 
   // Background Grace Period Scanner Service State
   const [scannerStatus, setScannerStatus] = useState<ScannerStatus>(getScannerStatus());
@@ -4082,7 +4112,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         ? isPending 
         : consumerStatusFilter === 'Disconnection Notice'
           ? (c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice')
-          : (!isPending && c.status === consumerStatusFilter));
+          : consumerStatusFilter === 'disconnected'
+            ? (c.status === 'disconnected' || c.isDisconnected)
+            : (!isPending && c.status === consumerStatusFilter));
 
     // 3. Consumer Classification Matcher
     const matchesType = 
@@ -6013,13 +6045,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                       </div>
                     )}
 
-                    {/* Background Service: Automated 3-Month Grace Period & Disconnection Scanner Banner */}
+                    {/* Background Service: Automated 2-Month Grace Period & Disconnection Scanner Banner */}
                     <GracePeriodScannerCard
                       scannerStatus={scannerStatus}
                       disconnectionCount={disconnectionCount}
                       activeCount={activeCount}
                       isManualScanning={isManualScanning}
                       onRunScanNow={handleTriggerManualGracePeriodScan}
+                      onPrintNoticeSummary={() => setIsDisconnectionSummaryOpen(true)}
                     />
 
                     {/* Quick Status Pill Bar */}
@@ -6071,6 +6104,24 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           consumerStatusFilter === 'Disconnection Notice' ? 'bg-rose-900 text-white' : 'bg-rose-100 text-rose-800'
                         }`}>
                           {disconnectionCount}
+                        </span>
+                      </button>
+
+                      {/* Disconnected Filter Pill */}
+                      <button
+                        onClick={() => setConsumerStatusFilter('disconnected')}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition shrink-0 flex items-center space-x-2 ${
+                          consumerStatusFilter === 'disconnected'
+                            ? 'bg-slate-800 text-white shadow-md ring-2 ring-slate-400'
+                            : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-300'
+                        }`}
+                      >
+                        <ShieldAlert className="h-3.5 w-3.5 text-slate-600" />
+                        <span>Disconnected (Inactive)</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
+                          consumerStatusFilter === 'disconnected' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-800'
+                        }`}>
+                          {consumers.filter(c => c.status === 'disconnected').length}
                         </span>
                       </button>
 
@@ -6649,6 +6700,60 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                           >
                                             <Eye className="h-3.5 w-3.5 text-white shrink-0" />
                                             <span className="text-white font-bold">View</span>
+                                          </button>
+                                        )}
+
+                                        {/* Disconnection Notice: Extend & Disconnect Buttons */}
+                                        {(c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice') && (
+                                          <>
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setExtensionModalConsumer(c);
+                                                setExtensionModalDays(5);
+                                                setExtensionModalReason('Promissory agreement for payment release');
+                                              }}
+                                              className="px-2 py-1.5 bg-amber-600/20 hover:bg-amber-600 text-amber-300 hover:text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition border border-amber-500/40 cursor-pointer shrink-0"
+                                              title="Grant extension of days"
+                                            >
+                                              <Clock className="h-3.5 w-3.5 shrink-0" />
+                                              <span>Extend</span>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setDisconnectModalConsumer(c);
+                                                setDisconnectModalReason('Unpaid water bills exceeding 2 months');
+                                              }}
+                                              className="px-2 py-1.5 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition border border-rose-500/40 cursor-pointer shrink-0"
+                                              title="Disconnect water service connection"
+                                            >
+                                              <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
+                                              <span>Cut</span>
+                                            </button>
+                                          </>
+                                        )}
+
+                                        {/* Disconnected 6+ months: Assume Account Button */}
+                                        {c.status === 'disconnected' && c.isAvailableForAssumption && (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setAssumeModalConsumer(c);
+                                              setAssumeFormName('');
+                                              setAssumeFormPhone('');
+                                              setAssumeFormEmail('');
+                                              setAssumeFormAddress(c.address || '');
+                                              setAssumeFormNewAccount(`ACC-2026-${Math.floor(1000 + Math.random() * 9000)}`);
+                                            }}
+                                            className="px-2 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg text-xs flex items-center space-x-1 transition shadow-xs cursor-pointer shrink-0"
+                                            title="Assume Account (Inactive 6+ months) - Transfer Name and Line"
+                                          >
+                                            <UserCheck className="h-3.5 w-3.5 shrink-0" />
+                                            <span>Assume</span>
                                           </button>
                                         )}
 
@@ -11605,6 +11710,331 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               document.body
             )
           : null)}
+
+      {/* DISCONNECTION NOTICE SUMMARY & PRINT MODAL */}
+      <DisconnectionNoticeSummaryModal
+        isOpen={isDisconnectionSummaryOpen}
+        onClose={() => setIsDisconnectionSummaryOpen(false)}
+        consumers={consumers}
+        readings={readings}
+        onGrantExtension={(c) => {
+          setIsDisconnectionSummaryOpen(false);
+          setExtensionModalConsumer(c);
+          setExtensionModalDays(5);
+          setExtensionModalReason('Promissory agreement for payment release');
+        }}
+        onDisconnectAccount={(c) => {
+          setIsDisconnectionSummaryOpen(false);
+          setDisconnectModalConsumer(c);
+          setDisconnectModalReason('Unpaid water bills exceeding 2 months');
+        }}
+        onAssumeAccount={(c) => {
+          setIsDisconnectionSummaryOpen(false);
+          setAssumeModalConsumer(c);
+          setAssumeFormName('');
+          setAssumeFormPhone('');
+          setAssumeFormEmail('');
+          setAssumeFormAddress(c.address || '');
+          setAssumeFormNewAccount(`ACC-2026-${Math.floor(1000 + Math.random() * 9000)}`);
+        }}
+      />
+
+      {/* GRANT EXTENSION MODAL */}
+      {extensionModalConsumer && (
+        <div 
+          className="fixed inset-0 z-[140] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setExtensionModalConsumer(null)}
+        >
+          <div 
+            className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl max-w-md w-full p-6 sm:p-7 space-y-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center space-x-3 text-amber-400">
+              <div className="p-2.5 bg-amber-950/80 rounded-2xl border border-amber-800/80">
+                <Clock className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-white">Grant Disconnection Extension</h3>
+                <p className="text-xs text-slate-400 font-mono">Account #{extensionModalConsumer.accountNumber}</p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-950 rounded-2xl border border-slate-800 text-xs space-y-1">
+              <p><strong>Consumer Name:</strong> {extensionModalConsumer.name}</p>
+              <p><strong>Overdue Balance:</strong> <span className="font-mono font-bold text-rose-400">₱{(extensionModalConsumer.outstandingBalance || 0).toFixed(2)}</span></p>
+              <p><strong>Address:</strong> {extensionModalConsumer.address}, {extensionModalConsumer.barangay}</p>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase mb-1">
+                  Extension Days to Grant:
+                </label>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {[3, 5, 7, 10, 15].map(days => (
+                    <button
+                      key={`ext-days-${days}`}
+                      type="button"
+                      onClick={() => setExtensionModalDays(days)}
+                      className={`py-2 rounded-xl text-xs font-mono font-black transition cursor-pointer border ${
+                        extensionModalDays === days 
+                          ? 'bg-amber-600 text-white border-amber-500 shadow-xs' 
+                          : 'bg-slate-950 text-slate-300 hover:bg-slate-800 border-slate-800'
+                      }`}
+                    >
+                      {days}d
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase mb-1">
+                  Reason / Promissory Note:
+                </label>
+                <input
+                  type="text"
+                  value={extensionModalReason}
+                  onChange={(e) => setExtensionModalReason(e.target.value)}
+                  placeholder="e.g. Salary release scheduled on 15th"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-amber-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setExtensionModalConsumer(null)}
+                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const res = grantAccountExtension(
+                    extensionModalConsumer.accountNumber,
+                    extensionModalDays,
+                    extensionModalReason,
+                    currentUser.name
+                  );
+                  if (res.success && res.updatedConsumer) {
+                    setConsumers(prev => prev.map(c => c.accountNumber === res.updatedConsumer!.accountNumber ? res.updatedConsumer! : c));
+                    toast.success('Extension Granted', res.message);
+                  } else {
+                    toast.error('Extension Error', res.message);
+                  }
+                  setExtensionModalConsumer(null);
+                }}
+                className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition cursor-pointer shadow-md"
+              >
+                Grant Extension
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DISCONNECT CONFIRM MODAL */}
+      {disconnectModalConsumer && (
+        <div 
+          className="fixed inset-0 z-[140] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setDisconnectModalConsumer(null)}
+        >
+          <div 
+            className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl max-w-md w-full p-6 sm:p-7 space-y-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center space-x-3 text-rose-400">
+              <div className="p-2.5 bg-rose-950/80 rounded-2xl border border-rose-800/80">
+                <ShieldAlert className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-white">Confirm Service Disconnection</h3>
+                <p className="text-xs text-slate-400 font-mono">Account #{disconnectModalConsumer.accountNumber}</p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-950 rounded-2xl border border-slate-800 text-xs space-y-1">
+              <p><strong>Consumer Name:</strong> {disconnectModalConsumer.name}</p>
+              <p><strong>Meter Number:</strong> {disconnectModalConsumer.meterNumber}</p>
+              <p><strong>Delinquent Balance:</strong> <span className="font-mono font-bold text-rose-400">₱{(disconnectModalConsumer.outstandingBalance || 0).toFixed(2)}</span></p>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              This will update the consumer status to <strong className="text-rose-400">Disconnected</strong> and mark the water meter <strong className="text-rose-400">inactive</strong>. The consumer may still log in to view past bills and pay. All existing payment and balance records remain strictly accountable to this consumer.
+            </p>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setDisconnectModalConsumer(null)}
+                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const res = disconnectAccount(
+                    disconnectModalConsumer.accountNumber,
+                    currentUser.name,
+                    disconnectModalReason
+                  );
+                  if (res.success && res.updatedConsumer) {
+                    setConsumers(prev => prev.map(c => c.accountNumber === res.updatedConsumer!.accountNumber ? res.updatedConsumer! : c));
+                    toast.success('Account Disconnected', res.message);
+                  } else {
+                    toast.error('Disconnection Error', res.message);
+                  }
+                  setDisconnectModalConsumer(null);
+                }}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition cursor-pointer shadow-md"
+              >
+                Confirm Disconnect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ASSUME ACCOUNT MODAL (6-Month Inactive Line Assumption) */}
+      {assumeModalConsumer && (
+        <div 
+          className="fixed inset-0 z-[140] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setAssumeModalConsumer(null)}
+        >
+          <div 
+            className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl max-w-lg w-full p-6 sm:p-7 space-y-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center space-x-3 text-indigo-400">
+              <div className="p-2.5 bg-indigo-950/80 rounded-2xl border border-indigo-800/80">
+                <UserCheck className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-white">Assume Inactive Water Connection</h3>
+                <p className="text-xs text-slate-400 font-mono">Transfer Line #{assumeModalConsumer.accountNumber} (6+ Months Inactive)</p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-950 rounded-2xl border border-slate-800 text-xs space-y-1">
+              <p><strong>Previous Registered Owner:</strong> <span className="text-slate-300 font-bold">{assumeModalConsumer.name}</span></p>
+              <p><strong>Physical Meter Tag:</strong> <span className="font-mono text-sky-400">{assumeModalConsumer.meterNumber}</span></p>
+              <p><strong>Historical Accountability:</strong> <span className="text-emerald-400">Past billing & payments remain accountable in previous owner ledger.</span></p>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                  New Registered Consumer Full Name: *
+                </label>
+                <input
+                  type="text"
+                  value={assumeFormName}
+                  onChange={(e) => setAssumeFormName(e.target.value)}
+                  placeholder="e.g. Maria Santos Del Rosario"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500 font-bold"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                    Contact Number:
+                  </label>
+                  <input
+                    type="text"
+                    value={assumeFormPhone}
+                    onChange={(e) => setAssumeFormPhone(e.target.value)}
+                    placeholder="0917-xxx-xxxx"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                    Email Address:
+                  </label>
+                  <input
+                    type="email"
+                    value={assumeFormEmail}
+                    onChange={(e) => setAssumeFormEmail(e.target.value)}
+                    placeholder="consumer@email.com"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                  Service Address / Sitio Zone:
+                </label>
+                <input
+                  type="text"
+                  value={assumeFormAddress}
+                  onChange={(e) => setAssumeFormAddress(e.target.value)}
+                  placeholder="Sitio Zone, Barangay"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                  Updated Account Number (Optional):
+                </label>
+                <input
+                  type="text"
+                  value={assumeFormNewAccount}
+                  onChange={(e) => setAssumeFormNewAccount(e.target.value)}
+                  placeholder="Leave as is or enter new account #"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500 font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setAssumeModalConsumer(null)}
+                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!assumeFormName.trim()) {
+                    toast.warning('Name Required', 'Please enter the assuming consumer name.');
+                    return;
+                  }
+                  const res = assumeAccount(
+                    assumeModalConsumer.accountNumber,
+                    {
+                      name: assumeFormName,
+                      contactNumber: assumeFormPhone,
+                      email: assumeFormEmail,
+                      address: assumeFormAddress,
+                      newAccountNumber: assumeFormNewAccount || undefined
+                    },
+                    currentUser.name
+                  );
+                  if (res.success && res.updatedConsumer) {
+                    setConsumers(prev => prev.map(c => c.accountNumber === assumeModalConsumer.accountNumber ? res.updatedConsumer! : c));
+                    toast.success('Account Assumed', res.message);
+                  } else {
+                    toast.error('Assumption Error', res.message);
+                  }
+                  setAssumeModalConsumer(null);
+                }}
+                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition cursor-pointer shadow-md"
+              >
+                Approve Assumption
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* EDIT STAFF MODAL */}
       {editingStaffModal && (

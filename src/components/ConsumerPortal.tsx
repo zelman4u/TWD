@@ -147,6 +147,7 @@ import {
   isNotificationReadPersistently,
   markNotificationsReadPersistently,
 } from '../utils/notificationDeduper';
+import { requestAccountExtension } from '../services/gracePeriodScannerService';
 
 const SEEN_CONSUMER_BANNERS_KEY = 'twd_live_v4_consumer_seen_banners_v1';
 
@@ -457,6 +458,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
   // Dynamic Tariff Schedule State & Modal
   const [activeTariff, setActiveTariff] = useState<WaterTariffConfig>(() => getActiveTariffConfig());
   const [showTariffScheduleModal, setShowTariffScheduleModal] = useState(false);
+
+  // Disconnection Notice Days Extension Request State
+  const [isExtensionModalOpen, setIsExtensionModalOpen] = useState(false);
+  const [extensionDaysSelected, setExtensionDaysSelected] = useState<number>(7);
+  const [extensionReasonInput, setExtensionReasonInput] = useState('');
+  const [isSubmittingExtension, setIsSubmittingExtension] = useState(false);
 
   // Track previous readings to detect admin payment modifications
   const prevReadingsRef = useRef<MeterReading[]>([]);
@@ -1726,15 +1733,22 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           }
         });
 
-        // 2. Official 3-Month Disconnection & Cutting Notice Check (3+ cycles or 90+ days of past unpaid approved bills)
+        // 2. Official 2-Month Disconnection & Cutting Notice Check (2+ cycles or 60+ days of past unpaid approved bills)
         // CRITICAL: When a consumer makes a partial payment, the critical disconnection warning HALTS!
         const hasPartialGoodwill = unpaidList.some(r => r.paymentStatus === 'partial' || (r.paidAmount && r.paidAmount > 0));
         const genuineUnpaidCycles = unpaidList.filter(r => r.paymentStatus !== 'partial' && (!r.paidAmount || r.paidAmount <= 0));
-        const has3MonthsOverdue = !hasPartialGoodwill && (genuineUnpaidCycles.length >= 3 || genuineUnpaidCycles.some(r => {
+        const has2MonthsOverdue = !hasPartialGoodwill && (genuineUnpaidCycles.length >= 2 || genuineUnpaidCycles.some(r => {
           let d = r.dueDate ? new Date(r.dueDate) : (r.readingDate ? new Date(r.readingDate) : new Date());
           const diff = (new Date().getTime() - d.getTime()) / (1000 * 60 * 60 * 24);
-          return diff >= 90 || r.isDisconnectionNoticeIssued;
+          return diff >= 60 || r.isDisconnectionNoticeIssued;
         }));
+
+        // Extension check: if consumer has an active extension granted, notice is deferred
+        const isExtensionActive = Boolean(
+          record.extensionGrantedUntil &&
+          new Date(record.extensionGrantedUntil).getTime() >= new Date().setHours(0, 0, 0, 0) &&
+          record.extensionStatus === 'approved'
+        );
 
         if (hasPartialGoodwill && (record.status === 'Disconnection Notice' || (record.status as string) === 'disconnection_notice')) {
           record = {
@@ -1749,7 +1763,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           mockDb.saveConsumers(allC);
         }
 
-        if (has3MonthsOverdue && unpaidList.length > 0) {
+        if (has2MonthsOverdue && unpaidList.length > 0 && !isExtensionActive && record.status !== 'disconnected') {
           const existingNotifs = mockDb.getNotifications(record.accountNumber, {
             userId: record.linkedUserId || currentUser.id,
             email: record.email || currentUser.email,
@@ -1767,8 +1781,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               consumerId: record.id,
               userId: record.linkedUserId || currentUser.id,
               consumerEmail: record.email || currentUser.email,
-              title: `CRITICAL: 3-Month Disconnection & Cutting Order Notice`,
-              message: `Your water account #${record.accountNumber} has unpaid statements exceeding 3 consecutive months. In accordance with Tagoloan Water District policy, a physical curb-stop disconnection order is pending. Pay at least 50% partial or upload your office receipt immediately to stop cutting.`,
+              title: `CRITICAL: 2-Month Disconnection & Cutting Order Notice`,
+              message: `Your water account #${record.accountNumber} has unpaid statements exceeding 2 consecutive months. In accordance with Tagoloan Water District policy, a physical curb-stop disconnection order is pending. You may request a days extension or pay at least 50% partial or upload your office receipt immediately to stop cutting.`,
               type: 'disconnection',
               readingId: primaryOverdue.id,
               billingPeriod: primaryOverdue.billingPeriod,
@@ -3309,14 +3323,26 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 </span>
               </span>
             ) : (
-              <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                <span className="h-1 w-1 rounded-full bg-emerald-400 animate-ping"></span>
+              <span className={`inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase border ${
+                consumerRecord.status === 'disconnected'
+                  ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                  : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
+                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                  : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+              }`}>
+                <span className={`h-1 w-1 rounded-full ${
+                  consumerRecord.status === 'disconnected'
+                    ? 'bg-rose-400'
+                    : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
+                    ? 'bg-amber-400 animate-pulse'
+                    : 'bg-emerald-400 animate-ping'
+                }`}></span>
                 <span>
-                  Confirmed • {
-                    consumerRecord.status === 'active' || !consumerRecord.status || consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
-                      ? 'Line Active'
-                      : consumerRecord.status
-                  }
+                  {consumerRecord.status === 'disconnected'
+                    ? 'Disconnected (Inactive)'
+                    : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
+                    ? 'Disconnection Notice'
+                    : 'Line Active'}
                 </span>
               </span>
             )}
@@ -4148,54 +4174,199 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             </div>
           ) : (
             /* OFFICIAL IDENTIFIERS ACTIVE BANNER */
-            <div className="bg-gradient-to-r from-blue-700 via-blue-650 to-sky-600 rounded-3xl p-6 sm:p-7 text-white shadow-lg relative overflow-hidden">
-              <div className="absolute top-0 right-0 h-48 w-48 bg-white/5 rounded-full blur-2xl transform translate-x-1/4 -translate-y-1/4"></div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center relative">
-                <div className="md:col-span-8 space-y-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-blue-100 font-semibold">
-                    <span className="text-white font-bold">
-                      {consumerRecord.consumerType || 'Residential'} Line
-                    </span>
-                    <span aria-hidden="true" className="text-blue-200/70">·</span>
-                    <span className="text-emerald-200 font-bold">
-                      Line Active
-                    </span>
+            <div className="space-y-4">
+              <div className={`rounded-3xl p-6 sm:p-7 text-white shadow-lg relative overflow-hidden ${
+                consumerRecord.status === 'disconnected'
+                  ? 'bg-gradient-to-r from-rose-950 via-slate-900 to-slate-900 border border-rose-700/60'
+                  : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
+                  ? 'bg-gradient-to-r from-amber-950 via-slate-900 to-blue-950 border border-amber-600/50'
+                  : 'bg-gradient-to-r from-blue-700 via-blue-650 to-sky-600'
+              }`}>
+                <div className="absolute top-0 right-0 h-48 w-48 bg-white/5 rounded-full blur-2xl transform translate-x-1/4 -translate-y-1/4"></div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center relative">
+                  <div className="md:col-span-8 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-blue-100 font-semibold">
+                      <span className="text-white font-bold">
+                        {consumerRecord.consumerType || 'Residential'} Line
+                      </span>
+                      <span aria-hidden="true" className="text-blue-200/70">·</span>
+                      <span className={
+                        consumerRecord.status === 'disconnected'
+                          ? 'text-rose-400 font-bold flex items-center gap-1'
+                          : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
+                          ? 'text-amber-300 font-bold flex items-center gap-1'
+                          : 'text-emerald-200 font-bold'
+                      }>
+                        {consumerRecord.status === 'disconnected' ? (
+                          <>
+                            <span className="h-1.5 w-1.5 rounded-full bg-rose-400"></span>
+                            Water Service Disconnected (Inactive Account)
+                          </>
+                        ) : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice' ? (
+                          <>
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                            Disconnection Notice (2 Months Unpaid)
+                          </>
+                        ) : (
+                          'Line Active'
+                        )}
+                      </span>
+                    </div>
+                    
+                    <h2 className="text-2xl sm:text-3xl font-black tracking-tight">{consumerRecord.name}</h2>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-blue-100">
+                      <span className="flex items-center space-x-1">
+                        <MapPin className="h-3.5 w-3.5 text-sky-300 shrink-0" />
+                        <span>{consumerRecord.address}</span>
+                      </span>
+                      <span className="flex items-center space-x-1 font-bold text-amber-200">
+                        <MapPin className="h-3.5 w-3.5 shrink-0" />
+                        <span>Barangay: {consumerRecord.barangay || 'Poblacion'}</span>
+                      </span>
+                    </div>
                   </div>
-                  
-                  <h2 className="text-2xl sm:text-3xl font-black tracking-tight">{consumerRecord.name}</h2>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-blue-100">
-                    <span className="flex items-center space-x-1">
-                      <MapPin className="h-3.5 w-3.5 text-sky-300 shrink-0" />
-                      <span>{consumerRecord.address}</span>
-                    </span>
-                    <span className="flex items-center space-x-1 font-bold text-amber-200">
-                      <MapPin className="h-3.5 w-3.5 shrink-0" />
-                      <span>Barangay: {consumerRecord.barangay || 'Poblacion'}</span>
-                    </span>
-                  </div>
-                </div>
 
-                {/* Official Account Number & Tag Number Identifiers Display */}
-                <div className="md:col-span-4 bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/15 space-y-2.5">
-                  <div className="flex justify-between items-center text-xs">
-                    <span className="text-blue-200 font-medium">Account Number:</span>
-                    <span className="font-mono tabular-nums font-black text-amber-300 text-sm">
-                      {consumerRecord.accountNumber}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center text-xs">
-                    <span className="text-blue-200 font-medium">Meter Tag Number:</span>
-                    <span className="font-mono tabular-nums font-black text-white text-sm">
-                      {consumerRecord.meterNumber || 'MT-7711'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center text-xs">
-                    <span className="text-blue-200 font-medium">Classification:</span>
-                    <span className="font-bold text-blue-100">{consumerRecord.consumerType || 'Residential'}</span>
+                  {/* Official Account Number & Tag Number Identifiers Display */}
+                  <div className="md:col-span-4 bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/15 space-y-2.5">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-blue-200 font-medium">Account Number:</span>
+                      <span className="font-mono tabular-nums font-black text-amber-300 text-sm">
+                        {consumerRecord.accountNumber}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-blue-200 font-medium">Meter Tag Number:</span>
+                      <span className="font-mono tabular-nums font-black text-white text-sm">
+                        {consumerRecord.meterNumber || 'MT-7711'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-blue-200 font-medium">Classification:</span>
+                      <span className="font-bold text-blue-100">{consumerRecord.consumerType || 'Residential'}</span>
+                    </div>
                   </div>
                 </div>
               </div>
+
+              {/* DISCONNECTED INACTIVE ACCOUNT BANNER */}
+              {consumerRecord.status === 'disconnected' && (
+                <div className="p-5 rounded-2xl bg-rose-950/40 border border-rose-500/50 text-rose-200 text-xs space-y-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 bg-rose-500/20 text-rose-300 rounded-xl border border-rose-500/40 shrink-0">
+                        <AlertOctagon className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-black text-white">Water Service Disconnected (Physical Curb Stop Locked)</h4>
+                        <p className="text-slate-300 text-[11px] mt-0.5">
+                          Account disconnected on {consumerRecord.disconnectedAt ? new Date(consumerRecord.disconnectedAt).toLocaleDateString('en-US') : 'Administration Order'}.
+                        </p>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-1 bg-rose-500/20 text-rose-300 font-mono font-bold text-[10px] rounded-lg border border-rose-500/40 shrink-0">
+                      INACTIVE
+                    </span>
+                  </div>
+                  <p className="text-slate-200 leading-relaxed text-[11px]">
+                    <strong className="text-white">Account Access & Accountability:</strong> You are still able to use this portal to view your statement history and official receipts. All past payments remain credited and existing outstanding obligations (<span className="text-rose-300 font-mono font-bold">₱{Number(consumerRecord.outstandingBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>) remain strictly accountable under your name.
+                  </p>
+                  <div className="p-3 bg-slate-900/80 rounded-xl border border-rose-800/40 text-[11px] space-y-1 text-slate-300">
+                    <p className="font-bold text-amber-300 flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5" />
+                      6-Month Inactivity Notice & Account Assumption Policy
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      In accordance with Tagoloan Water District regulations, accounts that remain disconnected and inactive for 6 months (180 days) become eligible for <strong>Account Assumption (Transfer of Account & Name)</strong> by incoming residents or prospective applicants at the TWD Office.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => handleConsumerTabChange('bills')}
+                      className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow"
+                    >
+                      <ReceiptText className="h-3.5 w-3.5" />
+                      <span>Review Outstanding Bills & Settle</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsUploadReceiptOpen(true);
+                      }}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs transition cursor-pointer border border-slate-700 flex items-center gap-1.5"
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      <span>Upload Proof of Office Payment</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 2-MONTH DISCONNECTION NOTICE & EXTENSION REQUEST BANNER */}
+              {(consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice') && (
+                <div className="p-5 rounded-2xl bg-amber-950/40 border border-amber-500/50 text-amber-200 text-xs space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 bg-amber-500/20 text-amber-300 rounded-xl border border-amber-500/40 shrink-0">
+                        <AlertTriangle className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-black text-amber-100">Disconnection Notice: 2-Month Grace Period Exceeded</h4>
+                        <p className="text-amber-300/80 text-[11px] mt-0.5">
+                          Unpaid water statements have exceeded 2 consecutive billing cycles (60 days overdue).
+                        </p>
+                      </div>
+                    </div>
+                    {consumerRecord.extensionStatus === 'approved' ? (
+                      <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 font-mono font-bold text-xs rounded-lg border border-emerald-500/40 shrink-0">
+                        Extension Active until {consumerRecord.extensionGrantedUntil}
+                      </span>
+                    ) : consumerRecord.extensionStatus === 'pending' ? (
+                      <span className="px-3 py-1 bg-amber-500/20 text-amber-300 font-mono font-bold text-xs rounded-lg border border-amber-500/40 shrink-0">
+                        Extension Request Pending Review ({consumerRecord.extensionDays} Days)
+                      </span>
+                    ) : (
+                      <span className="px-3 py-1 bg-rose-500/20 text-rose-300 font-mono font-bold text-xs rounded-lg border border-rose-500/40 shrink-0">
+                        Cutoff Pending: {consumerRecord.disconnectionCutoffDate || 'Subject to Physical Cutting'}
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-slate-300 leading-relaxed text-[11px]">
+                    To avoid physical meter disconnection and reconnection fees, please settle your account balance, make a partial payment of at least 50%, or submit an extension request for administration review.
+                  </p>
+
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {consumerRecord.extensionStatus !== 'approved' && (
+                      <button
+                        type="button"
+                        onClick={() => setIsExtensionModalOpen(true)}
+                        className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow"
+                      >
+                        <Clock className="h-3.5 w-3.5" />
+                        <span>{consumerRecord.extensionStatus === 'pending' ? 'Update Extension Request' : 'Request Extension of Days'}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleConsumerTabChange('bills')}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow"
+                    >
+                      <CreditCard className="h-3.5 w-3.5" />
+                      <span>Pay Bills Now</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsUploadReceiptOpen(true)}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs transition cursor-pointer border border-slate-700 flex items-center gap-1.5"
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      <span>Upload Official Receipt</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )
         )}
@@ -9125,6 +9296,153 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           </p>
         </div>
       </footer>
+
+      {/* DISCONNECTION NOTICE DAYS EXTENSION REQUEST MODAL */}
+      {isExtensionModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-amber-500/50 rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl animate-scale-in">
+            <div className="p-5 bg-gradient-to-r from-amber-950/80 to-slate-900 border-b border-amber-500/30 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-amber-500/20 text-amber-300 rounded-xl border border-amber-500/40">
+                  <Clock className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white">Request Days Extension</h3>
+                  <p className="text-[11px] text-amber-300/80">Tagoloan Water District • Disconnection Deferral</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsExtensionModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!extensionReasonInput.trim()) {
+                  toast.error('Please specify a valid reason for requesting an extension.');
+                  return;
+                }
+                setIsSubmittingExtension(true);
+                try {
+                  const res = requestAccountExtension(
+                    consumerRecord.accountNumber,
+                    extensionDaysSelected,
+                    extensionReasonInput.trim()
+                  );
+                  if (res.success && res.updatedConsumer) {
+                    setConsumerRecord(res.updatedConsumer);
+                    consumerRecordRef.current = res.updatedConsumer;
+                    toast.success(res.message);
+                    setIsExtensionModalOpen(false);
+                    setExtensionReasonInput('');
+                  } else {
+                    toast.error(res.message || 'Failed to submit extension request.');
+                  }
+                } catch (err: any) {
+                  toast.error(err?.message || 'Error submitting extension.');
+                } finally {
+                  setIsSubmittingExtension(false);
+                }
+              }}
+              className="p-6 space-y-4"
+            >
+              <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-1.5 text-xs">
+                <div className="flex justify-between items-center text-slate-400">
+                  <span>Account Number:</span>
+                  <span className="font-mono font-bold text-white">{consumerRecord.accountNumber}</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-400">
+                  <span>Registered Name:</span>
+                  <span className="font-bold text-slate-200">{consumerRecord.name}</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-400">
+                  <span>Outstanding Balance:</span>
+                  <span className="font-mono font-bold text-rose-400">
+                    ₱{Number(consumerRecord.outstandingBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-2">
+                  Select Requested Extension Period:
+                </label>
+                <div className="grid grid-cols-5 gap-2">
+                  {[3, 5, 7, 10, 15].map((days) => (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => setExtensionDaysSelected(days)}
+                      className={`py-2.5 px-2 rounded-xl text-center border font-bold text-xs transition cursor-pointer flex flex-col items-center justify-center ${
+                        extensionDaysSelected === days
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-300 ring-2 ring-amber-400/30'
+                          : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                      }`}
+                    >
+                      <span className="text-base font-black font-mono">{days}</span>
+                      <span className="text-[10px] font-normal uppercase">Days</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1.5">
+                  Deferred until:{' '}
+                  <strong className="text-amber-300 font-mono">
+                    {new Date(Date.now() + extensionDaysSelected * 86400000).toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric'
+                    })}
+                  </strong>
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  Reason for Extension Request: <span className="text-rose-400">*</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={extensionReasonInput}
+                  onChange={(e) => setExtensionReasonInput(e.target.value)}
+                  placeholder="e.g. Awaiting monthly salary on the 15th, family medical emergency, or delayed harvest collection..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                  required
+                />
+              </div>
+
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-200/90 space-y-1">
+                <p className="font-semibold text-amber-300">Tagoloan Water District Extension Policy:</p>
+                <p>
+                  Submission of this request places your disconnection order on temporary review. If granted, failure to remit payment on or before the granted extension date will result in immediate physical disconnection at the curb stop.
+                </p>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsExtensionModalOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingExtension}
+                  className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow"
+                >
+                  <Clock className="h-3.5 w-3.5" />
+                  <span>{isSubmittingExtension ? 'Submitting...' : 'Submit Extension Request'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Baymax 1.0 AI Consumer Companion Widget */}
       <BaymaxChatWidget

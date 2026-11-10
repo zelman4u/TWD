@@ -14,4 +14,5 @@ export * from './TariffRateManager';
 export * from './ConsumerReportsManager';
 export * from './AdminInquiryReplyModal';
 export * from './WaterMeterInstallationsManager';
+export * from './DisconnectionNoticeSummaryModal';
 

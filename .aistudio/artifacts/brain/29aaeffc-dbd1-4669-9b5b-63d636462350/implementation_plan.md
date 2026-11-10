@@ -112,3 +112,23 @@ Structural analysis of the **Tagoloan Field Mobile Web Terminal** (`MobileNew-ma
 2. **Phase 2 — Endpoint & Payload Harmonization**: Wire real-time two-way hooks for Readers (register, route update, terminate/reactivate), Validated Consumers & ID Issuance, Physical Water Meter statuses, and Field Readings (single + batch ingestion with 5-digit odometer + ₱10/₱25 tariff normalization and approve/reject callbacks).
 3. **Phase 3 — Admin & Portal UI Integration**: Add the Mobile Field Terminal connection status & manual sync controls in the Admin Portal (**Meter Readers** and **Approvals**), surface mobile `meterCondition` / OCR / GPS metadata inside interactive reading details, and add the direct `https://mobile-li9q.onrender.com/` launcher link.
 4. **Phase 4 — End-to-End Live Verification**: Verify TypeScript lint, production build, and live round-trip communication against `https://mobile-li9q.onrender.com`.
+
+---
+
+## 6. Disconnection Notice, Extension & Tariff Hike Streamlining (Completed)
+
+1. **Streamlined Tariff Adjustment UI**:
+   - Replaced 45 competing buttons in `TariffRateManager.tsx` with a single 3-step interface: (1) Scope selector (Residential / Commercial / Both), (2) Mode selector (Quick ₱/m³ or % vs Bracket Editor), and (3) Live 10m³/18m³/30m³ Bill Simulator.
+   - One primary action button: `"Review & Apply Tariff Adjustment"`.
+2. **Statement Locking & Partial Payment Balance Integrity**:
+   - `hasOfficialLock` and `isLegacyUnpaid` lock gross bill calculations for issued statements (`status === 'verified'`, with `dueDate` or `orNumber`), preventing statement alterations during future tariff hikes.
+   - Partial payments deduct correctly in consumer receipts, showing Gross Statement, Amount Paid, and Net Remaining Due.
+3. **2-Month Grace Period Disconnection Notice**:
+   - Updated threshold from 3 months (90 days / 3 cycles) to **2 months (60 days / 2 cycles)** in `gracePeriodScannerService.ts` and `ConsumerPortal.tsx`.
+   - Admin can print the Disconnection Notice Summary Report and individual notice slips with official TWD headers via `DisconnectionNoticeSummaryModal.tsx`.
+4. **Days Extension Request Workflow**:
+   - Consumers under Disconnection Notice can request a 3, 5, 7, 10, or 15-day extension directly from `ConsumerPortal.tsx`.
+   - Admins can grant or modify extensions in `AdminPortal.tsx`. If unpaid after the extension expires, the account is transitioned to `disconnected`.
+5. **Disconnected Inactive Accounts & 6-Month Assumption**:
+   - Disconnected accounts remain accessible in `ConsumerPortal.tsx` in a view-only inactive state with all historical payments and remaining balances strictly accountable.
+   - Accounts disconnected for 6 months (180 days) become `isAvailableForAssumption`. Admins can approve account assumption and transfer ownership to a new consumer.

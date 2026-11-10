@@ -312,8 +312,20 @@ export function getReadingEffectiveBillAmount(
     Boolean(
       (reading as any).isBillingIssued ||
         (reading as any).billingIssuedAt ||
-        (reading as any).invoiceNumber
+        (reading as any).invoiceNumber ||
+        (reading as any).orNumber ||
+        ((reading as any).status === 'verified' && (reading as any).dueDate)
     );
+
+  // If the bill has already been issued or paid, always preserve its stored billAmount
+  if (
+    hasOfficialLock &&
+    typeof reading.billAmount === 'number' &&
+    !Number.isNaN(reading.billAmount) &&
+    reading.billAmount >= 0
+  ) {
+    return Math.round(reading.billAmount * 100) / 100;
+  }
 
   const isLegacyUnpaidBaseline =
     reading.tariffBaselineSchema !== OFFICIAL_TARIFF_BASELINE_SCHEMA &&
@@ -417,7 +429,9 @@ export function getReadingTotalAssessment(
     Boolean(
       (reading as any).isBillingIssued ||
         (reading as any).billingIssuedAt ||
-        (reading as any).invoiceNumber
+        (reading as any).invoiceNumber ||
+        (reading as any).orNumber ||
+        ((reading as any).status === 'verified' && (reading as any).dueDate)
     );
 
   const isLegacyUnpaid =

@@ -46,11 +46,11 @@ export interface ScannerStatus {
 }
 
 /**
- * Evaluates whether a consumer account has exceeded the 3-month (90 days) payment grace period.
+ * Evaluates whether a consumer account has exceeded the 2-month (60 days) payment grace period.
  * 
  * Criteria (Standard Tagoloan Water District Policy):
- * 1. An unpaid verified bill has exceeded 90 days past its due date (3 months grace period)
- * 2. Or 3 or more consecutive monthly billing cycles remain unpaid with outstanding balance
+ * 1. An unpaid verified bill has exceeded 60 days past its due date (2 months grace period)
+ * 2. Or 2 or more consecutive monthly billing cycles remain unpaid with outstanding balance
  * 3. Or an explicit disconnection notice is already issued on delinquent bill
  */
 export function evaluateAccountGracePeriod(
@@ -145,9 +145,9 @@ export function evaluateAccountGracePeriod(
   const fullyUnpaidBills = unpaidBills.filter(b => b.paymentStatus !== 'partial' && (!b.paidAmount || b.paidAmount <= 0));
   const unpaidCycles = fullyUnpaidBills.length;
 
-  // 3 months grace period check: >= 90 days overdue OR >= 3 fully unpaid cycles OR explicit notice issued
+  // 2 months grace period check: >= 60 days overdue OR >= 2 fully unpaid cycles OR explicit notice issued
   // When a consumer makes a partial payment, the disconnection order is suspended (halted) while maintaining the remaining balance!
-  const isExceeded = !hasPartialPayment && (maxDaysOverdue >= 90 || unpaidCycles >= 3 || unpaidBills.some(r => r.isDisconnectionNoticeIssued === true));
+  const isExceeded = !hasPartialPayment && (maxDaysOverdue >= 60 || unpaidCycles >= 2 || unpaidBills.some(r => r.isDisconnectionNoticeIssued === true));
 
   return {
     isExceeded,
@@ -236,9 +236,106 @@ export function scanAndUpdateAccounts(): ScanSummary {
     const evalResult = evaluateAccountGracePeriod(consumer, readings);
     const prevStatus = consumer.status;
 
+    // Check if account is already disconnected (check 6 months inactivity for Account Assumption)
+    if (consumer.status === 'disconnected') {
+      const discDate = consumer.disconnectedAt ? new Date(consumer.disconnectedAt) : new Date(Date.now() - 181 * 86400000);
+      const daysDisconnected = Math.max(0, Math.floor((Date.now() - discDate.getTime()) / (1000 * 60 * 60 * 24)));
+      const isAvailableForAssumption = daysDisconnected >= 180 || Boolean(consumer.isAvailableForAssumption);
+      
+      if (isAvailableForAssumption && !consumer.isAvailableForAssumption) {
+        hasConsumerChanges = true;
+      }
+
+      items.push({
+        accountNumber: consumer.accountNumber,
+        name: consumer.name,
+        barangay: consumer.barangay,
+        previousStatus: 'disconnected',
+        newStatus: 'disconnected',
+        maxDaysOverdue: evalResult.maxDaysOverdue,
+        unpaidCycles: evalResult.unpaidCycles,
+        totalOverdueAmount: evalResult.totalOverdueAmount,
+        actionTaken: 'skipped',
+        reason: isAvailableForAssumption 
+          ? `Disconnected for ${daysDisconnected} days — Available for Assumption (Account Transfer)`
+          : `Disconnected for ${daysDisconnected} days (Inactive line)`
+      });
+
+      return {
+        ...consumer,
+        isDisconnected: true,
+        isAvailableForAssumption: Boolean(isAvailableForAssumption),
+        assumptionEligibleDate: consumer.assumptionEligibleDate || (isAvailableForAssumption ? new Date().toISOString() : undefined),
+        gracePeriodOverdueDays: evalResult.maxDaysOverdue,
+        unpaidCyclesCount: evalResult.unpaidCycles
+      };
+    }
+
     if (evalResult.isExceeded) {
+      const nowMs = Date.now();
+      const hasExtension = Boolean(consumer.extensionGrantedUntil);
+      const extDateMs = consumer.extensionGrantedUntil ? new Date(consumer.extensionGrantedUntil).getTime() : 0;
+      const isExtensionActive = hasExtension && extDateMs > nowMs;
+      const isExtensionExpired = hasExtension && extDateMs <= nowMs;
+
+      // If consumer had an extension and STILL did not pay after extension expired -> DISCONNECT
+      if (isExtensionExpired) {
+        hasConsumerChanges = true;
+        const discDate = new Date().toISOString();
+        
+        mockDb.addAuditLog(
+          'system-background-service',
+          'Automated Grace Period Scanner',
+          'system',
+          'ACCOUNT_DISCONNECTED_EXTENSION_EXPIRED',
+          `Background Service: Account #${consumer.accountNumber} (${consumer.name}) failed to settle arrears after extension expired (${consumer.extensionGrantedUntil}). Status updated to Disconnected.`
+        );
+
+        items.push({
+          accountNumber: consumer.accountNumber,
+          name: consumer.name,
+          barangay: consumer.barangay,
+          previousStatus: prevStatus,
+          newStatus: 'disconnected',
+          maxDaysOverdue: evalResult.maxDaysOverdue,
+          unpaidCycles: evalResult.unpaidCycles,
+          totalOverdueAmount: evalResult.totalOverdueAmount,
+          actionTaken: 'updated_to_disconnection',
+          reason: `Extension expired on ${consumer.extensionGrantedUntil} without payment — Line Disconnected`
+        });
+
+        return {
+          ...consumer,
+          status: 'disconnected' as const,
+          isDisconnected: true,
+          disconnectedAt: discDate,
+          extensionStatus: 'expired' as const,
+          gracePeriodOverdueDays: evalResult.maxDaysOverdue,
+          unpaidCyclesCount: evalResult.unpaidCycles,
+          blockReason: `Water service disconnected on ${new Date().toLocaleDateString('en-US')}. Extension expired without full settlement.`
+        };
+      }
+
+      if (isExtensionActive) {
+        // Retained under active extension protection
+        items.push({
+          accountNumber: consumer.accountNumber,
+          name: consumer.name,
+          barangay: consumer.barangay,
+          previousStatus: prevStatus,
+          newStatus: prevStatus,
+          maxDaysOverdue: evalResult.maxDaysOverdue,
+          unpaidCycles: evalResult.unpaidCycles,
+          totalOverdueAmount: evalResult.totalOverdueAmount,
+          actionTaken: 'retained_disconnection',
+          reason: `Extension active until ${consumer.extensionGrantedUntil} (${consumer.extensionDays || 'N/A'} days granted)`
+        });
+
+        return consumer;
+      }
+
       if (prevStatus !== 'Disconnection Notice') {
-        // AUTOMATICALLY UPDATE STATUS TO 'Disconnection Notice'
+        // AUTOMATICALLY UPDATE STATUS TO 'Disconnection Notice' (2 months unpaid)
         hasConsumerChanges = true;
         updatedToDisconnectionCount++;
 
@@ -263,8 +360,8 @@ export function scanAndUpdateAccounts(): ScanSummary {
             consumerId: consumer.id,
             userId: consumer.linkedUserId,
             consumerEmail: consumer.email,
-            title: 'CRITICAL: Water Service Disconnection Notice Issued',
-            message: `Official Notice from Tagoloan Water District: Account #${consumer.accountNumber} has exceeded the 3-month payment grace period (${evalResult.maxDaysOverdue} days overdue, ${evalResult.unpaidCycles} unpaid statements, ₱${evalResult.totalOverdueAmount.toFixed(2)} arrears). A physical curb-stop disconnection order is scheduled within 5 working days unless settled.`,
+            title: 'CRITICAL: Water Service Disconnection Notice Issued (2 Months Overdue)',
+            message: `Official Notice from Tagoloan Water District: Account #${consumer.accountNumber} has exceeded the 2-month payment grace period (${evalResult.maxDaysOverdue} days overdue, ${evalResult.unpaidCycles} unpaid statements, ₱${evalResult.totalOverdueAmount.toFixed(2)} arrears). A physical curb-stop disconnection order is scheduled within 5 working days unless settled or extension requested.`,
             type: 'disconnection',
             billingPeriod: evalResult.unpaidBills[0]?.billingPeriod || 'Delinquent Arrears',
             remainingBalance: evalResult.totalOverdueAmount
@@ -277,7 +374,7 @@ export function scanAndUpdateAccounts(): ScanSummary {
           'Automated Grace Period Scanner',
           'system',
           'AUTOMATED_DISCONNECTION_NOTICE_ISSUED',
-          `Background Service: Automatically updated account #${consumer.accountNumber} (${consumer.name}) to 'Disconnection Notice' status. Exceeded 3-month payment grace period with ${evalResult.maxDaysOverdue} days overdue (${evalResult.unpaidCycles} cycles, ₱${evalResult.totalOverdueAmount.toFixed(2)} arrears).`
+          `Background Service: Automatically updated account #${consumer.accountNumber} (${consumer.name}) to 'Disconnection Notice' status. Exceeded 2-month payment grace period with ${evalResult.maxDaysOverdue} days overdue (${evalResult.unpaidCycles} cycles, ₱${evalResult.totalOverdueAmount.toFixed(2)} arrears).`
         );
 
         items.push({
@@ -290,7 +387,7 @@ export function scanAndUpdateAccounts(): ScanSummary {
           unpaidCycles: evalResult.unpaidCycles,
           totalOverdueAmount: evalResult.totalOverdueAmount,
           actionTaken: 'updated_to_disconnection',
-          reason: `Exceeded 3-month grace period (${evalResult.maxDaysOverdue}d overdue, ${evalResult.unpaidCycles} cycles)`
+          reason: `Exceeded 2-month grace period (${evalResult.maxDaysOverdue}d overdue, ${evalResult.unpaidCycles} cycles)`
         });
 
         return {
@@ -299,7 +396,7 @@ export function scanAndUpdateAccounts(): ScanSummary {
           disconnectionNoticeDate: new Date().toISOString(),
           gracePeriodOverdueDays: evalResult.maxDaysOverdue,
           unpaidCyclesCount: evalResult.unpaidCycles,
-          blockReason: `Exceeded 3-month payment grace period (${evalResult.maxDaysOverdue} days overdue, ${evalResult.unpaidCycles} unpaid cycles). Disconnection Notice issued.`
+          blockReason: `Exceeded 2-month payment grace period (${evalResult.maxDaysOverdue} days overdue, ${evalResult.unpaidCycles} unpaid cycles). Disconnection Notice issued.`
         };
       } else {
         // Retained in Disconnection Notice
@@ -313,7 +410,7 @@ export function scanAndUpdateAccounts(): ScanSummary {
           unpaidCycles: evalResult.unpaidCycles,
           totalOverdueAmount: evalResult.totalOverdueAmount,
           actionTaken: 'retained_disconnection',
-          reason: `Still exceeds 3-month grace period (${evalResult.maxDaysOverdue}d overdue)`
+          reason: `Still exceeds 2-month grace period (${evalResult.maxDaysOverdue}d overdue)`
         });
 
         return {
@@ -484,5 +581,353 @@ export function subscribeToScanner(listener: (status: ScannerStatus) => void): (
   listener(getScannerStatus());
   return () => {
     statusListeners.delete(listener);
+  };
+}
+
+/**
+ * Admin grants an extension for an account under Disconnection Notice
+ */
+export function grantAccountExtension(
+  accountNumber: string,
+  extensionDays: number,
+  extensionReason: string,
+  adminName: string
+): { success: boolean; message: string; updatedConsumer?: Consumer } {
+  const consumers = mockDb.getConsumers();
+  const index = consumers.findIndex(c => c.accountNumber === accountNumber);
+  if (index === -1) {
+    return { success: false, message: `Account #${accountNumber} not found.` };
+  }
+  const consumer = consumers[index];
+  const extensionDate = new Date(Date.now() + extensionDays * 24 * 60 * 60 * 1000);
+  const extensionDateStr = extensionDate.toISOString().split('T')[0];
+
+  const updated: Consumer = {
+    ...consumer,
+    extensionDays,
+    extensionReason,
+    extensionGrantedUntil: extensionDateStr,
+    extensionStatus: 'approved',
+    disconnectionCutoffDate: extensionDateStr,
+    blockReason: `Extension granted for ${extensionDays} days until ${extensionDateStr}. Reason: ${extensionReason}`
+  };
+
+  consumers[index] = updated;
+  mockDb.saveConsumers(consumers);
+
+  mockDb.addNotification({
+    accountNumber: consumer.accountNumber,
+    consumerId: consumer.id,
+    userId: consumer.linkedUserId,
+    consumerEmail: consumer.email,
+    title: `Extension Granted: Disconnection Cutoff Extended to ${extensionDateStr}`,
+    message: `Your request for a ${extensionDays}-day extension on Account #${consumer.accountNumber} has been approved by Tagoloan Water District Administration. Your disconnection deadline is now deferred until ${extensionDateStr}. Please ensure payment is remitted on or before this date to prevent service disruption.`,
+    type: 'disconnection',
+    remainingBalance: consumer.outstandingBalance
+  });
+
+  mockDb.addAuditLog(
+    'admin-operations',
+    adminName,
+    'admin',
+    'DISCONNECTION_EXTENSION_GRANTED',
+    `Granted ${extensionDays}-day extension for Account #${accountNumber} (${consumer.name}) until ${extensionDateStr}. Reason: ${extensionReason}`
+  );
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('twd_database_updated', {
+      detail: { key: 'extension_granted', accountNumber, timestamp: Date.now() }
+    }));
+  }
+
+  return {
+    success: true,
+    message: `Extension of ${extensionDays} days granted until ${extensionDateStr}.`,
+    updatedConsumer: updated
+  };
+}
+
+/**
+ * Consumer submits an extension request
+ */
+export function requestAccountExtension(
+  accountNumber: string,
+  extensionDays: number,
+  extensionReason: string
+): { success: boolean; message: string; updatedConsumer?: Consumer } {
+  const consumers = mockDb.getConsumers();
+  const index = consumers.findIndex(c => c.accountNumber === accountNumber);
+  if (index === -1) {
+    return { success: false, message: `Account #${accountNumber} not found.` };
+  }
+  const consumer = consumers[index];
+  const proposedDate = new Date(Date.now() + extensionDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+  const updated: Consumer = {
+    ...consumer,
+    extensionDays,
+    extensionReason,
+    extensionRequestedAt: new Date().toISOString(),
+    extensionStatus: 'pending',
+    extensionGrantedUntil: proposedDate
+  };
+
+  consumers[index] = updated;
+  mockDb.saveConsumers(consumers);
+
+  mockDb.addAuditLog(
+    'consumer-portal',
+    consumer.name,
+    'consumer',
+    'DISCONNECTION_EXTENSION_REQUESTED',
+    `Consumer requested ${extensionDays}-day extension for Account #${accountNumber}. Reason: ${extensionReason}`
+  );
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('twd_database_updated', {
+      detail: { key: 'extension_requested', accountNumber, timestamp: Date.now() }
+    }));
+  }
+
+  return {
+    success: true,
+    message: `Extension request submitted successfully for ${extensionDays} days until ${proposedDate}.`,
+    updatedConsumer: updated
+  };
+}
+
+/**
+ * Physically disconnect an account (service suspended; account accessible in inactive state, ledger remains accountable)
+ */
+export function disconnectAccount(
+  accountNumber: string,
+  adminName: string,
+  reason: string = 'Non-payment of delinquent water bill'
+): { success: boolean; message: string; updatedConsumer?: Consumer } {
+  const consumers = mockDb.getConsumers();
+  const index = consumers.findIndex(c => c.accountNumber === accountNumber);
+  if (index === -1) {
+    return { success: false, message: `Account #${accountNumber} not found.` };
+  }
+  const consumer = consumers[index];
+  const now = new Date().toISOString();
+
+  const updated: Consumer = {
+    ...consumer,
+    status: 'disconnected',
+    isDisconnected: true,
+    disconnectedAt: now,
+    extensionStatus: 'expired',
+    blockReason: `Water service physically disconnected on ${new Date().toLocaleDateString('en-US')}. ${reason}`
+  };
+
+  consumers[index] = updated;
+  mockDb.saveConsumers(consumers);
+
+  // Update water meter status to inactive
+  const meters = mockDb.getMeters().map(m => {
+    if (m.linkedAccountNumber === accountNumber || m.meterNumber === consumer.meterNumber) {
+      return {
+        ...m,
+        status: 'inactive' as const,
+        remarks: `Disconnected due to unpaid balance on ${new Date().toLocaleDateString('en-US')}`
+      };
+    }
+    return m;
+  });
+  mockDb.saveMeters(meters);
+
+  mockDb.addNotification({
+    accountNumber: consumer.accountNumber,
+    consumerId: consumer.id,
+    userId: consumer.linkedUserId,
+    consumerEmail: consumer.email,
+    title: 'NOTICE: Water Service Connection Disconnected',
+    message: `Official Notice: Water service connection for Account #${consumer.accountNumber} has been disconnected. All past billing statements and payments remain accountable to your account. To restore service, visit the Tagoloan Water District cashier to settle your balance and request reconnection.`,
+    type: 'disconnection',
+    remainingBalance: consumer.outstandingBalance
+  });
+
+  mockDb.addAuditLog(
+    'admin-operations',
+    adminName,
+    'admin',
+    'ACCOUNT_DISCONNECTED',
+    `Physically disconnected Account #${accountNumber} (${consumer.name}). Reason: ${reason}. Ledger remains accountable.`
+  );
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('twd_database_updated', {
+      detail: { key: 'account_disconnected', accountNumber, timestamp: Date.now() }
+    }));
+  }
+
+  return {
+    success: true,
+    message: `Account #${accountNumber} successfully set to Disconnected. Meter marked inactive.`,
+    updatedConsumer: updated
+  };
+}
+
+/**
+ * Reconnect a disconnected account once settled
+ */
+export function reconnectAccount(
+  accountNumber: string,
+  adminName: string
+): { success: boolean; message: string; updatedConsumer?: Consumer } {
+  const consumers = mockDb.getConsumers();
+  const index = consumers.findIndex(c => c.accountNumber === accountNumber);
+  if (index === -1) {
+    return { success: false, message: `Account #${accountNumber} not found.` };
+  }
+  const consumer = consumers[index];
+
+  const updated: Consumer = {
+    ...consumer,
+    status: 'active',
+    isDisconnected: false,
+    disconnectedAt: undefined,
+    blockReason: undefined,
+    disconnectionNoticeDate: undefined,
+    extensionGrantedUntil: undefined
+  };
+
+  consumers[index] = updated;
+  mockDb.saveConsumers(consumers);
+
+  // Update water meter status to active
+  const meters = mockDb.getMeters().map(m => {
+    if (m.linkedAccountNumber === accountNumber || m.meterNumber === consumer.meterNumber) {
+      return {
+        ...m,
+        status: 'active' as const,
+        remarks: `Reconnected on ${new Date().toLocaleDateString('en-US')}`
+      };
+    }
+    return m;
+  });
+  mockDb.saveMeters(meters);
+
+  mockDb.addAuditLog(
+    'admin-operations',
+    adminName,
+    'admin',
+    'ACCOUNT_RECONNECTED',
+    `Reconnected water service for Account #${accountNumber} (${consumer.name}). Status restored to Active.`
+  );
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('twd_database_updated', {
+      detail: { key: 'account_reconnected', accountNumber, timestamp: Date.now() }
+    }));
+  }
+
+  return {
+    success: true,
+    message: `Account #${accountNumber} successfully reconnected to Active.`,
+    updatedConsumer: updated
+  };
+}
+
+/**
+ * Allows a new applicant to assume an account that has been inactive/disconnected for 6+ months.
+ * Changes consumer name, contact, and account details while preserving historical billing & payment accountability.
+ */
+export function assumeAccount(
+  targetAccountNumber: string,
+  newOwnerData: {
+    name: string;
+    contactNumber: string;
+    email: string;
+    address?: string;
+    sitioZone?: string;
+    newAccountNumber?: string;
+    consumerType?: 'Residential' | 'Commercial';
+  },
+  adminName: string
+): { success: boolean; message: string; updatedConsumer?: Consumer } {
+  const consumers = mockDb.getConsumers();
+  const index = consumers.findIndex(c => c.accountNumber === targetAccountNumber);
+  if (index === -1) {
+    return { success: false, message: `Account #${targetAccountNumber} not found.` };
+  }
+  const original = consumers[index];
+  const oldOwnerName = original.name;
+  const targetAcc = newOwnerData.newAccountNumber?.trim() || original.accountNumber;
+  const now = new Date().toISOString();
+
+  const updated: Consumer = {
+    ...original,
+    accountNumber: targetAcc,
+    name: newOwnerData.name.trim(),
+    contactNumber: newOwnerData.contactNumber.trim(),
+    email: newOwnerData.email.trim(),
+    address: newOwnerData.address?.trim() || original.address,
+    sitioZone: newOwnerData.sitioZone?.trim() || original.sitioZone,
+    consumerType: newOwnerData.consumerType || original.consumerType,
+    status: 'active',
+    isDisconnected: false,
+    disconnectedAt: undefined,
+    isAvailableForAssumption: false,
+    previousAccountOwnerName: oldOwnerName,
+    assumedByConsumerName: newOwnerData.name.trim(),
+    assumedAt: now,
+    blockReason: undefined,
+    disconnectionNoticeDate: undefined,
+    extensionGrantedUntil: undefined,
+    assumptionNotes: `Account assumed by ${newOwnerData.name.trim()} from ${oldOwnerName} approved by ${adminName} on ${new Date().toLocaleDateString('en-US')}. Previous bills remain accounted in historical records.`
+  };
+
+  consumers[index] = updated;
+  mockDb.saveConsumers(consumers);
+
+  // If account number changed, update linked readings' accountNumber mapping
+  if (targetAcc !== original.accountNumber) {
+    const readings = mockDb.getReadings().map(r => {
+      if (r.accountNumber === original.accountNumber) {
+        return {
+          ...r,
+          accountNumber: targetAcc,
+          notes: (r.notes ? `${r.notes} • ` : '') + `Transferred from Acc #${original.accountNumber} (Prev: ${oldOwnerName})`
+        };
+      }
+      return r;
+    });
+    mockDb.saveReadings(readings);
+  }
+
+  // Update meter linked account
+  const meters = mockDb.getMeters().map(m => {
+    if (m.linkedAccountNumber === original.accountNumber || m.meterNumber === original.meterNumber) {
+      return {
+        ...m,
+        linkedAccountNumber: targetAcc,
+        status: 'active' as const,
+        remarks: `Assumed by ${newOwnerData.name.trim()} on ${new Date().toLocaleDateString('en-US')}`
+      };
+    }
+    return m;
+  });
+  mockDb.saveMeters(meters);
+
+  mockDb.addAuditLog(
+    'admin-operations',
+    adminName,
+    'admin',
+    'ACCOUNT_ASSUMPTION_APPROVED',
+    `Account #${original.accountNumber} (6-month inactive line) assumed by ${newOwnerData.name.trim()}. Previous registered owner: ${oldOwnerName}. Updated account #${targetAcc}. Historical payments remain accountable.`
+  );
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('twd_database_updated', {
+      detail: { key: 'account_assumed', accountNumber: targetAcc, timestamp: Date.now() }
+    }));
+  }
+
+  return {
+    success: true,
+    message: `Account successfully assumed by ${newOwnerData.name}. Service restored to Active with updated account details.`,
+    updatedConsumer: updated
   };
 }

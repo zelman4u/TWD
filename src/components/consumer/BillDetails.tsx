@@ -392,7 +392,7 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
             <div className="space-y-1">
               <div className="flex items-center space-x-2">
                 <span className="text-[11px] font-black uppercase tracking-wider text-blue-200">
-                  Total Amount Due
+                  {isPaid ? 'Account Balance' : isPartial ? 'Net Remaining Due' : 'Total Amount Due'}
                 </span>
                 <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
                   isPaid 
@@ -404,13 +404,23 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
                   {isPaid ? 'Settled in Full' : isPartial ? 'Partially Paid' : 'Unpaid Statement'}
                 </span>
               </div>
-              <div className="flex items-baseline space-x-3">
+              <div className="flex items-baseline space-x-3 flex-wrap">
                 <span className="text-3xl sm:text-4xl font-black font-mono tabular-nums text-white tracking-tight">
-                  ₱{breakdown.totalAmount.toFixed(2)}
+                  ₱{(isPaid ? 0 : isPartial ? breakdown.netRemainingDue : breakdown.totalAmount).toFixed(2)}
                 </span>
-                <span className="text-xs text-blue-200 font-medium">
-                  (After Due Date: ₱{breakdown.amountAfterDueDate.toFixed(2)})
-                </span>
+                {isPartial ? (
+                  <span className="text-xs text-amber-200 font-medium">
+                    (Gross Statement: ₱{breakdown.totalAmount.toFixed(2)} • Paid: -₱{breakdown.paidAmount.toFixed(2)})
+                  </span>
+                ) : isPaid ? (
+                  <span className="text-xs text-emerald-200 font-medium">
+                    (Paid in Full: ₱{(breakdown.paidAmount || breakdown.totalAmount).toFixed(2)})
+                  </span>
+                ) : (
+                  <span className="text-xs text-blue-200 font-medium">
+                    (After Due Date: ₱{breakdown.amountAfterDueDate.toFixed(2)})
+                  </span>
+                )}
               </div>
             </div>
 
