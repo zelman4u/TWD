@@ -58,7 +58,11 @@ export const DisconnectionNoticeSummaryModal: React.FC<DisconnectionNoticeSummar
   const totalArrearsSum = filteredConsumers.reduce((sum, c) => sum + (c.outstandingBalance || 0), 0);
 
   const handlePrint = () => {
-    window.print();
+    try {
+      window.print();
+    } catch (e) {
+      console.warn('Sandboxed window.print prevented by container:', e);
+    }
   };
 
   return (

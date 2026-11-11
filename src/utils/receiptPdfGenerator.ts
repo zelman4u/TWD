@@ -554,7 +554,7 @@ export async function downloadOfficialReceiptPdf(params: {
 export function printCleanElement(elementId: string): void {
   const targetEl = document.getElementById(elementId);
   if (!targetEl) {
-    window.print();
+    try { window.print(); } catch {}
     return;
   }
 
@@ -572,7 +572,7 @@ export function printCleanElement(elementId: string): void {
 
     const doc = iframe.contentWindow?.document;
     if (!doc) {
-      window.print();
+      try { window.print(); } catch {}
       return;
     }
 
@@ -866,7 +866,7 @@ export function printCleanElement(elementId: string): void {
         iframe.contentWindow?.focus();
         iframe.contentWindow?.print();
       } catch {
-        window.print();
+        try { window.print(); } catch {}
       } finally {
         setTimeout(() => {
           if (iframe.parentNode) {
@@ -876,6 +876,6 @@ export function printCleanElement(elementId: string): void {
       }
     }, 350);
   } catch {
-    window.print();
+    try { window.print(); } catch {}
   }
 }

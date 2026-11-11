@@ -146,9 +146,13 @@ export function evaluateAccountGracePeriod(
   const fullyUnpaidBills = unpaidBills.filter(b => b.paymentStatus !== 'partial' && (!b.paidAmount || b.paidAmount <= 0));
   const unpaidCycles = fullyUnpaidBills.length;
 
-  // 2 months grace period check: >= 60 days overdue OR >= 2 fully unpaid cycles OR explicit notice issued
+  // 2 months grace period check: >= 2 fully unpaid cycles OR explicit notice issued OR (>= 60 days overdue AND >= 2 statements)
   // When a consumer makes a partial payment, the disconnection order is suspended (halted) while maintaining the remaining balance!
-  const isExceeded = !hasPartialPayment && (maxDaysOverdue >= 60 || unpaidCycles >= 2 || unpaidBills.some(r => r.isDisconnectionNoticeIssued === true));
+  const isExceeded = !hasPartialPayment && (
+    unpaidCycles >= 2 ||
+    unpaidBills.some(r => r.isDisconnectionNoticeIssued === true) ||
+    (maxDaysOverdue >= 60 && unpaidBills.length >= 2)
+  );
 
   return {
     isExceeded,

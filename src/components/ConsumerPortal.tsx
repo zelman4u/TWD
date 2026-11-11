@@ -1252,6 +1252,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               applyAutomaticIdConfirmation(matchedRemote, undefined, false, shouldShowBanner);
             } else {
               const currentLocal = mockDb.getConsumers();
+              const prevSnapshot = JSON.stringify(currentLocal);
               const idx = currentLocal.findIndex(lc =>
                 (matchedRemote.accountNumber && lc.accountNumber === matchedRemote.accountNumber) ||
                 (matchedRemote.email && lc.email && lc.email.toLowerCase() === matchedRemote.email.toLowerCase()) ||
@@ -1274,7 +1275,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               } else {
                 currentLocal.unshift(matchedRemote);
               }
-              mockDb.saveConsumers(currentLocal);
+              if (prevSnapshot !== JSON.stringify(currentLocal)) {
+                mockDb.saveConsumers(currentLocal);
+              }
               if (!consumerRecordRef.current || consumerRecordRef.current.accountNumber !== matchedRemote.accountNumber) {
                 consumerRecordRef.current = targetConsumer;
                 setConsumerRecord(targetConsumer);
@@ -1282,6 +1285,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             }
           } else {
             const currentLocal = mockDb.getConsumers();
+            const prevSnapshot = JSON.stringify(currentLocal);
             const idx = currentLocal.findIndex(lc =>
               (matchedRemote.accountNumber && lc.accountNumber === matchedRemote.accountNumber) ||
               (matchedRemote.email && lc.email && lc.email.toLowerCase() === matchedRemote.email.toLowerCase()) ||
@@ -1304,7 +1308,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             } else {
               currentLocal.unshift(matchedRemote);
             }
-            mockDb.saveConsumers(currentLocal);
+            if (prevSnapshot !== JSON.stringify(currentLocal)) {
+              mockDb.saveConsumers(currentLocal);
+            }
             if (!isConsumerRecordIssued(consumerRecordRef.current)) {
               consumerRecordRef.current = idx >= 0 ? currentLocal[idx] : matchedRemote;
               setConsumerRecord(consumerRecordRef.current);
@@ -1313,14 +1319,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         }
       };
 
-      const alreadyIssuedLocally = isConsumerRecordIssued(consumerRecordRef.current);
-      const shouldRunRemoteResolve =
-        !alreadyIssuedLocally ||
-        !silent ||
-        Date.now() - lastAccountResolveRef.current >= 30000;
+      const now = Date.now();
+      const elapsedSinceResolve = now - lastAccountResolveRef.current;
+      const minInterval = silent ? 30000 : 8000;
+      const shouldRunRemoteResolve = elapsedSinceResolve >= minInterval;
 
       if (shouldRunRemoteResolve) {
-        lastAccountResolveRef.current = Date.now();
+        lastAccountResolveRef.current = now;
         // 1a. Direct Cloud Firestore resolution (works across all devices, browsers, and Vercel deployments)
         resolveConsumerAccountInFirestore(resolvePayload)
           .then(fsResolved => {
@@ -1430,10 +1435,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           (currentUser.id && inst.linkedUserId === currentUser.id)
         );
 
-        const syntheticAcc = userLinkedAcc || (matchedInst as any)?.accountNumber || `PENDING-${Date.now().toString(36).toUpperCase()}`;
+        const stableUid = (liveUser?.id || currentUser.id || userEmailLower || 'user').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 16);
+        const syntheticAcc = userLinkedAcc || (matchedInst as any)?.accountNumber || `PENDING-${stableUid.toUpperCase()}`;
         const syntheticStatus: Consumer['status'] = isRealIssuedAccountNumber(syntheticAcc) ? 'active' : 'pending_installation';
         record = {
-          id: `cons-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: `cons-${stableUid}`,
           accountNumber: syntheticAcc,
           meterNumber: (matchedInst as any)?.meterNumber || `MT-${syntheticAcc}`,
           name: liveUser?.name || currentUser.name || matchedInst?.consumerName || 'Valued Consumer',
@@ -1454,6 +1460,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         };
 
         const currentLocal = mockDb.getConsumers();
+        const prevSnapshot = JSON.stringify(currentLocal);
         const existingIdx = currentLocal.findIndex(c =>
           (c.accountNumber && c.accountNumber === record!.accountNumber) ||
           (c.email && c.email.toLowerCase() === record!.email?.toLowerCase()) ||
@@ -1465,7 +1472,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         } else {
           currentLocal.unshift(record);
         }
-        mockDb.saveConsumers(currentLocal);
+        if (prevSnapshot !== JSON.stringify(currentLocal)) {
+          mockDb.saveConsumers(currentLocal);
+        }
       }
 
       if (record) {
@@ -1771,11 +1780,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         // CRITICAL: When a consumer makes a partial payment, the critical disconnection warning HALTS!
         const hasPartialGoodwill = unpaidList.some(r => r.paymentStatus === 'partial' || (r.paidAmount && r.paidAmount > 0));
         const genuineUnpaidCycles = unpaidList.filter(r => r.paymentStatus !== 'partial' && (!r.paidAmount || r.paidAmount <= 0));
-        const has2MonthsOverdue = !hasPartialGoodwill && (genuineUnpaidCycles.length >= 2 || genuineUnpaidCycles.some(r => {
-          let d = r.dueDate ? new Date(r.dueDate) : (r.readingDate ? new Date(r.readingDate) : new Date());
-          const diff = (new Date().getTime() - d.getTime()) / (1000 * 60 * 60 * 24);
-          return diff >= 60 || r.isDisconnectionNoticeIssued;
-        }));
+        const has2MonthsOverdue = !hasPartialGoodwill && (
+          genuineUnpaidCycles.length >= 2 ||
+          unpaidList.some(r => r.isDisconnectionNoticeIssued === true)
+        );
 
         // Extension check: if consumer has an active extension granted, notice is deferred
         const isExtensionActive = Boolean(
@@ -1793,9 +1801,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           };
           consumerRecordRef.current = record;
           setConsumerRecord(record);
-          const allC = mockDb.getConsumers().map(c => c.accountNumber === record.accountNumber ? record : c);
-          mockDb.saveConsumers(allC);
-          apiClient.reconcileConsumers(allC).catch(() => {});
+          const currentAll = mockDb.getConsumers();
+          const target = currentAll.find(c => c.accountNumber === record.accountNumber);
+          if (target && (target.status === 'Disconnection Notice' || (target.status as string) === 'disconnection_notice')) {
+            const allC = currentAll.map(c => c.accountNumber === record.accountNumber ? { ...c, status: 'active' as const } : c);
+            mockDb.saveConsumers(allC);
+            apiClient.reconcileConsumers(allC).catch(() => {});
+          }
         }
 
         if (has2MonthsOverdue && unpaidList.length > 0 && !isExtensionActive && record.status !== 'disconnected') {
@@ -2013,7 +2025,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
       debounceDbUpdateRef.current = setTimeout(() => {
         loadConsumerInfo(true);
-      }, 40);
+      }, 300);
     };
     window.addEventListener('twd_database_updated', handleDbUpdate);
 
@@ -2046,7 +2058,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         if (debounceDbUpdateRef.current) clearTimeout(debounceDbUpdateRef.current);
         debounceDbUpdateRef.current = setTimeout(() => {
           loadConsumerInfo(true);
-        }, 40);
+        }, 300);
       }
     };
     window.addEventListener('storage', handleStorage);
