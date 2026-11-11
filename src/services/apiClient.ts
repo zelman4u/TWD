@@ -731,6 +731,14 @@ export const apiClient = {
     );
   },
 
+  reconcileConsumers: async (consumers: any[], options?: RequestOptions) => {
+    return apiClient.post<{ success: boolean; consumersCount?: number; consumers?: any[] }>(
+      '/api/consumers/reconcile',
+      { consumers },
+      { retries: 0, timeoutMs: 6000, skipLogging: true, ...options }
+    );
+  },
+
   getMobileBridgeStatus: async (options?: RequestOptions) => {
     return apiClient.get<{ success: boolean; bridge: any }>('/api/mobile-bridge/status', {
       retries: 0,

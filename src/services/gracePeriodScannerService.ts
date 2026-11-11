@@ -4,6 +4,7 @@
  */
 
 import { mockDb } from '../mockDb';
+import { apiClient } from './apiClient';
 import { Consumer, MeterReading, AuditLog } from '../types';
 
 export interface GracePeriodEvaluation {
@@ -478,6 +479,7 @@ export function scanAndUpdateAccounts(): ScanSummary {
   // Save changes if any status or readings changed
   if (hasConsumerChanges) {
     mockDb.saveConsumers(updatedConsumers);
+    apiClient.reconcileConsumers(updatedConsumers).catch(() => {});
   }
   if (hasReadingChanges) {
     mockDb.saveReadings(readings);
@@ -614,6 +616,7 @@ export function grantAccountExtension(
 
   consumers[index] = updated;
   mockDb.saveConsumers(consumers);
+  apiClient.reconcileConsumers(consumers).catch(() => {});
 
   mockDb.addNotification({
     accountNumber: consumer.accountNumber,
@@ -674,6 +677,7 @@ export function requestAccountExtension(
 
   consumers[index] = updated;
   mockDb.saveConsumers(consumers);
+  apiClient.reconcileConsumers(consumers).catch(() => {});
 
   mockDb.addAuditLog(
     'consumer-portal',
@@ -723,6 +727,7 @@ export function disconnectAccount(
 
   consumers[index] = updated;
   mockDb.saveConsumers(consumers);
+  apiClient.reconcileConsumers(consumers).catch(() => {});
 
   // Update water meter status to inactive
   const meters = mockDb.getMeters().map(m => {
@@ -795,6 +800,7 @@ export function reconnectAccount(
 
   consumers[index] = updated;
   mockDb.saveConsumers(consumers);
+  apiClient.reconcileConsumers(consumers).catch(() => {});
 
   // Update water meter status to active
   const meters = mockDb.getMeters().map(m => {
@@ -881,6 +887,7 @@ export function assumeAccount(
 
   consumers[index] = updated;
   mockDb.saveConsumers(consumers);
+  apiClient.reconcileConsumers(consumers).catch(() => {});
 
   // If account number changed, update linked readings' accountNumber mapping
   if (targetAcc !== original.accountNumber) {

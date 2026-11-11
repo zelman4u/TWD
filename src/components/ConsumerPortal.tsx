@@ -1006,17 +1006,27 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     const accNum = issuedConsumer.accountNumber.trim().toUpperCase();
     const meterNum = (issuedConsumer.meterNumber || `MT-${accNum}`).trim().toUpperCase();
 
+    const localConsumers = mockDb.getConsumers();
+    const existingIdx = localConsumers.findIndex(lc =>
+      (lc.accountNumber && lc.accountNumber.toUpperCase() === accNum) ||
+      (issuedConsumer.email && lc.email && lc.email.toLowerCase() === issuedConsumer.email.toLowerCase()) ||
+      (issuedConsumer.linkedUserId && lc.linkedUserId && lc.linkedUserId === issuedConsumer.linkedUserId)
+    );
+    const existingLocalStatus = existingIdx >= 0 ? localConsumers[existingIdx]?.status : consumerRecordRef.current?.status;
+    const isDelinquentLocal = existingLocalStatus === 'Disconnection Notice' || existingLocalStatus === 'disconnected';
+
     const normalizedConsumer: Consumer = {
       ...consumerRecordRef.current,
       ...issuedConsumer,
       accountNumber: accNum,
       meterNumber: meterNum,
-      status: issuedConsumer.status && !isPendingConsumerStatus(issuedConsumer.status) ? issuedConsumer.status : 'active',
+      status: isDelinquentLocal
+        ? existingLocalStatus
+        : (issuedConsumer.status && !isPendingConsumerStatus(issuedConsumer.status) ? issuedConsumer.status : 'active'),
       isRegistered: true
     };
 
     // 1. Update local consumers store & remove any stale pending duplicate ONLY if changed
-    const localConsumers = mockDb.getConsumers();
     let matched = false;
     const updatedConsumers = localConsumers.map(lc => {
       const same =
@@ -1247,15 +1257,27 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 (matchedRemote.email && lc.email && lc.email.toLowerCase() === matchedRemote.email.toLowerCase()) ||
                 (matchedRemote.linkedUserId && lc.linkedUserId === matchedRemote.linkedUserId)
               );
+              let targetConsumer = matchedRemote;
               if (idx >= 0) {
-                currentLocal[idx] = { ...currentLocal[idx], ...matchedRemote };
+                const isDelinquentLocal =
+                  currentLocal[idx]?.status === 'Disconnection Notice' ||
+                  currentLocal[idx]?.status === 'disconnected';
+                const remoteIsStaleActive = matchedRemote.status === 'active';
+                const shouldPreserveLocalStatus = isDelinquentLocal && remoteIsStaleActive;
+
+                targetConsumer = {
+                  ...currentLocal[idx],
+                  ...matchedRemote,
+                  ...(shouldPreserveLocalStatus ? { status: currentLocal[idx].status } : {})
+                };
+                currentLocal[idx] = targetConsumer;
               } else {
                 currentLocal.unshift(matchedRemote);
               }
               mockDb.saveConsumers(currentLocal);
               if (!consumerRecordRef.current || consumerRecordRef.current.accountNumber !== matchedRemote.accountNumber) {
-                consumerRecordRef.current = matchedRemote;
-                setConsumerRecord(matchedRemote);
+                consumerRecordRef.current = targetConsumer;
+                setConsumerRecord(targetConsumer);
               }
             }
           } else {
@@ -1265,8 +1287,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               (matchedRemote.email && lc.email && lc.email.toLowerCase() === matchedRemote.email.toLowerCase()) ||
               (matchedRemote.linkedUserId && lc.linkedUserId === matchedRemote.linkedUserId)
             );
+            let targetConsumer = matchedRemote;
             if (idx >= 0) {
-              currentLocal[idx] = { ...currentLocal[idx], ...matchedRemote };
+              const isDelinquentLocal =
+                currentLocal[idx]?.status === 'Disconnection Notice' ||
+                currentLocal[idx]?.status === 'disconnected';
+              const remoteIsStaleActive = matchedRemote.status === 'active';
+              const shouldPreserveLocalStatus = isDelinquentLocal && remoteIsStaleActive;
+
+              targetConsumer = {
+                ...currentLocal[idx],
+                ...matchedRemote,
+                ...(shouldPreserveLocalStatus ? { status: currentLocal[idx].status } : {})
+              };
+              currentLocal[idx] = targetConsumer;
             } else {
               currentLocal.unshift(matchedRemote);
             }
@@ -1761,6 +1795,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           setConsumerRecord(record);
           const allC = mockDb.getConsumers().map(c => c.accountNumber === record.accountNumber ? record : c);
           mockDb.saveConsumers(allC);
+          apiClient.reconcileConsumers(allC).catch(() => {});
         }
 
         if (has2MonthsOverdue && unpaidList.length > 0 && !isExtensionActive && record.status !== 'disconnected') {
