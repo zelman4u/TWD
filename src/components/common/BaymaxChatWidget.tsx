@@ -33,7 +33,11 @@ import {
   HelpCircle,
   Volume2,
   VolumeX,
-  ChevronDown
+  ChevronDown,
+  GripVertical,
+  GripHorizontal,
+  Move,
+  LocateFixed
 } from 'lucide-react';
 import {
   ChatPortalType,
@@ -83,6 +87,236 @@ export const BaymaxChatWidget: React.FC<BaymaxChatWidgetProps> = ({
   const [showGreetingBubble, setShowGreetingBubble] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // -------------------------------------------------------------
+  // Draggable / Grabbable Position State & Storage
+  // -------------------------------------------------------------
+  const LAUNCHER_POS_KEY = 'twd_baymax_launcher_pos_v2';
+  const MODAL_POS_KEY = 'twd_baymax_modal_pos_v2';
+
+  const getDefaultLauncherPos = () => {
+    if (typeof window === 'undefined') return { x: 20, y: 20 };
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const btnWidth = width < 640 ? 64 : 220;
+    return {
+      x: Math.max(16, width - btnWidth - 24),
+      y: Math.max(16, height - 76),
+    };
+  };
+
+  const getDefaultModalPos = () => {
+    if (typeof window === 'undefined') return { x: 20, y: 20 };
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const modalWidth = Math.min(460, width - 32);
+    const modalHeight = Math.min(640, height * 0.88);
+    return {
+      x: Math.max(16, width - modalWidth - 24),
+      y: Math.max(16, height - modalHeight - 24),
+    };
+  };
+
+  const [launcherPos, setLauncherPos] = useState<{ x: number; y: number }>(() => {
+    try {
+      const saved = localStorage.getItem(LAUNCHER_POS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed?.x === 'number' && typeof parsed?.y === 'number') {
+          if (typeof window !== 'undefined') {
+            const btnWidth = window.innerWidth < 640 ? 64 : 220;
+            return {
+              x: Math.min(Math.max(12, parsed.x), Math.max(12, window.innerWidth - btnWidth - 12)),
+              y: Math.min(Math.max(12, parsed.y), Math.max(12, window.innerHeight - 76)),
+            };
+          }
+          return parsed;
+        }
+      }
+    } catch {}
+    return getDefaultLauncherPos();
+  });
+
+  const [modalPos, setModalPos] = useState<{ x: number; y: number }>(() => {
+    try {
+      const saved = localStorage.getItem(MODAL_POS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed?.x === 'number' && typeof parsed?.y === 'number') {
+          if (typeof window !== 'undefined') {
+            const modalWidth = Math.min(460, window.innerWidth - 32);
+            return {
+              x: Math.min(Math.max(12, parsed.x), Math.max(12, window.innerWidth - modalWidth - 12)),
+              y: Math.min(Math.max(12, parsed.y), Math.max(12, window.innerHeight - 100)),
+            };
+          }
+          return parsed;
+        }
+      }
+    } catch {}
+    return getDefaultModalPos();
+  });
+
+  const [isDraggingLauncher, setIsDraggingLauncher] = useState(false);
+  const [isDraggingModal, setIsDraggingModal] = useState(false);
+
+  const launcherDragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const hasDraggedLauncherRef = useRef(false);
+  const ignoreLauncherClickUntilRef = useRef(0);
+
+  const modalDragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const hasDraggedModalRef = useRef(false);
+
+  // Keep positions clamped inside viewport on screen resize
+  useEffect(() => {
+    const handleResize = () => {
+      setLauncherPos((prev) => {
+        const btnWidth = window.innerWidth < 640 ? 64 : 220;
+        return {
+          x: Math.min(Math.max(12, prev.x), Math.max(12, window.innerWidth - btnWidth - 12)),
+          y: Math.min(Math.max(12, prev.y), Math.max(12, window.innerHeight - 76)),
+        };
+      });
+      setModalPos((prev) => {
+        const modalWidth = Math.min(460, window.innerWidth - 32);
+        return {
+          x: Math.min(Math.max(12, prev.x), Math.max(12, window.innerWidth - modalWidth - 12)),
+          y: Math.min(Math.max(12, prev.y), Math.max(12, window.innerHeight - 100)),
+        };
+      });
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Launcher Drag Handlers
+  const handleLauncherPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('[data-no-drag="true"]')) return;
+
+    launcherDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: launcherPos.x,
+      origY: launcherPos.y,
+    };
+    hasDraggedLauncherRef.current = false;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  const handleLauncherPointerMove = (e: React.PointerEvent) => {
+    if (!launcherDragRef.current) return;
+    const dx = e.clientX - launcherDragRef.current.startX;
+    const dy = e.clientY - launcherDragRef.current.startY;
+
+    if (!hasDraggedLauncherRef.current && Math.hypot(dx, dy) > 4) {
+      hasDraggedLauncherRef.current = true;
+      setIsDraggingLauncher(true);
+    }
+
+    if (hasDraggedLauncherRef.current) {
+      const btnWidth = window.innerWidth < 640 ? 64 : 220;
+      const nextX = Math.min(Math.max(10, launcherDragRef.current.origX + dx), Math.max(10, window.innerWidth - btnWidth - 10));
+      const nextY = Math.min(Math.max(10, launcherDragRef.current.origY + dy), Math.max(10, window.innerHeight - 70));
+      setLauncherPos({ x: nextX, y: nextY });
+    }
+  };
+
+  const handleLauncherPointerUp = (e: React.PointerEvent) => {
+    if (!launcherDragRef.current) return;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+
+    if (hasDraggedLauncherRef.current) {
+      ignoreLauncherClickUntilRef.current = Date.now() + 250;
+      try {
+        localStorage.setItem(LAUNCHER_POS_KEY, JSON.stringify(launcherPos));
+      } catch {}
+    }
+
+    launcherDragRef.current = null;
+    setIsDraggingLauncher(false);
+  };
+
+  const handleLauncherClick = (e: React.MouseEvent) => {
+    if (hasDraggedLauncherRef.current || Date.now() < ignoreLauncherClickUntilRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    setIsOpen(true);
+  };
+
+  const resetLauncherPosition = () => {
+    const def = getDefaultLauncherPos();
+    setLauncherPos(def);
+    try {
+      localStorage.removeItem(LAUNCHER_POS_KEY);
+    } catch {}
+  };
+
+  // Modal Drag Handlers
+  const handleModalPointerDown = (e: React.PointerEvent) => {
+    if (isExpanded) return;
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('button, input, textarea, a, select, [data-no-drag="true"]')) return;
+
+    modalDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: modalPos.x,
+      origY: modalPos.y,
+    };
+    hasDraggedModalRef.current = false;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  const handleModalPointerMove = (e: React.PointerEvent) => {
+    if (!modalDragRef.current || isExpanded) return;
+    const dx = e.clientX - modalDragRef.current.startX;
+    const dy = e.clientY - modalDragRef.current.startY;
+
+    if (!hasDraggedModalRef.current && Math.hypot(dx, dy) > 4) {
+      hasDraggedModalRef.current = true;
+      setIsDraggingModal(true);
+    }
+
+    if (hasDraggedModalRef.current) {
+      const modalWidth = Math.min(460, window.innerWidth - 32);
+      const nextX = Math.min(Math.max(10, modalDragRef.current.origX + dx), Math.max(10, window.innerWidth - modalWidth - 10));
+      const nextY = Math.min(Math.max(10, modalDragRef.current.origY + dy), Math.max(10, window.innerHeight - 90));
+      setModalPos({ x: nextX, y: nextY });
+    }
+  };
+
+  const handleModalPointerUp = (e: React.PointerEvent) => {
+    if (!modalDragRef.current) return;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+
+    if (hasDraggedModalRef.current) {
+      try {
+        localStorage.setItem(MODAL_POS_KEY, JSON.stringify(modalPos));
+      } catch {}
+    }
+
+    modalDragRef.current = null;
+    setIsDraggingModal(false);
+  };
+
+  const resetModalPosition = () => {
+    const def = getDefaultModalPos();
+    setModalPos(def);
+    try {
+      localStorage.removeItem(MODAL_POS_KEY);
+    } catch {}
+  };
 
   const [language, setLanguage] = useState<ChatLanguage>('auto');
   const [inputMessage, setInputMessage] = useState('');
@@ -371,60 +605,93 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
       {/* ============================================================ */}
       {/* FLOATING LAUNCHER BUTTON & GREETING TOAST                    */}
       {/* ============================================================ */}
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end space-y-3 pointer-events-auto">
-        
-        {/* Floating Greeting Toast */}
-        {!isOpen && showGreetingBubble && (
-          <div
-            onClick={() => setIsOpen(true)}
-            className="group relative max-w-xs bg-slate-900 border border-slate-700/80 rounded-2xl p-3.5 shadow-2xl cursor-pointer hover:border-sky-500/80 transition-all duration-300 transform hover:-translate-y-1 animate-in fade-in slide-in-from-bottom-2"
-          >
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowGreetingBubble(false);
+      {/* ============================================================ */}
+      {/* FLOATING DRAGGABLE LAUNCHER BUTTON & GREETING TOAST         */}
+      {/* ============================================================ */}
+      {!isOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            left: `${launcherPos.x}px`,
+            top: `${launcherPos.y}px`,
+            zIndex: 9999,
+          }}
+          className="pointer-events-none select-none flex flex-col items-end"
+        >
+          {/* Floating Greeting Toast */}
+          {showGreetingBubble && (
+            <div
+              data-no-drag="true"
+              onClick={() => setIsOpen(true)}
+              style={{
+                position: 'absolute',
+                [launcherPos.y > 220 ? 'bottom' : 'top']: 'calc(100% + 12px)',
+                [launcherPos.x > (typeof window !== 'undefined' ? window.innerWidth / 2 : 400) ? 'right' : 'left']: 0,
               }}
-              className="absolute -top-1.5 -right-1.5 p-1 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-full border border-slate-600 transition"
-              aria-label="Dismiss greeting"
+              className="pointer-events-auto group max-w-xs w-72 bg-slate-900 border border-slate-700/80 rounded-2xl p-3.5 shadow-2xl cursor-pointer hover:border-sky-500/80 transition-all duration-300 transform hover:-translate-y-1 animate-in fade-in slide-in-from-bottom-2"
             >
-              <X className="h-3 w-3" />
-            </button>
-            <div className="flex items-start space-x-2.5">
-              <div className={`p-2 rounded-xl shrink-0 ${isConsumer ? 'bg-sky-500/20 text-sky-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                {isConsumer ? <Heart className="h-4 w-4 animate-pulse" /> : <ShieldCheck className="h-4 w-4" />}
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center space-x-1.5">
-                  <span className="text-xs font-black text-white">{botName}</span>
-                  <span className="text-[9px] font-bold uppercase tracking-wider text-sky-400 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/60">
-                    Online
-                  </span>
+              <button
+                type="button"
+                data-no-drag="true"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowGreetingBubble(false);
+                }}
+                className="absolute -top-1.5 -right-1.5 p-1 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-full border border-slate-600 transition cursor-pointer"
+                aria-label="Dismiss greeting"
+              >
+                <X className="h-3 w-3" />
+              </button>
+              <div className="flex items-start space-x-2.5">
+                <div className={`p-2 rounded-xl shrink-0 ${isConsumer ? 'bg-sky-500/20 text-sky-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                  {isConsumer ? <Heart className="h-4 w-4 animate-pulse" /> : <ShieldCheck className="h-4 w-4" />}
                 </div>
-                <p className="text-[11px] text-slate-300 line-clamp-2 mt-0.5 leading-snug">
-                  {isConsumer
-                    ? 'Kumusta! Unsaon nako pagtabang sa imong water bill karon? (English · Tagalog · Bisaya)'
-                    : 'Baymax 2.0 ready. Operational & billing support in English, Tagalog & Bisaya.'}
-                </p>
+                <div className="min-w-0">
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-xs font-black text-white">{botName}</span>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-sky-400 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/60">
+                      Online
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 line-clamp-2 mt-0.5 leading-snug">
+                    {isConsumer
+                      ? 'Kumusta! Unsaon nako pagtabang sa imong water bill karon? (English · Tagalog · Bisaya)'
+                      : 'Baymax 2.0 ready. Operational & billing support in English, Tagalog & Bisaya.'}
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Floating Round Launcher Button */}
-        {!isOpen && (
-          <button
-            type="button"
-            onClick={() => setIsOpen(true)}
-            aria-label={`Open ${botName}`}
-            className={`group relative flex items-center space-x-2.5 px-4 py-3 rounded-full shadow-2xl transition-all duration-300 cursor-pointer transform hover:scale-105 active:scale-95 ${
+          {/* Draggable Launcher Button */}
+          <div
+            onPointerDown={handleLauncherPointerDown}
+            onPointerMove={handleLauncherPointerMove}
+            onPointerUp={handleLauncherPointerUp}
+            onPointerCancel={handleLauncherPointerUp}
+            onClick={handleLauncherClick}
+            onDoubleClick={resetLauncherPosition}
+            title="Grab and drag anywhere to avoid blocking buttons behind • Click to open • Double-click to snap back"
+            className={`pointer-events-auto touch-none group relative flex items-center space-x-2 px-3 sm:px-4 py-2.5 sm:py-3 rounded-full shadow-2xl transition-[box-shadow,transform,ring] duration-150 select-none ${
+              isDraggingLauncher
+                ? 'cursor-grabbing scale-105 ring-4 ring-sky-400/70 shadow-sky-500/50 opacity-95'
+                : 'cursor-grab hover:scale-105 active:scale-95'
+            } ${
               isConsumer
                 ? 'bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-600 text-white hover:shadow-sky-500/30 hover:ring-4 hover:ring-sky-500/20'
                 : 'bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-2 border-emerald-500/60 text-white hover:shadow-emerald-500/30 hover:ring-4 hover:ring-emerald-500/20'
             }`}
           >
+            {/* Grab Grip handle */}
+            <div
+              className="p-0.5 text-white/50 group-hover:text-white/90 transition flex items-center justify-center shrink-0"
+              title="Drag to reposition"
+            >
+              <GripVertical className="h-4 w-4" />
+            </div>
+
             {/* Robot Avatar Icon with pulse */}
-            <div className="relative flex items-center justify-center">
+            <div className="relative flex items-center justify-center shrink-0">
               <div className={`p-2 rounded-full ${isConsumer ? 'bg-white/20' : 'bg-emerald-500/20 text-emerald-400'}`}>
                 <Bot className="h-5 w-5" />
               </div>
@@ -444,31 +711,54 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                 {botSubtitle}
               </div>
             </div>
-          </button>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
 
       {/* ============================================================ */}
       {/* EXPANDABLE CHAT MODAL / DRAWER                               */}
       {/* ============================================================ */}
       {isOpen && (
         <div
-          className={`fixed z-50 transition-all duration-300 flex flex-col shadow-2xl overflow-hidden ${
+          style={
             isExpanded
-              ? 'inset-3 sm:inset-6 md:inset-10 rounded-2xl bg-slate-950 border border-slate-800'
-              : 'bottom-4 right-4 sm:bottom-6 sm:right-6 w-[calc(100vw-2rem)] sm:w-[460px] max-h-[88vh] h-[640px] rounded-2xl bg-slate-950 border border-slate-800'
+              ? undefined
+              : {
+                  position: 'fixed',
+                  left: `${modalPos.x}px`,
+                  top: `${modalPos.y}px`,
+                  zIndex: 9999,
+                }
+          }
+          className={`z-50 transition-[box-shadow,border-color] duration-200 flex flex-col shadow-2xl overflow-hidden ${
+            isExpanded
+              ? 'fixed inset-3 sm:inset-6 md:inset-10 rounded-2xl bg-slate-950 border border-slate-800'
+              : 'w-[calc(100vw-2rem)] sm:w-[460px] max-h-[88vh] h-[640px] rounded-2xl bg-slate-950 border border-slate-800'
           }`}
         >
-          {/* Header */}
+          {/* Header - Grabbable / Draggable when not expanded */}
           <div
-            className={`px-4 sm:px-5 py-3.5 flex items-center justify-between border-b shrink-0 ${
+            onPointerDown={handleModalPointerDown}
+            onPointerMove={handleModalPointerMove}
+            onPointerUp={handleModalPointerUp}
+            onPointerCancel={handleModalPointerUp}
+            onDoubleClick={resetModalPosition}
+            title={isExpanded ? undefined : 'Drag header to move chat window out of the way • Double-click to snap back to corner'}
+            className={`px-4 sm:px-5 py-3.5 flex items-center justify-between border-b shrink-0 select-none touch-none ${
+              !isExpanded ? (isDraggingModal ? 'cursor-grabbing' : 'cursor-grab') : ''
+            } ${
               isConsumer
                 ? 'bg-gradient-to-r from-slate-900 via-sky-950/60 to-slate-900 border-sky-900/50'
                 : 'bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 border-emerald-900/50'
             }`}
           >
-            {/* Bot Identity */}
-            <div className="flex items-center space-x-3 min-w-0">
+            {/* Bot Identity + Drag Grip indicator */}
+            <div className="flex items-center space-x-2.5 min-w-0">
+              {!isExpanded && (
+                <div className="text-slate-500 hover:text-slate-300 transition shrink-0" title="Drag to reposition chat">
+                  <GripVertical className="h-4 w-4" />
+                </div>
+              )}
               <div
                 className={`p-2.5 rounded-xl border shrink-0 ${
                   isConsumer
@@ -491,9 +781,25 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
             </div>
 
             {/* Window Controls */}
-            <div className="flex items-center space-x-1 sm:space-x-1.5 shrink-0 ml-2">
+            <div
+              className="flex items-center space-x-1 sm:space-x-1.5 shrink-0 ml-2"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              {!isExpanded && (
+                <button
+                  type="button"
+                  data-no-drag="true"
+                  onClick={resetModalPosition}
+                  title="Snap chat window back to default corner"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-sky-300 hover:bg-slate-800/80 transition cursor-pointer"
+                >
+                  <LocateFixed className="h-4 w-4" />
+                </button>
+              )}
+
               <button
                 type="button"
+                data-no-drag="true"
                 onClick={() => setSoundEnabled(!soundEnabled)}
                 title={soundEnabled ? 'Mute sound' : 'Enable sound'}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/80 transition cursor-pointer"
@@ -503,6 +809,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
 
               <button
                 type="button"
+                data-no-drag="true"
                 onClick={handleClearHistory}
                 title="Reset conversation"
                 className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-slate-800/80 transition cursor-pointer"
@@ -512,6 +819,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
 
               <button
                 type="button"
+                data-no-drag="true"
                 onClick={() => setIsExpanded(!isExpanded)}
                 title={isExpanded ? 'Minimize' : 'Expand full screen'}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/80 transition cursor-pointer hidden sm:block"
@@ -521,6 +829,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
 
               <button
                 type="button"
+                data-no-drag="true"
                 onClick={() => setIsOpen(false)}
                 title="Close chat"
                 className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-red-500/20 hover:text-red-400 transition cursor-pointer"
