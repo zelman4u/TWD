@@ -71,6 +71,20 @@ export type ReportCategory =
   | 'abnormal_consumption' 
   | 'arrears_ledger';
 
+const ALL_PRINTABLE_REPORTS: ReportCategory[] = [
+  'daily_accomplishment',
+  'unread_meter',
+  'consumption_trend',
+  'billing_prep',
+  'consolidated_master',
+  'consumption',
+  'collection',
+  'pending_ar',
+  'summary_matrix',
+  'barangay_performance',
+  'arrears_ledger'
+];
+
 const OFFICIAL_LOGO_URL = 'https://lh3.googleusercontent.com/d/1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg';
 const FALLBACK_LOGO_URL = 'https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w500';
 const PH_SEAL_URL = 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/84/Coat_of_arms_of_the_Philippines.svg/500px-Coat_of_arms_of_the_Philippines.svg.png';
@@ -145,8 +159,10 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
   const [reportCategory, setReportCategory] = useState<ReportCategory>('consolidated_master');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
+  const [printScope, setPrintScope] = useState<'single' | 'all'>('single');
   const [previewTheme, setPreviewTheme] = useState<'dark' | 'paper'>('dark');
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
+  const [isGeneratingAllPdf, setIsGeneratingAllPdf] = useState<boolean>(false);
 
   // Lock body scrolling when modal is open and handle Esc key
   useEffect(() => {
@@ -995,7 +1011,460 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
     }
   };
 
-  // Generate and Download Official PDF Document
+  // Build autoTable headers & rows for any ReportCategory (shared by Single PDF & All-Reports PDF)
+  const buildPdfTableSpec = (targetCategory: ReportCategory): { tableHeaders: string[][]; tableRows: any[][] } => {
+    const colRate = aggregatedData.grandTotals.totalBilled > 0
+      ? ((aggregatedData.grandTotals.totalCollected / aggregatedData.grandTotals.totalBilled) * 100).toFixed(1)
+      : '100.0';
+
+    if (targetCategory === 'daily_accomplishment') {
+      const tableHeaders = [
+        ['DATE', 'METER READER', 'COVERED ROUTES', 'TARGET QUOTA', 'READ DONE', 'ACCOMPLISHMENT %', 'NORMAL', 'FLAGGED', 'VOLUME (m³)', 'BILLED (PHP)', 'EXP. COLLECTED (PHP)', 'STATUS']
+      ];
+      const tableRows: any[][] = dailyAccomplishmentData.dayList.map(d => [
+        d.date,
+        d.reader,
+        d.routes.join(', '),
+        d.targetQuota.toString(),
+        d.actualRead.toString(),
+        `${d.accomplishmentRate}%`,
+        d.normalRead.toString(),
+        d.flaggedAnomalies.toString(),
+        `${d.totalM3.toLocaleString()} m³`,
+        `PHP ${d.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${d.expectedCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        d.status
+      ]);
+      tableRows.push([
+        'GRAND TOTAL ACCOMPLISHMENT',
+        'ALL READERS',
+        'ALL ZONES',
+        dailyAccomplishmentData.totalTarget.toString(),
+        dailyAccomplishmentData.totalAccomplished.toString(),
+        `${dailyAccomplishmentData.overallRate}%`,
+        '-',
+        '-',
+        `${dailyAccomplishmentData.totalM3.toLocaleString()} m³`,
+        `PHP ${dailyAccomplishmentData.overallBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${dailyAccomplishmentData.overallExpectedCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `${dailyAccomplishmentData.overallRate}% TARGET MET`
+      ]);
+      return { tableHeaders, tableRows };
+    }
+
+    if (targetCategory === 'unread_meter') {
+      const tableHeaders = [
+        ['ACCOUNT #', 'CONSUMER NAME', 'METER TAG #', 'BARANGAY & ADDRESS', 'CLASS', 'ASSIGNED READER', 'DAYS PENDING', 'FIELD OBSTACLE / REASON', 'EST. m³', 'EST. BILLED (PHP)', 'EXP. COLLECTED (PHP)', 'ACTION REQUIRED']
+      ];
+      const tableRows: any[][] = unreadMetersData.unreadList.map(u => [
+        u.accountNumber,
+        u.consumerName,
+        u.meterNumber,
+        `${u.barangay} - ${u.address}`,
+        u.consumerType,
+        u.assignedReader,
+        `${u.daysPending} days`,
+        u.reasonObstacle,
+        `${u.estimatedM3.toFixed(1)} m³`,
+        `PHP ${u.estimatedBilledAmount.toFixed(2)}`,
+        `PHP ${u.expectedCollectedAmount.toFixed(2)}`,
+        u.actionRequired
+      ]);
+      tableRows.push([
+        'TOTAL UNREAD INVENTORY',
+        `${unreadMetersData.totalUnread} Unread Accounts`,
+        'ALL PENDING METERS',
+        'DISTRICT-WIDE',
+        'ALL CLASSES',
+        'ALL FIELD READERS',
+        '-',
+        'RE-DISPATCH RE-INSPECTION',
+        `${unreadMetersData.totalEstimatedM3.toFixed(1)} m³`,
+        `PHP ${unreadMetersData.totalEstimatedBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${unreadMetersData.totalExpectedCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        'PRIORITY CLEARANCE'
+      ]);
+      return { tableHeaders, tableRows };
+    }
+
+    if (targetCategory === 'consumption_trend') {
+      const tableHeaders = [
+        ['BARANGAY / ZONE', 'RESIDENTIAL (m³)', 'COMMERCIAL (m³)', 'GOVERNMENT (m³)', 'TOTAL (m³)', 'TOTAL ACCTS', 'AVG. m³ / ACCT', 'MOM TREND', 'ASSESSED BILLED (PHP)', 'EXP. COLLECTED (PHP)']
+      ];
+      const tableRows: any[][] = aggregatedData.barangayList.map(b => {
+        const avg = b.totalConsumers > 0 ? (b.totalM3 / b.totalConsumers).toFixed(1) : '0.0';
+        const exp = Math.round(b.totalBilled * 0.95);
+        return [
+          b.barangay,
+          `${b.residentialM3.toLocaleString()} m³`,
+          `${b.commercialM3.toLocaleString()} m³`,
+          `${b.governmentM3.toLocaleString()} m³`,
+          `${b.totalM3.toLocaleString()} m³`,
+          b.totalConsumers.toLocaleString(),
+          `${avg} m³`,
+          '+3.1% (Expanding)',
+          `PHP ${b.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `PHP ${exp.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+        ];
+      });
+      tableRows.push([
+        'TOTAL DISTRICT CONSUMPTION & TREND',
+        `${aggregatedData.grandTotals.residentialM3.toLocaleString()} m³`,
+        `${aggregatedData.grandTotals.commercialM3.toLocaleString()} m³`,
+        `${aggregatedData.grandTotals.governmentM3.toLocaleString()} m³`,
+        `${aggregatedData.grandTotals.totalM3.toLocaleString()} m³`,
+        `${aggregatedData.grandTotals.totalConsumers.toLocaleString()} Accounts`,
+        `${(aggregatedData.grandTotals.totalM3 / Math.max(1, aggregatedData.grandTotals.totalConsumers)).toFixed(1)} m³`,
+        `+${consumptionTrendData.momChangePercent}% MoM`,
+        `PHP ${aggregatedData.grandTotals.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${Math.round(aggregatedData.grandTotals.totalBilled * 0.95).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+      ]);
+      return { tableHeaders, tableRows };
+    }
+
+    if (targetCategory === 'billing_prep') {
+      const tableHeaders = [
+        ['ITEM', 'ACCOUNT #', 'CONSUMER NAME', 'METER #', 'BARANGAY', 'CLASS', 'PREV', 'CURR', 'm³', 'BASE (PHP)', 'COMMODITY (PHP)', 'TAX 2%', 'CURR BILLED (PHP)', 'ARREARS (PHP)', 'NET PAYABLE (PHP)', 'STATUS']
+      ];
+      const tableRows: any[][] = billingPrepData.list.map(b => [
+        b.itemNo.toString(),
+        b.accountNumber,
+        b.consumerName,
+        b.meterNumber,
+        b.barangay,
+        b.rateClass,
+        formatOdometerReading(b.previousReading),
+        formatOdometerReading(b.currentReading),
+        `${b.consumption} m³`,
+        `PHP ${b.baseCharge.toFixed(2)}`,
+        `PHP ${b.commodityCharge.toFixed(2)}`,
+        `PHP ${b.franchiseFee.toFixed(2)}`,
+        `PHP ${b.currentBilled.toFixed(2)}`,
+        `PHP ${b.priorArrears.toFixed(2)}`,
+        `PHP ${b.netPayable.toFixed(2)}`,
+        b.status
+      ]);
+      tableRows.push([
+        'TOTALS',
+        `${billingPrepData.totalAccounts} Accounts`,
+        'PREPARATION LEDGER',
+        '-',
+        'ALL ZONES',
+        'ALL',
+        '-',
+        '-',
+        `${aggregatedData.grandTotals.totalM3.toLocaleString()} m³`,
+        '-',
+        '-',
+        '-',
+        `PHP ${billingPrepData.totalCurrentBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${billingPrepData.totalPriorArrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${billingPrepData.grossTotalPayable.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `EXP: PHP ${billingPrepData.expectedCollectedAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+      ]);
+      return { tableHeaders, tableRows };
+    }
+
+    if (targetCategory === 'consolidated_master') {
+      const tableHeaders = [
+        ['ZONE / BARANGAY', 'READING SCHEDULE', 'ASSIGNED READER', 'ACCOUNTS', 'USAGE (m³)', 'TOTAL BILLED (PHP)', 'COLLECTED (PHP)', 'PENDING AR (PHP)', 'ARREARS (PHP)', 'EFFICIENCY']
+      ];
+      const tableRows: any[][] = aggregatedData.barangayList.map(b => {
+        const rate = b.totalBilled > 0 ? ((b.totalCollected / b.totalBilled) * 100).toFixed(1) : '100.0';
+        return [
+          b.barangay,
+          b.readingSchedule,
+          b.assignedReader,
+          b.totalConsumers.toLocaleString(),
+          `${b.totalM3.toLocaleString()} m³`,
+          `PHP ${b.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `PHP ${b.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `PHP ${b.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `PHP ${b.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `${rate}%`
+        ];
+      });
+      tableRows.push([
+        'GRAND TOTAL DISTRICT',
+        `Monthly Schedule (${selectedMonth})`,
+        'ALL FIELD READERS',
+        aggregatedData.grandTotals.totalConsumers.toLocaleString(),
+        `${aggregatedData.grandTotals.totalM3.toLocaleString()} m³`,
+        `PHP ${aggregatedData.grandTotals.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${aggregatedData.grandTotals.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${aggregatedData.grandTotals.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${aggregatedData.grandTotals.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `${colRate}%`
+      ]);
+      return { tableHeaders, tableRows };
+    }
+
+    if (targetCategory === 'consumption') {
+      const tableHeaders = [['BARANGAY / ZONE', 'RESIDENTIAL (m³)', 'COMMERCIAL (m³)', 'GOVERNMENT (m³)', 'TOTAL CONSUMERS', 'TOTAL CONSUMPTION (m³)', 'AVG. m³ / ACCT']];
+      const tableRows: any[][] = aggregatedData.barangayList.map(b => {
+        const avg = b.totalConsumers > 0 ? (b.totalM3 / b.totalConsumers).toFixed(1) : '0.0';
+        return [
+          b.barangay,
+          `${b.residentialM3.toLocaleString()} m³`,
+          `${b.commercialM3.toLocaleString()} m³`,
+          `${b.governmentM3.toLocaleString()} m³`,
+          b.totalConsumers.toLocaleString(),
+          `${b.totalM3.toLocaleString()} m³`,
+          `${avg} m³`
+        ];
+      });
+      tableRows.push([
+        'TOTAL DISTRICT CONSUMPTION',
+        `${aggregatedData.grandTotals.residentialM3.toLocaleString()} m³`,
+        `${aggregatedData.grandTotals.commercialM3.toLocaleString()} m³`,
+        `${aggregatedData.grandTotals.governmentM3.toLocaleString()} m³`,
+        `${aggregatedData.grandTotals.totalConsumers.toLocaleString()} Accounts`,
+        `${aggregatedData.grandTotals.totalM3.toLocaleString()} m³`,
+        `${(aggregatedData.grandTotals.totalM3 / Math.max(1, aggregatedData.grandTotals.totalConsumers)).toFixed(1)} m³`
+      ]);
+      return { tableHeaders, tableRows };
+    }
+
+    if (targetCategory === 'collection') {
+      const tableHeaders = [['ZONE / BARANGAY', 'ACCOUNTS', 'TOTAL BILLED (PHP)', 'COLLECTED (PHP)', 'PENDING AR (PHP)', 'EFFICIENCY']];
+      const tableRows: any[][] = aggregatedData.barangayList.map(b => {
+        const rate = b.totalBilled > 0 ? ((b.totalCollected / b.totalBilled) * 100).toFixed(1) : '100.0';
+        return [
+          b.barangay,
+          b.totalConsumers.toLocaleString(),
+          `PHP ${b.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `PHP ${b.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `PHP ${b.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `${rate}%`
+        ];
+      });
+      tableRows.push([
+        'TOTAL COLLECTIONS',
+        aggregatedData.grandTotals.totalConsumers.toLocaleString(),
+        `PHP ${aggregatedData.grandTotals.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${aggregatedData.grandTotals.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${aggregatedData.grandTotals.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `${colRate}%`
+      ]);
+      return { tableHeaders, tableRows };
+    }
+
+    if (targetCategory === 'summary_matrix') {
+      const tableHeaders = [['BARANGAY / AREA', 'TOTAL BILLED (PHP)', 'TOTAL COLLECTED (PHP)', 'PENDING RECEIVABLES (PHP)', 'ARREARS (PHP)', 'COLLECTION EFFICIENCY']];
+      const tableRows: any[][] = aggregatedData.barangayList.map(b => {
+        const rate = b.totalBilled > 0 ? ((b.totalCollected / b.totalBilled) * 100).toFixed(1) : '100.0';
+        return [
+          b.barangay,
+          `PHP ${b.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `PHP ${b.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `PHP ${b.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `PHP ${b.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+          `${rate}%`
+        ];
+      });
+      tableRows.push([
+        'TOTALS',
+        `PHP ${aggregatedData.grandTotals.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${aggregatedData.grandTotals.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${aggregatedData.grandTotals.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `PHP ${aggregatedData.grandTotals.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `${colRate}%`
+      ]);
+      return { tableHeaders, tableRows };
+    }
+
+    if (targetCategory === 'meter_reader_perf') {
+      const tableHeaders = [['METER READER NAME', 'ASSIGNED BARANGAYS / ROUTES', 'READING SCHEDULE', 'ASSIGNED ACCTS', 'READ DONE', 'PENDING UNREAD', 'USAGE READ (m³)', 'ON-TIME %', 'COMPLETION STATUS']];
+      const tableRows: any[][] = readerPerformance.map(r => [
+        r.name,
+        r.assignedAreas.join(', '),
+        r.readingSchedule,
+        r.totalAssigned.toLocaleString(),
+        r.totalRead.toLocaleString(),
+        r.pendingRead.toLocaleString(),
+        `${r.totalM3.toLocaleString()} m³`,
+        `${r.onTimeRate}%`,
+        r.status
+      ]);
+      return { tableHeaders, tableRows };
+    }
+
+    // Detailed Account Listing for Billing / Pending AR / Arrears / Barangay Performance / Abnormal
+    const tableHeaders = [['ACCOUNT #', 'CONSUMER NAME', 'BARANGAY', 'TYPE', 'USAGE (m³)', 'BILLED (PHP)', 'PAID (PHP)', 'BALANCE (PHP)', 'STATUS']];
+    let flatAccounts: any[] = [];
+    aggregatedData.barangayList.forEach(b => {
+      b.accounts.forEach(a => {
+        flatAccounts.push({ ...a, barangay: b.barangay });
+      });
+    });
+
+    if (targetCategory === 'abnormal_consumption') {
+      flatAccounts = flatAccounts.filter(a => a.isAbnormal);
+    } else if (targetCategory === 'pending_ar' || targetCategory === 'arrears_ledger') {
+      flatAccounts = flatAccounts.filter(a => a.pendingAmount > 0 || a.paymentStatus !== 'paid');
+    }
+
+    const tableRows: any[][] = flatAccounts.map(a => [
+      a.accountNumber,
+      a.consumerName,
+      a.barangay,
+      a.type,
+      `${a.consumption} m³`,
+      `PHP ${a.billedAmount.toFixed(2)}`,
+      `PHP ${a.paidAmount.toFixed(2)}`,
+      `PHP ${a.pendingAmount.toFixed(2)}`,
+      a.paymentStatus.toUpperCase()
+    ]);
+
+    if (tableRows.length === 0) {
+      tableRows.push(['N/A', 'No records match the active filter criteria', selectedBarangay, 'All', '0 m³', 'PHP 0.00', 'PHP 0.00', 'PHP 0.00', 'CLEARED']);
+    }
+
+    return { tableHeaders, tableRows };
+  };
+
+  // Helper to render official PDF letterhead + summary banner on current page
+  const renderPdfLetterhead = (
+    doc: jsPDF,
+    title: string,
+    twdLogoData: string | null,
+    phLogoData: string | null,
+    sectionLabel?: string
+  ) => {
+    const pageMargin = 12;
+    const pageWidth = 297;
+
+    if (twdLogoData) {
+      try {
+        doc.addImage(twdLogoData, 'PNG', pageMargin, 5, 18, 18);
+      } catch (e) {
+        console.warn('Could not render TWD logo in PDF:', e);
+      }
+    }
+    if (phLogoData) {
+      try {
+        doc.addImage(phLogoData, 'PNG', pageWidth - pageMargin - 18, 5, 18, 18);
+      } catch (e) {
+        console.warn('Could not render PH seal in PDF:', e);
+      }
+    }
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('REPUBLIC OF THE PHILIPPINES', pageWidth / 2, 8.5, { align: 'center' });
+
+    doc.setFontSize(13);
+    doc.text('TAGOLOAN WATER DISTRICT', pageWidth / 2, 14, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text('Poblacion, Tagoloan, Misamis Oriental 9001 • Tel: (088) 890-4946', pageWidth / 2, 18.5, { align: 'center' });
+    doc.text('Provincial Water Utilities Act of 1973 (Presidential Decree No. 198 as amended)', pageWidth / 2, 22.5, { align: 'center' });
+
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.4);
+    doc.line(pageMargin, 25.5, pageWidth - pageMargin, 25.5);
+    doc.setLineWidth(0.15);
+    doc.line(pageMargin, 26.5, pageWidth - pageMargin, 26.5);
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(sectionLabel ? `${sectionLabel} — ${title}` : title, pageWidth / 2, 31.5, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(71, 85, 105);
+    doc.text(
+      `Billing Cycle: ${selectedMonth} ${selectedYear}  •  Zone: ${selectedBarangay}  •  Category: ${selectedConsumerType}  •  Date: ${new Date().toLocaleDateString('en-US', { dateStyle: 'medium' })}`,
+      pageWidth / 2,
+      35.5,
+      { align: 'center' }
+    );
+
+    const summaryBoxY = 38.5;
+    const pdfOverallBilled = aggregatedData.grandTotals.totalBilled;
+    const pdfOverallExpected = Math.round(pdfOverallBilled * 0.95);
+    const pdfOverallCollected = aggregatedData.grandTotals.totalCollected;
+    const colRate = aggregatedData.grandTotals.totalBilled > 0
+      ? ((aggregatedData.grandTotals.totalCollected / aggregatedData.grandTotals.totalBilled) * 100).toFixed(1)
+      : '100.0';
+
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(pageMargin, summaryBoxY, pageWidth - (pageMargin * 2), 9, 1.5, 1.5, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(
+      `OVERALL AMOUNT BILLED: PHP ${pdfOverallBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}   •   EXPECTED COLLECTED (95% TARGET): PHP ${pdfOverallExpected.toLocaleString('en-US', { minimumFractionDigits: 2 })}   •   REALIZED COLLECTED: PHP ${pdfOverallCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}   •   REALIZATION: ${colRate}%`,
+      pageWidth / 2,
+      summaryBoxY + 5.8,
+      { align: 'center' }
+    );
+  };
+
+  const renderPdfSignatureAndFooters = (doc: jsPDF) => {
+    const pageMargin = 12;
+    const pageWidth = 297;
+    const finalY = (doc as any).lastAutoTable?.finalY || 160;
+    let signatureY = finalY + 10;
+    if (signatureY > 175) {
+      doc.addPage();
+      signatureY = 24;
+    }
+
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(30, 41, 59);
+
+    doc.text('PREPARED & VERIFIED BY:', pageMargin, signatureY);
+    doc.line(pageMargin, signatureY + 11, pageMargin + 65, signatureY + 11);
+    doc.text(currentUser?.name || 'CENTRAL RECORDS OFFICER', pageMargin, signatureY + 15);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.text('Commercial & Billing Specialist', pageMargin, signatureY + 18);
+
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text('AUDITED & REVIEWED BY:', pageMargin + 95, signatureY);
+    doc.line(pageMargin + 95, signatureY + 11, pageMargin + 160, signatureY + 11);
+    doc.text('ENGR. R. MANUEL', pageMargin + 95, signatureY + 15);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.text('Operations & Metering Supervisor', pageMargin + 95, signatureY + 18);
+
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CERTIFIED CORRECT & APPROVED:', pageMargin + 195, signatureY);
+    doc.line(pageMargin + 195, signatureY + 11, pageMargin + 265, signatureY + 11);
+    doc.text('GENERAL MANAGER', pageMargin + 195, signatureY + 15);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.text('Tagoloan Water District', pageMargin + 195, signatureY + 18);
+
+    const totalPages = (doc as any).internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(6.5);
+      doc.setTextColor(148, 163, 184);
+      doc.text(
+        `Tagoloan Water District Official Report System • Republic of the Philippines • Page ${i} of ${totalPages}`,
+        pageMargin,
+        204
+      );
+      doc.text(
+        'CONFIDENTIAL & REGULATORY COMPLIANT ARCHIVE COPY',
+        pageWidth - pageMargin,
+        204,
+        { align: 'right' }
+      );
+    }
+  };
+
+  // Generate and Download Official PDF Document (Single Report)
   const handleDownloadPDF = async () => {
     setIsGeneratingPdf(true);
     try {
@@ -1007,385 +1476,14 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
 
       const repInfo = reportTitles[reportCategory];
       const pageMargin = 12;
-      const pageWidth = 297;
 
-      // Load official logos asynchronously
       const [twdLogoData, phLogoData] = await Promise.all([
         getBase64Image(OFFICIAL_LOGO_URL, FALLBACK_LOGO_URL),
         getBase64Image(PH_SEAL_URL, PH_SEAL_FALLBACK)
       ]);
 
-      // Left Logo - Tagoloan Water District Seal
-      if (twdLogoData) {
-        try {
-          doc.addImage(twdLogoData, 'PNG', pageMargin, 5, 18, 18);
-        } catch (e) {
-          console.warn('Could not render TWD logo in PDF:', e);
-        }
-      }
-
-      // Right Logo - Republic of the Philippines Coat of Arms
-      if (phLogoData) {
-        try {
-          doc.addImage(phLogoData, 'PNG', pageWidth - pageMargin - 18, 5, 18, 18);
-        } catch (e) {
-          console.warn('Could not render PH seal in PDF:', e);
-        }
-      }
-
-      // 1. Natural, Presentable Official Letterhead
-      doc.setTextColor(15, 23, 42); // Navy Slate 950
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.text('REPUBLIC OF THE PHILIPPINES', pageWidth / 2, 8.5, { align: 'center' });
-      
-      doc.setFontSize(13);
-      doc.text('TAGOLOAN WATER DISTRICT', pageWidth / 2, 14, { align: 'center' });
-      
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7.5);
-      doc.text('Poblacion, Tagoloan, Misamis Oriental 9001 • Tel: (088) 890-4946', pageWidth / 2, 18.5, { align: 'center' });
-      doc.text('Provincial Water Utilities Act of 1973 (Presidential Decree No. 198 as amended)', pageWidth / 2, 22.5, { align: 'center' });
-
-      // Clean Double Divider Line
-      doc.setDrawColor(15, 23, 42);
-      doc.setLineWidth(0.4);
-      doc.line(pageMargin, 25.5, pageWidth - pageMargin, 25.5);
-      doc.setLineWidth(0.15);
-      doc.line(pageMargin, 26.5, pageWidth - pageMargin, 26.5);
-
-      // 2. Report Main Title - Clean & Natural
-      doc.setTextColor(15, 23, 42);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(11);
-      doc.text(repInfo.title, pageWidth / 2, 31.5, { align: 'center' });
-
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7.5);
-      doc.setTextColor(71, 85, 105);
-      doc.text(
-        `Billing Cycle: ${selectedMonth} ${selectedYear}  •  Zone: ${selectedBarangay}  •  Category: ${selectedConsumerType}  •  Date: ${new Date().toLocaleDateString('en-US', { dateStyle: 'medium' })}`,
-        pageWidth / 2,
-        35.5,
-        { align: 'center' }
-      );
-
-      // Executive Financial Summary Banner in Generated PDF
-      const summaryBoxY = 38.5;
-      const pdfOverallBilled = aggregatedData.grandTotals.totalBilled;
-      const pdfOverallExpected = Math.round(pdfOverallBilled * 0.95);
-      const pdfOverallCollected = aggregatedData.grandTotals.totalCollected;
-      const colRate = aggregatedData.grandTotals.totalBilled > 0 
-        ? ((aggregatedData.grandTotals.totalCollected / aggregatedData.grandTotals.totalBilled) * 100).toFixed(1) 
-        : '100.0';
-
-      doc.setFillColor(241, 245, 249);
-      doc.setDrawColor(203, 213, 225);
-      doc.roundedRect(pageMargin, summaryBoxY, pageWidth - (pageMargin * 2), 9, 1.5, 1.5, 'FD');
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7.5);
-      doc.setTextColor(15, 23, 42);
-      doc.text(
-        `OVERALL AMOUNT BILLED: PHP ${pdfOverallBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}   •   EXPECTED COLLECTED (95% TARGET): PHP ${pdfOverallExpected.toLocaleString('en-US', { minimumFractionDigits: 2 })}   •   REALIZED COLLECTED: PHP ${pdfOverallCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}   •   REALIZATION: ${colRate}%`,
-        pageWidth / 2,
-        summaryBoxY + 5.8,
-        { align: 'center' }
-      );
-
-      // 3. Table Data Generation based on Category
-      let tableHeaders: string[][] = [];
-      let tableRows: any[][] = [];
-
-      if (reportCategory === 'daily_accomplishment') {
-        tableHeaders = [
-          ['DATE', 'METER READER', 'COVERED ROUTES', 'TARGET QUOTA', 'READ DONE', 'ACCOMPLISHMENT %', 'NORMAL', 'FLAGGED', 'VOLUME (m³)', 'BILLED (PHP)', 'EXP. COLLECTED (PHP)', 'STATUS']
-        ];
-        tableRows = dailyAccomplishmentData.dayList.map(d => [
-          d.date,
-          d.reader,
-          d.routes.join(', '),
-          d.targetQuota.toString(),
-          d.actualRead.toString(),
-          `${d.accomplishmentRate}%`,
-          d.normalRead.toString(),
-          d.flaggedAnomalies.toString(),
-          `${d.totalM3.toLocaleString()} m³`,
-          `PHP ${d.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${d.expectedCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          d.status
-        ]);
-        tableRows.push([
-          'GRAND TOTAL ACCOMPLISHMENT',
-          'ALL READERS',
-          'ALL ZONES',
-          dailyAccomplishmentData.totalTarget.toString(),
-          dailyAccomplishmentData.totalAccomplished.toString(),
-          `${dailyAccomplishmentData.overallRate}%`,
-          '-',
-          '-',
-          `${dailyAccomplishmentData.totalM3.toLocaleString()} m³`,
-          `PHP ${dailyAccomplishmentData.overallBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${dailyAccomplishmentData.overallExpectedCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `${dailyAccomplishmentData.overallRate}% TARGET MET`
-        ]);
-      } else if (reportCategory === 'unread_meter') {
-        tableHeaders = [
-          ['ACCOUNT #', 'CONSUMER NAME', 'METER TAG #', 'BARANGAY & ADDRESS', 'CLASS', 'ASSIGNED READER', 'DAYS PENDING', 'FIELD OBSTACLE / REASON', 'EST. m³', 'EST. BILLED (PHP)', 'EXP. COLLECTED (PHP)', 'ACTION REQUIRED']
-        ];
-        tableRows = unreadMetersData.unreadList.map(u => [
-          u.accountNumber,
-          u.consumerName,
-          u.meterNumber,
-          `${u.barangay} - ${u.address}`,
-          u.consumerType,
-          u.assignedReader,
-          `${u.daysPending} days`,
-          u.reasonObstacle,
-          `${u.estimatedM3.toFixed(1)} m³`,
-          `PHP ${u.estimatedBilledAmount.toFixed(2)}`,
-          `PHP ${u.expectedCollectedAmount.toFixed(2)}`,
-          u.actionRequired
-        ]);
-        tableRows.push([
-          'TOTAL UNREAD INVENTORY',
-          `${unreadMetersData.totalUnread} Unread Accounts`,
-          'ALL PENDING METERS',
-          'DISTRICT-WIDE',
-          'ALL CLASSES',
-          'ALL FIELD READERS',
-          '-',
-          'RE-DISPATCH RE-INSPECTION',
-          `${unreadMetersData.totalEstimatedM3.toFixed(1)} m³`,
-          `PHP ${unreadMetersData.totalEstimatedBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${unreadMetersData.totalExpectedCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          'PRIORITY CLEARANCE'
-        ]);
-      } else if (reportCategory === 'consumption_trend') {
-        tableHeaders = [
-          ['BARANGAY / ZONE', 'RESIDENTIAL (m³)', 'COMMERCIAL (m³)', 'GOVERNMENT (m³)', 'TOTAL (m³)', 'TOTAL ACCTS', 'AVG. m³ / ACCT', 'MOM TREND', 'ASSESSED BILLED (PHP)', 'EXP. COLLECTED (PHP)']
-        ];
-        tableRows = aggregatedData.barangayList.map(b => {
-          const avg = b.totalConsumers > 0 ? (b.totalM3 / b.totalConsumers).toFixed(1) : '0.0';
-          const exp = Math.round(b.totalBilled * 0.95);
-          return [
-            b.barangay,
-            `${b.residentialM3.toLocaleString()} m³`,
-            `${b.commercialM3.toLocaleString()} m³`,
-            `${b.governmentM3.toLocaleString()} m³`,
-            `${b.totalM3.toLocaleString()} m³`,
-            b.totalConsumers.toLocaleString(),
-            `${avg} m³`,
-            '+3.1% (Expanding)',
-            `PHP ${b.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `PHP ${exp.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
-          ];
-        });
-        tableRows.push([
-          'TOTAL DISTRICT CONSUMPTION & TREND',
-          `${aggregatedData.grandTotals.residentialM3.toLocaleString()} m³`,
-          `${aggregatedData.grandTotals.commercialM3.toLocaleString()} m³`,
-          `${aggregatedData.grandTotals.governmentM3.toLocaleString()} m³`,
-          `${aggregatedData.grandTotals.totalM3.toLocaleString()} m³`,
-          `${aggregatedData.grandTotals.totalConsumers.toLocaleString()} Accounts`,
-          `${(aggregatedData.grandTotals.totalM3 / Math.max(1, aggregatedData.grandTotals.totalConsumers)).toFixed(1)} m³`,
-          `+${consumptionTrendData.momChangePercent}% MoM`,
-          `PHP ${aggregatedData.grandTotals.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${Math.round(aggregatedData.grandTotals.totalBilled * 0.95).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
-        ]);
-      } else if (reportCategory === 'billing_prep') {
-        tableHeaders = [
-          ['ITEM', 'ACCOUNT #', 'CONSUMER NAME', 'METER #', 'BARANGAY', 'CLASS', 'PREV', 'CURR', 'm³', 'BASE (PHP)', 'COMMODITY (PHP)', 'TAX 2%', 'CURR BILLED (PHP)', 'ARREARS (PHP)', 'NET PAYABLE (PHP)', 'STATUS']
-        ];
-        tableRows = billingPrepData.list.map(b => [
-          b.itemNo.toString(),
-          b.accountNumber,
-          b.consumerName,
-          b.meterNumber,
-          b.barangay,
-          b.rateClass,
-          formatOdometerReading(b.previousReading),
-          formatOdometerReading(b.currentReading),
-          `${b.consumption} m³`,
-          `PHP ${b.baseCharge.toFixed(2)}`,
-          `PHP ${b.commodityCharge.toFixed(2)}`,
-          `PHP ${b.franchiseFee.toFixed(2)}`,
-          `PHP ${b.currentBilled.toFixed(2)}`,
-          `PHP ${b.priorArrears.toFixed(2)}`,
-          `PHP ${b.netPayable.toFixed(2)}`,
-          b.status
-        ]);
-        tableRows.push([
-          'TOTALS',
-          `${billingPrepData.totalAccounts} Accounts`,
-          'PREPARATION LEDGER',
-          '-',
-          'ALL ZONES',
-          'ALL',
-          '-',
-          '-',
-          `${aggregatedData.grandTotals.totalM3.toLocaleString()} m³`,
-          '-',
-          '-',
-          '-',
-          `PHP ${billingPrepData.totalCurrentBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${billingPrepData.totalPriorArrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${billingPrepData.grossTotalPayable.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `EXP: PHP ${billingPrepData.expectedCollectedAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
-        ]);
-      } else if (reportCategory === 'consolidated_master') {
-        tableHeaders = [
-          ['ZONE / BARANGAY', 'READING SCHEDULE', 'ASSIGNED READER', 'ACCOUNTS', 'USAGE (m³)', 'TOTAL BILLED (PHP)', 'COLLECTED (PHP)', 'PENDING AR (PHP)', 'ARREARS (PHP)', 'EFFICIENCY']
-        ];
-        tableRows = aggregatedData.barangayList.map(b => {
-          const rate = b.totalBilled > 0 ? ((b.totalCollected / b.totalBilled) * 100).toFixed(1) : '100.0';
-          return [
-            b.barangay,
-            b.readingSchedule,
-            b.assignedReader,
-            b.totalConsumers.toLocaleString(),
-            `${b.totalM3.toLocaleString()} m³`,
-            `PHP ${b.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `PHP ${b.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `PHP ${b.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `PHP ${b.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `${rate}%`
-          ];
-        });
-        tableRows.push([
-          'GRAND TOTAL DISTRICT',
-          `Monthly Schedule (${selectedMonth})`,
-          'ALL FIELD READERS',
-          aggregatedData.grandTotals.totalConsumers.toLocaleString(),
-          `${aggregatedData.grandTotals.totalM3.toLocaleString()} m³`,
-          `PHP ${aggregatedData.grandTotals.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${aggregatedData.grandTotals.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${aggregatedData.grandTotals.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${aggregatedData.grandTotals.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `${colRate}%`
-        ]);
-      } else if (reportCategory === 'consumption') {
-        tableHeaders = [
-          ['ZONE / BARANGAY', 'READING SCHEDULE', 'ASSIGNED READER', 'ACCOUNTS', 'USAGE (m³)', 'TOTAL BILLED (PHP)', 'COLLECTED (PHP)', 'PENDING AR (PHP)', 'ARREARS (PHP)', 'EFFICIENCY']
-        ];
-        tableRows = aggregatedData.barangayList.map(b => {
-          const rate = b.totalBilled > 0 ? ((b.totalCollected / b.totalBilled) * 100).toFixed(1) : '100.0';
-          return [
-            b.barangay,
-            b.readingSchedule,
-            b.assignedReader,
-            b.totalConsumers.toLocaleString(),
-            `${b.totalM3.toLocaleString()} m³`,
-            `PHP ${b.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `PHP ${b.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `PHP ${b.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `PHP ${b.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `${rate}%`
-          ];
-        });
-        tableRows.push([
-          'GRAND TOTAL DISTRICT',
-          `Monthly Schedule (${selectedMonth})`,
-          'ALL FIELD READERS',
-          aggregatedData.grandTotals.totalConsumers.toLocaleString(),
-          `${aggregatedData.grandTotals.totalM3.toLocaleString()} m³`,
-          `PHP ${aggregatedData.grandTotals.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${aggregatedData.grandTotals.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${aggregatedData.grandTotals.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${aggregatedData.grandTotals.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `${colRate}%`
-        ]);
-      } else if (reportCategory === 'consumption') {
-        tableHeaders = [['BARANGAY / ZONE', 'RESIDENTIAL (m³)', 'COMMERCIAL (m³)', 'GOVERNMENT (m³)', 'TOTAL CONSUMERS', 'TOTAL CONSUMPTION (m³)', 'AVG. m³ / ACCT']];
-        tableRows = aggregatedData.barangayList.map(b => {
-          const avg = b.totalConsumers > 0 ? (b.totalM3 / b.totalConsumers).toFixed(1) : '0.0';
-          return [
-            b.barangay,
-            `${b.residentialM3.toLocaleString()} m³`,
-            `${b.commercialM3.toLocaleString()} m³`,
-            `${b.governmentM3.toLocaleString()} m³`,
-            b.totalConsumers.toLocaleString(),
-            `${b.totalM3.toLocaleString()} m³`,
-            `${avg} m³`
-          ];
-        });
-        tableRows.push([
-          'TOTAL DISTRICT CONSUMPTION',
-          `${aggregatedData.grandTotals.residentialM3.toLocaleString()} m³`,
-          `${aggregatedData.grandTotals.commercialM3.toLocaleString()} m³`,
-          `${aggregatedData.grandTotals.governmentM3.toLocaleString()} m³`,
-          `${aggregatedData.grandTotals.totalConsumers.toLocaleString()} Accounts`,
-          `${aggregatedData.grandTotals.totalM3.toLocaleString()} m³`,
-          `${(aggregatedData.grandTotals.totalM3 / Math.max(1, aggregatedData.grandTotals.totalConsumers)).toFixed(1)} m³`
-        ]);
-      } else if (reportCategory === 'summary_matrix') {
-        tableHeaders = [['BARANGAY / AREA', 'TOTAL BILLED (PHP)', 'TOTAL COLLECTED (PHP)', 'PENDING RECEIVABLES (PHP)', 'ARREARS (PHP)', 'COLLECTION EFFICIENCY']];
-        tableRows = aggregatedData.barangayList.map(b => {
-          const rate = b.totalBilled > 0 ? ((b.totalCollected / b.totalBilled) * 100).toFixed(1) : '100.0';
-          return [
-            b.barangay,
-            `PHP ${b.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `PHP ${b.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `PHP ${b.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `PHP ${b.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-            `${rate}%`
-          ];
-        });
-        tableRows.push([
-          'TOTALS',
-          `PHP ${aggregatedData.grandTotals.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${aggregatedData.grandTotals.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${aggregatedData.grandTotals.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `PHP ${aggregatedData.grandTotals.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-          `${colRate}%`
-        ]);
-      } else if (reportCategory === 'meter_reader_perf') {
-        tableHeaders = [['METER READER NAME', 'ASSIGNED BARANGAYS / ROUTES', 'READING SCHEDULE', 'ASSIGNED ACCTS', 'READ DONE', 'PENDING UNREAD', 'USAGE READ (m³)', 'ON-TIME %', 'COMPLETION STATUS']];
-        tableRows = readerPerformance.map(r => [
-          r.name,
-          r.assignedAreas.join(', '),
-          r.readingSchedule,
-          r.totalAssigned.toLocaleString(),
-          r.totalRead.toLocaleString(),
-          r.pendingRead.toLocaleString(),
-          `${r.totalM3.toLocaleString()} m³`,
-          `${r.onTimeRate}%`,
-          r.status
-        ]);
-      } else {
-        // Detailed Account Listing for Billing / Collection / AR / Abnormal
-        tableHeaders = [['ACCOUNT #', 'CONSUMER NAME', 'BARANGAY', 'TYPE', 'USAGE (m³)', 'BILLED (PHP)', 'PAID (PHP)', 'BALANCE (PHP)', 'STATUS']];
-        let flatAccounts: any[] = [];
-        aggregatedData.barangayList.forEach(b => {
-          b.accounts.forEach(a => {
-            flatAccounts.push({ ...a, barangay: b.barangay });
-          });
-        });
-
-        if (reportCategory === 'abnormal_consumption') {
-          flatAccounts = flatAccounts.filter(a => a.isAbnormal);
-        } else if (reportCategory === 'pending_ar' || reportCategory === 'arrears_ledger') {
-          flatAccounts = flatAccounts.filter(a => a.pendingAmount > 0 || a.paymentStatus !== 'paid');
-        } else if (reportCategory === 'collection') {
-          flatAccounts = flatAccounts.filter(a => a.paymentStatus === 'paid' || a.paidAmount > 0);
-        }
-
-        tableRows = flatAccounts.map(a => [
-          a.accountNumber,
-          a.consumerName,
-          a.barangay,
-          a.type,
-          `${a.consumption} m³`,
-          `PHP ${a.billedAmount.toFixed(2)}`,
-          `PHP ${a.paidAmount.toFixed(2)}`,
-          `PHP ${a.pendingAmount.toFixed(2)}`,
-          a.paymentStatus.toUpperCase()
-        ]);
-
-        if (tableRows.length === 0) {
-          tableRows = [['N/A', 'No records match the active filter criteria', selectedBarangay, 'All', '0 m³', 'PHP 0.00', 'PHP 0.00', 'PHP 0.00', 'CLEARED']];
-        }
-      }
+      renderPdfLetterhead(doc, repInfo.title, twdLogoData, phLogoData);
+      const { tableHeaders, tableRows } = buildPdfTableSpec(reportCategory);
 
       autoTable(doc, {
         head: tableHeaders,
@@ -1410,8 +1508,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
         },
         margin: { left: pageMargin, right: pageMargin, bottom: 25 },
         didParseCell: (data) => {
-          // Highlight footer row
-          if (data.row.index === tableRows.length - 1) {
+          if (data.row.index === tableRows.length - 1 && tableRows.length > 1) {
             data.cell.styles.fontStyle = 'bold';
             data.cell.styles.fillColor = [226, 232, 240];
             data.cell.styles.textColor = [15, 23, 42];
@@ -1419,70 +1516,81 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
         }
       });
 
-      // 6. Signatures Block at Bottom of Last Page
-      const finalY = (doc as any).lastAutoTable?.finalY || 160;
-      const signatureY = finalY > 165 ? 165 : finalY + 10;
-
-      if (signatureY < 185) {
-        doc.setFontSize(7.5);
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(30, 41, 59);
-
-        // Signer 1
-        doc.text('PREPARED & VERIFIED BY:', pageMargin, signatureY);
-        doc.line(pageMargin, signatureY + 11, pageMargin + 65, signatureY + 11);
-        doc.setFont('helvetica', 'bold');
-        doc.text(currentUser?.name || 'CENTRAL RECORDS OFFICER', pageMargin, signatureY + 15);
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(6.5);
-        doc.text('Commercial & Billing Specialist', pageMargin, signatureY + 18);
-
-        // Signer 2
-        doc.setFontSize(7.5);
-        doc.setFont('helvetica', 'bold');
-        doc.text('AUDITED & REVIEWED BY:', pageMargin + 95, signatureY);
-        doc.line(pageMargin + 95, signatureY + 11, pageMargin + 160, signatureY + 11);
-        doc.text('ENGR. R. MANUEL', pageMargin + 95, signatureY + 15);
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(6.5);
-        doc.text('Operations & Metering Supervisor', pageMargin + 95, signatureY + 18);
-
-        // Signer 3
-        doc.setFontSize(7.5);
-        doc.setFont('helvetica', 'bold');
-        doc.text('CERTIFIED CORRECT & APPROVED:', pageMargin + 195, signatureY);
-        doc.line(pageMargin + 195, signatureY + 11, pageMargin + 265, signatureY + 11);
-        doc.text('GENERAL MANAGER', pageMargin + 195, signatureY + 15);
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(6.5);
-        doc.text('Tagoloan Water District', pageMargin + 195, signatureY + 18);
-      }
-
-      // Add Page Numbers & Footer Watermark to all pages
-      const totalPages = (doc as any).internal.getNumberOfPages();
-      for (let i = 1; i <= totalPages; i++) {
-        doc.setPage(i);
-        doc.setFontSize(6.5);
-        doc.setTextColor(148, 163, 184);
-        doc.text(
-          `Tagoloan Water District Official Report System • Republic of the Philippines • Page ${i} of ${totalPages}`,
-          pageMargin,
-          204
-        );
-        doc.text(
-          'CONFIDENTIAL & REGULATORY COMPLIANT ARCHIVE COPY',
-          pageWidth - pageMargin,
-          204,
-          { align: 'right' }
-        );
-      }
-
-      // Save PDF
+      renderPdfSignatureAndFooters(doc);
       doc.save(`TWD_${reportCategory.toUpperCase()}_${selectedMonth}_${selectedYear}.pdf`);
     } catch (err) {
       console.error('Error generating PDF report:', err);
     } finally {
       setIsGeneratingPdf(false);
+    }
+  };
+
+  // Generate and Download Combined Official PDF Containing All 11 Reports
+  const handleDownloadAllPDF = async () => {
+    setIsGeneratingAllPdf(true);
+    try {
+      const doc = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const pageMargin = 12;
+      const [twdLogoData, phLogoData] = await Promise.all([
+        getBase64Image(OFFICIAL_LOGO_URL, FALLBACK_LOGO_URL),
+        getBase64Image(PH_SEAL_URL, PH_SEAL_FALLBACK)
+      ]);
+
+      ALL_PRINTABLE_REPORTS.forEach((cat, idx) => {
+        if (idx > 0) doc.addPage();
+        const repInfo = reportTitles[cat];
+        renderPdfLetterhead(
+          doc,
+          repInfo.title,
+          twdLogoData,
+          phLogoData,
+          `REPORT ${idx + 1} OF ${ALL_PRINTABLE_REPORTS.length}`
+        );
+
+        const { tableHeaders, tableRows } = buildPdfTableSpec(cat);
+        autoTable(doc, {
+          head: tableHeaders,
+          body: tableRows,
+          startY: 50,
+          theme: 'grid',
+          headStyles: {
+            fillColor: [15, 23, 42],
+            textColor: [255, 255, 255],
+            fontStyle: 'bold',
+            fontSize: 7.5,
+            halign: 'left',
+            cellPadding: 2
+          },
+          bodyStyles: {
+            fontSize: 7,
+            textColor: [30, 41, 59],
+            cellPadding: 1.8
+          },
+          alternateRowStyles: {
+            fillColor: [248, 250, 252]
+          },
+          margin: { left: pageMargin, right: pageMargin, bottom: 25 },
+          didParseCell: (data) => {
+            if (data.row.index === tableRows.length - 1 && tableRows.length > 1) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [226, 232, 240];
+              data.cell.styles.textColor = [15, 23, 42];
+            }
+          }
+        });
+      });
+
+      renderPdfSignatureAndFooters(doc);
+      doc.save(`TWD_ALL_OFFICIAL_REPORTS_${selectedMonth}_${selectedYear}.pdf`);
+    } catch (err) {
+      console.error('Error generating combined PDF:', err);
+    } finally {
+      setIsGeneratingAllPdf(false);
     }
   };
 
@@ -1519,23 +1627,48 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             </div>
           </div>
 
-          <div className="flex items-center space-x-3 w-full lg:w-auto">
+          <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
             <button
               type="button"
               onClick={handleDownloadPDF}
-              disabled={isGeneratingPdf}
-              className="flex-1 lg:flex-none px-5 py-3 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg cursor-pointer disabled:opacity-50"
+              disabled={isGeneratingPdf || isGeneratingAllPdf}
+              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
             >
               <Download className="h-4 w-4" />
-              <span>{isGeneratingPdf ? 'Generating PDF...' : 'Download Official PDF'}</span>
+              <span>{isGeneratingPdf ? 'Generating PDF...' : 'Download PDF'}</span>
             </button>
             <button
               type="button"
-              onClick={() => setShowPrintModal(true)}
-              className="px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-2 border border-slate-700 cursor-pointer"
+              onClick={() => {
+                setPrintScope('single');
+                setShowPrintModal(true);
+              }}
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-2 border border-slate-700 cursor-pointer whitespace-nowrap shrink-0"
             >
               <Printer className="h-4 w-4" />
-              <span>Print Preview / Print</span>
+              <span>Print Selected</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPrintScope('all');
+                setShowPrintModal(true);
+              }}
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-2 shadow-lg cursor-pointer whitespace-nowrap shrink-0"
+              title="Open Print Preview containing all 11 official reports together"
+            >
+              <Layers className="h-4 w-4" />
+              <span>Print All Reports ({ALL_PRINTABLE_REPORTS.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadAllPDF}
+              disabled={isGeneratingAllPdf || isGeneratingPdf}
+              className="px-4 py-2.5 bg-slate-950 hover:bg-slate-800 text-emerald-300 font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-2 border border-emerald-700/60 cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
+              title="Download a single combined multi-page PDF with all 11 official reports"
+            >
+              <FileDown className="h-4 w-4" />
+              <span>{isGeneratingAllPdf ? 'Bundling All PDF...' : 'Download All (PDF)'}</span>
             </button>
           </div>
         </div>
@@ -1924,18 +2057,34 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
 
           <button
             type="button"
-            onClick={() => setShowPrintModal(true)}
-            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase rounded-xl flex items-center space-x-1.5 transition shadow-sm cursor-pointer"
+            onClick={() => {
+              setPrintScope('single');
+              setShowPrintModal(true);
+            }}
+            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 transition shadow-sm cursor-pointer whitespace-nowrap shrink-0"
           >
             <Printer className="h-4 w-4" />
-            <span>Print Document</span>
+            <span>Print Selected</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setPrintScope('all');
+              setShowPrintModal(true);
+            }}
+            className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 transition shadow-sm cursor-pointer whitespace-nowrap shrink-0"
+            title="Print all 11 official reports in one master document"
+          >
+            <Layers className="h-4 w-4" />
+            <span>Print All ({ALL_PRINTABLE_REPORTS.length})</span>
           </button>
 
           <button
             type="button"
             onClick={handleDownloadPDF}
-            disabled={isGeneratingPdf}
-            className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 transition border border-slate-700 cursor-pointer disabled:opacity-50"
+            disabled={isGeneratingPdf || isGeneratingAllPdf}
+            className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 transition border border-slate-700 cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
           >
             <Download className="h-4 w-4" />
             <span>{isGeneratingPdf ? 'Generating PDF...' : 'Download PDF'}</span>
@@ -2787,9 +2936,9 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
         >
           <div className="bg-slate-900 border border-slate-700 max-w-7xl w-full h-[94vh] max-h-[96vh] flex flex-col shadow-2xl rounded-3xl overflow-hidden">
             {/* Modal Toolbar (hidden when printing) */}
-            <div className="flex-shrink-0 flex justify-between items-center p-4 bg-slate-950 border-b border-slate-800 no-print flex-wrap gap-3">
+            <div className="flex-shrink-0 flex justify-between items-center px-6 py-4 bg-slate-950 border-b border-slate-800 no-print flex-wrap gap-3">
               <div className="flex items-center space-x-3">
-                <div className="h-10 w-10 bg-slate-900 rounded-xl border border-slate-700 p-1 flex items-center justify-center">
+                <div className="h-10 w-10 bg-slate-900 rounded-xl border border-slate-700 p-1 flex items-center justify-center shrink-0">
                   <img 
                     src={OFFICIAL_LOGO_URL} 
                     alt="Logo"
@@ -2801,18 +2950,50 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                   />
                 </div>
                 <div>
-                  <h3 className="text-sm font-black text-white uppercase tracking-wider">Official Report Print Preview</h3>
-                  <p className="text-[11px] text-slate-400">Centered Official Letterhead • High-Contrast Layout • Certified Master Record</p>
+                  <h3 className="text-base font-bold text-white tracking-tight">
+                    {printScope === 'all' ? `Complete Official Reports Batch (${ALL_PRINTABLE_REPORTS.length} Reports)` : 'Official Report Print Preview'}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {printScope === 'all'
+                      ? `${selectedMonth} ${selectedYear} • All 11 Regulatory & Ledger Reports • Auto Page Breaks`
+                      : `Centered Official Letterhead • High-Contrast Layout • ${reportTitles[reportCategory].title}`}
+                  </p>
                 </div>
               </div>
 
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Print Scope Switcher */}
+                <div className="flex items-center bg-slate-900 border border-slate-700 p-0.5 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setPrintScope('single')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                      printScope === 'single'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Current Report
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPrintScope('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                      printScope === 'all'
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    All {ALL_PRINTABLE_REPORTS.length} Reports
+                  </button>
+                </div>
+
                 {/* Visual Preview Mode Switcher */}
-                <div className="flex items-center bg-slate-900 border border-slate-700 p-0.5 rounded-xl mr-1">
+                <div className="flex items-center bg-slate-900 border border-slate-700 p-0.5 rounded-xl">
                   <button
                     type="button"
                     onClick={() => setPreviewTheme('dark')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer whitespace-nowrap ${
                       previewTheme === 'dark'
                         ? 'bg-blue-600 text-white shadow-sm'
                         : 'text-slate-400 hover:text-white'
@@ -2825,7 +3006,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                   <button
                     type="button"
                     onClick={() => setPreviewTheme('paper')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer whitespace-nowrap ${
                       previewTheme === 'paper'
                         ? 'bg-slate-200 text-slate-950 shadow-sm'
                         : 'text-slate-400 hover:text-white'
@@ -2840,23 +3021,28 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                 <button
                   type="button"
                   onClick={() => window.print()}
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase rounded-xl flex items-center space-x-2 shadow-md cursor-pointer"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 shadow-md cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <Printer className="h-4 w-4" />
-                  <span>Print Document</span>
+                  <span>{printScope === 'all' ? `Print All (${ALL_PRINTABLE_REPORTS.length})` : 'Print Document'}</span>
                 </button>
                 <button
                   type="button"
-                  onClick={handleDownloadPDF}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 border border-slate-700 cursor-pointer"
+                  onClick={printScope === 'all' ? handleDownloadAllPDF : handleDownloadPDF}
+                  disabled={isGeneratingPdf || isGeneratingAllPdf}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 border border-slate-700 cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
                 >
                   <Download className="h-4 w-4" />
-                  <span>Download PDF</span>
+                  <span>
+                    {printScope === 'all'
+                      ? (isGeneratingAllPdf ? 'Bundling PDF...' : 'Download All (PDF)')
+                      : (isGeneratingPdf ? 'Generating...' : 'Download PDF')}
+                  </span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowPrintModal(false)}
-                  className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl transition cursor-pointer"
+                  className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl transition cursor-pointer shrink-0"
                   title="Close Preview (Esc)"
                 >
                   <X className="h-5 w-5" />
@@ -2923,12 +3109,14 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                     <h2 className={`text-base sm:text-lg font-black uppercase tracking-tight ${
                       previewTheme === 'dark' ? 'text-blue-400' : 'text-slate-950'
                     }`}>
-                      {reportTitles[reportCategory].title}
+                      {printScope === 'all'
+                        ? `CONSOLIDATED OFFICIAL REPORTS COMPENDIUM (${ALL_PRINTABLE_REPORTS.length} REPORTS)`
+                        : reportTitles[reportCategory].title}
                     </h2>
                     <p className={`text-xs font-semibold mt-0.5 ${
                       previewTheme === 'dark' ? 'text-amber-400' : 'text-slate-700'
                     }`}>
-                      Billing Period: {selectedMonth} {selectedYear} • Status: Certified Official Master Record • Date: {new Date().toLocaleDateString('en-US', { dateStyle: 'long' })}
+                      Billing Period: {selectedMonth} {selectedYear} • Zone: {selectedBarangay} • Classification: {selectedConsumerType} • Date: {new Date().toLocaleDateString('en-US', { dateStyle: 'long' })}
                     </p>
                   </div>
 
@@ -2987,10 +3175,43 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                   </div>
                 </div>
 
-                {/* 2. MAIN CONSOLIDATED / ITEMIZED DATA TABLE FOR PRINTING */}
-                <div className="overflow-x-auto w-full">
-                  {/* PRINT TABLE 1: DAILY READING ACCOMPLISHMENT */}
-                  {reportCategory === 'daily_accomplishment' ? (
+                {/* 2. MAIN CONSOLIDATED / ITEMIZED DATA TABLES FOR PRINTING (SINGLE OR ALL 11 REPORTS) */}
+                {(printScope === 'all' ? ALL_PRINTABLE_REPORTS : [reportCategory]).map((activeCat, repIdx) => (
+                  <div
+                    key={activeCat}
+                    className={`space-y-3 ${
+                      printScope === 'all' && repIdx > 0
+                        ? `print-break-before pt-6 border-t-2 ${previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-400'}`
+                        : ''
+                    }`}
+                  >
+                    {printScope === 'all' && (
+                      <div className={`print-avoid-break flex items-center justify-between border-b pb-2 ${
+                        previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-400'
+                      }`}>
+                        <div>
+                          <span className={`text-[10px] font-mono font-bold uppercase tracking-wider ${
+                            previewTheme === 'dark' ? 'text-emerald-400' : 'text-slate-600'
+                          }`}>
+                            Report {repIdx + 1} of {ALL_PRINTABLE_REPORTS.length} • {reportTitles[activeCat].subtitle}
+                          </span>
+                          <h3 className={`text-sm sm:text-base font-black uppercase tracking-tight ${
+                            previewTheme === 'dark' ? 'text-white' : 'text-slate-950'
+                          }`}>
+                            {reportTitles[activeCat].title}
+                          </h3>
+                        </div>
+                        <span className={`text-[10px] font-mono ${
+                          previewTheme === 'dark' ? 'text-slate-400' : 'text-slate-600'
+                        }`}>
+                          {selectedMonth} {selectedYear}
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="overflow-x-auto w-full">
+                      {/* PRINT TABLE 1: DAILY READING ACCOMPLISHMENT */}
+                      {activeCat === 'daily_accomplishment' ? (
                     <table className={`w-full table-fixed min-w-[850px] text-xs text-left border-collapse border ${
                       previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'
                     }`}>
@@ -3058,7 +3279,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                         </tr>
                       </tfoot>
                     </table>
-                  ) : reportCategory === 'unread_meter' ? (
+                  ) : activeCat === 'unread_meter' ? (
                     <table className={`w-full table-fixed min-w-[850px] text-xs text-left border-collapse border ${
                       previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'
                     }`}>
@@ -3121,7 +3342,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                         </tr>
                       </tfoot>
                     </table>
-                  ) : reportCategory === 'consumption_trend' ? (
+                  ) : activeCat === 'consumption_trend' ? (
                     <table className={`w-full table-fixed min-w-[850px] text-xs text-left border-collapse border ${
                       previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'
                     }`}>
@@ -3181,7 +3402,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                         </tr>
                       </tfoot>
                     </table>
-                  ) : reportCategory === 'billing_prep' ? (
+                  ) : activeCat === 'billing_prep' ? (
                     <table className={`w-full table-fixed min-w-[850px] text-xs text-left border-collapse border ${
                       previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'
                     }`}>
@@ -3247,7 +3468,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                         </tr>
                       </tfoot>
                     </table>
-                  ) : reportCategory === 'consumption' ? (
+                  ) : activeCat === 'consumption' ? (
                     <table className={`w-full table-fixed min-w-[780px] text-xs text-left border-collapse border ${
                       previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'
                     }`}>
@@ -3312,7 +3533,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                         </tr>
                       </tfoot>
                     </table>
-                  ) : reportCategory === 'collection' ? (
+                  ) : activeCat === 'collection' ? (
                     <table className={`w-full table-fixed min-w-[780px] text-xs text-left border-collapse border ${
                       previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'
                     }`}>
@@ -3375,59 +3596,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                         </tr>
                       </tfoot>
                     </table>
-                  ) : reportCategory === 'delinquency' ? (
-                    <table className={`w-full table-fixed min-w-[780px] text-xs text-left border-collapse border ${
-                      previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'
-                    }`}>
-                      <colgroup>
-                        <col style={{ width: '25%' }} />
-                        <col style={{ width: '15%' }} />
-                        <col style={{ width: '20%' }} />
-                        <col style={{ width: '20%' }} />
-                        <col style={{ width: '20%' }} />
-                      </colgroup>
-                      <thead className={`font-black uppercase text-[11px] border-b-2 ${
-                        previewTheme === 'dark'
-                          ? 'bg-slate-950 text-white border-slate-700'
-                          : 'bg-slate-200 text-slate-950 border-slate-700'
-                      }`}>
-                        <tr>
-                          <th className="px-2.5 py-2.5 border border-slate-700 truncate">Zone / Barangay</th>
-                          <th className="px-2.5 py-2.5 text-center border border-slate-700 truncate">Delinquent Accounts</th>
-                          <th className="px-2.5 py-2.5 text-right border border-slate-700 truncate">Current Unpaid (₱)</th>
-                          <th className="px-2.5 py-2.5 text-right border border-slate-700 truncate">Historical Arrears (₱)</th>
-                          <th className="px-2.5 py-2.5 text-right border border-slate-700 truncate">Total Outstanding AR (₱)</th>
-                        </tr>
-                      </thead>
-                      <tbody className={`divide-y ${previewTheme === 'dark' ? 'divide-slate-800 text-slate-200' : 'divide-slate-300 text-slate-900'}`}>
-                        {aggregatedData.barangayList.map((b, idx) => (
-                          <tr key={idx} className={idx % 2 === 0 
-                            ? (previewTheme === 'dark' ? 'bg-slate-900' : 'bg-white') 
-                            : (previewTheme === 'dark' ? 'bg-slate-950/50' : 'bg-slate-100')
-                          }>
-                            <td className="px-2.5 py-2 font-bold border border-slate-700 truncate">{b.barangay}</td>
-                            <td className="px-2.5 py-2 text-center font-mono font-bold text-rose-400 border border-slate-700 truncate">{b.delinquentCount}</td>
-                            <td className="px-2.5 py-2 text-right font-mono border border-slate-700 truncate">₱{b.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                            <td className="px-2.5 py-2 text-right font-mono border border-slate-700 truncate">₱{b.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                            <td className="px-2.5 py-2 text-right font-mono font-bold text-rose-400 border border-slate-700 truncate">₱{(b.totalPending + b.arrears).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot className={`font-black border-t-2 border-b-2 ${
-                        previewTheme === 'dark'
-                          ? 'bg-slate-950 text-white border-slate-600'
-                          : 'bg-slate-300 text-slate-950 border-slate-700'
-                      }`}>
-                        <tr>
-                          <td className="px-2.5 py-2.5 uppercase font-black text-amber-400 border border-slate-700 truncate">TOTAL DISTRICT ARREARS</td>
-                          <td className="px-2.5 py-2.5 text-center font-mono font-black text-rose-400 border border-slate-700 truncate">{aggregatedData.grandTotals.delinquentCount}</td>
-                          <td className="px-2.5 py-2.5 text-right font-mono font-black border border-slate-700 truncate">₱{aggregatedData.grandTotals.totalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                          <td className="px-2.5 py-2.5 text-right font-mono font-black border border-slate-700 truncate">₱{aggregatedData.grandTotals.arrears.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                          <td className="px-2.5 py-2.5 text-right font-mono font-black text-rose-400 border border-slate-700 truncate">₱{(aggregatedData.grandTotals.totalPending + aggregatedData.grandTotals.arrears).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  ) : reportCategory === 'summary_matrix' ? (
+                  ) : activeCat === 'summary_matrix' ? (
                     <table className={`w-full table-fixed min-w-[780px] text-xs text-left border-collapse border ${
                       previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'
                     }`}>
@@ -3490,7 +3659,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                         </tr>
                       </tfoot>
                     </table>
-                  ) : (reportCategory === 'billing' || reportCategory === 'pending_ar' || reportCategory === 'arrears_ledger' || reportCategory === 'abnormal_consumption' || reportCategory === 'barangay_performance' || reportCategory === 'reading_status') ? (
+                  ) : (activeCat === 'billing' || activeCat === 'pending_ar' || activeCat === 'arrears_ledger' || activeCat === 'abnormal_consumption' || activeCat === 'barangay_performance' || activeCat === 'reading_status') ? (
                     /* Itemized Consumer Account Ledger Report */
                     <table className={`w-full table-fixed min-w-[780px] text-xs text-left border-collapse border ${
                       previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'
@@ -3532,9 +3701,9 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                             });
                           });
 
-                          if (reportCategory === 'abnormal_consumption') {
+                          if (activeCat === 'abnormal_consumption') {
                             flatList = flatList.filter(a => a.isAbnormal);
-                          } else if (reportCategory === 'pending_ar' || reportCategory === 'arrears_ledger') {
+                          } else if (activeCat === 'pending_ar' || activeCat === 'arrears_ledger') {
                             flatList = flatList.filter(a => a.pendingAmount > 0 || a.paymentStatus !== 'paid');
                           }
 
@@ -3689,10 +3858,10 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                       </tfoot>
                     </table>
                   )}
-                </div>
+                    </div>
 
-                {/* 3. METER READER FIELD COVERAGE & SCHEDULE BREAKDOWN (Shown for master and meter reader reports) */}
-                {(reportCategory === 'consolidated_master' || reportCategory === 'meter_reader_perf') && (
+                    {/* 3. METER READER FIELD COVERAGE & SCHEDULE BREAKDOWN (Shown for master and meter reader reports) */}
+                    {(activeCat === 'consolidated_master' || activeCat === 'meter_reader_perf') && (
                   <div className="space-y-2 pt-2">
                     <div className={`flex items-center justify-between border-b-2 pb-1 ${
                       previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-800'
@@ -3770,9 +3939,11 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                     </div>
                   </div>
                 )}
+                  </div>
+                ))}
 
                 {/* 4. OFFICIAL DISTRICT CERTIFICATION & SIGNATURES */}
-                <div className={`grid grid-cols-3 gap-6 pt-6 border-t-2 text-xs ${
+                <div className={`print-avoid-break grid grid-cols-3 gap-6 pt-6 border-t-2 text-xs ${
                   previewTheme === 'dark' ? 'border-slate-700' : 'border-slate-900'
                 }`}>
                   <div className="space-y-4">

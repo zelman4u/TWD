@@ -4647,23 +4647,23 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   </button>
 
                   {showAdminBellDropdown && (
-                    <div className="fixed inset-x-3 top-16 sm:inset-x-auto sm:top-auto sm:absolute sm:right-0 sm:mt-2 sm:w-[410px] bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl z-[120] overflow-hidden text-slate-100">
-                      <div className="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
+                    <div className="fixed inset-x-3 top-16 sm:inset-x-auto sm:top-auto sm:absolute sm:right-0 sm:mt-2 sm:w-[430px] bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl z-[120] overflow-hidden text-slate-100">
+                      <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2 min-w-0">
                           <Bell className="h-4 w-4 text-sky-400 shrink-0" />
-                          <h4 className="text-xs font-bold text-white truncate">
-                            Installations &amp; Consumer Inquiries
+                          <h4 className="text-sm font-bold text-white truncate">
+                            Installations &amp; Inquiries
                           </h4>
                         </div>
                         {unreadAdminCount > 0 && (
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-[11px] font-mono tabular-nums font-bold text-rose-400">
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            <span className="text-xs font-mono tabular-nums font-semibold text-rose-400">
                               {unreadAdminCount} unread
                             </span>
                             <button
                               type="button"
                               onClick={handleMarkAllAdminNotificationsRead}
-                              className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] font-bold text-sky-300 hover:text-white transition cursor-pointer whitespace-nowrap"
+                              className="text-xs font-semibold text-sky-400 hover:text-sky-300 transition cursor-pointer whitespace-nowrap"
                               title="Mark all notifications as read"
                             >
                               Mark all read
@@ -4672,9 +4672,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         )}
                       </div>
 
-                      <div className="max-h-[65vh] sm:max-h-96 overflow-y-auto divide-y divide-slate-800/80">
+                      <div className="max-h-[65vh] sm:max-h-[420px] overflow-y-auto divide-y divide-slate-800/80">
                         {combinedAlerts.length === 0 ? (
-                          <div className="p-6 text-center text-xs text-slate-400">
+                          <div className="p-8 text-center text-sm text-slate-400">
                             No installation requests or consumer inquiries yet.
                           </div>
                         ) : (
@@ -4709,22 +4709,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                       openInstallationNotification();
                                     }
                                   }}
-                                  className={`w-full text-left px-3.5 py-3 hover:bg-slate-800/80 transition cursor-pointer space-y-1 group ${
-                                    isUnread ? 'bg-sky-950/35' : ''
+                                  className={`w-full text-left px-5 py-3.5 hover:bg-slate-800/70 transition cursor-pointer space-y-1.5 group ${
+                                    isUnread ? 'bg-sky-950/30' : ''
                                   }`}
                                 >
-                                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                                  <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
                                     <div className="flex items-center gap-1.5 min-w-0 truncate">
-                                      <span className="font-bold text-white truncate">
+                                      <span className="font-semibold text-slate-200 truncate">
                                         {req.consumerName}
                                       </span>
                                       <span aria-hidden="true" className="text-slate-600">·</span>
                                       <span className="font-mono tabular-nums font-semibold text-emerald-400 shrink-0">
-                                        {req.applicationNumber}
+                                        #{req.applicationNumber}
                                       </span>
                                     </div>
-                                    <div className="flex items-center gap-1.5 shrink-0">
-                                      <span className="font-mono tabular-nums text-[10px] text-slate-400">
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <span className="font-mono tabular-nums">
                                         {new Date(req.updatedAt || req.submissionDate).toLocaleDateString([], {
                                           month: 'short',
                                           day: 'numeric',
@@ -4744,7 +4744,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                                   : mockDb.getInstallationRequests()
                                               );
                                             }}
-                                            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[9px] font-bold text-sky-300 hover:text-white transition cursor-pointer whitespace-nowrap"
+                                            className="text-xs font-semibold text-sky-400 hover:text-sky-300 transition cursor-pointer whitespace-nowrap"
                                             title="Mark this notification as read"
                                           >
                                             Mark read
@@ -4754,27 +4754,27 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     </div>
                                   </div>
 
-                                  <div className="text-[11px] font-semibold text-sky-300 truncate">
+                                  <div className="text-[13px] font-bold text-white truncate">
                                     Meter Installation · {req.status}
                                     {req.status === 'Installed' && req.accountValidationStatus !== 'validated' ? ' (Validate & Issue IDs)' : ''}
                                   </div>
 
-                                  <p className="text-[11px] text-slate-300 line-clamp-2 leading-snug">
+                                  <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed">
                                     Brgy. {req.barangay} · Preferred/Scheduled: {formatInstallationDateDisplay(schedDate)}
                                     {req.consumerRemarks ? ` — "${req.consumerRemarks}"` : ''}
                                   </p>
 
-                                  <div className="flex items-center justify-between pt-0.5 text-[10px] text-slate-400">
+                                  <div className="flex items-center justify-between pt-0.5 text-xs text-slate-400">
                                     <span className="font-mono tabular-nums">{req.contactNumber}</span>
-                                    <span className="font-bold text-sky-400 group-hover:text-sky-300 inline-flex items-center gap-0.5">
+                                    <span className="font-semibold text-sky-400 group-hover:text-sky-300 inline-flex items-center gap-0.5">
                                       <span>
                                         {req.status === 'Pending Review'
-                                          ? 'Accept / Update Status'
+                                          ? 'Accept / Update'
                                           : req.status === 'Installed' && req.accountValidationStatus !== 'validated'
                                           ? 'Validate & Issue IDs'
                                           : 'Update Status'}
                                       </span>
-                                      <ChevronRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                                      <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
                                     </span>
                                   </div>
                                 </div>
@@ -4814,13 +4814,13 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     openReportNotification();
                                   }
                                 }}
-                                className={`w-full text-left px-3.5 py-3 hover:bg-slate-800/80 transition cursor-pointer space-y-1 group ${
+                                className={`w-full text-left px-5 py-3.5 hover:bg-slate-800/70 transition cursor-pointer space-y-1.5 group ${
                                   isUnread ? 'bg-blue-950/30' : ''
                                 }`}
                               >
-                                <div className="flex items-center justify-between gap-2 text-[11px]">
+                                <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
                                   <div className="flex items-center gap-1.5 min-w-0 truncate">
-                                    <span className="font-bold text-white truncate">
+                                    <span className="font-semibold text-slate-200 truncate">
                                       {rep.consumerName}
                                     </span>
                                     <span aria-hidden="true" className="text-slate-600">·</span>
@@ -4828,8 +4828,8 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                       #{rep.accountNumber}
                                     </span>
                                   </div>
-                                  <div className="flex items-center gap-1.5 shrink-0">
-                                    <span className="font-mono tabular-nums text-[10px] text-slate-400">
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <span className="font-mono tabular-nums">
                                       {new Date(rep.updatedAt || rep.createdAt).toLocaleDateString([], {
                                         month: 'short',
                                         day: 'numeric',
@@ -4849,7 +4849,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                                 : mockDb.getReports()
                                             );
                                           }}
-                                          className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[9px] font-bold text-sky-300 hover:text-white transition cursor-pointer whitespace-nowrap"
+                                          className="text-xs font-semibold text-sky-400 hover:text-sky-300 transition cursor-pointer whitespace-nowrap"
                                           title="Mark this notification as read"
                                         >
                                           Mark read
@@ -4859,7 +4859,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                   </div>
                                 </div>
 
-                                <div className="text-[11px] font-semibold text-sky-300 truncate">
+                                <div className="text-[13px] font-bold text-white truncate">
                                   {ref
                                     ? ref.meterStatus
                                       ? `Re: Water Meter (${formatMeterStatusLabel(ref.meterStatus)})${ref.meterNumber ? ` · #${ref.meterNumber}` : ''}`
@@ -4867,15 +4867,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                                     : rep.title}
                                 </div>
 
-                                <p className="text-[11px] text-slate-300 line-clamp-2 leading-snug">
+                                <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed">
                                   {cleanPreview}
                                 </p>
 
-                                <div className="flex items-center justify-between pt-0.5 text-[10px] text-slate-400">
-                                  <span className="font-mono tabular-nums">{rep.ticketNumber}</span>
-                                  <span className="font-bold text-blue-400 group-hover:text-blue-300 inline-flex items-center gap-0.5">
+                                <div className="flex items-center justify-between pt-0.5 text-xs text-slate-400">
+                                  <span className="font-mono tabular-nums">#{rep.ticketNumber}</span>
+                                  <span className="font-semibold text-blue-400 group-hover:text-blue-300 inline-flex items-center gap-0.5">
                                     <span>Read &amp; Reply</span>
-                                    <ChevronRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                                    <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
                                   </span>
                                 </div>
                               </div>
@@ -4884,7 +4884,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         )}
                       </div>
 
-                      <div className="p-2.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2 px-4">
+                      <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2">
                         <button
                           type="button"
                           onClick={() => {
@@ -4893,7 +4893,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             setMetersSubTab('installations');
                             mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
                           }}
-                          className="text-xs font-bold text-sky-400 hover:text-sky-300 hover:underline cursor-pointer whitespace-nowrap"
+                          className="text-xs font-semibold text-sky-400 hover:text-sky-300 hover:underline cursor-pointer whitespace-nowrap"
                         >
                           Installations ({installationRequests.length})
                         </button>
@@ -4905,7 +4905,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             setAnnouncementsSubTab('customer_service');
                             mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
                           }}
-                          className="text-xs font-bold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer whitespace-nowrap"
+                          className="text-xs font-semibold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer whitespace-nowrap"
                         >
                           Inquiries ({reports.length})
                         </button>
@@ -9232,21 +9232,28 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           {activeTab === 'bills' && (
             <div className="w-full min-w-0 space-y-6 animate-fade-in" id="bills-tab">
               {/* Security & Separation of Duties Audit Notice */}
-              <div className="bg-slate-900 border-l-4 border-amber-500 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-white">
-                <div className="flex items-start space-x-3">
-                  <ShieldCheck className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
-                  <div>
-                    <h4 className="text-xs font-black uppercase tracking-wider text-amber-400">Strict Audit & Immutable Records Notice</h4>
-                    <p className="text-[11px] text-slate-300 mt-0.5">
-                      Bills in this ledger are immutable financial records. No direct payment collecting or amount editing is allowed in this module. To collect payments, switch to the <button onClick={() => setActiveTab('payments')} className="underline font-bold text-emerald-400 hover:text-emerald-300 cursor-pointer">Process Payment (Cashier Counter)</button> module.
+              <div className="bg-slate-900 border border-amber-500/40 p-5 rounded-2xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-white">
+                <div className="flex items-start gap-3.5 min-w-0">
+                  <div className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 shrink-0 mt-0.5">
+                    <ShieldCheck className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <p className="text-xs font-semibold text-amber-300">Billing Audit Policy</p>
+                    <h4 className="text-sm sm:text-base font-bold text-white leading-snug">Strict Audit &amp; Immutable Records Notice</h4>
+                    <p className="text-[13px] text-slate-300 leading-relaxed">
+                      Bills in this ledger are immutable financial records. Direct payment collection or amount editing is disabled here. To collect payments, open the{' '}
+                      <button onClick={() => setActiveTab('payments')} className="underline font-semibold text-emerald-400 hover:text-emerald-300 cursor-pointer">
+                        Process Payment (Cashier Counter)
+                      </button>{' '}
+                      module.
                     </p>
                   </div>
                 </div>
                 <button
                   onClick={() => setActiveTab('payments')}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] uppercase tracking-wider rounded-xl transition shrink-0 flex items-center space-x-1.5 cursor-pointer shadow-sm"
+                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition shrink-0 flex items-center gap-2 cursor-pointer shadow-sm whitespace-nowrap"
                 >
-                  <CreditCard className="h-3.5 w-3.5" />
+                  <CreditCard className="h-4 w-4" />
                   <span>Go to Process Payment</span>
                 </button>
               </div>
@@ -12614,67 +12621,79 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           onClick={() => setExtensionModalConsumer(null)}
         >
           <div 
-            className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl max-w-md w-full p-6 sm:p-7 space-y-5 shadow-2xl"
+            className="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl max-w-xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[86vh] animate-scale-up"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center space-x-3 text-amber-400">
-              <div className="p-2.5 bg-amber-950/80 rounded-2xl border border-amber-800/80">
-                <Clock className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-base font-black text-white">Grant Disconnection Extension</h3>
-                <p className="text-xs text-slate-400 font-mono">Account #{extensionModalConsumer.accountNumber}</p>
-              </div>
-            </div>
-
-            <div className="p-3 bg-slate-950 rounded-2xl border border-slate-800 text-xs space-y-1">
-              <p><strong>Consumer Name:</strong> {extensionModalConsumer.name}</p>
-              <p><strong>Overdue Balance:</strong> <span className="font-mono font-bold text-rose-400">₱{(extensionModalConsumer.outstandingBalance || 0).toFixed(2)}</span></p>
-              <p><strong>Address:</strong> {extensionModalConsumer.address}, {extensionModalConsumer.barangay}</p>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-300 uppercase mb-1">
-                  Extension Days to Grant:
-                </label>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {[3, 5, 7, 10, 15].map(days => (
-                    <button
-                      key={`ext-days-${days}`}
-                      type="button"
-                      onClick={() => setExtensionModalDays(days)}
-                      className={`py-2 rounded-xl text-xs font-mono font-black transition cursor-pointer border ${
-                        extensionModalDays === days 
-                          ? 'bg-amber-600 text-white border-amber-500 shadow-xs' 
-                          : 'bg-slate-950 text-slate-300 hover:bg-slate-800 border-slate-800'
-                      }`}
-                    >
-                      {days}d
-                    </button>
-                  ))}
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-4 shrink-0">
+              <div className="flex items-start gap-3.5 min-w-0">
+                <div className="p-2.5 bg-amber-500/15 rounded-xl border border-amber-500/30 text-amber-400 shrink-0 mt-0.5">
+                  <Clock className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-xs font-mono tabular-nums text-amber-300 font-semibold">Account #{extensionModalConsumer.accountNumber}</p>
+                  <h3 className="text-base sm:text-lg font-bold text-white leading-snug">Grant Disconnection Extension</h3>
                 </div>
               </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-300 uppercase mb-1">
-                  Reason / Promissory Note:
-                </label>
-                <input
-                  type="text"
-                  value={extensionModalReason}
-                  onChange={(e) => setExtensionModalReason(e.target.value)}
-                  placeholder="e.g. Salary release scheduled on 15th"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-amber-500"
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={() => setExtensionModalConsumer(null)}
-                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
+                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                aria-label="Close extension dialog"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 overflow-y-auto space-y-4">
+              <div className="px-4 py-3 bg-slate-950/75 rounded-xl border border-slate-800 text-sm space-y-1.5">
+                <p className="text-slate-200"><span className="text-slate-400 font-medium">Consumer Name:</span> <strong className="text-white">{extensionModalConsumer.name}</strong></p>
+                <p className="text-slate-200"><span className="text-slate-400 font-medium">Overdue Balance:</span> <span className="font-mono tabular-nums font-bold text-rose-400">₱{(extensionModalConsumer.outstandingBalance || 0).toFixed(2)}</span></p>
+                <p className="text-slate-300 text-[13px] leading-relaxed"><span className="text-slate-400 font-medium">Address:</span> {extensionModalConsumer.address}, {extensionModalConsumer.barangay}</p>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-2">
+                    Extension Days to Grant
+                  </label>
+                  <div className="grid grid-cols-5 gap-2">
+                    {[3, 5, 7, 10, 15].map(days => (
+                      <button
+                        key={`ext-days-${days}`}
+                        type="button"
+                        onClick={() => setExtensionModalDays(days)}
+                        className={`py-2.5 rounded-xl text-xs font-mono tabular-nums font-bold transition cursor-pointer border ${
+                          extensionModalDays === days 
+                            ? 'bg-amber-600 text-white border-amber-500 shadow-xs' 
+                            : 'bg-slate-950 text-slate-300 hover:bg-slate-800 border-slate-800'
+                        }`}
+                      >
+                        {days}d
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Reason / Promissory Note
+                  </label>
+                  <input
+                    type="text"
+                    value={extensionModalReason}
+                    onChange={(e) => setExtensionModalReason(e.target.value)}
+                    placeholder="e.g. Salary release scheduled on 15th"
+                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder:text-slate-500 focus:outline-hidden focus:border-amber-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setExtensionModalConsumer(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl border border-slate-700 transition cursor-pointer whitespace-nowrap"
               >
                 Cancel
               </button>
@@ -12695,7 +12714,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   }
                   setExtensionModalConsumer(null);
                 }}
-                className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition cursor-pointer shadow-md"
+                className="px-5 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl transition cursor-pointer shadow-sm whitespace-nowrap"
               >
                 Grant Extension
               </button>
@@ -12711,34 +12730,46 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           onClick={() => setDisconnectModalConsumer(null)}
         >
           <div 
-            className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl max-w-md w-full p-6 sm:p-7 space-y-5 shadow-2xl"
+            className="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl max-w-xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[86vh] animate-scale-up"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center space-x-3 text-rose-400">
-              <div className="p-2.5 bg-rose-950/80 rounded-2xl border border-rose-800/80">
-                <ShieldAlert className="h-6 w-6" />
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-4 shrink-0">
+              <div className="flex items-start gap-3.5 min-w-0">
+                <div className="p-2.5 bg-rose-500/15 rounded-xl border border-rose-500/30 text-rose-400 shrink-0 mt-0.5">
+                  <ShieldAlert className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-xs font-mono tabular-nums text-rose-300 font-semibold">Account #{disconnectModalConsumer.accountNumber}</p>
+                  <h3 className="text-base sm:text-lg font-bold text-white leading-snug">Confirm Service Disconnection</h3>
+                </div>
               </div>
-              <div>
-                <h3 className="text-base font-black text-white">Confirm Service Disconnection</h3>
-                <p className="text-xs text-slate-400 font-mono">Account #{disconnectModalConsumer.accountNumber}</p>
-              </div>
-            </div>
-
-            <div className="p-3 bg-slate-950 rounded-2xl border border-slate-800 text-xs space-y-1">
-              <p><strong>Consumer Name:</strong> {disconnectModalConsumer.name}</p>
-              <p><strong>Meter Number:</strong> {disconnectModalConsumer.meterNumber}</p>
-              <p><strong>Delinquent Balance:</strong> <span className="font-mono font-bold text-rose-400">₱{(disconnectModalConsumer.outstandingBalance || 0).toFixed(2)}</span></p>
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed">
-              This will update the consumer status to <strong className="text-rose-400">Disconnected</strong> and mark the water meter <strong className="text-rose-400">inactive</strong>. The consumer may still log in to view past bills and pay. All existing payment and balance records remain strictly accountable to this consumer.
-            </p>
-
-            <div className="flex gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={() => setDisconnectModalConsumer(null)}
-                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
+                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                aria-label="Close disconnection dialog"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 overflow-y-auto space-y-4">
+              <div className="px-4 py-3 bg-slate-950/75 rounded-xl border border-slate-800 text-sm space-y-1.5">
+                <p className="text-slate-200"><span className="text-slate-400 font-medium">Consumer Name:</span> <strong className="text-white">{disconnectModalConsumer.name}</strong></p>
+                <p className="text-slate-200"><span className="text-slate-400 font-medium">Meter Number:</span> <span className="font-mono tabular-nums text-slate-100">{disconnectModalConsumer.meterNumber}</span></p>
+                <p className="text-slate-200"><span className="text-slate-400 font-medium">Delinquent Balance:</span> <span className="font-mono tabular-nums font-bold text-rose-400">₱{(disconnectModalConsumer.outstandingBalance || 0).toFixed(2)}</span></p>
+              </div>
+
+              <p className="text-sm text-slate-200 leading-[1.6]">
+                This will update the consumer status to <strong className="text-rose-400">Disconnected</strong> and mark the water meter <strong className="text-rose-400">inactive</strong>. The consumer may still log in to view past bills and settle balances. All existing payment and balance records remain strictly accountable to this consumer.
+              </p>
+            </div>
+
+            <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setDisconnectModalConsumer(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl border border-slate-700 transition cursor-pointer whitespace-nowrap"
               >
                 Cancel
               </button>
@@ -12758,7 +12789,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   }
                   setDisconnectModalConsumer(null);
                 }}
-                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition cursor-pointer shadow-md"
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl transition cursor-pointer shadow-sm whitespace-nowrap"
               >
                 Confirm Disconnect
               </button>
@@ -12774,98 +12805,110 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           onClick={() => setAssumeModalConsumer(null)}
         >
           <div 
-            className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl max-w-lg w-full p-6 sm:p-7 space-y-5 shadow-2xl"
+            className="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl max-w-xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[86vh] animate-scale-up"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center space-x-3 text-indigo-400">
-              <div className="p-2.5 bg-indigo-950/80 rounded-2xl border border-indigo-800/80">
-                <UserCheck className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-base font-black text-white">Assume Inactive Water Connection</h3>
-                <p className="text-xs text-slate-400 font-mono">Transfer Line #{assumeModalConsumer.accountNumber} (6+ Months Inactive)</p>
-              </div>
-            </div>
-
-            <div className="p-3 bg-slate-950 rounded-2xl border border-slate-800 text-xs space-y-1">
-              <p><strong>Previous Registered Owner:</strong> <span className="text-slate-300 font-bold">{assumeModalConsumer.name}</span></p>
-              <p><strong>Physical Meter Tag:</strong> <span className="font-mono text-sky-400">{assumeModalConsumer.meterNumber}</span></p>
-              <p><strong>Historical Accountability:</strong> <span className="text-emerald-400">Past billing & payments remain accountable in previous owner ledger.</span></p>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
-                  New Registered Consumer Full Name: *
-                </label>
-                <input
-                  type="text"
-                  value={assumeFormName}
-                  onChange={(e) => setAssumeFormName(e.target.value)}
-                  placeholder="e.g. Maria Santos Del Rosario"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500 font-bold"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
-                    Contact Number:
-                  </label>
-                  <input
-                    type="text"
-                    value={assumeFormPhone}
-                    onChange={(e) => setAssumeFormPhone(e.target.value)}
-                    placeholder="0917-xxx-xxxx"
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500 font-mono"
-                  />
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-4 shrink-0">
+              <div className="flex items-start gap-3.5 min-w-0">
+                <div className="p-2.5 bg-indigo-500/15 rounded-xl border border-indigo-500/30 text-indigo-400 shrink-0 mt-0.5">
+                  <UserCheck className="h-5 w-5" />
                 </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
-                    Email Address:
-                  </label>
-                  <input
-                    type="email"
-                    value={assumeFormEmail}
-                    onChange={(e) => setAssumeFormEmail(e.target.value)}
-                    placeholder="consumer@email.com"
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500 font-mono"
-                  />
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-xs font-mono tabular-nums text-indigo-300 font-semibold">Transfer Line #{assumeModalConsumer.accountNumber} · 6+ Months Inactive</p>
+                  <h3 className="text-base sm:text-lg font-bold text-white leading-snug">Assume Inactive Water Connection</h3>
                 </div>
               </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
-                  Service Address / Sitio Zone:
-                </label>
-                <input
-                  type="text"
-                  value={assumeFormAddress}
-                  onChange={(e) => setAssumeFormAddress(e.target.value)}
-                  placeholder="Sitio Zone, Barangay"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
-                  Updated Account Number (Optional):
-                </label>
-                <input
-                  type="text"
-                  value={assumeFormNewAccount}
-                  onChange={(e) => setAssumeFormNewAccount(e.target.value)}
-                  placeholder="Leave as is or enter new account #"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-hidden focus:border-indigo-500 font-mono"
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={() => setAssumeModalConsumer(null)}
-                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
+                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                aria-label="Close assume account dialog"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 overflow-y-auto space-y-4">
+              <div className="px-4 py-3 bg-slate-950/75 rounded-xl border border-slate-800 text-sm space-y-1.5">
+                <p className="text-slate-200"><span className="text-slate-400 font-medium">Previous Owner:</span> <strong className="text-white">{assumeModalConsumer.name}</strong></p>
+                <p className="text-slate-200"><span className="text-slate-400 font-medium">Physical Meter Tag:</span> <span className="font-mono tabular-nums text-sky-400">{assumeModalConsumer.meterNumber}</span></p>
+                <p className="text-[13px] text-emerald-300 leading-relaxed"><span className="text-slate-400 font-medium">Accountability:</span> Past billing &amp; payments remain strictly in the previous owner&apos;s ledger.</p>
+              </div>
+
+              <div className="space-y-3.5 text-sm">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    New Registered Consumer Full Name <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={assumeFormName}
+                    onChange={(e) => setAssumeFormName(e.target.value)}
+                    placeholder="e.g. Maria Santos Del Rosario"
+                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-hidden focus:border-indigo-500 font-semibold"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                      Contact Number
+                    </label>
+                    <input
+                      type="text"
+                      value={assumeFormPhone}
+                      onChange={(e) => setAssumeFormPhone(e.target.value)}
+                      placeholder="0917-xxx-xxxx"
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-hidden focus:border-indigo-500 font-mono tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                      Email Address
+                    </label>
+                    <input
+                      type="email"
+                      value={assumeFormEmail}
+                      onChange={(e) => setAssumeFormEmail(e.target.value)}
+                      placeholder="consumer@email.com"
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-hidden focus:border-indigo-500 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Service Address / Sitio Zone
+                  </label>
+                  <input
+                    type="text"
+                    value={assumeFormAddress}
+                    onChange={(e) => setAssumeFormAddress(e.target.value)}
+                    placeholder="Sitio Zone, Barangay"
+                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-hidden focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Updated Account Number (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={assumeFormNewAccount}
+                    onChange={(e) => setAssumeFormNewAccount(e.target.value)}
+                    placeholder="Leave as is or enter new account #"
+                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-hidden focus:border-indigo-500 font-mono tabular-nums"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setAssumeModalConsumer(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl border border-slate-700 transition cursor-pointer whitespace-nowrap"
               >
                 Cancel
               </button>
@@ -12895,7 +12938,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   }
                   setAssumeModalConsumer(null);
                 }}
-                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition cursor-pointer shadow-md"
+                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition cursor-pointer shadow-sm whitespace-nowrap"
               >
                 Approve Assumption
               </button>
@@ -13326,76 +13369,86 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
       {/* EDIT ANNOUNCEMENT MODAL */}
       {editingAnnouncementModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-white shadow-2xl space-y-6 animate-fade-in">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-              <div>
-                <h3 className="text-base font-extrabold text-white">Edit Advisory Bulletin</h3>
-                <p className="text-xs text-slate-400">Update public announcement information</p>
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setEditingAnnouncementModal(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full text-white shadow-2xl overflow-hidden flex flex-col max-h-[86vh] animate-scale-up"
+          >
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
+              <div className="space-y-0.5">
+                <p className="text-xs font-semibold text-blue-400">District Advisory</p>
+                <h3 className="text-base sm:text-lg font-bold text-white leading-snug">Edit Advisory Bulletin</h3>
               </div>
               <button
+                type="button"
                 onClick={() => setEditingAnnouncementModal(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
+                aria-label="Close advisory editor"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
-            <form onSubmit={handleUpdateAnnouncement} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Title</label>
-                <input
-                  type="text"
-                  required
-                  value={editingAnnouncementModal.title}
-                  onChange={(e) => setEditingAnnouncementModal({ ...editingAnnouncementModal, title: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+            <form onSubmit={handleUpdateAnnouncement} className="flex flex-col flex-1 min-h-0">
+              <div className="px-6 py-5 overflow-y-auto space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Category</label>
-                  <select
-                    value={editingAnnouncementModal.category}
-                    onChange={(e: any) => setEditingAnnouncementModal({ ...editingAnnouncementModal, category: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
-                  >
-                    <option value="disruption">Service Disruption</option>
-                    <option value="maintenance">Preventive Maintenance</option>
-                    <option value="event">Community Event</option>
-                    <option value="info">General Info</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Posted By</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">Title</label>
                   <input
                     type="text"
-                    value={editingAnnouncementModal.postedBy}
-                    onChange={(e) => setEditingAnnouncementModal({ ...editingAnnouncementModal, postedBy: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
+                    required
+                    value={editingAnnouncementModal.title}
+                    onChange={(e) => setEditingAnnouncementModal({ ...editingAnnouncementModal, title: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none"
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">Category</label>
+                    <select
+                      value={editingAnnouncementModal.category}
+                      onChange={(e: any) => setEditingAnnouncementModal({ ...editingAnnouncementModal, category: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none cursor-pointer"
+                    >
+                      <option value="disruption">Service Disruption</option>
+                      <option value="maintenance">Preventive Maintenance</option>
+                      <option value="event">Community Event</option>
+                      <option value="info">General Info</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">Posted By</label>
+                    <input
+                      type="text"
+                      value={editingAnnouncementModal.postedBy}
+                      onChange={(e) => setEditingAnnouncementModal({ ...editingAnnouncementModal, postedBy: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">Content</label>
+                  <textarea
+                    rows={5}
+                    required
+                    value={editingAnnouncementModal.content}
+                    onChange={(e) => setEditingAnnouncementModal({ ...editingAnnouncementModal, content: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-xl px-3.5 py-3 text-sm leading-relaxed text-white focus:outline-none resize-none"
                   />
                 </div>
               </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Content</label>
-                <textarea
-                  rows={4}
-                  required
-                  value={editingAnnouncementModal.content}
-                  onChange={(e) => setEditingAnnouncementModal({ ...editingAnnouncementModal, content: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white"
-                />
-              </div>
-              <div className="flex justify-end space-x-3 pt-4 border-t border-slate-800">
+              <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => setEditingAnnouncementModal(null)}
-                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl"
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl border border-slate-700 transition cursor-pointer whitespace-nowrap"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl uppercase tracking-wider"
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition cursor-pointer shadow-sm whitespace-nowrap"
                 >
                   Save Changes
                 </button>
@@ -13610,37 +13663,57 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       {/* GLOBAL SANDBOX-SAFE CONFIRMATION MODAL                        */}
       {/* ------------------------------------------------------------- */}
       {confirmDialog.isOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-start space-x-3.5">
-              <div className={`p-3 rounded-2xl shrink-0 ${
-                confirmDialog.confirmVariant === 'success' 
-                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                  : confirmDialog.confirmVariant === 'primary'
-                  ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
-                  : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-              }`}>
-                {confirmDialog.confirmVariant === 'success' ? (
-                  <CheckCheck className="h-6 w-6" />
-                ) : confirmDialog.confirmVariant === 'primary' ? (
-                  <CheckCircle className="h-6 w-6" />
-                ) : (
-                  <AlertTriangle className="h-6 w-6" />
-                )}
+        <div
+          className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[86vh] animate-scale-up"
+          >
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-4 shrink-0">
+              <div className="flex items-start gap-3.5 min-w-0">
+                <div className={`p-2.5 rounded-xl border shrink-0 mt-0.5 ${
+                  confirmDialog.confirmVariant === 'success' 
+                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                    : confirmDialog.confirmVariant === 'primary'
+                    ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+                    : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                }`}>
+                  {confirmDialog.confirmVariant === 'success' ? (
+                    <CheckCheck className="h-5 w-5" />
+                  ) : confirmDialog.confirmVariant === 'primary' ? (
+                    <CheckCircle className="h-5 w-5" />
+                  ) : (
+                    <AlertTriangle className="h-5 w-5" />
+                  )}
+                </div>
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-xs font-semibold text-slate-400">Action Confirmation</p>
+                  <h3 className="text-base sm:text-lg font-bold text-white leading-snug">{confirmDialog.title}</h3>
+                </div>
               </div>
-              <div className="space-y-1">
-                <h3 className="text-base font-black text-white">{confirmDialog.title}</h3>
-                <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-line">
-                  {confirmDialog.message}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-800/80">
               <button
                 type="button"
                 onClick={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
+                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                aria-label="Close confirmation dialog"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 overflow-y-auto">
+              <p className="text-sm sm:text-[15px] text-slate-200 leading-[1.6] whitespace-pre-line">
+                {confirmDialog.message}
+              </p>
+            </div>
+
+            <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl transition cursor-pointer border border-slate-700 whitespace-nowrap"
               >
                 Cancel
               </button>
@@ -13651,7 +13724,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   setConfirmDialog(prev => ({ ...prev, isOpen: false }));
                   action();
                 }}
-                className={`px-5 py-2.5 text-white font-black text-xs rounded-xl uppercase tracking-wider transition shadow-sm cursor-pointer ${
+                className={`px-5 py-2 text-white font-bold text-xs rounded-xl transition shadow-sm cursor-pointer whitespace-nowrap ${
                   confirmDialog.confirmVariant === 'success'
                     ? 'bg-emerald-600 hover:bg-emerald-500'
                     : confirmDialog.confirmVariant === 'primary'
@@ -13670,69 +13743,78 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       {/* IN-APP WATER BILL CANCELLATION MODAL                           */}
       {/* ------------------------------------------------------------- */}
       {cancelBillModal.isOpen && cancelBillModal.bill && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center space-x-3">
-                <div className="p-3 bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded-2xl">
-                  <XCircle className="h-6 w-6" />
+        <div
+          className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setCancelBillModal({ isOpen: false, bill: null, reason: '' })}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[86vh] animate-scale-up"
+          >
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-4 shrink-0">
+              <div className="flex items-start gap-3.5 min-w-0">
+                <div className="p-2.5 bg-rose-500/15 text-rose-400 border border-rose-500/30 rounded-xl shrink-0 mt-0.5">
+                  <XCircle className="h-5 w-5" />
                 </div>
-                <div>
-                  <h3 className="text-base font-black text-white">Cancel Water Billing Statement</h3>
-                  <p className="text-xs text-slate-400">Statement ID #{cancelBillModal.bill.id}</p>
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-xs font-mono tabular-nums text-rose-300 font-semibold">Statement ID #{cancelBillModal.bill.id}</p>
+                  <h3 className="text-base sm:text-lg font-bold text-white leading-snug">Cancel Water Billing Statement</h3>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setCancelBillModal({ isOpen: false, bill: null, reason: '' })}
-                className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer"
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
+                aria-label="Close cancel bill dialog"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            {/* Bill Summary Details */}
-            <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-4 grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider block">Consumer Name</span>
-                <span className="font-black text-white">{cancelBillModal.bill.consumerName}</span>
+            <div className="px-6 py-5 overflow-y-auto space-y-4">
+              {/* Bill Summary Details */}
+              <div className="bg-slate-950/75 border border-slate-800 rounded-xl px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                <div>
+                  <span className="text-slate-400 text-xs font-medium block">Consumer Name</span>
+                  <span className="font-semibold text-white">{cancelBillModal.bill.consumerName}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-xs font-medium block">Account Number</span>
+                  <span className="font-mono tabular-nums font-semibold text-sky-400">#{cancelBillModal.bill.accountNumber}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-xs font-medium block">Billing Period</span>
+                  <span className="font-semibold text-slate-200">{cancelBillModal.bill.billingPeriod || 'N/A'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 text-xs font-medium block">Billed Amount</span>
+                  <span className="font-mono tabular-nums font-bold text-rose-400">₱{(cancelBillModal.bill.totalAmount || calculateCostOf(cancelBillModal.bill.consumption, cancelBillModal.bill.classification)).toFixed(2)}</span>
+                </div>
               </div>
-              <div>
-                <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider block">Account Number</span>
-                <span className="font-mono font-bold text-sky-400">#{cancelBillModal.bill.accountNumber}</span>
-              </div>
-              <div>
-                <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider block">Billing Period</span>
-                <span className="font-bold text-slate-200">{cancelBillModal.bill.billingPeriod || 'N/A'}</span>
-              </div>
-              <div>
-                <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider block">Billed Amount</span>
-                <span className="font-mono font-black text-rose-400">₱{(cancelBillModal.bill.totalAmount || calculateCostOf(cancelBillModal.bill.consumption, cancelBillModal.bill.classification)).toFixed(2)}</span>
+
+              {/* Reason Field */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-300">
+                  Reason for Cancellation <span className="text-rose-400">*</span>
+                </label>
+                <textarea
+                  value={cancelBillModal.reason}
+                  onChange={(e) => setCancelBillModal(prev => ({ ...prev, reason: e.target.value }))}
+                  placeholder="e.g. Erroneous meter reading entered, administrative rate adjustment, or leak disputed..."
+                  rows={3}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm leading-relaxed text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 resize-none"
+                />
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  This reason will be recorded permanently in the official utility audit trail.
+                </p>
               </div>
             </div>
 
-            {/* Reason Field */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                Reason for Cancellation <span className="text-rose-400">*</span>
-              </label>
-              <textarea
-                value={cancelBillModal.reason}
-                onChange={(e) => setCancelBillModal(prev => ({ ...prev, reason: e.target.value }))}
-                placeholder="e.g. Erroneous meter reading entered, administrative rate adjustment, or leak disputed..."
-                rows={3}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-rose-500/40 focus:border-rose-500"
-              />
-              <p className="text-[11px] text-slate-500">
-                This reason will be recorded permanently in the official utility audit trail.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-800">
+            <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2.5 shrink-0">
               <button
                 type="button"
                 onClick={() => setCancelBillModal({ isOpen: false, bill: null, reason: '' })}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-700"
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl transition cursor-pointer border border-slate-700 whitespace-nowrap"
               >
                 Keep Bill / Close
               </button>
@@ -13762,7 +13844,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   toast.success('Bill Cancelled', `Bill #${bill.id} has been marked as CANCELLED.`);
                   setCancelBillModal({ isOpen: false, bill: null, reason: '' });
                 }}
-                className={`px-5 py-2.5 font-black text-xs rounded-xl uppercase tracking-wider transition shadow-sm cursor-pointer ${
+                className={`px-5 py-2 font-bold text-xs rounded-xl transition shadow-sm cursor-pointer whitespace-nowrap ${
                   cancelBillModal.reason.trim()
                     ? 'bg-rose-600 hover:bg-rose-500 text-white'
                     : 'bg-rose-950 text-rose-400 cursor-not-allowed opacity-50'
@@ -13814,33 +13896,35 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             onClick={() => setCreateBillModal(prev => ({ ...prev, isOpen: false }))}
           >
             <div
-              className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-5 text-slate-100 max-h-[92vh] overflow-y-auto"
+              className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full shadow-2xl text-slate-100 overflow-hidden flex flex-col max-h-[86vh] animate-scale-up"
               onClick={e => e.stopPropagation()}
             >
-              <div className="flex items-start justify-between border-b border-slate-800 pb-4">
-                <div className="flex items-center space-x-3">
-                  <div className="p-2.5 bg-blue-600/20 border border-blue-500/30 rounded-2xl text-blue-400">
+              <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-4 shrink-0">
+                <div className="flex items-start gap-3.5 min-w-0">
+                  <div className="p-2.5 bg-blue-500/15 border border-blue-500/30 rounded-xl text-blue-400 shrink-0 mt-0.5">
                     <ReceiptText className="h-5 w-5" />
                   </div>
-                  <div>
-                    <h3 className="text-base font-black text-white">Create & Issue Official Consumer Billing</h3>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Issuing a billing unlocks the Water Billing Notice & Receipt on the consumer's dashboard.
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="text-xs font-semibold text-blue-400">Official Billing Issuance</p>
+                    <h3 className="text-base sm:text-lg font-bold text-white leading-snug">Create &amp; Issue Official Consumer Billing</h3>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      Unlocks the Water Billing Notice &amp; Receipt on the consumer&apos;s dashboard.
                     </p>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setCreateBillModal(prev => ({ ...prev, isOpen: false }))}
-                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+                  className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                  aria-label="Close create billing dialog"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
 
-              <div className="space-y-4 text-xs">
+              <div className="px-6 py-5 overflow-y-auto space-y-4 text-xs">
                 <div>
-                  <label className="block font-bold text-slate-300 uppercase tracking-wider text-[11px] mb-1.5">
+                  <label className="block font-semibold text-slate-300 text-xs mb-1.5">
                     Consumer Account <span className="text-rose-400">*</span>
                   </label>
                   <select
@@ -13865,7 +13949,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                         currentReading: formatOdometerReading(c),
                       }));
                     }}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-bold text-white focus:outline-none focus:border-blue-500 cursor-pointer"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-blue-500 cursor-pointer"
                   >
                     {activeConsumers.map(c => (
                       <option key={`bill-opt-${c.accountNumber}`} value={c.accountNumber}>
@@ -13877,17 +13961,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">Billing Period</label>
+                    <label className="block font-semibold text-slate-300 text-xs mb-1.5">Billing Period</label>
                     <input
                       type="text"
                       value={createBillModal.billingPeriod}
                       onChange={e => setCreateBillModal(prev => ({ ...prev, billingPeriod: e.target.value }))}
                       placeholder="e.g. October 2026"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-blue-500"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-blue-500"
                     />
                   </div>
                   <div>
-                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">Reading Date</label>
+                    <label className="block font-semibold text-slate-300 text-xs mb-1.5">Reading Date</label>
                     <input
                       type="date"
                       value={createBillModal.readingDate}
@@ -13898,24 +13982,24 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           dueDate: computeDefaultDueDate(e.target.value),
                         }))
                       }
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-blue-500"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-blue-500 font-mono tabular-nums"
                     />
                   </div>
                   <div>
-                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">Due Date</label>
+                    <label className="block font-semibold text-slate-300 text-xs mb-1.5">Due Date</label>
                     <input
                       type="text"
                       value={createBillModal.dueDate}
                       onChange={e => setCreateBillModal(prev => ({ ...prev, dueDate: e.target.value }))}
                       placeholder="e.g. November 11, 2026"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-blue-500"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-white focus:outline-none focus:border-blue-500"
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">
+                    <label className="block font-semibold text-slate-300 text-xs mb-1.5">
                       Previous Dial (00000–99999)
                     </label>
                     <input
@@ -13937,11 +14021,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           previousReading: padOdometerInput(prev.previousReading),
                         }))
                       }
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm font-mono tabular-nums tracking-widest font-black text-white focus:outline-none focus:border-blue-500"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm font-mono tabular-nums tracking-widest font-bold text-white focus:outline-none focus:border-blue-500"
                     />
                   </div>
                   <div>
-                    <label className="block font-bold text-slate-400 uppercase tracking-wider text-[10px] mb-1">
+                    <label className="block font-semibold text-slate-300 text-xs mb-1.5">
                       Present Dial (00000–99999)
                     </label>
                     <input
@@ -13963,7 +14047,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           currentReading: padOdometerInput(prev.currentReading),
                         }))
                       }
-                      className={`w-full bg-slate-950 border rounded-xl px-3 py-2.5 text-sm font-mono tabular-nums tracking-widest font-black focus:outline-none ${
+                      className={`w-full bg-slate-950 border rounded-xl px-3.5 py-2.5 text-sm font-mono tabular-nums tracking-widest font-bold focus:outline-none ${
                         implausibleWrap
                           ? 'border-rose-500 text-rose-300 focus:border-rose-400'
                           : 'border-slate-800 text-sky-400 focus:border-blue-500'
@@ -13973,7 +14057,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 </div>
 
                 {odoPreview.rolledOver && !implausibleWrap && (
-                  <div className="bg-sky-950/50 border border-sky-700/60 rounded-xl px-3.5 py-2 text-[11px] text-sky-200 font-medium flex items-center justify-between gap-2">
+                  <div className="bg-sky-950/50 border border-sky-700/60 rounded-xl px-4 py-2.5 text-xs text-sky-200 font-medium flex items-center justify-between gap-2">
                     <span>5-Digit Odometer Rollover Detected (99999 → 00000)</span>
                     <span className="font-mono tabular-nums font-bold text-sky-300">
                       {formatOdometerReading(prevIdx)} → {formatOdometerReading(currIdx)} (+{odoPreview.consumption} m³)
@@ -13982,61 +14066,61 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 )}
 
                 {implausibleWrap && (
-                  <div className="bg-rose-950/60 border border-rose-700/60 rounded-xl px-3.5 py-2 text-[11px] text-rose-200 font-medium">
+                  <div className="bg-rose-950/60 border border-rose-700/60 rounded-xl px-4 py-2.5 text-xs text-rose-200 font-medium leading-relaxed">
                     Present dial ({formatOdometerReading(currIdx)}) is lower than Previous dial ({formatOdometerReading(prevIdx)}). Enter a reading ≥ {formatOdometerReading(prevIdx)} unless the 5-digit odometer wrapped past 99999 → 00000.
                   </div>
                 )}
 
                 {/* Live 3-Pillar Preview */}
-                <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
+                <div className="bg-slate-950/75 border border-slate-800 rounded-xl p-4 space-y-2 text-[13px]">
                   <div className="flex justify-between text-slate-400">
-                    <span>Odometer Dial Span:</span>
-                    <span className="font-mono tabular-nums font-bold text-slate-200">
+                    <span>Odometer Dial Span</span>
+                    <span className="font-mono tabular-nums font-semibold text-slate-200">
                       {formatOdometerReading(prevIdx)} → {formatOdometerReading(currIdx)}
                     </span>
                   </div>
                   <div className="flex justify-between text-slate-400">
-                    <span>Net Consumption ({cls} @ ₱{previewRatePerM3.toFixed(2)}/m³):</span>
-                    <span className="font-mono font-black text-cyan-300">{previewUsage} m³</span>
+                    <span>Net Consumption ({cls} @ ₱{previewRatePerM3.toFixed(2)}/m³)</span>
+                    <span className="font-mono tabular-nums font-bold text-cyan-300">{previewUsage} m³</span>
                   </div>
                   <div className="flex justify-between text-slate-300">
-                    <span>Basic Water Charge (Bill Amt.):</span>
-                    <span className="font-mono font-bold text-white">₱{previewWaterAmt.toFixed(2)}</span>
+                    <span>Basic Water Charge (Bill Amt.)</span>
+                    <span className="font-mono tabular-nums font-semibold text-white">₱{previewWaterAmt.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-slate-300">
-                    <span>2% Local Franchise Tax:</span>
-                    <span className="font-mono font-bold text-white">₱{previewTax.toFixed(2)}</span>
+                    <span>2% Local Franchise Tax</span>
+                    <span className="font-mono tabular-nums font-semibold text-white">₱{previewTax.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-slate-300">
-                    <span>Unpaid Arrears:</span>
-                    <span className="font-mono font-bold text-amber-300">₱{previewArrears.toFixed(2)}</span>
+                    <span>Unpaid Arrears</span>
+                    <span className="font-mono tabular-nums font-semibold text-amber-300">₱{previewArrears.toFixed(2)}</span>
                   </div>
-                  <div className="pt-2 border-t border-slate-800 flex justify-between items-baseline">
-                    <span className="font-black text-white uppercase">Total Amount Due:</span>
-                    <span className="font-mono font-black text-lg text-emerald-400">₱{previewTotal.toFixed(2)}</span>
+                  <div className="pt-2.5 border-t border-slate-800 flex justify-between items-baseline">
+                    <span className="font-bold text-white">Total Amount Due</span>
+                    <span className="font-mono tabular-nums font-bold text-lg text-emerald-400">₱{previewTotal.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between text-[11px] text-rose-300 pt-1">
-                    <span>Amount After Due Date (+10% Penalty: +₱{previewPenalty.toFixed(2)}):</span>
-                    <span className="font-mono font-bold">₱{previewAfterDue.toFixed(2)}</span>
+                  <div className="flex justify-between text-xs text-rose-300 pt-0.5">
+                    <span>Amount After Due Date (+10% Penalty: +₱{previewPenalty.toFixed(2)})</span>
+                    <span className="font-mono tabular-nums font-bold">₱{previewAfterDue.toFixed(2)}</span>
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-800">
+              <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => setCreateBillModal(prev => ({ ...prev, isOpen: false }))}
-                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs rounded-xl transition cursor-pointer whitespace-nowrap"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={handleCreateAndIssueBilling}
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition shadow-md flex items-center space-x-2 cursor-pointer"
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition shadow-sm flex items-center gap-2 cursor-pointer whitespace-nowrap"
                 >
                   <ReceiptText className="h-4 w-4" />
-                  <span>Generate & Issue Billing</span>
+                  <span>Generate &amp; Issue Billing</span>
                 </button>
               </div>
             </div>
@@ -14609,41 +14693,42 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       {/* INTERACTIVE ROW-CLICK DETAIL MODAL 4: DISTRICT ADVISORY COMPLETE DETAILS */}
       {viewingAnnouncementModal && (
         <div
-          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
           onClick={() => setViewingAnnouncementModal(null)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-lg bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden text-slate-900"
+            className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[86vh] text-slate-100 animate-scale-up"
           >
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2 text-xs text-slate-500 font-semibold">
-                  <span className="text-blue-700 font-bold uppercase">{viewingAnnouncementModal.category}</span>
-                  <span>·</span>
-                  <span>{viewingAnnouncementModal.date}</span>
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-4 shrink-0">
+              <div className="min-w-0 space-y-1">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                  <span className="text-blue-400 font-semibold capitalize">{viewingAnnouncementModal.category}</span>
+                  <span aria-hidden="true" className="text-slate-600">·</span>
+                  <span className="font-mono tabular-nums">{viewingAnnouncementModal.date}</span>
                 </div>
-                <h3 className="text-base font-black text-slate-900 mt-1">{viewingAnnouncementModal.title}</h3>
+                <h3 className="text-base sm:text-lg font-bold text-white leading-snug break-words">{viewingAnnouncementModal.title}</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setViewingAnnouncementModal(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition cursor-pointer shrink-0"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
+                aria-label="Close advisory details"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
-              <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">
+            <div className="px-6 py-5 overflow-y-auto space-y-4">
+              <p className="text-sm sm:text-[15px] text-slate-100 leading-[1.6] whitespace-pre-line">
                 {viewingAnnouncementModal.content}
               </p>
-              <div className="pt-3 border-t border-slate-100 text-xs text-slate-500 flex items-center justify-between">
-                <span>Posted by: <strong className="text-slate-700">{viewingAnnouncementModal.postedBy}</strong></span>
+              <div className="pt-3 border-t border-slate-800 text-xs text-slate-400 flex items-center justify-between">
+                <span>Posted by <strong className="text-slate-200 font-semibold">{viewingAnnouncementModal.postedBy}</strong></span>
               </div>
             </div>
 
-            <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
+            <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2.5 shrink-0">
               <button
                 type="button"
                 onClick={() => {
@@ -14651,14 +14736,14 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                   setViewingAnnouncementModal(null);
                   setEditingAnnouncementModal({ ...target });
                 }}
-                className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition cursor-pointer whitespace-nowrap"
               >
                 Edit Advisory
               </button>
               <button
                 type="button"
                 onClick={() => setViewingAnnouncementModal(null)}
-                className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs transition cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 transition cursor-pointer whitespace-nowrap"
               >
                 Close
               </button>

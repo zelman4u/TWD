@@ -3774,27 +3774,30 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               {/* Quick Notification Dropdown Popover - Responsive Fixed on Mobile, Anchored Popover on Desktop */}
               {showNotifDropdown && (
                 <div 
-                  className="fixed inset-x-3 top-16 sm:inset-x-auto sm:top-auto sm:absolute sm:right-0 sm:mt-2 sm:w-96 bg-slate-900 text-slate-100 rounded-2xl shadow-2xl border border-slate-700/90 z-50 overflow-hidden animate-slide-down"
+                  className="fixed inset-x-3 top-16 sm:inset-x-auto sm:top-auto sm:absolute sm:right-0 sm:mt-2 sm:w-[430px] bg-slate-900 text-slate-100 rounded-2xl shadow-2xl border border-slate-800 z-50 overflow-hidden animate-slide-down"
                   id="header-notif-dropdown"
                 >
-                  <div className="p-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
-                    <div className="flex items-center space-x-2">
-                      <Bell className="h-4 w-4 text-blue-400" />
-                      <span className="text-xs font-black text-white uppercase tracking-wider">
+                  <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Bell className="h-4 w-4 text-blue-400 shrink-0" />
+                      <span className="text-sm font-bold text-white truncate">
                         Notifications
                       </span>
                       {unreadNotifCount > 0 && (
-                        <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 border border-blue-500/30 font-black text-[10px] rounded-md tabular-nums">
-                          {unreadNotifCount} unread
-                        </span>
+                        <>
+                          <span aria-hidden="true" className="text-slate-600">·</span>
+                          <span className="text-xs font-mono tabular-nums font-bold text-blue-400 whitespace-nowrap">
+                            {unreadNotifCount} unread
+                          </span>
+                        </>
                       )}
                     </div>
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       {unreadNotifCount > 0 && (
                         <button
                           type="button"
                           onClick={handleMarkAllNotifsRead}
-                          className="text-[10px] font-bold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer"
+                          className="text-xs font-semibold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer whitespace-nowrap"
                         >
                           Mark all read
                         </button>
@@ -3812,7 +3815,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                   <div className="max-h-[65vh] sm:max-h-96 overflow-y-auto divide-y divide-slate-800/80">
                     {notifications.length === 0 ? (
-                      <div className="p-6 text-center text-xs text-slate-400">
+                      <div className="p-8 text-center text-sm text-slate-400">
                         No notifications yet.
                       </div>
                     ) : (
@@ -3864,8 +3867,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             type="button"
                             key={`dropdown-notif-${n.id || idx}`}
                             onClick={() => handleOpenNotificationDetailModal(n)}
-                            className={`w-full text-left p-3.5 hover:bg-slate-800/80 transition cursor-pointer flex items-start space-x-3 group ${
-                              !n.read ? 'bg-blue-950/35' : ''
+                            className={`w-full text-left px-5 py-3.5 hover:bg-slate-800/75 transition cursor-pointer flex items-start gap-3 group ${
+                              !n.read ? 'bg-blue-950/30' : ''
                             }`}
                           >
                             <div className={`p-2 rounded-xl shrink-0 mt-0.5 border ${
@@ -3915,51 +3918,50 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                 <Info className="h-4 w-4" />
                               )}
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center justify-between gap-1.5 mb-1">
-                                <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                            <div className="flex-1 min-w-0 space-y-1">
+                              <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
+                                <div className="flex items-center gap-1.5 min-w-0 truncate">
+                                  <span className="font-semibold text-slate-300 truncate">{categoryLabel}</span>
                                   {attribution.isFromAdmin && (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sky-950/90 text-sky-300 border border-sky-800/70 text-[9px] font-black uppercase tracking-wider shrink-0">
-                                      <Building className="h-2.5 w-2.5 text-sky-400" />
-                                      <span>{attribution.senderBadgeLabel}</span>
-                                    </span>
+                                    <>
+                                      <span aria-hidden="true" className="text-slate-600">·</span>
+                                      <span className="text-sky-300 font-semibold truncate">{attribution.senderBadgeLabel}</span>
+                                    </>
                                   )}
                                   {linkedThread && !isReport && (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-950/90 text-indigo-300 border border-indigo-800/70 text-[9px] font-mono font-bold shrink-0">
-                                      <span>Replied · {linkedThread.ticketNumber}</span>
-                                    </span>
+                                    <>
+                                      <span aria-hidden="true" className="text-slate-600">·</span>
+                                      <span className="font-mono tabular-nums text-indigo-300 shrink-0">{linkedThread.ticketNumber}</span>
+                                    </>
                                   )}
                                   {isReport && n.referencedNotice && (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-950/90 text-indigo-300 border border-indigo-800/70 text-[9px] font-bold truncate max-w-[170px]">
-                                      <span className="truncate">
+                                    <>
+                                      <span aria-hidden="true" className="text-slate-600">·</span>
+                                      <span className="text-indigo-300 truncate">
                                         {n.referencedNotice.meterStatus
                                           ? `Re: Meter (${formatMeterStatusLabel(n.referencedNotice.meterStatus)})`
                                           : `Re: ${n.referencedNotice.subject}`}
                                       </span>
-                                    </span>
+                                    </>
                                   )}
                                 </div>
                                 {!n.read && (
                                   <span className="h-2 w-2 rounded-full bg-blue-400 shrink-0" aria-label="Unread notification"></span>
                                 )}
                               </div>
-                              <h4 className="text-xs font-bold text-white truncate">
+                              <h4 className="text-[13px] font-bold text-white leading-snug line-clamp-1">
                                 {n.title || n.subject}
                               </h4>
-                              <p className="text-[11px] text-slate-300 line-clamp-2 leading-snug mt-0.5">
+                              <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed">
                                 {normalizeSingleLinePreview(n.message)}
                               </p>
-                              <div className="flex items-center justify-between gap-2 mt-1.5 pt-1 border-t border-slate-800/80 text-[10px]">
-                                <div className="flex items-center gap-1.5 text-slate-400 min-w-0 truncate">
-                                  <span className="font-semibold text-slate-300 truncate">{categoryLabel}</span>
-                                  <span aria-hidden="true" className="text-slate-600">·</span>
-                                  <span className="font-mono tabular-nums shrink-0">
-                                    {new Date(n.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                                  </span>
-                                </div>
-                                <span className="font-bold text-blue-400 group-hover:text-blue-300 inline-flex items-center gap-0.5 shrink-0">
+                              <div className="flex items-center justify-between gap-2 pt-1 text-xs text-slate-400">
+                                <span className="font-mono tabular-nums shrink-0">
+                                  {new Date(n.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                </span>
+                                <span className="font-semibold text-blue-400 group-hover:text-blue-300 inline-flex items-center gap-0.5 shrink-0">
                                   <span>{attribution.canReplyDirectly ? 'Read & Reply' : 'Read full info'}</span>
-                                  <ChevronRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                                  <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
                                 </span>
                               </div>
                             </div>
@@ -3969,7 +3971,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     )}
                   </div>
 
-                  <div className="p-2.5 bg-slate-950 border-t border-slate-800 text-center">
+                  <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 text-center">
                     <button
                       type="button"
                       onClick={() => {
@@ -4007,22 +4009,27 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
         {/* IMMEDIATE REAL-TIME ACCOUNT & METER ID CONFIRMATION BANNER */}
         {idConfirmedBanner && (
-          <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-700 text-white rounded-2xl p-5 shadow-lg border border-emerald-400/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-slide-down">
-            <div className="flex items-start space-x-3.5">
-              <div className="p-2.5 bg-white/20 rounded-xl text-white shrink-0 mt-0.5">
-                <UserCheck className="h-6 w-6" />
+          <div className="bg-slate-900 border border-emerald-500/45 text-slate-100 rounded-2xl p-5 sm:p-6 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-slide-down">
+            <div className="flex items-start gap-3.5 min-w-0">
+              <div className="p-2.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-emerald-400 shrink-0 mt-0.5">
+                <UserCheck className="h-5 w-5" />
               </div>
-              <div>
-                <h4 className="text-sm font-black uppercase tracking-wider flex flex-wrap items-center gap-2">
-                  <span>{idConfirmedBanner.isUpdate ? 'Account Number Updated & Confirmed!' : 'Official Account & Meter Confirmed!'}</span>
-                  <span className="text-[10px] font-mono font-black bg-white/20 px-2.5 py-0.5 rounded-full">
+              <div className="space-y-1.5 min-w-0">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                  <span className="font-semibold text-emerald-400">Official Confirmation</span>
+                  <span aria-hidden="true" className="text-slate-600">·</span>
+                  <span className="font-mono tabular-nums text-slate-200 font-semibold">
                     Account #{idConfirmedBanner.accountNumber}
                   </span>
-                  <span className="text-[10px] font-mono font-bold bg-black/20 px-2.5 py-0.5 rounded-full">
+                  <span aria-hidden="true" className="text-slate-600">·</span>
+                  <span className="font-mono tabular-nums text-slate-300">
                     Meter #{idConfirmedBanner.meterNumber}
                   </span>
+                </div>
+                <h4 className="text-base sm:text-lg font-bold text-white leading-snug">
+                  {idConfirmedBanner.isUpdate ? 'Account Number Updated & Confirmed' : 'Official Account & Meter Confirmed'}
                 </h4>
-                <p className="text-xs text-emerald-50 mt-1 leading-relaxed">
+                <p className="text-sm text-slate-200 leading-[1.6] max-w-3xl">
                   Tagoloan Water District Administration has officially issued and confirmed your water service identifiers ({idConfirmedBanner.confirmedAt}). Your Consumer Portal dashboard, telemetry history, billing ledger, and official activation notification are now active.
                 </p>
               </div>
@@ -4042,7 +4049,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   setNotifFilter('account_issue');
                   setIdConfirmedBanner(null);
                 }}
-                className="px-3.5 py-2 bg-white text-emerald-800 hover:bg-emerald-50 rounded-xl text-xs font-black transition cursor-pointer shadow-xs"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-xs whitespace-nowrap shrink-0"
               >
                 View Notification
               </button>
@@ -4058,10 +4065,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   }
                   setIdConfirmedBanner(null);
                 }}
-                className="text-white/80 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition cursor-pointer"
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
                 aria-label="Dismiss confirmation banner"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -4069,40 +4076,48 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
         {/* IMMEDIATE REAL-TIME PAYMENT CONFIRMATION BANNER / TOAST */}
         {paymentConfirmationToast && (
-          <div className={`${
+          <div className={`bg-slate-900 text-slate-100 rounded-2xl p-5 sm:p-6 shadow-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-slide-down ${
             paymentConfirmationToast.isPartial
-              ? 'bg-amber-600 border-amber-400'
-              : 'bg-emerald-600 border-emerald-500'
-          } text-white rounded-2xl p-5 shadow-lg border flex items-start justify-between gap-4 animate-slide-down`}>
-            <div className="flex items-start space-x-3.5">
-              <div className="p-2 bg-white/20 rounded-xl text-white shrink-0 mt-0.5">
-                <CheckCircle2 className="h-6 w-6" />
+              ? 'border-amber-500/45'
+              : 'border-emerald-500/45'
+          }`}>
+            <div className="flex items-start gap-3.5 min-w-0">
+              <div className={`p-2.5 rounded-xl border shrink-0 mt-0.5 ${
+                paymentConfirmationToast.isPartial
+                  ? 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                  : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+              }`}>
+                <CheckCircle2 className="h-5 w-5" />
               </div>
-              <div>
-                <h4 className="text-sm font-black uppercase tracking-wider flex flex-wrap items-center gap-2">
-                  <span>
-                    {paymentConfirmationToast.isPartial
-                      ? 'Partial Payment Credited!'
-                      : 'Payment Settlement Confirmed!'}
+              <div className="space-y-1.5 min-w-0">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                  <span className={`font-semibold ${paymentConfirmationToast.isPartial ? 'text-amber-300' : 'text-emerald-400'}`}>
+                    {paymentConfirmationToast.isPartial ? 'Partial Settlement' : 'Payment Confirmed'}
                   </span>
-                  <span className="text-[10px] font-bold bg-white/20 px-2 py-0.5 rounded-full">
+                  <span aria-hidden="true" className="text-slate-600">·</span>
+                  <span className="font-mono tabular-nums text-slate-200 font-semibold">
                     Official Receipt #{paymentConfirmationToast.reference}
                   </span>
+                </div>
+                <h4 className="text-base sm:text-lg font-bold text-white leading-snug">
+                  {paymentConfirmationToast.isPartial
+                    ? 'Partial Payment Credited'
+                    : 'Payment Settlement Confirmed'}
                 </h4>
-                <p className="text-xs text-white/95 mt-1 leading-relaxed">
+                <p className="text-sm text-slate-200 leading-[1.6] max-w-3xl">
                   {paymentConfirmationToast.isPartial ? (
                     <>
-                      Your partial payment of <strong>₱{paymentConfirmationToast.amount.toFixed(2)}</strong> for billing cycle <strong>{paymentConfirmationToast.period}</strong> has been credited on {paymentConfirmationToast.date}. Remaining balance due: <strong>₱{(paymentConfirmationToast.remaining ?? 0).toFixed(2)}</strong>.
+                      Your partial payment of <strong className="font-mono tabular-nums text-white">₱{paymentConfirmationToast.amount.toFixed(2)}</strong> for billing cycle <strong className="text-white">{paymentConfirmationToast.period}</strong> has been credited on {paymentConfirmationToast.date}. Remaining balance due: <strong className="font-mono tabular-nums text-amber-300">₱{(paymentConfirmationToast.remaining ?? 0).toFixed(2)}</strong>.
                     </>
                   ) : (
                     <>
-                      Your water tariff payment of <strong>₱{paymentConfirmationToast.amount.toFixed(2)}</strong> for billing cycle <strong>{paymentConfirmationToast.period}</strong> has been cleared and stamped into the central district records on {paymentConfirmationToast.date}. Outstanding balance updated.
+                      Your water tariff payment of <strong className="font-mono tabular-nums text-white">₱{paymentConfirmationToast.amount.toFixed(2)}</strong> for billing cycle <strong className="text-white">{paymentConfirmationToast.period}</strong> has been cleared and stamped into the central district records on {paymentConfirmationToast.date}. Outstanding balance updated.
                     </>
                   )}
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
               {(() => {
                 const targetReceiptReading = billedReadings.find(
                   b =>
@@ -4116,9 +4131,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   <button
                     type="button"
                     onClick={() => setReceiptDetailModal(targetReceiptReading)}
-                    className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0"
                   >
-                    <ReceiptText className="h-3.5 w-3.5" />
+                    <ReceiptText className="h-3.5 w-3.5 text-emerald-400" />
                     <span>View Receipt</span>
                   </button>
                 );
@@ -4144,9 +4159,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   }));
                   setPaymentConfirmationToast(null);
                 }}
-                className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition cursor-pointer"
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
+                aria-label="Dismiss payment confirmation"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -4154,19 +4170,19 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
         {/* STATUS / ERROR TOAST */}
         {statusMsg && (
-          <div className={`p-4 rounded-2xl text-xs flex items-center justify-between gap-3 shadow-md ${
+          <div className={`px-5 py-4 rounded-2xl text-sm flex items-center justify-between gap-3 shadow-md ${
             statusMsg.type === 'success'
-              ? 'bg-emerald-950/80 text-emerald-200 border border-emerald-500/40'
-              : 'bg-rose-950/80 text-rose-200 border border-rose-500/40'
+              ? 'bg-slate-900 text-emerald-200 border border-emerald-500/45'
+              : 'bg-slate-900 text-rose-200 border border-rose-500/45'
           }`}>
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center gap-3 min-w-0">
               <AlertCircle className={`h-5 w-5 shrink-0 ${statusMsg.type === 'success' ? 'text-emerald-400' : 'text-rose-400'}`} />
-              <span className="font-semibold">{statusMsg.msg}</span>
+              <span className="font-semibold leading-relaxed">{statusMsg.msg}</span>
             </div>
             <button
               type="button"
               onClick={() => setStatusMsg(null)}
-              className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
             >
               <X className="h-4 w-4" />
             </button>
@@ -4375,50 +4391,51 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
               {/* DISCONNECTED INACTIVE ACCOUNT BANNER */}
               {consumerRecord.status === 'disconnected' && (
-                <div className="p-5 rounded-2xl bg-rose-950/40 border border-rose-500/50 text-rose-200 text-xs space-y-3">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2.5 bg-rose-500/20 text-rose-300 rounded-xl border border-rose-500/40 shrink-0">
-                        <AlertOctagon className="h-5 w-5" />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-black text-white">Water Service Disconnected (Physical Curb Stop Locked)</h4>
-                        <p className="text-slate-300 text-[11px] mt-0.5">
-                          Account disconnected on {consumerRecord.disconnectedAt ? new Date(consumerRecord.disconnectedAt).toLocaleDateString('en-US') : 'Administration Order'}.
-                        </p>
-                      </div>
+                <div className="p-6 rounded-2xl bg-slate-900 border border-rose-500/45 text-slate-100 space-y-4 shadow-lg">
+                  <div className="flex items-start gap-3.5">
+                    <div className="p-2.5 bg-rose-500/15 text-rose-400 rounded-xl border border-rose-500/30 shrink-0 mt-0.5">
+                      <AlertOctagon className="h-5 w-5" />
                     </div>
-                    <span className="px-2.5 py-1 bg-rose-500/20 text-rose-300 font-mono font-bold text-[10px] rounded-lg border border-rose-500/40 shrink-0">
-                      INACTIVE
-                    </span>
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                        <span className="font-semibold text-rose-400">Account Inactive</span>
+                        <span aria-hidden="true" className="text-slate-600">·</span>
+                        <span className="font-mono tabular-nums">
+                          Disconnected {consumerRecord.disconnectedAt ? new Date(consumerRecord.disconnectedAt).toLocaleDateString('en-US') : 'by Administration Order'}
+                        </span>
+                      </div>
+                      <h4 className="text-base sm:text-lg font-bold text-white leading-snug">
+                        Water Service Disconnected (Physical Curb Stop Locked)
+                      </h4>
+                    </div>
                   </div>
-                  <p className="text-slate-200 leading-relaxed text-[11px]">
-                    <strong className="text-white">Account Access & Accountability:</strong> You are still able to use this portal to view your statement history and official receipts. All past payments remain credited and existing outstanding obligations (<span className="text-rose-300 font-mono font-bold">₱{Number(consumerRecord.outstandingBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>) remain strictly accountable under your name.
+                  <p className="text-sm text-slate-200 leading-[1.6]">
+                    <strong className="text-white">Account Access &amp; Accountability:</strong> You can still view your statement history and official receipts here. All past payments remain credited and existing outstanding obligations (<span className="text-rose-300 font-mono tabular-nums font-bold">₱{Number(consumerRecord.outstandingBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>) remain due under your account.
                   </p>
-                  <div className="p-3 bg-slate-900/80 rounded-xl border border-rose-800/40 text-[11px] space-y-1 text-slate-300">
-                    <p className="font-bold text-amber-300 flex items-center gap-1.5">
-                      <Clock className="h-3.5 w-3.5" />
-                      6-Month Inactivity Notice & Account Assumption Policy
+                  <div className="p-4 bg-slate-950/75 rounded-xl border border-slate-800 space-y-1.5">
+                    <p className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5 shrink-0" />
+                      <span>6-Month Inactivity Notice &amp; Account Assumption Policy</span>
                     </p>
-                    <p className="text-[10px] text-slate-400">
-                      In accordance with Tagoloan Water District regulations, accounts that remain disconnected and inactive for 6 months (180 days) become eligible for <strong>Account Assumption (Transfer of Account & Name)</strong> by incoming residents or prospective applicants at the TWD Office.
+                    <p className="text-[13px] text-slate-300 leading-relaxed">
+                      In accordance with Tagoloan Water District regulations, accounts that remain disconnected and inactive for 6 months (180 days) become eligible for <strong className="text-white">Account Assumption (Transfer of Account &amp; Name)</strong> by incoming residents or prospective applicants at the TWD Office.
                     </p>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <div className="flex flex-wrap items-center gap-2.5 pt-1">
                     <button
                       type="button"
                       onClick={() => handleConsumerTabChange('bills')}
-                      className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow"
+                      className="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow whitespace-nowrap shrink-0"
                     >
                       <ReceiptText className="h-3.5 w-3.5" />
-                      <span>Review Outstanding Bills & Settle</span>
+                      <span>Review Outstanding Bills &amp; Settle</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => {
                         setIsUploadReceiptOpen(true);
                       }}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs transition cursor-pointer border border-slate-700 flex items-center gap-1.5"
+                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs transition cursor-pointer border border-slate-700 flex items-center gap-1.5 whitespace-nowrap shrink-0"
                     >
                       <Upload className="h-3.5 w-3.5" />
                       <span>Upload Proof of Office Payment</span>
@@ -4429,44 +4446,48 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
               {/* 2-MONTH DISCONNECTION NOTICE & EXTENSION REQUEST BANNER */}
               {hasActiveDisconnectionNotice && (
-                <div className="p-5 rounded-2xl bg-amber-950/40 border border-amber-500/50 text-amber-200 text-xs space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2.5 bg-amber-500/20 text-amber-300 rounded-xl border border-amber-500/40 shrink-0">
+                <div className="p-6 rounded-2xl bg-slate-900 border border-amber-500/45 text-slate-100 space-y-4 shadow-lg">
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                    <div className="flex items-start gap-3.5 min-w-0">
+                      <div className="p-2.5 bg-amber-500/15 text-amber-400 rounded-xl border border-amber-500/30 shrink-0 mt-0.5">
                         <AlertTriangle className="h-5 w-5" />
                       </div>
-                      <div>
-                        <h4 className="text-sm font-black text-amber-100">Disconnection Notice: 2-Month Grace Period Exceeded</h4>
-                        <p className="text-amber-300/80 text-[11px] mt-0.5">
-                          Unpaid water statements have exceeded 2 consecutive billing cycles (60 days overdue).
-                        </p>
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                          <span className="font-semibold text-amber-300">Disconnection Notice</span>
+                          <span aria-hidden="true" className="text-slate-600">·</span>
+                          <span>2-Month Grace Period Exceeded</span>
+                        </div>
+                        <h4 className="text-base sm:text-lg font-bold text-white leading-snug">
+                          Unpaid Statements Exceed 2 Billing Cycles (60 Days Overdue)
+                        </h4>
                       </div>
                     </div>
                     {consumerRecord.extensionStatus === 'approved' ? (
-                      <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 font-mono font-bold text-xs rounded-lg border border-emerald-500/40 shrink-0">
+                      <span className="text-xs font-mono tabular-nums font-bold text-emerald-400 shrink-0 self-start sm:self-center">
                         Extension Active until {consumerRecord.extensionGrantedUntil}
                       </span>
                     ) : consumerRecord.extensionStatus === 'pending' ? (
-                      <span className="px-3 py-1 bg-amber-500/20 text-amber-300 font-mono font-bold text-xs rounded-lg border border-amber-500/40 shrink-0">
-                        Extension Request Pending Review ({consumerRecord.extensionDays} Days)
+                      <span className="text-xs font-mono tabular-nums font-bold text-amber-300 shrink-0 self-start sm:self-center">
+                        Extension Pending Review ({consumerRecord.extensionDays} Days)
                       </span>
                     ) : (
-                      <span className="px-3 py-1 bg-rose-500/20 text-rose-300 font-mono font-bold text-xs rounded-lg border border-rose-500/40 shrink-0">
-                        Cutoff Pending: {consumerRecord.disconnectionCutoffDate || 'Subject to Physical Cutting'}
+                      <span className="text-xs font-mono tabular-nums font-bold text-rose-400 shrink-0 self-start sm:self-center">
+                        Cutoff: {consumerRecord.disconnectionCutoffDate || 'Subject to Physical Cutting'}
                       </span>
                     )}
                   </div>
 
-                  <p className="text-slate-300 leading-relaxed text-[11px]">
+                  <p className="text-sm text-slate-200 leading-[1.6] max-w-3xl">
                     To avoid physical meter disconnection and reconnection fees, please settle your account balance, make a partial payment of at least 50%, or submit an extension request for administration review.
                   </p>
 
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <div className="flex flex-wrap items-center gap-2.5 pt-1">
                     {consumerRecord.extensionStatus !== 'approved' && (
                       <button
                         type="button"
                         onClick={() => setIsExtensionModalOpen(true)}
-                        className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow"
+                        className="px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow whitespace-nowrap shrink-0"
                       >
                         <Clock className="h-3.5 w-3.5" />
                         <span>{consumerRecord.extensionStatus === 'pending' ? 'Update Extension Request' : 'Request Extension of Days'}</span>
@@ -4475,7 +4496,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     <button
                       type="button"
                       onClick={() => handleConsumerTabChange('bills')}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow"
+                      className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow whitespace-nowrap shrink-0"
                     >
                       <CreditCard className="h-3.5 w-3.5" />
                       <span>Pay Bills Now</span>
@@ -4483,7 +4504,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     <button
                       type="button"
                       onClick={() => setIsUploadReceiptOpen(true)}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs transition cursor-pointer border border-slate-700 flex items-center gap-1.5"
+                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs transition cursor-pointer border border-slate-700 flex items-center gap-1.5 whitespace-nowrap shrink-0"
                     >
                       <Upload className="h-3.5 w-3.5" />
                       <span>Upload Official Receipt</span>
@@ -4534,38 +4555,39 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             )}
 
             {/* OFFICIAL WATER TARIFF UPDATE & PRICE HIKE ADVISORY BANNER */}
-            <div className="bg-gradient-to-r from-blue-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-5 sm:p-6 border border-blue-800/80 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-fade-in" id="consumer-tariff-advisory-banner">
-              <div className="flex items-start sm:items-center space-x-3.5">
-                <div className="p-3 bg-blue-500/20 rounded-2xl border border-blue-400/40 text-blue-300 shrink-0">
+            <div className="bg-slate-900 text-slate-100 rounded-2xl p-5 sm:p-6 border border-slate-800 shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-fade-in" id="consumer-tariff-advisory-banner">
+              <div className="flex items-start gap-3.5 min-w-0">
+                <div className="p-2.5 bg-blue-500/15 rounded-xl border border-blue-500/30 text-blue-400 shrink-0 mt-0.5">
                   <Waves className="h-5 w-5" />
                 </div>
-                <div className="space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-md border border-emerald-400/40">
-                      Approved Tariff Schedule: {activeTariff.resolutionNumber}
+                <div className="space-y-1.5 min-w-0">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                    <span className="font-semibold text-emerald-400">
+                      Approved Tariff Schedule · {activeTariff.resolutionNumber}
                     </span>
-                    <span className="text-[11px] text-slate-300 font-mono">
-                      Effective: {activeTariff.effectiveDate}
+                    <span aria-hidden="true" className="text-slate-600">·</span>
+                    <span className="font-mono tabular-nums">
+                      Effective {activeTariff.effectiveDate}
                     </span>
                   </div>
-                  <h4 className="text-sm font-black text-white">
+                  <h4 className="text-base font-bold text-white leading-snug">
                     Official Tagoloan Water District Tariff Schedule
                   </h4>
-                  <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-                    Official baseline water service rates under Board Resolution {activeTariff.resolutionNumber}:{' '}
-                    {consumerRecord?.consumerType === 'Commercial' ? 'Commercial' : 'Domestic / Residential'} rate is set at{' '}
-                    <strong className="text-emerald-400 font-mono">
-                      ₱{getEffectiveRatePerM3(consumerRecord?.consumerType === 'Commercial' ? 'Commercial' : 'Residential', activeTariff).toFixed(2)} / m³
+                  <p className="text-sm text-slate-300 max-w-2xl leading-[1.6]">
+                    Baseline rate under Board Resolution {activeTariff.resolutionNumber}:{' '}
+                    {consumerRecord?.consumerType === 'Commercial' ? 'Commercial' : 'Domestic / Residential'} is set at{' '}
+                    <strong className="text-emerald-400 font-mono tabular-nums">
+                      ₱{getEffectiveRatePerM3(consumerRecord?.consumerType === 'Commercial' ? 'Commercial' : 'Residential', activeTariff).toFixed(2)}/m³
                     </strong>{' '}
-                    plus <strong className="text-indigo-300 font-mono">{(activeTariff.franchiseTaxRate * 100).toFixed(0)}% Franchise Tax</strong> and{' '}
-                    <strong className="text-amber-300 font-mono">{(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}% Late Penalty</strong> after due date.
+                    plus <strong className="text-indigo-300 font-mono tabular-nums">{(activeTariff.franchiseTaxRate * 100).toFixed(0)}% Franchise Tax</strong> and{' '}
+                    <strong className="text-amber-300 font-mono tabular-nums">{(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}% Late Penalty</strong> after due date.
                   </p>
                 </div>
               </div>
 
               <button
                 onClick={() => setShowTariffScheduleModal(true)}
-                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition flex items-center space-x-2 shadow-md cursor-pointer shrink-0 self-end md:self-center"
+                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition flex items-center gap-2 shadow-md cursor-pointer shrink-0 self-end md:self-center whitespace-nowrap"
               >
                 <FileText className="h-4 w-4" />
                 <span>View Rate Schedule</span>
@@ -5201,24 +5223,25 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
             {/* OFFICIAL DISTRICT ADVISORIES & ANNOUNCEMENTS BULLETIN */}
             {announcements.length > 0 && (
-              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-md space-y-4" id="dashboard-advisories-section">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2.5 bg-blue-500/15 text-blue-400 rounded-2xl border border-blue-500/25">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-md space-y-4" id="dashboard-advisories-section">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-slate-800">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 bg-blue-500/15 text-blue-400 rounded-xl border border-blue-500/25 shrink-0">
                       <Bell className="h-5 w-5" />
                     </div>
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-sm font-bold text-white">
-                          Official District Advisories & Announcements
-                        </h3>
+                    <div className="space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                        <span className="font-semibold text-blue-400">Public Bulletins</span>
                         <span aria-hidden="true" className="text-slate-600">·</span>
-                        <span className="text-xs text-blue-400 font-semibold">
+                        <span className="font-mono tabular-nums">
                           {announcements.length} Active Bulletin{announcements.length === 1 ? '' : 's'}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-400">
-                        Live public service bulletins, scheduled maintenance advisories, and board announcements from Tagoloan Water District
+                      <h3 className="text-base font-bold text-white leading-snug">
+                        Official District Advisories &amp; Announcements
+                      </h3>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Live public service bulletins, scheduled maintenance advisories, and board announcements from Tagoloan Water District.
                       </p>
                     </div>
                   </div>
@@ -5227,7 +5250,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       setActiveTab('notifications');
                       setNotifFilter('announcement');
                     }}
-                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold rounded-xl transition flex items-center space-x-1.5 cursor-pointer self-start sm:self-auto shrink-0"
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer self-start sm:self-auto shrink-0 whitespace-nowrap"
                   >
                     <span>View All Advisories</span>
                     <ChevronRight className="h-3.5 w-3.5" />
@@ -5254,7 +5277,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           })
                         }
                         title="Click to read complete advisory"
-                        className={`rounded-2xl p-4 border flex flex-col justify-between gap-3 transition bg-slate-950 cursor-pointer ${
+                        className={`rounded-2xl p-4 border flex flex-col justify-between gap-3 transition bg-slate-950/80 cursor-pointer ${
                           isAlert
                             ? 'border-rose-500/40 hover:border-rose-400'
                             : isMaint
@@ -5262,8 +5285,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             : 'border-slate-800 hover:border-blue-500/60'
                         }`}
                       >
-                        <div className="space-y-1.5">
-                          <div className="flex items-center justify-between gap-2 text-[11px]">
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2 text-xs">
                             <span className={`font-semibold capitalize ${
                               isAlert
                                 ? 'text-rose-400'
@@ -5273,13 +5296,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             }`}>
                               {cat}
                             </span>
-                            <span className="font-mono tabular-nums text-slate-500">{ann.date}</span>
+                            <span className="font-mono tabular-nums text-slate-400">{ann.date}</span>
                           </div>
-                          <h4 className="text-xs font-bold text-white leading-snug">{ann.title}</h4>
-                          <p className="text-xs text-slate-400 leading-relaxed line-clamp-3">{ann.content}</p>
+                          <h4 className="text-sm font-bold text-white leading-snug">{ann.title}</h4>
+                          <p className="text-[13px] text-slate-300 leading-relaxed line-clamp-3">{ann.content}</p>
                         </div>
-                        <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500 font-medium">
-                          <span>By: {ann.postedBy || (ann as any).author || 'TWD Administration'}</span>
+                        <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+                          <span>By {ann.postedBy || (ann as any).author || 'TWD Administration'}</span>
                         </div>
                       </div>
                     );
@@ -5289,39 +5312,37 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             )}
 
             {/* CONSUMER SERVICE ASSISTANCE & REPORT CONCERN DASHBOARD BANNER */}
-            <div className="bg-gradient-to-r from-blue-900 via-indigo-950 to-slate-900 text-white border border-blue-800/80 rounded-3xl p-6 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-6" id="dashboard-reports-banner">
-              <div className="flex items-start space-x-4">
-                <div className="p-3 bg-blue-500/20 text-blue-300 rounded-2xl border border-blue-400/30 shrink-0 mt-0.5">
-                  <MessageSquare className="h-6 w-6" />
+            <div className="bg-slate-900 text-slate-100 border border-slate-800 rounded-2xl p-6 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-6" id="dashboard-reports-banner">
+              <div className="flex items-start gap-3.5 min-w-0">
+                <div className="p-2.5 bg-blue-500/15 text-blue-400 rounded-xl border border-blue-500/30 shrink-0 mt-0.5">
+                  <MessageSquare className="h-5 w-5" />
                 </div>
-                <div className="space-y-1.5 max-w-xl">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="px-2.5 py-0.5 bg-blue-500/30 border border-blue-400/40 text-blue-200 text-[10px] font-black uppercase tracking-wider rounded-md">
-                      24/7 Consumer Assistance Desk
-                    </span>
+                <div className="space-y-1.5 max-w-2xl min-w-0">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                    <span className="font-semibold text-blue-400">24/7 Consumer Assistance Desk</span>
                     {unreadReportsCount > 0 && (
-                      <span className="px-2.5 py-0.5 bg-amber-400 text-slate-950 text-[10px] font-black uppercase tracking-wider rounded-md animate-pulse">
-                        {unreadReportsCount} Admin Reply Awaiting Review
-                      </span>
+                      <>
+                        <span aria-hidden="true" className="text-slate-600">·</span>
+                        <span className="font-bold text-amber-300 font-mono tabular-nums">
+                          {unreadReportsCount} Admin Reply Awaiting Review
+                        </span>
+                      </>
+                    )}
+                    {reports.length > 0 && (
+                      <>
+                        <span aria-hidden="true" className="text-slate-600">·</span>
+                        <span className="font-mono tabular-nums text-slate-300">
+                          Latest: {reports[0].ticketNumber}
+                        </span>
+                      </>
                     )}
                   </div>
-                  <h3 className="text-base font-black text-white">
+                  <h3 className="text-base sm:text-lg font-bold text-white leading-snug">
                     Need Help? Report a Water Leak, Pressure Drop, or Billing Concern
                   </h3>
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    Have an issue at your service connection? File an official report directly to Tagoloan Water District. 
-                    Admins and maintenance crew receive instant alerts and respond directly to your ticket with status updates.
+                  <p className="text-sm text-slate-300 leading-[1.6]">
+                    Have an issue at your service connection? File an official report directly to Tagoloan Water District. Admins and maintenance crew receive instant alerts and reply directly to your ticket with status updates.
                   </p>
-                  
-                  {reports.length > 0 && (
-                    <div className="pt-1 flex items-center gap-2 text-xs text-slate-300">
-                      <span className="font-semibold text-blue-200">Latest Ticket:</span>
-                      <span className="font-mono text-white font-bold bg-white/10 px-2 py-0.5 rounded text-[11px]">
-                        {reports[0].ticketNumber}
-                      </span>
-                      <span className="truncate max-w-xs text-slate-300 font-medium">({reports[0].title})</span>
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -5330,7 +5351,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   onClick={() => {
                     setActiveTab('reports');
                   }}
-                  className="px-5 py-3 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center gap-2 shadow-md cursor-pointer flex-1 md:flex-initial"
+                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition flex items-center justify-center gap-2 shadow-md cursor-pointer flex-1 md:flex-initial whitespace-nowrap"
                 >
                   <Plus className="h-4 w-4" />
                   <span>Report An Issue</span>
@@ -5342,9 +5363,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       setSelectedReportId(reports[0].id);
                     }
                   }}
-                  className="px-4 py-3 bg-white/10 hover:bg-white/20 text-white font-bold text-xs uppercase tracking-wider rounded-xl border border-white/20 transition flex items-center justify-center gap-1.5 cursor-pointer flex-1 md:flex-initial"
+                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold text-xs rounded-xl border border-slate-700 transition flex items-center justify-center gap-1.5 cursor-pointer flex-1 md:flex-initial whitespace-nowrap"
                 >
-                  <Eye className="h-4 w-4" />
+                  <Eye className="h-4 w-4 text-sky-400" />
                   <span>View My Tickets ({reports.length})</span>
                 </button>
               </div>
@@ -7120,13 +7141,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <div 
                         key={`notif-tab-${n.id || idx}`}
                         onClick={() => handleOpenNotificationDetailModal(n)}
-                        className={`border rounded-2xl p-5 shadow-md flex flex-col lg:flex-row items-start justify-between gap-4 transition cursor-pointer ${
+                        className={`border rounded-2xl p-5 sm:p-6 shadow-md flex flex-col lg:flex-row items-start justify-between gap-4 transition cursor-pointer ${
                           !n.read
-                            ? 'bg-blue-950/30 border-blue-500/50 text-white hover:border-blue-400/70'
+                            ? 'bg-blue-950/30 border-blue-500/45 text-white hover:border-blue-400/70'
                             : 'bg-slate-900 border-slate-800 text-slate-100 hover:border-slate-700'
                         }`}
                       >
-                        <div className="flex items-start space-x-3.5 min-w-0 flex-1">
+                        <div className="flex items-start gap-3.5 min-w-0 flex-1">
                           <div className={`p-2.5 rounded-xl border shrink-0 mt-0.5 ${
                             isReport || isAnnouncement
                               ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
@@ -7175,8 +7196,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             )}
                           </div>
                           <div className="space-y-1.5 min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2 text-xs">
-                              <span className={`font-bold ${
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                              <span className={`font-semibold ${
                                 isReport || isAnnouncement
                                   ? 'text-indigo-400'
                                   : isInstallation
@@ -7231,54 +7252,56 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                     {cardAttr.isFromAdmin && (
                                       <>
                                         <span aria-hidden="true" className="text-slate-600">·</span>
-                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-950/90 text-sky-300 border border-sky-800/70 text-[10px] font-bold">
-                                          <Building className="h-2.5 w-2.5 text-sky-400" />
-                                          <span>{cardAttr.senderBadgeLabel} ({cardAttr.senderName})</span>
+                                        <span className="text-sky-300 font-semibold">
+                                          {cardAttr.senderBadgeLabel} ({cardAttr.senderName})
                                         </span>
                                       </>
                                     )}
                                     {cardThread && !isReport && (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-950/90 text-indigo-300 border border-indigo-800/70 text-[10px] font-mono font-bold">
-                                        <span>Replied · {cardThread.ticketNumber}</span>
-                                      </span>
+                                      <>
+                                        <span aria-hidden="true" className="text-slate-600">·</span>
+                                        <span className="font-mono tabular-nums text-indigo-300 font-semibold">
+                                          Replied · {cardThread.ticketNumber}
+                                        </span>
+                                      </>
                                     )}
                                   </>
                                 );
                               })()}
                               <span aria-hidden="true" className="text-slate-600">·</span>
-                              <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                              <span className="font-mono tabular-nums text-slate-400">
                                 {new Date(n.timestamp).toLocaleString()}
                               </span>
                               {!n.read && (
                                 <>
                                   <span aria-hidden="true" className="text-slate-600">·</span>
-                                  <span className="text-[11px] font-bold text-blue-400">Unread</span>
+                                  <span className="font-bold text-blue-400">Unread</span>
                                 </>
                               )}
                             </div>
-                            <h4 className="text-sm font-bold text-white">{n.title || n.subject}</h4>
+                            <h4 className="text-base font-bold text-white leading-snug">{n.title || n.subject}</h4>
 
                             {/* Structured Installation Summary Strip */}
                             {isInstallation && (n.applicationNumber || n.installationStatus || n.confirmedDate || n.preferredDate) && (
-                              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-[11px] my-1.5">
+                              <div className="bg-slate-950/75 border border-slate-800 rounded-xl p-3.5 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs my-1.5">
                                 {n.applicationNumber && (
                                   <div>
-                                    <span className="text-slate-400 uppercase font-bold text-[10px] block">Application No.</span>
-                                    <span className="font-mono tabular-nums text-cyan-300 font-bold">{n.applicationNumber}</span>
+                                    <span className="text-slate-400 font-medium block">Application No.</span>
+                                    <span className="font-mono tabular-nums text-cyan-300 font-bold mt-0.5 block">{n.applicationNumber}</span>
                                   </div>
                                 )}
                                 {n.installationStatus && (
                                   <div>
-                                    <span className="text-slate-400 uppercase font-bold text-[10px] block">Installation Status</span>
-                                    <span className="text-white font-bold">{n.installationStatus}</span>
+                                    <span className="text-slate-400 font-medium block">Installation Status</span>
+                                    <span className="text-white font-bold mt-0.5 block">{n.installationStatus}</span>
                                   </div>
                                 )}
                                 {(n.confirmedDate || n.preferredDate) && (
                                   <div>
-                                    <span className="text-slate-400 uppercase font-bold text-[10px] block">
+                                    <span className="text-slate-400 font-medium block">
                                       {n.confirmedDate ? 'Confirmed Date' : 'Preferred Date'}
                                     </span>
-                                    <span className="font-mono tabular-nums text-slate-200">
+                                    <span className="font-mono tabular-nums text-slate-200 mt-0.5 block">
                                       {formatInstallationDateDisplay(n.confirmedDate || n.preferredDate)}
                                     </span>
                                   </div>
@@ -7288,20 +7311,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                             {/* Structured Water Meter Status Summary Strip */}
                             {isMeterStatus && (
-                              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-[11px] my-1.5">
+                              <div className="bg-slate-950/75 border border-slate-800 rounded-xl p-3.5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs my-1.5">
                                 <div>
-                                  <span className="text-slate-400 uppercase font-bold text-[10px] block">Consumer</span>
-                                  <span className="text-white font-semibold">{n.consumerName || consumerRecord?.name || 'Registered Consumer'}</span>
+                                  <span className="text-slate-400 font-medium block">Consumer</span>
+                                  <span className="text-white font-semibold mt-0.5 block">{n.consumerName || consumerRecord?.name || 'Registered Consumer'}</span>
                                 </div>
                                 <div>
-                                  <span className="text-slate-400 uppercase font-bold text-[10px] block">Account Number</span>
-                                  <span className="font-mono tabular-nums text-sky-300 font-bold">
+                                  <span className="text-slate-400 font-medium block">Account Number</span>
+                                  <span className="font-mono tabular-nums text-sky-300 font-bold mt-0.5 block">
                                     #{n.accountNumber || consumerRecord?.accountNumber}
                                   </span>
                                 </div>
                                 <div>
-                                  <span className="text-slate-400 uppercase font-bold text-[10px] block">Water Meter Status</span>
-                                  <span className={`font-black uppercase ${
+                                  <span className="text-slate-400 font-medium block">Water Meter Status</span>
+                                  <span className={`font-bold mt-0.5 block ${
                                     meterStatusNorm === 'damaged'
                                       ? 'text-rose-400'
                                       : meterStatusNorm === 'maintenance'
@@ -7314,21 +7337,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   </span>
                                 </div>
                                 <div>
-                                  <span className="text-slate-400 uppercase font-bold text-[10px] block">Date Updated</span>
-                                  <span className="font-mono tabular-nums text-slate-200">
+                                  <span className="text-slate-400 font-medium block">Date Updated</span>
+                                  <span className="font-mono tabular-nums text-slate-200 mt-0.5 block">
                                     {formatMeterStatusUpdateDate(n.statusUpdateDate || n.timestamp)}
                                   </span>
                                 </div>
                                 {n.remarks && (
-                                  <div className="sm:col-span-2 lg:col-span-4 pt-1.5 border-t border-slate-800/80">
-                                    <span className="text-slate-400 uppercase font-bold text-[10px] mr-1.5">Administrator Remarks:</span>
+                                  <div className="sm:col-span-2 lg:col-span-4 pt-2 border-t border-slate-800/80">
+                                    <span className="text-slate-400 font-semibold mr-1.5">Administrator Remarks:</span>
                                     <span className="text-slate-200">{n.remarks}</span>
                                   </div>
                                 )}
                               </div>
                             )}
 
-                            <p className="text-xs text-slate-300 leading-snug max-w-3xl line-clamp-3">
+                            <p className="text-sm text-slate-200 leading-[1.6] max-w-3xl line-clamp-3">
                               {normalizeCompactParagraphs(n.message, {
                                 stripAdminEnvelope: true,
                                 hideDuplicateRemarks: isMeterStatus,
@@ -7516,23 +7539,24 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           read: true,
                         })
                       }
-                      className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-5 shadow-md flex items-start justify-between gap-4 text-slate-100 transition cursor-pointer"
+                      className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-5 sm:p-6 shadow-md flex items-start justify-between gap-4 text-slate-100 transition cursor-pointer"
                     >
-                      <div className="flex items-start space-x-3.5">
+                      <div className="flex items-start gap-3.5 min-w-0">
                         <div className="p-2.5 bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 rounded-xl shrink-0 mt-0.5">
                           <Bell className="h-5 w-5" />
                         </div>
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="font-bold text-indigo-400 capitalize">
+                        <div className="space-y-1.5 min-w-0">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                            <span className="font-semibold text-indigo-400 capitalize">
                               {ann.category || (ann as any).type || 'Advisory'}
                             </span>
                             <span aria-hidden="true" className="text-slate-600">·</span>
-                            <span className="text-[11px] font-mono tabular-nums text-slate-400">{ann.date}</span>
+                            <span className="font-mono tabular-nums text-slate-400">{ann.date}</span>
+                            <span aria-hidden="true" className="text-slate-600">·</span>
+                            <span className="text-slate-400">Issued by {ann.postedBy || (ann as any).author || 'TWD Administration'}</span>
                           </div>
-                          <h4 className="text-sm font-bold text-white">{ann.title}</h4>
-                          <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">{ann.content}</p>
-                          <p className="text-[11px] font-medium text-slate-500 pt-1">Issued by: {ann.postedBy || (ann as any).author || 'TWD Administration'}</p>
+                          <h4 className="text-base font-bold text-white leading-snug">{ann.title}</h4>
+                          <p className="text-sm text-slate-200 leading-[1.6] max-w-3xl">{ann.content}</p>
                         </div>
                       </div>
                     </div>
@@ -8208,63 +8232,69 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
       {/* UPLOADED PHYSICAL RECEIPT VIEWER MODAL */}
       {viewingReceiptReading && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 max-w-xl w-full text-white shadow-2xl space-y-4">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-800">
-              <div className="flex items-center space-x-2">
-                <span className="p-2 bg-emerald-500/20 text-emerald-400 rounded-xl border border-emerald-500/30">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fade-in"
+          onClick={() => setViewingReceiptReading(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full text-slate-100 shadow-2xl overflow-hidden flex flex-col max-h-[86vh]"
+          >
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <span className="p-2 bg-emerald-500/15 text-emerald-400 rounded-xl border border-emerald-500/30 shrink-0">
                   <ShieldCheck className="h-5 w-5" />
                 </span>
-                <div>
-                  <h3 className="text-base font-black uppercase tracking-wider">Validated Cashier Slip</h3>
-                  <p className="text-xs text-slate-400">Official Physical Receipt Verification</p>
+                <div className="min-w-0">
+                  <p className="text-xs text-emerald-400 font-semibold">Official Physical Receipt Verification</p>
+                  <h3 className="text-base sm:text-lg font-bold text-white truncate">Validated Cashier Slip</h3>
                 </div>
               </div>
               <button
                 onClick={() => setViewingReceiptReading(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer"
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="space-y-3">
-              <div className="flex justify-between items-center text-xs bg-slate-950 p-3 rounded-2xl border border-slate-800 font-mono">
+            <div className="px-6 py-5 space-y-4 overflow-y-auto">
+              <div className="flex justify-between items-center text-xs bg-slate-950/75 p-4 rounded-xl border border-slate-800">
                 <div>
-                  <span className="text-slate-500 text-[10px] block">OR Number</span>
-                  <strong className="text-amber-400 text-sm">{viewingReceiptReading.orNumber || 'OR-PENDING'}</strong>
+                  <span className="text-slate-400 font-medium block">OR Number</span>
+                  <strong className="font-mono tabular-nums text-amber-400 text-sm mt-0.5 block">{viewingReceiptReading.orNumber || 'OR-PENDING'}</strong>
                 </div>
                 <div className="text-right">
-                  <span className="text-slate-500 text-[10px] block">Amount Credited</span>
-                  <strong className="text-emerald-400 text-sm">₱{(viewingReceiptReading.paidAmount || 0).toFixed(2)}</strong>
+                  <span className="text-slate-400 font-medium block">Amount Credited</span>
+                  <strong className="font-mono tabular-nums text-emerald-400 text-sm mt-0.5 block">₱{(viewingReceiptReading.paidAmount || 0).toFixed(2)}</strong>
                 </div>
               </div>
 
               {viewingReceiptReading.paymentReceiptUrl ? (
-                <div className="rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 max-h-96 flex items-center justify-center">
+                <div className="rounded-xl overflow-hidden border border-slate-800 bg-slate-950 p-2 max-h-96 flex items-center justify-center">
                   <img
                     src={viewingReceiptReading.paymentReceiptUrl}
                     alt="Physical Cashier Receipt"
-                    className="max-h-80 w-auto object-contain rounded-xl shadow"
+                    className="max-h-80 w-auto object-contain rounded-lg shadow"
                     referrerPolicy="no-referrer"
                   />
                 </div>
               ) : (
-                <div className="py-12 text-center text-xs text-slate-400 bg-slate-950 rounded-2xl border border-slate-800">
+                <div className="py-10 text-center text-sm text-slate-400 bg-slate-950 rounded-xl border border-slate-800">
                   No image photo attached for this statement.
                 </div>
               )}
 
-              <div className="flex items-center justify-between text-xs text-slate-400 pt-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 pt-1">
                 <span>Billing Period: <strong className="text-slate-200">{viewingReceiptReading.billingPeriod}</strong></span>
-                <span>Date: <strong className="text-slate-200">{viewingReceiptReading.paymentDate || 'Verified'}</strong></span>
+                <span className="font-mono tabular-nums">Date: <strong className="text-slate-200">{viewingReceiptReading.paymentDate || 'Verified'}</strong></span>
               </div>
             </div>
 
-            <div className="pt-2 flex justify-end">
+            <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex justify-end shrink-0">
               <button
                 onClick={() => setViewingReceiptReading(null)}
-                className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl cursor-pointer transition"
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl cursor-pointer transition whitespace-nowrap"
               >
                 Close Viewer
               </button>
@@ -8276,141 +8306,143 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       {/* Official Tariff Schedule & Price Hike Modal */}
       {showTariffScheduleModal && (
         <div 
-          className="fixed inset-0 z-[120] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-fade-in"
+          className="fixed inset-0 z-[120] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
           onClick={() => setShowTariffScheduleModal(false)}
         >
           <div 
-            className="bg-slate-900 rounded-3xl max-w-xl w-full border border-slate-800 shadow-2xl p-6 sm:p-8 space-y-6 text-slate-100"
+            className="bg-slate-900 rounded-2xl max-w-xl w-full border border-slate-800 shadow-2xl overflow-hidden text-slate-100 flex flex-col max-h-[86vh]"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
-              <div className="flex items-center space-x-3">
-                <div className="p-3 bg-blue-950 text-blue-400 rounded-2xl border border-blue-800/80 shrink-0">
-                  <FileText className="h-6 w-6" />
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-4 shrink-0">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="p-2.5 bg-blue-500/15 text-blue-400 rounded-xl border border-blue-500/30 shrink-0 mt-0.5">
+                  <FileText className="h-5 w-5" />
                 </div>
-                <div>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-[10px] font-black uppercase text-blue-300 bg-blue-950 border border-blue-800 px-2 py-0.5 rounded">
-                      Official Schedule
-                    </span>
-                    <span className="text-[11px] font-mono text-slate-400">
-                      {activeTariff.resolutionNumber}
-                    </span>
+                <div className="min-w-0 space-y-0.5">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                    <span className="font-semibold text-blue-400">Official Schedule</span>
+                    <span aria-hidden="true" className="text-slate-600">·</span>
+                    <span className="font-mono tabular-nums">{activeTariff.resolutionNumber}</span>
                   </div>
-                  <h3 className="text-base font-extrabold text-white mt-0.5">
-                    Water Tariff Rates & Price Adjustment Schedule
+                  <h3 className="text-base sm:text-lg font-bold text-white leading-snug">
+                    Water Tariff Rates &amp; Price Adjustment Schedule
                   </h3>
                 </div>
               </div>
               <button
                 onClick={() => setShowTariffScheduleModal(false)}
-                className="text-slate-400 hover:text-slate-200 font-bold text-sm cursor-pointer p-1"
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
+                aria-label="Close tariff schedule"
               >
-                ✕
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="p-3.5 bg-slate-950 border border-blue-900/60 rounded-2xl text-xs text-slate-200 leading-relaxed">
-              <strong className="text-blue-300">Official Advisory:</strong> {activeTariff.memoNotes || 'Tagoloan Water District operational tariff schedule adjustment implemented under Presidential Decree No. 198 and LWUA regulatory guidelines.'}
-              <div className="mt-1 text-[11px] text-blue-400 font-medium">
-                Effective Implementation Date: <strong className="text-white">{activeTariff.effectiveDate}</strong>
+            <div className="px-6 py-5 space-y-4 overflow-y-auto">
+              <div className="p-4 bg-slate-950/75 border border-slate-800 rounded-xl text-sm text-slate-200 leading-[1.6] space-y-1.5">
+                <p>
+                  <strong className="text-sky-300">Official Advisory:</strong> {activeTariff.memoNotes || 'Tagoloan Water District operational tariff schedule adjustment implemented under Presidential Decree No. 198 and LWUA regulatory guidelines.'}
+                </p>
+                <p className="text-xs text-slate-400">
+                  Effective Implementation Date: <strong className="text-white font-mono tabular-nums">{activeTariff.effectiveDate}</strong>
+                </p>
+              </div>
+
+              {/* Rates Table */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                  Active Rate Brackets for {consumerRecord?.consumerType === 'Commercial' ? 'Commercial Connections' : 'Domestic / Residential Connections'}
+                </h4>
+
+                <div className="border border-slate-800 rounded-xl overflow-hidden shadow-2xs">
+                  <table className="min-w-full text-xs text-left">
+                    <thead className="bg-slate-950 text-[11px] uppercase font-bold text-slate-400 border-b border-slate-800">
+                      <tr>
+                        <th className="py-2.5 px-4">Consumption Tier</th>
+                        <th className="py-2.5 px-4">Volume Range</th>
+                        <th className="py-2.5 px-4 text-right">Approved Rate (₱)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800 font-medium text-slate-200">
+                      {consumerRecord?.consumerType === 'Commercial' ? (
+                        <>
+                          <tr className="bg-blue-950/40">
+                            <td className="py-2.5 px-4 font-bold text-white">Official Baseline Rate</td>
+                            <td className="py-2.5 px-4 text-slate-400 font-mono tabular-nums">1 – 10 m³</td>
+                            <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-blue-400">₱{getEffectiveRatePerM3('Commercial', activeTariff).toFixed(2)} / m³</td>
+                          </tr>
+                          <tr className="hover:bg-slate-850">
+                            <td className="py-2.5 px-4">Tier 1: Incremental</td>
+                            <td className="py-2.5 px-4 text-slate-400 font-mono tabular-nums">11 – 20 m³</td>
+                            <td className="py-2.5 px-4 text-right font-mono tabular-nums text-white">₱{activeTariff.commercial.tier1_rate.toFixed(2)} / m³</td>
+                          </tr>
+                          <tr className="hover:bg-slate-850">
+                            <td className="py-2.5 px-4">Tier 2: Commercial</td>
+                            <td className="py-2.5 px-4 text-slate-400 font-mono tabular-nums">21 – 30 m³</td>
+                            <td className="py-2.5 px-4 text-right font-mono tabular-nums text-white">₱{activeTariff.commercial.tier2_rate.toFixed(2)} / m³</td>
+                          </tr>
+                          <tr className="hover:bg-slate-850">
+                            <td className="py-2.5 px-4">Tier 3: Commercial</td>
+                            <td className="py-2.5 px-4 text-slate-400 font-mono tabular-nums">31 – 40 m³</td>
+                            <td className="py-2.5 px-4 text-right font-mono tabular-nums text-white">₱{activeTariff.commercial.tier3_rate.toFixed(2)} / m³</td>
+                          </tr>
+                          <tr className="hover:bg-slate-850">
+                            <td className="py-2.5 px-4">Tier 4: High Commercial</td>
+                            <td className="py-2.5 px-4 text-slate-400 font-mono tabular-nums">41 – 50 m³</td>
+                            <td className="py-2.5 px-4 text-right font-mono tabular-nums text-white">₱{activeTariff.commercial.tier4_rate.toFixed(2)} / m³</td>
+                          </tr>
+                          <tr className="hover:bg-slate-850">
+                            <td className="py-2.5 px-4">Tier 5: Industrial / Max</td>
+                            <td className="py-2.5 px-4 text-slate-400 font-mono tabular-nums">51+ m³</td>
+                            <td className="py-2.5 px-4 text-right font-mono tabular-nums text-white">₱{activeTariff.commercial.tier5_rate.toFixed(2)} / m³</td>
+                          </tr>
+                        </>
+                      ) : (
+                        <>
+                          <tr className="bg-emerald-950/40">
+                            <td className="py-2.5 px-4 font-bold text-white">Official Baseline Rate</td>
+                            <td className="py-2.5 px-4 text-slate-400 font-mono tabular-nums">1 – 10 m³</td>
+                            <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-emerald-400">₱{getEffectiveRatePerM3('Residential', activeTariff).toFixed(2)} / m³</td>
+                          </tr>
+                          <tr className="hover:bg-slate-850">
+                            <td className="py-2.5 px-4">Tier 1: Incremental</td>
+                            <td className="py-2.5 px-4 text-slate-400 font-mono tabular-nums">11 – 20 m³</td>
+                            <td className="py-2.5 px-4 text-right font-mono tabular-nums text-white">₱{activeTariff.residential.tier1_rate.toFixed(2)} / m³</td>
+                          </tr>
+                          <tr className="hover:bg-slate-850">
+                            <td className="py-2.5 px-4">Tier 2: Standard Domestic</td>
+                            <td className="py-2.5 px-4 text-slate-400 font-mono tabular-nums">21 – 30 m³</td>
+                            <td className="py-2.5 px-4 text-right font-mono tabular-nums text-white">₱{activeTariff.residential.tier2_rate.toFixed(2)} / m³</td>
+                          </tr>
+                          <tr className="hover:bg-slate-850">
+                            <td className="py-2.5 px-4">Tier 3: Moderate Domestic</td>
+                            <td className="py-2.5 px-4 text-slate-400 font-mono tabular-nums">31 – 40 m³</td>
+                            <td className="py-2.5 px-4 text-right font-mono tabular-nums text-white">₱{activeTariff.residential.tier3_rate.toFixed(2)} / m³</td>
+                          </tr>
+                          <tr className="hover:bg-slate-850">
+                            <td className="py-2.5 px-4">Tier 4: Heavy Consumption</td>
+                            <td className="py-2.5 px-4 text-slate-400 font-mono tabular-nums">41+ m³</td>
+                            <td className="py-2.5 px-4 text-right font-mono tabular-nums text-white">₱{activeTariff.residential.tier4_rate.toFixed(2)} / m³</td>
+                          </tr>
+                        </>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 pt-1 font-mono tabular-nums">
+                  <span>Residential: <strong className="text-emerald-400">₱{getEffectiveRatePerM3('Residential', activeTariff).toFixed(2)}/m³</strong> · Commercial: <strong className="text-blue-400">₱{getEffectiveRatePerM3('Commercial', activeTariff).toFixed(2)}/m³</strong></span>
+                  <span>Franchise Tax: <strong className="text-slate-200">{(activeTariff.franchiseTaxRate * 100).toFixed(0)}%</strong> · Late Penalty: <strong className="text-slate-200">{(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}%</strong></span>
+                </div>
               </div>
             </div>
 
-            {/* Rates Table */}
-            <div className="space-y-4">
-              <h4 className="text-xs font-black uppercase tracking-wider text-white">
-                Active Rate Brackets for {consumerRecord?.consumerType === 'Commercial' ? 'Commercial Connections' : 'Domestic / Residential Connections'}
-              </h4>
-
-              <div className="border border-slate-800 rounded-2xl overflow-hidden shadow-2xs">
-                <table className="min-w-full text-xs text-left">
-                  <thead className="bg-slate-950 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-800">
-                    <tr>
-                      <th className="py-2.5 px-4">Consumption Tier</th>
-                      <th className="py-2.5 px-4">Volume Range</th>
-                      <th className="py-2.5 px-4 text-right">Approved Rate (₱)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800 font-medium text-slate-200">
-                    {consumerRecord?.consumerType === 'Commercial' ? (
-                      <>
-                        <tr className="bg-blue-950/40">
-                          <td className="py-2.5 px-4 font-bold text-white">Official Baseline Rate</td>
-                          <td className="py-2.5 px-4 text-slate-400 font-mono">1 – 10 m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono font-bold text-blue-400">₱{getEffectiveRatePerM3('Commercial', activeTariff).toFixed(2)} / m³</td>
-                        </tr>
-                        <tr className="hover:bg-slate-850">
-                          <td className="py-2.5 px-4">Tier 1: Incremental</td>
-                          <td className="py-2.5 px-4 text-slate-400 font-mono">11 – 20 m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.commercial.tier1_rate.toFixed(2)} / m³</td>
-                        </tr>
-                        <tr className="hover:bg-slate-850">
-                          <td className="py-2.5 px-4">Tier 2: Commercial</td>
-                          <td className="py-2.5 px-4 text-slate-400 font-mono">21 – 30 m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.commercial.tier2_rate.toFixed(2)} / m³</td>
-                        </tr>
-                        <tr className="hover:bg-slate-850">
-                          <td className="py-2.5 px-4">Tier 3: Commercial</td>
-                          <td className="py-2.5 px-4 text-slate-400 font-mono">31 – 40 m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.commercial.tier3_rate.toFixed(2)} / m³</td>
-                        </tr>
-                        <tr className="hover:bg-slate-850">
-                          <td className="py-2.5 px-4">Tier 4: High Commercial</td>
-                          <td className="py-2.5 px-4 text-slate-400 font-mono">41 – 50 m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.commercial.tier4_rate.toFixed(2)} / m³</td>
-                        </tr>
-                        <tr className="hover:bg-slate-850">
-                          <td className="py-2.5 px-4">Tier 5: Industrial / Max</td>
-                          <td className="py-2.5 px-4 text-slate-400 font-mono">51+ m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.commercial.tier5_rate.toFixed(2)} / m³</td>
-                        </tr>
-                      </>
-                    ) : (
-                      <>
-                        <tr className="bg-emerald-950/40">
-                          <td className="py-2.5 px-4 font-bold text-white">Official Baseline Rate</td>
-                          <td className="py-2.5 px-4 text-slate-400 font-mono">1 – 10 m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono font-bold text-emerald-400">₱{getEffectiveRatePerM3('Residential', activeTariff).toFixed(2)} / m³</td>
-                        </tr>
-                        <tr className="hover:bg-slate-850">
-                          <td className="py-2.5 px-4">Tier 1: Incremental</td>
-                          <td className="py-2.5 px-4 text-slate-400 font-mono">11 – 20 m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.residential.tier1_rate.toFixed(2)} / m³</td>
-                        </tr>
-                        <tr className="hover:bg-slate-850">
-                          <td className="py-2.5 px-4">Tier 2: Standard Domestic</td>
-                          <td className="py-2.5 px-4 text-slate-400 font-mono">21 – 30 m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.residential.tier2_rate.toFixed(2)} / m³</td>
-                        </tr>
-                        <tr className="hover:bg-slate-850">
-                          <td className="py-2.5 px-4">Tier 3: Moderate Domestic</td>
-                          <td className="py-2.5 px-4 text-slate-400 font-mono">31 – 40 m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.residential.tier3_rate.toFixed(2)} / m³</td>
-                        </tr>
-                        <tr className="hover:bg-slate-850">
-                          <td className="py-2.5 px-4">Tier 4: Heavy Consumption</td>
-                          <td className="py-2.5 px-4 text-slate-400 font-mono">41+ m³</td>
-                          <td className="py-2.5 px-4 text-right font-mono text-white">₱{activeTariff.residential.tier4_rate.toFixed(2)} / m³</td>
-                        </tr>
-                      </>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400 pt-1 font-mono">
-                <span>Residential: <strong className="text-emerald-400">₱{getEffectiveRatePerM3('Residential', activeTariff).toFixed(2)}/m³</strong> • Commercial: <strong className="text-blue-400">₱{getEffectiveRatePerM3('Commercial', activeTariff).toFixed(2)}/m³</strong></span>
-                <span>Franchise Tax: <strong className="text-slate-200">{(activeTariff.franchiseTaxRate * 100).toFixed(0)}%</strong> • Late Penalty: <strong className="text-slate-200">{(activeTariff.latePaymentSurchargeRate * 100).toFixed(0)}%</strong></span>
-              </div>
-            </div>
-
-            <div className="pt-2 flex justify-end border-t border-slate-800">
+            <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex justify-end shrink-0">
               <button
                 onClick={() => setShowTariffScheduleModal(false)}
-                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl cursor-pointer transition shadow-md"
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl cursor-pointer transition shadow-md whitespace-nowrap"
               >
-                Acknowledge & Close
+                Acknowledge &amp; Close
               </button>
             </div>
           </div>
@@ -8576,14 +8608,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             aria-labelledby="notif-detail-modal-title"
           >
             <div
-              className="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl w-full max-w-2xl max-h-[85vh] shadow-2xl overflow-hidden flex flex-col animate-scale-up"
+              className="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl w-full max-w-2xl max-h-[86vh] shadow-2xl overflow-hidden flex flex-col animate-scale-up"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Zone 1: Compact Unified Header */}
-              <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-3 shrink-0">
-                <div className="flex items-start gap-3 min-w-0">
+              {/* Zone 1: Unified Modal Header */}
+              <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-4 shrink-0">
+                <div className="flex items-start gap-3.5 min-w-0">
                   <div
-                    className={`p-2 rounded-xl border shrink-0 mt-0.5 ${
+                    className={`p-2.5 rounded-xl border shrink-0 mt-0.5 ${
                       isReport || isAnnouncement
                         ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
                         : isInstallation
@@ -8610,33 +8642,33 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     }`}
                   >
                     {isReport ? (
-                      <MessageSquare className="h-4 w-4" />
+                      <MessageSquare className="h-5 w-5" />
                     ) : isAnnouncement ? (
-                      <Bell className="h-4 w-4" />
+                      <Bell className="h-5 w-5" />
                     ) : isInstallation ? (
-                      <Wrench className="h-4 w-4" />
+                      <Wrench className="h-5 w-5" />
                     ) : isMeterStatus ? (
-                      <Gauge className="h-4 w-4" />
+                      <Gauge className="h-5 w-5" />
                     ) : isDisconnection ? (
-                      <AlertOctagon className="h-4 w-4" />
+                      <AlertOctagon className="h-5 w-5" />
                     ) : isAccountIssue ? (
-                      <UserCheck className="h-4 w-4" />
+                      <UserCheck className="h-5 w-5" />
                     ) : isPartialAlert ? (
-                      <AlertTriangle className="h-4 w-4" />
+                      <AlertTriangle className="h-5 w-5" />
                     ) : isBilling ? (
-                      <ReceiptText className="h-4 w-4" />
+                      <ReceiptText className="h-5 w-5" />
                     ) : isPayment ? (
-                      <CheckCircle2 className="h-4 w-4" />
+                      <CheckCircle2 className="h-5 w-5" />
                     ) : (
-                      <Info className="h-4 w-4" />
+                      <Info className="h-5 w-5" />
                     )}
                   </div>
 
-                  <div className="min-w-0 space-y-0.5">
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400">
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
                       {attribution.isFromAdmin && (
                         <>
-                          <span className="font-bold text-sky-300">
+                          <span className="font-semibold text-sky-300">
                             {attribution.senderBadgeLabel}
                           </span>
                           <span aria-hidden="true" className="text-slate-600">·</span>
@@ -8649,16 +8681,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                     <h3
                       id="notif-detail-modal-title"
-                      className="text-sm sm:text-base font-bold text-white leading-snug break-words"
+                      className="text-base sm:text-lg font-bold text-white leading-snug break-words"
                     >
                       {n.title || n.subject}
                     </h3>
 
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
                       {attribution.isFromAdmin && (
                         <>
                           <span>
-                            Sent by: <strong className="text-sky-300 font-semibold">{attribution.senderFullLabel}</strong>
+                            Sent by <strong className="text-sky-300 font-semibold">{attribution.senderFullLabel}</strong>
                           </span>
                           <span aria-hidden="true" className="text-slate-600">·</span>
                         </>
@@ -8687,11 +8719,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 </button>
               </div>
 
-              {/* Zone 2: Clean Compact Summary + Message & Conversation Stream */}
-              <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3.5 space-y-3 bg-slate-900">
-                {/* Compact Summary Bar — Water Meter Installation */}
+              {/* Zone 2: Structured Summary Strip + Readable Message & Conversation Stream */}
+              <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-4 bg-slate-900">
+                {/* Summary Strip — Water Meter Installation */}
                 {isInstallation && (
-                  <div className="rounded-xl bg-slate-950/90 border border-slate-800 px-3.5 py-2.5 text-xs space-y-1">
+                  <div className="rounded-xl bg-slate-950/75 border border-slate-800 px-4 py-3 text-xs space-y-1.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-slate-300">
                         {n.applicationNumber && (
@@ -8721,7 +8753,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       )}
                     </div>
                     {n.remarks && n.remarks.trim() && (
-                      <p className="text-[11px] text-slate-200 pt-1 border-t border-slate-800/80 leading-snug">
+                      <p className="text-[13px] text-slate-200 pt-1.5 border-t border-slate-800/80 leading-relaxed">
                         <span className="text-slate-400 font-semibold">Admin Remarks: </span>
                         {n.remarks.trim()}
                       </p>
@@ -8729,9 +8761,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   </div>
                 )}
 
-                {/* Compact Summary Bar — Meter Status */}
+                {/* Summary Strip — Meter Status */}
                 {isMeterStatus && (
-                  <div className="rounded-xl bg-slate-950/90 border border-slate-800 px-3.5 py-2.5 text-xs space-y-1">
+                  <div className="rounded-xl bg-slate-950/75 border border-slate-800 px-4 py-3 text-xs space-y-1.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-slate-300">
                         <span>
@@ -8765,7 +8797,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       </span>
                     </div>
                     {n.remarks && n.remarks.trim() && (
-                      <p className="text-[11px] text-slate-200 pt-1 border-t border-slate-800/80 leading-snug">
+                      <p className="text-[13px] text-slate-200 pt-1.5 border-t border-slate-800/80 leading-relaxed">
                         <span className="text-slate-400 font-semibold">Admin Remarks: </span>
                         {n.remarks.trim()}
                       </p>
@@ -8773,14 +8805,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   </div>
                 )}
 
-                {/* Compact Summary Bar — Referenced Official Notice on Admin Reply */}
+                {/* Summary Strip — Referenced Official Notice on Admin Reply */}
                 {isReport && effectiveRefNotice && (() => {
                   const refMeterNorm = effectiveRefNotice.meterStatus
                     ? normalizeMeterStatus(effectiveRefNotice.meterStatus)
                     : null;
                   const refMeterLabel = refMeterNorm ? formatMeterStatusLabel(refMeterNorm) : null;
                   return (
-                    <div className="rounded-xl bg-slate-950/90 border border-slate-800 px-3.5 py-2.5 text-xs space-y-1">
+                    <div className="rounded-xl bg-slate-950/75 border border-slate-800 px-4 py-3 text-xs space-y-1.5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="min-w-0">
                           <span className="text-sky-400 font-semibold mr-1.5">Referenced Notice:</span>
@@ -8788,7 +8820,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         </div>
                         {refMeterLabel && (
                           <span
-                            className={`font-bold text-[11px] whitespace-nowrap shrink-0 ${
+                            className={`font-bold text-xs whitespace-nowrap shrink-0 ${
                               refMeterNorm === 'damaged'
                                 ? 'text-rose-400'
                                 : refMeterNorm === 'maintenance'
@@ -8804,7 +8836,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           </span>
                         )}
                       </div>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
                         {effectiveRefNotice.meterNumber && (
                           <>
                             <span>
@@ -8834,7 +8866,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         </span>
                       </div>
                       {effectiveRefNotice.remarks && (
-                        <p className="text-[11px] text-slate-300 pt-1 border-t border-slate-800/80 leading-snug">
+                        <p className="text-[13px] text-slate-300 pt-1.5 border-t border-slate-800/80 leading-relaxed">
                           <span className="text-slate-400 font-semibold">Original Admin Remarks: </span>
                           {effectiveRefNotice.remarks}
                         </p>
@@ -8843,9 +8875,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   );
                 })()}
 
-                {/* Compact Summary Bar — Billing / Payment / Account Identifiers */}
+                {/* Summary Strip — Billing / Payment / Account Identifiers */}
                 {hasBillingOrAccountSummary && (
-                  <div className="rounded-xl bg-slate-950/90 border border-slate-800 px-3.5 py-2.5 text-xs flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                  <div className="rounded-xl bg-slate-950/75 border border-slate-800 px-4 py-3 text-xs flex flex-wrap items-center gap-x-4 gap-y-1.5">
                     {effectiveBillingPeriod && (
                       <span>
                         <span className="text-slate-400">Cycle: </span>
@@ -8915,12 +8947,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                 {/* Primary Message or Unified Conversation Stream */}
                 {isReport && matchedReport ? (
-                  <div className="space-y-2.5">
+                  <div className="space-y-3.5">
                     {/* Consumer's Initial Inquiry / Reply */}
                     <div className="flex flex-col items-end">
-                      <div className="max-w-[92%] space-y-1">
-                        <div className="flex items-center justify-end gap-1.5 text-[11px] text-slate-400">
-                          <span className="font-bold text-slate-200">You ({consumerRecord.name})</span>
+                      <div className="max-w-[92%] space-y-1.5">
+                        <div className="flex items-center justify-end gap-2 text-xs text-slate-400">
+                          <span className="font-semibold text-slate-200">You ({consumerRecord.name})</span>
                           <span aria-hidden="true" className="text-slate-600">·</span>
                           <span className="font-mono tabular-nums">
                             {new Date(matchedReport.createdAt).toLocaleString([], {
@@ -8931,7 +8963,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             })}
                           </span>
                         </div>
-                        <div className="rounded-xl bg-slate-800 border border-slate-700 px-3.5 py-2.5 text-xs sm:text-[13px] text-slate-100 leading-snug space-y-1.5">
+                        <div className="rounded-2xl bg-slate-800 border border-slate-700 px-4 py-3 text-sm text-slate-100 leading-[1.6] space-y-2">
                           {normalizeCompactParagraphs(matchedReport.description).map((p, idx) => (
                             <p key={idx}>{p}</p>
                           ))}
@@ -8950,13 +8982,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           key={rep.id || rIdx}
                           className={`flex flex-col ${fromAdmin ? 'items-start' : 'items-end'}`}
                         >
-                          <div className="max-w-[92%] space-y-1">
+                          <div className="max-w-[92%] space-y-1.5">
                             <div
-                              className={`flex items-center gap-1.5 text-[11px] text-slate-400 ${
+                              className={`flex items-center gap-2 text-xs text-slate-400 ${
                                 fromAdmin ? 'justify-start' : 'justify-end'
                               }`}
                             >
-                              <span className={fromAdmin ? 'font-bold text-sky-300' : 'font-bold text-slate-200'}>
+                              <span className={fromAdmin ? 'font-semibold text-sky-300' : 'font-semibold text-slate-200'}>
                                 {fromAdmin ? `Admin (${rep.senderName})` : `You (${consumerRecord.name})`}
                               </span>
                               <span aria-hidden="true" className="text-slate-600">·</span>
@@ -8970,7 +9002,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               </span>
                             </div>
                             <div
-                              className={`rounded-xl px-3.5 py-2.5 text-xs sm:text-[13px] leading-snug space-y-1.5 border ${
+                              className={`rounded-2xl px-4 py-3 text-sm leading-[1.6] space-y-2 border ${
                                 fromAdmin
                                   ? 'bg-blue-950/75 text-slate-100 border-blue-800/70'
                                   : 'bg-slate-800 text-slate-100 border-slate-700'
@@ -8986,15 +9018,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     })}
 
                     {!hasAdminHumanReply && (
-                      <p className="text-[11px] text-slate-400 text-center pt-1">
+                      <p className="text-xs text-slate-400 text-center pt-1">
                         Delivered to Tagoloan Water District Administration ({matchedReport.ticketNumber}) — awaiting reply.
                       </p>
                     )}
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {/* Compact Normalized Notice Body */}
-                    <div className="space-y-1.5 text-[13px] sm:text-sm text-slate-100 leading-snug break-words">
+                  <div className="space-y-4">
+                    {/* Normalized Notice Body */}
+                    <div className="space-y-2.5 text-sm sm:text-[15px] text-slate-100 leading-[1.6] break-words">
                       {noticeParagraphs.length > 0 ? (
                         noticeParagraphs.map((para, pIdx) => <p key={pIdx}>{para}</p>)
                       ) : (
@@ -9016,9 +9048,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                     {/* Inline Thread if Consumer Already Replied to This Official Notice */}
                     {matchedReport && (
-                      <div className="pt-2.5 border-t border-slate-800 space-y-2">
-                        <div className="flex items-center justify-between text-[11px] text-slate-400">
-                          <span className="font-bold text-slate-200">
+                      <div className="pt-3.5 border-t border-slate-800 space-y-3">
+                        <div className="flex items-center justify-between text-xs text-slate-400">
+                          <span className="font-semibold text-slate-200">
                             Conversation on This Notice
                           </span>
                           <span className="font-mono tabular-nums text-indigo-300 font-semibold">
@@ -9028,9 +9060,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
                         {/* Initial Consumer Reply */}
                         <div className="flex flex-col items-end">
-                          <div className="max-w-[92%] space-y-0.5">
-                            <div className="flex items-center justify-end gap-1.5 text-[10px] text-slate-400">
-                              <span className="font-bold text-slate-200">You</span>
+                          <div className="max-w-[92%] space-y-1">
+                            <div className="flex items-center justify-end gap-2 text-xs text-slate-400">
+                              <span className="font-semibold text-slate-200">You</span>
                               <span aria-hidden="true" className="text-slate-600">·</span>
                               <span className="font-mono tabular-nums">
                                 {new Date(matchedReport.createdAt).toLocaleTimeString([], {
@@ -9039,7 +9071,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                 })}
                               </span>
                             </div>
-                            <div className="rounded-xl bg-slate-800 border border-slate-700 px-3 py-2 text-xs text-slate-100 leading-snug space-y-1">
+                            <div className="rounded-2xl bg-slate-800 border border-slate-700 px-4 py-3 text-sm text-slate-100 leading-[1.6] space-y-1.5">
                               {normalizeCompactParagraphs(matchedReport.description).map((p, idx) => (
                                 <p key={idx}>{p}</p>
                               ))}
@@ -9055,13 +9087,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               key={rep.id || rIdx}
                               className={`flex flex-col ${fromAdmin ? 'items-start' : 'items-end'}`}
                             >
-                              <div className="max-w-[92%] space-y-0.5">
+                              <div className="max-w-[92%] space-y-1">
                                 <div
-                                  className={`flex items-center gap-1.5 text-[10px] text-slate-400 ${
+                                  className={`flex items-center gap-2 text-xs text-slate-400 ${
                                     fromAdmin ? 'justify-start' : 'justify-end'
                                   }`}
                                 >
-                                  <span className={fromAdmin ? 'font-bold text-sky-300' : 'font-bold text-slate-200'}>
+                                  <span className={fromAdmin ? 'font-semibold text-sky-300' : 'font-semibold text-slate-200'}>
                                     {fromAdmin ? `Admin (${rep.senderName})` : 'You'}
                                   </span>
                                   <span aria-hidden="true" className="text-slate-600">·</span>
@@ -9073,7 +9105,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                                   </span>
                                 </div>
                                 <div
-                                  className={`rounded-xl px-3 py-2 text-xs leading-snug space-y-1 border ${
+                                  className={`rounded-2xl px-4 py-3 text-sm leading-[1.6] space-y-1.5 border ${
                                     fromAdmin
                                       ? 'bg-blue-950/75 text-slate-100 border-blue-800/70'
                                       : 'bg-slate-800 text-slate-100 border-slate-700'
@@ -9091,7 +9123,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         })}
 
                         {!hasAdminHumanReply && (
-                          <p className="text-[11px] text-slate-400 text-right">
+                          <p className="text-xs text-slate-400 text-right">
                             Delivered to Administration — awaiting official reply.
                           </p>
                         )}
@@ -9101,11 +9133,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 )}
               </div>
 
-              {/* Zone 3: Pinned Always-Visible Reply Bar & Compact Footer */}
-              <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 shrink-0 space-y-2">
+              {/* Zone 3: Pinned Always-Visible Reply Bar & Unified Footer */}
+              <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 shrink-0 space-y-2.5">
                 {canReplyInModal && (
-                  <form onSubmit={handleSendBellNotificationReply} className="space-y-1.5">
-                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                  <form onSubmit={handleSendBellNotificationReply} className="space-y-2">
+                    <div className="flex items-center justify-between gap-2 text-xs">
                       <span className="font-semibold text-sky-300 flex items-center gap-1.5">
                         <MessageSquare className="h-3.5 w-3.5 shrink-0" />
                         <span>
@@ -9114,12 +9146,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             : 'Reply directly to Administration about this notice'}
                         </span>
                       </span>
-                      <span className="text-slate-400 font-mono tabular-nums text-[10px] shrink-0">
+                      <span className="text-slate-400 font-mono tabular-nums text-[11px] shrink-0">
                         {matchedReport ? matchedReport.ticketNumber : 'Notice auto-attached'}
                       </span>
                     </div>
 
-                    <div className="flex items-end gap-2">
+                    <div className="flex items-end gap-2.5">
                       <textarea
                         rows={2}
                         value={bellReplyText}
@@ -9132,7 +9164,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             ? 'Write a follow-up message to Administration...'
                             : 'Write your reply or question to Administration...'
                         }
-                        className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none resize-none leading-snug"
+                        className="flex-1 px-3.5 py-2.5 bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl text-sm text-white placeholder:text-slate-500 focus:outline-none resize-none leading-relaxed"
                       />
                       <button
                         type="submit"
@@ -9273,78 +9305,78 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100"
+              className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 flex flex-col max-h-[86vh]"
             >
-              <div className="px-5 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
+              <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="p-2 bg-sky-500/15 border border-sky-500/30 rounded-xl text-sky-400 shrink-0">
                     <Activity className="h-4 w-4" />
                   </div>
                   <div className="min-w-0">
-                    <h3 className="text-sm font-black text-white truncate">
-                      Meter Reading &amp; Consumption Details
-                    </h3>
-                    <p className="text-[11px] font-mono tabular-nums text-slate-400 truncate">
+                    <p className="text-xs font-mono tabular-nums text-slate-400 truncate">
                       {r.billingPeriod || 'Field Cycle'} · Record #{r.id}
                     </p>
+                    <h3 className="text-base sm:text-lg font-bold text-white truncate">
+                      Meter Reading &amp; Consumption Details
+                    </h3>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setSelectedUsageReadingModal(null)}
-                  className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                  className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
 
-              <div className="p-5 space-y-4 text-xs">
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-3.5">
+              <div className="px-6 py-5 space-y-4 text-xs overflow-y-auto">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-950/75 border border-slate-800 rounded-xl p-3.5">
                   <div>
-                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Account Number</span>
-                    <span className="font-mono tabular-nums font-bold text-sky-400">
+                    <span className="text-xs font-medium text-slate-400 block">Account Number</span>
+                    <span className="font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">
                       #{consumerRecord?.accountNumber || r.accountNumber || 'PENDING'}
                     </span>
                   </div>
                   <div>
-                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Meter Tag Number</span>
-                    <span className="font-mono tabular-nums font-bold text-white">
+                    <span className="text-xs font-medium text-slate-400 block">Meter Tag Number</span>
+                    <span className="font-mono tabular-nums font-bold text-white mt-0.5 block">
                       #{r.meterNumber || consumerRecord?.meterNumber || 'N/A'}
                     </span>
                   </div>
                   <div>
-                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Inspection Date</span>
-                    <span className="font-mono tabular-nums font-semibold text-slate-200">
+                    <span className="text-xs font-medium text-slate-400 block">Inspection Date</span>
+                    <span className="font-mono tabular-nums font-semibold text-slate-200 mt-0.5 block">
                       {r.readingDate}
                     </span>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
-                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Previous Dial</span>
-                    <span className="text-base font-mono tabular-nums font-black text-slate-200 mt-0.5 block">
+                  <div className="bg-slate-950/75 border border-slate-800 rounded-xl p-3.5">
+                    <span className="text-xs font-medium text-slate-400 block">Previous Dial</span>
+                    <span className="text-base font-mono tabular-nums font-bold text-slate-200 mt-0.5 block">
                       {formatOdometerReading(r.previousReading)}
                     </span>
                   </div>
-                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
-                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Present Dial</span>
-                    <span className="text-base font-mono tabular-nums font-black text-white mt-0.5 block">
+                  <div className="bg-slate-950/75 border border-slate-800 rounded-xl p-3.5">
+                    <span className="text-xs font-medium text-slate-400 block">Present Dial</span>
+                    <span className="text-base font-mono tabular-nums font-bold text-white mt-0.5 block">
                       {formatOdometerReading(presIdx)}
                     </span>
                   </div>
-                  <div className="bg-slate-950 border border-sky-800/60 rounded-xl p-3">
-                    <span className="text-[10px] font-bold uppercase text-sky-400 block">Consumption</span>
-                    <span className="text-base font-mono tabular-nums font-black text-sky-400 mt-0.5 block">
+                  <div className="bg-slate-950/75 border border-sky-800/60 rounded-xl p-3.5">
+                    <span className="text-xs font-medium text-sky-400 block">Consumption</span>
+                    <span className="text-base font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">
                       {r.consumption} m³
                     </span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-3.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/75 border border-slate-800 rounded-xl p-3.5">
                   <div>
-                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Verification Status</span>
-                    <span className={`font-bold ${
+                    <span className="text-xs font-medium text-slate-400 block">Verification Status</span>
+                    <span className={`font-bold mt-0.5 block ${
                       r.status === 'flagged_abnormal'
                         ? 'text-rose-400'
                         : r.status === 'pending'
@@ -9361,29 +9393,29 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                     </span>
                   </div>
                   <div>
-                    <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                    <span className="text-xs font-medium text-slate-400 block">
                       {billIssued ? 'Assessed Water Bill' : 'Estimated Tariff Charge'}
                     </span>
-                    <span className="font-mono tabular-nums font-black text-white text-sm">
+                    <span className="font-mono tabular-nums font-bold text-white text-sm mt-0.5 block">
                       ₱{estCost.toFixed(2)}
                     </span>
                   </div>
                   <div>
-                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Field Meter Reader</span>
-                    <span className="font-semibold text-slate-200">
+                    <span className="text-xs font-medium text-slate-400 block">Field Meter Reader</span>
+                    <span className="font-semibold text-slate-200 mt-0.5 block">
                       {r.meterReaderName || 'Authorized TWD Field Inspector'}
                     </span>
                   </div>
                   <div>
-                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Inspection Remarks</span>
-                    <span className="text-slate-300">
+                    <span className="text-xs font-medium text-slate-400 block">Inspection Remarks</span>
+                    <span className="text-slate-300 mt-0.5 block leading-relaxed">
                       {r.notes || 'Normal mechanical dial reading verified.'}
                     </span>
                   </div>
                 </div>
               </div>
 
-              <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2">
+              <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2 shrink-0">
                 {billIssued ? (
                   <button
                     type="button"
@@ -9396,20 +9428,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         setIsBillDetailsOpen(true);
                       }
                     }}
-                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
                   >
                     <ReceiptText className="h-3.5 w-3.5" />
                     <span>{isCleared ? 'Open Official Receipt' : 'Open Statement Breakdown'}</span>
                   </button>
                 ) : (
-                  <span className="text-[11px] text-slate-400">
+                  <span className="text-xs text-slate-400">
                     Statement unlocks once Administration issues billing.
                   </span>
                 )}
                 <button
                   type="button"
                   onClick={() => setSelectedUsageReadingModal(null)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer ml-auto"
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer ml-auto whitespace-nowrap"
                 >
                   Close
                 </button>
@@ -9431,22 +9463,28 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
       {/* DISCONNECTION NOTICE DAYS EXTENSION REQUEST MODAL */}
       {isExtensionModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-amber-500/50 rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl animate-scale-in">
-            <div className="p-5 bg-gradient-to-r from-amber-950/80 to-slate-900 border-b border-amber-500/30 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-amber-500/20 text-amber-300 rounded-xl border border-amber-500/40">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setIsExtensionModalOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full overflow-hidden shadow-2xl animate-scale-in flex flex-col max-h-[86vh]"
+          >
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 bg-amber-500/15 text-amber-400 rounded-xl border border-amber-500/30 shrink-0">
                   <Clock className="h-5 w-5" />
                 </div>
-                <div>
-                  <h3 className="text-sm font-black text-white">Request Days Extension</h3>
-                  <p className="text-[11px] text-amber-300/80">Tagoloan Water District • Disconnection Deferral</p>
+                <div className="min-w-0">
+                  <p className="text-xs text-amber-400 font-semibold">Disconnection Deferral Request</p>
+                  <h3 className="text-base sm:text-lg font-bold text-white truncate">Request Days Extension</h3>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setIsExtensionModalOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -9481,91 +9519,93 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   setIsSubmittingExtension(false);
                 }
               }}
-              className="p-6 space-y-4"
+              className="flex flex-col flex-1 min-h-0"
             >
-              <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-1.5 text-xs">
-                <div className="flex justify-between items-center text-slate-400">
-                  <span>Account Number:</span>
-                  <span className="font-mono font-bold text-white">{consumerRecord.accountNumber}</span>
+              <div className="px-6 py-5 space-y-4 overflow-y-auto">
+                <div className="p-4 bg-slate-950/75 rounded-xl border border-slate-800 space-y-2 text-xs">
+                  <div className="flex justify-between items-center text-slate-400">
+                    <span>Account Number:</span>
+                    <span className="font-mono tabular-nums font-bold text-white">{consumerRecord.accountNumber}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-400">
+                    <span>Registered Name:</span>
+                    <span className="font-bold text-slate-200">{consumerRecord.name}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-400">
+                    <span>Outstanding Balance:</span>
+                    <span className="font-mono tabular-nums font-bold text-rose-400">
+                      ₱{Number(consumerRecord.outstandingBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex justify-between items-center text-slate-400">
-                  <span>Registered Name:</span>
-                  <span className="font-bold text-slate-200">{consumerRecord.name}</span>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-2">
+                    Select Requested Extension Period
+                  </label>
+                  <div className="grid grid-cols-5 gap-2">
+                    {[3, 5, 7, 10, 15].map((days) => (
+                      <button
+                        key={days}
+                        type="button"
+                        onClick={() => setExtensionDaysSelected(days)}
+                        className={`py-2.5 px-2 rounded-xl text-center border font-bold text-xs transition cursor-pointer flex flex-col items-center justify-center ${
+                          extensionDaysSelected === days
+                            ? 'bg-amber-500/20 border-amber-400 text-amber-300 ring-2 ring-amber-400/30'
+                            : 'bg-slate-950/75 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                        }`}
+                      >
+                        <span className="text-base font-black font-mono tabular-nums">{days}</span>
+                        <span className="text-[11px] font-medium">Days</span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-slate-400 mt-2">
+                    Deferred until:{' '}
+                    <strong className="text-amber-300 font-mono tabular-nums">
+                      {new Date(Date.now() + extensionDaysSelected * 86400000).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric'
+                      })}
+                    </strong>
+                  </p>
                 </div>
-                <div className="flex justify-between items-center text-slate-400">
-                  <span>Outstanding Balance:</span>
-                  <span className="font-mono font-bold text-rose-400">
-                    ₱{Number(consumerRecord.outstandingBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                  </span>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                    Reason for Extension Request <span className="text-rose-400">*</span>
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={extensionReasonInput}
+                    onChange={(e) => setExtensionReasonInput(e.target.value)}
+                    placeholder="e.g. Awaiting monthly salary on the 15th, family medical emergency, or delayed harvest collection..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 leading-relaxed"
+                    required
+                  />
+                </div>
+
+                <div className="p-3.5 bg-slate-950/75 border border-amber-500/30 rounded-xl text-xs text-slate-200 space-y-1 leading-relaxed">
+                  <p className="font-semibold text-amber-300">Tagoloan Water District Extension Policy</p>
+                  <p>
+                    Submission of this request places your disconnection order on temporary review. If granted, failure to remit payment on or before the granted extension date will result in immediate physical disconnection at the curb stop.
+                  </p>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-2">
-                  Select Requested Extension Period:
-                </label>
-                <div className="grid grid-cols-5 gap-2">
-                  {[3, 5, 7, 10, 15].map((days) => (
-                    <button
-                      key={days}
-                      type="button"
-                      onClick={() => setExtensionDaysSelected(days)}
-                      className={`py-2.5 px-2 rounded-xl text-center border font-bold text-xs transition cursor-pointer flex flex-col items-center justify-center ${
-                        extensionDaysSelected === days
-                          ? 'bg-amber-500/20 border-amber-400 text-amber-300 ring-2 ring-amber-400/30'
-                          : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                      }`}
-                    >
-                      <span className="text-base font-black font-mono">{days}</span>
-                      <span className="text-[10px] font-normal uppercase">Days</span>
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-slate-400 mt-1.5">
-                  Deferred until:{' '}
-                  <strong className="text-amber-300 font-mono">
-                    {new Date(Date.now() + extensionDaysSelected * 86400000).toLocaleDateString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                      year: 'numeric'
-                    })}
-                  </strong>
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  Reason for Extension Request: <span className="text-rose-400">*</span>
-                </label>
-                <textarea
-                  rows={3}
-                  value={extensionReasonInput}
-                  onChange={(e) => setExtensionReasonInput(e.target.value)}
-                  placeholder="e.g. Awaiting monthly salary on the 15th, family medical emergency, or delayed harvest collection..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                  required
-                />
-              </div>
-
-              <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-200/90 space-y-1">
-                <p className="font-semibold text-amber-300">Tagoloan Water District Extension Policy:</p>
-                <p>
-                  Submission of this request places your disconnection order on temporary review. If granted, failure to remit payment on or before the granted extension date will result in immediate physical disconnection at the curb stop.
-                </p>
-              </div>
-
-              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+              <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsExtensionModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer whitespace-nowrap"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmittingExtension}
-                  className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow"
+                  className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow whitespace-nowrap"
                 >
                   <Clock className="h-3.5 w-3.5" />
                   <span>{isSubmittingExtension ? 'Submitting...' : 'Submit Extension Request'}</span>

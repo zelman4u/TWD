@@ -422,41 +422,34 @@ export function ConsumerReportsSection({
     <div className="space-y-6 animate-fade-in" id="consumer-reports-module">
       
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden border border-blue-800/40">
-        <div className="absolute right-0 top-0 bottom-0 w-1/3 opacity-10 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-400 to-transparent pointer-events-none" />
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+      <div className="bg-slate-900 rounded-2xl p-6 text-slate-100 shadow-lg border border-slate-800">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2 max-w-2xl">
-            <div className="flex items-center gap-2">
-              <span className="px-2.5 py-1 rounded-full bg-blue-500/30 border border-blue-400/40 text-blue-200 text-xs font-bold uppercase tracking-wider">
-                Official Consumer Assistance Desk
-              </span>
-              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-bold border border-emerald-400/30">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                Admin Monitored
-              </span>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+              <span className="font-semibold text-blue-400">Consumer Assistance Desk</span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className="text-emerald-400 font-medium">Admin Monitored</span>
             </div>
-            <h2 className="text-2xl sm:text-3xl font-black tracking-tight">
-              Service Reports & Water Inquiries
+            <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
+              Service Reports &amp; Water Inquiries
             </h2>
             <p className="text-sm text-slate-300 leading-relaxed">
-              Have a water pipe leak, sudden pressure drop, discolored water, or billing concern? 
-              File an official report directly to Tagoloan Water District. Administrators will be instantly notified 
-              and reply directly to your concern with real-time tracking.
+              Have a water pipe leak, sudden pressure drop, discolored water, or billing concern? File an official report directly to Tagoloan Water District so administrators can review and reply in real time.
             </p>
           </div>
 
-          <div className="shrink-0 flex flex-col sm:flex-row gap-3">
+          <div className="shrink-0 flex flex-col sm:flex-row gap-2.5">
             <button
               onClick={() => setShowNewReportModal(true)}
-              className="px-5 py-3.5 bg-blue-500 hover:bg-blue-400 text-white font-extrabold text-sm rounded-xl shadow-lg transition flex items-center justify-center gap-2 cursor-pointer group hover:scale-[1.02]"
+              className="px-5 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
               id="file-new-report-btn"
             >
-              <Plus className="h-5 w-5 group-hover:rotate-90 transition-transform" />
+              <Plus className="h-4 w-4" />
               <span>File New Report</span>
             </button>
             <button
               onClick={onRefreshReports}
-              className="px-4 py-3.5 bg-white/10 hover:bg-white/20 text-white font-bold text-sm rounded-xl border border-white/20 transition flex items-center justify-center gap-2 cursor-pointer"
+              className="px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm rounded-xl border border-slate-700 transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
               title="Check for Admin Replies"
             >
               <RefreshCw className="h-4 w-4" />
@@ -634,30 +627,33 @@ export function ConsumerReportsSection({
 
         {/* Right Column: Active Conversation Thread View (7 cols) */}
         {activeThreadReport && (
-          <div className="lg:col-span-7 bg-slate-900 rounded-3xl border border-slate-800 shadow-xl overflow-hidden flex flex-col h-[750px] sticky top-4 text-slate-100">
+          <div className="lg:col-span-7 bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden flex flex-col h-[740px] sticky top-4 text-slate-100">
             
             {/* Thread Header */}
-            <div className="bg-slate-950 text-white p-5 flex items-center justify-between border-b border-slate-800 shrink-0">
-              <div className="space-y-1 min-w-0 pr-4">
+            <div className="bg-slate-950 text-white px-6 py-4 flex items-start justify-between gap-3 border-b border-slate-800 shrink-0">
+              <div className="space-y-1 min-w-0 pr-2">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-mono text-xs font-extrabold text-blue-400 bg-blue-950/80 px-2.5 py-0.5 rounded-md border border-blue-800/80">
+                  <span className="font-mono tabular-nums text-xs font-semibold text-sky-400">
                     {activeThreadReport.ticketNumber}
                   </span>
+                  <span aria-hidden="true" className="text-slate-600">·</span>
                   {getUrgencyBadge(activeThreadReport.urgency)}
                   {getStatusBadge(activeThreadReport.status)}
                 </div>
-                <h3 className="text-base font-black truncate text-white">
+                <h3 className="text-base sm:text-lg font-bold text-white leading-snug break-words">
                   {activeThreadReport.title}
                 </h3>
-                <div className="flex items-center gap-3 text-[11px] text-slate-400 flex-wrap">
+                <div className="flex items-center gap-2 text-xs text-slate-400 flex-wrap">
                   <span className="flex items-center gap-1">
-                    <MapPin className="h-3 w-3 text-blue-400" />
+                    <MapPin className="h-3.5 w-3.5 text-sky-400" />
                     <span>{activeThreadReport.barangay}</span>
                   </span>
-                  <span>·</span>
-                  <span className="font-mono">Meter: {activeThreadReport.meterNumber || 'MT-N/A'}</span>
-                  <span>·</span>
-                  <span>Filed: {new Date(activeThreadReport.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                  <span aria-hidden="true" className="text-slate-600">·</span>
+                  <span className="font-mono tabular-nums">Meter {activeThreadReport.meterNumber || 'MT-N/A'}</span>
+                  <span aria-hidden="true" className="text-slate-600">·</span>
+                  <span className="font-mono tabular-nums">
+                    Filed {new Date(activeThreadReport.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  </span>
                 </div>
               </div>
 
@@ -666,35 +662,35 @@ export function ConsumerReportsSection({
                   setActiveThreadReport(null);
                   if (onClearSelectedReport) onClearSelectedReport();
                 }}
-                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
+                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer shrink-0"
                 title="Close Thread"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
             {/* Crew Assignment Notice Banner if In Progress */}
             {activeThreadReport.assignedStaff && (
-              <div className="bg-blue-950/60 border-b border-blue-900/80 px-5 py-2.5 flex items-center gap-2 text-xs text-blue-200 font-medium">
+              <div className="bg-blue-950/60 border-b border-blue-900/70 px-6 py-2.5 flex items-center gap-2 text-xs text-blue-200 font-medium">
                 <Building className="h-4 w-4 text-blue-400 shrink-0" />
                 <span>
-                  <strong className="text-white">Assigned Response Team:</strong> {activeThreadReport.assignedStaff}
+                  <strong className="text-white">Assigned Team:</strong> {activeThreadReport.assignedStaff}
                 </span>
               </div>
             )}
 
             {/* Resolution Notice Banner if Resolved */}
             {activeThreadReport.status === 'resolved' && (
-              <div className="bg-emerald-950/60 border-b border-emerald-900/80 px-5 py-2.5 flex items-center gap-2 text-xs text-emerald-200 font-medium">
+              <div className="bg-emerald-950/60 border-b border-emerald-900/70 px-6 py-2.5 flex items-center gap-2 text-xs text-emerald-200 font-medium">
                 <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
                 <span>
-                  <strong className="text-white">Report Resolved:</strong> Water District operations verified resolution for this ticket.
+                  <strong className="text-white">Report Resolved:</strong> Operations verified resolution for this ticket.
                 </span>
               </div>
             )}
 
             {/* Messages Scroll Area */}
-            <div className="p-5 flex-grow overflow-y-auto space-y-4 bg-slate-950/60">
+            <div className="px-6 py-5 flex-grow overflow-y-auto space-y-4 bg-slate-900">
 
               {/* Referenced Official Admin Notice Card if Thread Originated from Bell Notice */}
               {activeThreadReport.referencedNotice && (() => {
@@ -702,54 +698,51 @@ export function ConsumerReportsSection({
                 const meterNorm = ref.meterStatus ? normalizeMeterStatus(ref.meterStatus) : null;
                 const meterLabel = meterNorm ? formatMeterStatusLabel(meterNorm) : null;
                 return (
-                  <div className="bg-slate-900 rounded-2xl p-4 border border-sky-700/60 shadow-xs space-y-2.5">
+                  <div className="bg-slate-950/75 rounded-xl px-4 py-3 border border-slate-800 space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         <Bell className="h-4 w-4 text-sky-400 shrink-0" />
-                        <div>
-                          <span className="text-[10px] font-black uppercase tracking-wider text-sky-400 block">
-                            Referenced Official Notice from Admin ({ref.sentByAdmin || 'TWD Administration'})
+                        <div className="min-w-0">
+                          <span className="text-xs font-semibold text-sky-400 block">
+                            Referenced Notice ({ref.sentByAdmin || 'TWD Administration'})
                           </span>
-                          <span className="text-xs font-bold text-white">{ref.subject}</span>
+                          <span className="text-sm font-bold text-white break-words">{ref.subject}</span>
                         </div>
                       </div>
                       {meterLabel && (
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border whitespace-nowrap shrink-0 ${
-                          meterNorm === 'damaged'
-                            ? 'bg-rose-950/90 text-rose-300 border-rose-800/80'
-                            : meterNorm === 'maintenance'
-                            ? 'bg-amber-950/90 text-amber-300 border-amber-800/80'
-                            : meterNorm === 'active'
-                            ? 'bg-emerald-950/90 text-emerald-300 border-emerald-800/80'
-                            : 'bg-slate-800 text-slate-200 border-slate-700'
-                        }`}>
+                        <span
+                          className={`text-xs font-semibold whitespace-nowrap shrink-0 ${
+                            meterNorm === 'damaged'
+                              ? 'text-rose-400'
+                              : meterNorm === 'maintenance'
+                              ? 'text-amber-300'
+                              : meterNorm === 'active'
+                              ? 'text-emerald-400'
+                              : 'text-slate-300'
+                          }`}
+                        >
                           Status: {meterLabel}
                         </span>
                       )}
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-300">
                       {ref.meterNumber && (
-                        <div>
-                          <span className="text-slate-400 text-[10px] uppercase font-bold block">Meter Serial</span>
-                          <span className="font-mono tabular-nums font-bold text-slate-200">#{ref.meterNumber}</span>
-                        </div>
+                        <span>
+                          Meter <strong className="font-mono tabular-nums text-white">#{ref.meterNumber}</strong>
+                        </span>
                       )}
                       {ref.accountNumber && (
-                        <div>
-                          <span className="text-slate-400 text-[10px] uppercase font-bold block">Account #</span>
-                          <span className="font-mono tabular-nums font-bold text-sky-300">#{ref.accountNumber}</span>
-                        </div>
-                      )}
-                      <div>
-                        <span className="text-slate-400 text-[10px] uppercase font-bold block">Notice Date</span>
-                        <span className="font-mono tabular-nums text-slate-200">
-                          {formatMeterStatusUpdateDate(ref.statusUpdateDate || ref.sentAt)}
+                        <span>
+                          Account <strong className="font-mono tabular-nums text-sky-300">#{ref.accountNumber}</strong>
                         </span>
-                      </div>
+                      )}
+                      <span className="font-mono tabular-nums text-slate-400">
+                        {formatMeterStatusUpdateDate(ref.statusUpdateDate || ref.sentAt)}
+                      </span>
                     </div>
                     {ref.remarks && (
-                      <p className="text-xs text-slate-300 pt-1.5 border-t border-slate-800/80">
-                        <strong className="text-slate-400 text-[10px] uppercase mr-1.5">Admin Remarks:</strong>
+                      <p className="text-[13px] text-slate-200 pt-1.5 border-t border-slate-800/80 leading-relaxed">
+                        <strong className="text-slate-400 font-semibold mr-1.5">Remarks:</strong>
                         {ref.remarks}
                       </p>
                     )}
@@ -758,28 +751,32 @@ export function ConsumerReportsSection({
               })()}
               
               {/* Original Report Summary Card */}
-              <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800 shadow-xs space-y-2">
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span className="font-bold text-white">Your Initial Reply / Concern Message</span>
-                  <span className="font-mono">{new Date(activeThreadReport.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                </div>
-                <p className="text-xs sm:text-sm text-slate-200 leading-relaxed font-normal">
-                  {activeThreadReport.description}
-                </p>
-
-                {/* Photo attachment if available */}
-                {activeThreadReport.photoUrl && (
-                  <div className="mt-3 pt-3 border-t border-slate-800">
-                    <span className="text-[11px] font-bold text-slate-400 block mb-1">Attached Photographic Proof:</span>
-                    <div className="inline-block relative rounded-xl overflow-hidden border border-slate-700 max-w-xs group">
-                      <img 
-                        src={activeThreadReport.photoUrl} 
-                        alt="Concern attachment" 
-                        className="max-h-48 w-auto object-cover group-hover:scale-105 transition" 
-                      />
-                    </div>
+              <div className="flex flex-col items-end">
+                <div className="max-w-[90%] space-y-1">
+                  <div className="flex items-center justify-end gap-1.5 text-xs text-slate-400">
+                    <span className="font-semibold text-slate-200">Your Initial Concern</span>
+                    <span aria-hidden="true" className="text-slate-600">·</span>
+                    <span className="font-mono tabular-nums">
+                      {new Date(activeThreadReport.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
                   </div>
-                )}
+                  <div className="bg-slate-800 border border-slate-700 rounded-2xl px-4 py-3 text-sm text-slate-100 leading-[1.6] space-y-2.5">
+                    <p>{activeThreadReport.description}</p>
+
+                    {activeThreadReport.photoUrl && (
+                      <div className="pt-2.5 border-t border-slate-700/80">
+                        <span className="text-xs font-medium text-slate-400 block mb-1.5">Attached Photo</span>
+                        <div className="inline-block relative rounded-xl overflow-hidden border border-slate-700 max-w-xs">
+                          <img
+                            src={activeThreadReport.photoUrl}
+                            alt="Concern attachment"
+                            className="max-h-48 w-auto object-cover"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Chronological Replies (Deduplicated) */}
@@ -793,50 +790,36 @@ export function ConsumerReportsSection({
                     key={reply.id || idx}
                     className={`flex flex-col ${isAdmin ? 'items-start' : 'items-end'}`}
                   >
-                    <div className="max-w-[85%] space-y-1">
-                      
-                      {/* Sender header */}
-                      <div className={`flex items-center gap-1.5 text-[11px] flex-wrap ${isAdmin ? 'justify-start' : 'justify-end'}`}>
-                        {isAdmin ? (
-                          <>
-                            <span className={`px-2 py-0.5 rounded-md text-white font-black text-[9px] uppercase tracking-wider flex items-center gap-1 ${
-                              isAutoAck ? 'bg-indigo-600 border border-indigo-400/40' : 'bg-blue-600'
-                            }`}>
-                              <Building className="h-2.5 w-2.5" />
-                              {isAutoAck ? 'Automated Delivery Receipt' : 'Tagoloan Water District Admin'}
-                            </span>
-                            <span className="font-bold text-slate-200">{reply.senderName}</span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="font-bold text-slate-200">You ({consumer.name})</span>
-                            <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700 font-bold text-[9px] uppercase">Consumer</span>
-                          </>
-                        )}
-                        <span className="text-slate-400 font-mono">
+                    <div className="max-w-[90%] space-y-1">
+                      <div className={`flex items-center gap-1.5 text-xs text-slate-400 flex-wrap ${isAdmin ? 'justify-start' : 'justify-end'}`}>
+                        <span className={`font-semibold ${isAdmin ? 'text-sky-300' : 'text-slate-200'}`}>
+                          {isAutoAck
+                            ? `TWD Desk · ${reply.senderName}`
+                            : isAdmin
+                            ? `Admin · ${reply.senderName}`
+                            : `You (${consumer.name})`}
+                        </span>
+                        <span aria-hidden="true" className="text-slate-600">·</span>
+                        <span className="font-mono tabular-nums">
                           {new Date(reply.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
 
-                      {/* Bubble */}
                       <div
-                        className={`rounded-2xl p-3.5 sm:p-4 text-xs sm:text-sm leading-relaxed shadow-xs ${
+                        className={`rounded-2xl px-4 py-3 text-sm leading-[1.6] border ${
                           isAutoAck
-                            ? 'bg-slate-900/95 text-blue-100 rounded-tl-xs border border-indigo-500/60'
+                            ? 'bg-slate-950/90 text-slate-200 border-indigo-500/40'
                             : isAdmin
-                              ? 'bg-blue-600 text-white rounded-tl-xs border border-blue-500'
-                              : 'bg-slate-800 text-slate-100 rounded-tr-xs border border-slate-700'
+                            ? 'bg-blue-950/75 text-slate-100 border-blue-800/70'
+                            : 'bg-slate-800 text-slate-100 border-slate-700'
                         }`}
                       >
                         <p>{reply.message}</p>
 
-                        {/* Status update badge inside admin reply if provided */}
                         {reply.statusUpdate && (
-                          <div className={`mt-2 pt-2 border-t text-[11px] font-bold flex items-center gap-1.5 ${
-                            isAdmin ? 'border-blue-400/50 text-blue-100' : 'border-slate-700 text-slate-300'
-                          }`}>
-                            <RefreshCw className="h-3 w-3" />
-                            <span>Status updated to: {reply.statusUpdate.toUpperCase().replace('_', ' ')}</span>
+                          <div className="mt-2 pt-2 border-t border-slate-700/60 text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                            <RefreshCw className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                            <span>Status updated to <strong className="text-white uppercase">{reply.statusUpdate.replace('_', ' ')}</strong></span>
                           </div>
                         )}
                       </div>
@@ -848,27 +831,27 @@ export function ConsumerReportsSection({
             </div>
 
             {/* Reply Composer Input Form */}
-            <form onSubmit={handleSendReply} className="p-4 bg-slate-900 border-t border-slate-800 shrink-0">
-              <div className="flex items-center gap-2">
+            <form onSubmit={handleSendReply} className="px-6 py-4 bg-slate-950 border-t border-slate-800 shrink-0 space-y-2">
+              <div className="flex items-center gap-2.5">
                 <input
                   type="text"
                   value={replyMessage}
                   onChange={(e) => setReplyMessage(e.target.value)}
                   placeholder="Type your message or follow-up to the Administrator..."
-                  className="flex-grow px-4 py-3 bg-slate-950 border border-slate-700 rounded-xl text-xs sm:text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-white placeholder:text-slate-500 transition"
+                  className="flex-grow px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-white placeholder:text-slate-500 transition"
                   disabled={isSendingReply}
                 />
                 <button
                   type="submit"
                   disabled={isSendingReply || !replyMessage.trim()}
-                  className="px-5 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs sm:text-sm rounded-xl transition flex items-center gap-1.5 shrink-0 shadow-md cursor-pointer"
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-sm rounded-xl transition flex items-center gap-1.5 shrink-0 cursor-pointer whitespace-nowrap"
                 >
                   <Send className="h-4 w-4" />
                   <span className="hidden sm:inline">{isSendingReply ? 'Sending...' : 'Reply'}</span>
                 </button>
               </div>
-              <p className="text-[10px] text-slate-400 mt-1.5">
-                Replies are synchronized in real time with the Tagoloan Water District Administrative Operations Desk.
+              <p className="text-xs text-slate-400">
+                Replies are synchronized in real time with Tagoloan Water District Operations Desk.
               </p>
             </form>
           </div>
@@ -882,34 +865,33 @@ export function ConsumerReportsSection({
           onClick={() => setShowNewReportModal(false)}
         >
           <div 
-            className="bg-slate-900 rounded-3xl max-w-2xl w-full max-h-[92vh] flex flex-col border border-slate-800 shadow-2xl overflow-hidden animate-scale-up relative text-slate-100"
+            className="bg-slate-900 rounded-2xl max-w-2xl w-full max-h-[86vh] flex flex-col border border-slate-800 shadow-2xl overflow-hidden animate-scale-up relative text-slate-100"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header (Fixed at top) */}
-            <div className="shrink-0 bg-gradient-to-r from-blue-900 via-indigo-950 to-slate-950 text-white p-5 sm:p-6 flex items-center justify-between border-b border-slate-800 shadow-xs">
-              <div className="space-y-1 pr-3">
-                <div className="flex items-center gap-2">
-                  <span className="px-2.5 py-0.5 rounded-md bg-blue-500/30 border border-blue-400/30 text-blue-200 text-[10px] font-extrabold uppercase tracking-wider">
-                    Official Ticket Submission
-                  </span>
-                  <span className="text-[11px] text-blue-200 font-mono font-bold">
+            <div className="shrink-0 bg-slate-950 text-white px-6 py-4 flex items-start justify-between gap-3 border-b border-slate-800">
+              <div className="space-y-0.5 pr-3">
+                <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <span className="font-semibold text-blue-400">Official Ticket Submission</span>
+                  <span aria-hidden="true" className="text-slate-600">·</span>
+                  <span className="font-mono tabular-nums text-slate-300">
                     Acct #{consumer.accountNumber || 'Pending'}
                   </span>
                 </div>
-                <h3 className="text-lg sm:text-xl font-black tracking-tight text-white">
+                <h3 className="text-base sm:text-lg font-bold tracking-tight text-white">
                   Submit Customer Service Concern or Report
                 </h3>
-                <p className="text-xs text-slate-300">
+                <p className="text-xs text-slate-400">
                   Tagoloan Water District administrators and response crew will review and respond.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setShowNewReportModal(false)}
-                className="p-2 text-slate-300 hover:text-white rounded-xl hover:bg-white/10 transition cursor-pointer shrink-0"
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
                 title="Close modal"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
@@ -917,7 +899,7 @@ export function ConsumerReportsSection({
             <form onSubmit={handleSubmitReport} className="flex flex-col flex-1 min-h-0 overflow-hidden">
               
               {/* Scrollable Form Content */}
-              <div className="flex-1 min-h-0 overflow-y-auto p-5 sm:p-6 space-y-5">
+              <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-5">
                 {/* Category Picker */}
                 <div className="space-y-2">
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">
@@ -1078,25 +1060,25 @@ export function ConsumerReportsSection({
               </div>
 
               {/* Action Buttons Footer - Pinned and Always Fully Shown */}
-              <div className="shrink-0 bg-slate-950 border-t border-slate-800 p-4 sm:p-5 flex items-center justify-between gap-3">
-                <p className="text-[11px] text-slate-400 hidden sm:block">
+              <div className="shrink-0 bg-slate-950 border-t border-slate-800 px-6 py-3.5 flex items-center justify-between gap-3">
+                <p className="text-xs text-slate-400 hidden sm:block">
                   Submissions are logged with direct ticket tracking and admin response history.
                 </p>
                 <div className="flex items-center gap-2.5 ml-auto">
                   <button
                     type="button"
                     onClick={() => setShowNewReportModal(false)}
-                    className="px-4 py-2.5 text-slate-300 hover:text-white hover:bg-slate-800 font-bold text-xs rounded-xl transition cursor-pointer"
+                    className="px-4 py-2 text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 font-semibold text-xs rounded-xl transition cursor-pointer whitespace-nowrap"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 disabled:opacity-50 text-white font-extrabold text-xs sm:text-sm rounded-xl shadow-md hover:shadow-lg transition flex items-center gap-2 cursor-pointer"
+                    className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-xs sm:text-sm rounded-xl transition flex items-center gap-2 cursor-pointer whitespace-nowrap"
                   >
                     <Send className="h-4 w-4" />
-                    <span>{isSubmitting ? 'Transmitting to Admin...' : 'Submit Official Report'}</span>
+                    <span>{isSubmitting ? 'Submitting...' : 'Submit Official Report'}</span>
                   </button>
                 </div>
               </div>

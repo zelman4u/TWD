@@ -292,14 +292,14 @@ export function AdminInquiryReplyModal({
         aria-labelledby="admin-inquiry-modal-title"
       >
         <div
-          className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] shadow-2xl overflow-hidden flex flex-col animate-scale-up text-slate-100"
+          className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[86vh] shadow-2xl overflow-hidden flex flex-col animate-scale-up text-slate-100"
           onClick={e => e.stopPropagation()}
         >
-          {/* Zone 1: Compact Unified Header */}
-          <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-3 shrink-0">
-            <div className="min-w-0 space-y-0.5">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400">
-                <span className="font-mono tabular-nums font-bold text-sky-400">
+          {/* Zone 1: Standardized Header */}
+          <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-3 shrink-0">
+            <div className="min-w-0 space-y-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                <span className="font-mono tabular-nums font-semibold text-sky-400">
                   {report.ticketNumber}
                 </span>
                 <span aria-hidden="true" className="text-slate-600">·</span>
@@ -327,7 +327,7 @@ export function AdminInquiryReplyModal({
 
               <h3
                 id="admin-inquiry-modal-title"
-                className="text-sm sm:text-base font-bold text-white leading-snug break-words"
+                className="text-base sm:text-lg font-bold text-white leading-snug break-words"
               >
                 {report.title}
               </h3>
@@ -338,7 +338,7 @@ export function AdminInquiryReplyModal({
                 </span>
                 <span aria-hidden="true" className="text-slate-600">·</span>
                 <span>
-                  Account:{' '}
+                  Account{' '}
                   <strong className="font-mono tabular-nums text-sky-300">
                     #{report.accountNumber}
                   </strong>
@@ -347,7 +347,7 @@ export function AdminInquiryReplyModal({
                   <>
                     <span aria-hidden="true" className="text-slate-600">·</span>
                     <span>
-                      Meter:{' '}
+                      Meter{' '}
                       <strong className="font-mono tabular-nums text-slate-200">
                         #{report.meterNumber || ref?.meterNumber}
                       </strong>
@@ -382,21 +382,21 @@ export function AdminInquiryReplyModal({
             </button>
           </div>
 
-          {/* Zone 2: Clean Compact Context + Unified Conversation Thread */}
-          <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3.5 space-y-3 bg-slate-900">
-            {/* Compact Referenced Official Notice Bar */}
+          {/* Zone 2: Context Strip + Readable Conversation Stream */}
+          <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-4 bg-slate-900">
+            {/* Referenced Official Notice Strip */}
             {ref && (
-              <div className="rounded-xl bg-slate-950/90 border border-slate-800 px-3.5 py-2.5 text-xs space-y-1">
+              <div className="rounded-xl bg-slate-950/75 border border-slate-800 px-4 py-3 text-xs space-y-1.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="min-w-0">
                     <span className="text-sky-400 font-semibold mr-1.5">
                       Referenced Notice:
                     </span>
-                    <span className="font-bold text-white">{ref.subject}</span>
+                    <span className="font-bold text-white text-[13px]">{ref.subject}</span>
                   </div>
                   {meterLabel && (
                     <span
-                      className={`font-bold text-[11px] whitespace-nowrap shrink-0 ${
+                      className={`font-semibold text-xs whitespace-nowrap shrink-0 ${
                         meterNorm === 'damaged'
                           ? 'text-rose-400'
                           : meterNorm === 'maintenance'
@@ -413,7 +413,7 @@ export function AdminInquiryReplyModal({
                   )}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-400">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
                   {ref.meterNumber && (
                     <>
                       <span>
@@ -438,8 +438,8 @@ export function AdminInquiryReplyModal({
                 </div>
 
                 {ref.remarks && (
-                  <p className="text-[11px] text-slate-300 pt-1 border-t border-slate-800/80 leading-snug">
-                    <span className="text-slate-400 font-semibold">Original Admin Remarks: </span>
+                  <p className="text-[13px] text-slate-200 pt-1.5 border-t border-slate-800/80 leading-relaxed">
+                    <span className="text-slate-400 font-semibold">Original Remarks: </span>
                     {ref.remarks}
                   </p>
                 )}
@@ -447,12 +447,12 @@ export function AdminInquiryReplyModal({
             )}
 
             {/* Unified Chronological Message Stream */}
-            <div className="space-y-2.5">
+            <div className="space-y-3.5">
               {/* Initial Consumer Message */}
               <div className="flex flex-col items-start">
-                <div className="max-w-[92%] space-y-1">
-                  <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                    <span className="font-bold text-slate-200">{report.consumerName}</span>
+                <div className="max-w-[90%] space-y-1">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                    <span className="font-semibold text-slate-200">{report.consumerName}</span>
                     <span aria-hidden="true" className="text-slate-600">·</span>
                     <span>Consumer</span>
                     <span aria-hidden="true" className="text-slate-600">·</span>
@@ -465,7 +465,7 @@ export function AdminInquiryReplyModal({
                       })}
                     </span>
                   </div>
-                  <div className="rounded-xl bg-slate-800/95 border border-slate-700/80 px-3.5 py-2.5 text-xs sm:text-[13px] text-slate-100 leading-snug space-y-1.5">
+                  <div className="rounded-2xl bg-slate-800/95 border border-slate-700/80 px-4 py-3 text-sm text-slate-100 leading-[1.6] space-y-2">
                     {initialParagraphs.length > 0 ? (
                       initialParagraphs.map((p, idx) => <p key={idx}>{p}</p>)
                     ) : (
@@ -484,9 +484,9 @@ export function AdminInquiryReplyModal({
                           referrerPolicy="no-referrer"
                           className="h-10 w-10 object-cover rounded border border-slate-700 shrink-0"
                         />
-                        <span className="text-[11px] font-semibold text-sky-300 inline-flex items-center gap-1 pr-1.5 whitespace-nowrap">
+                        <span className="text-xs font-semibold text-sky-300 inline-flex items-center gap-1 pr-1.5 whitespace-nowrap">
                           <span>View Attached Photo</span>
-                          <Maximize2 className="h-3 w-3" />
+                          <Maximize2 className="h-3.5 w-3.5" />
                         </span>
                       </button>
                     )}
@@ -506,13 +506,13 @@ export function AdminInquiryReplyModal({
                     key={reply.id || idx}
                     className={`flex flex-col ${isAdmin ? 'items-end' : 'items-start'}`}
                   >
-                    <div className="max-w-[92%] space-y-1">
+                    <div className="max-w-[90%] space-y-1">
                       <div
-                        className={`flex items-center gap-1.5 text-[11px] text-slate-400 ${
+                        className={`flex items-center gap-1.5 text-xs text-slate-400 ${
                           isAdmin ? 'justify-end' : 'justify-start'
                         }`}
                       >
-                        <span className={isAdmin ? 'font-bold text-sky-300' : 'font-bold text-slate-200'}>
+                        <span className={isAdmin ? 'font-semibold text-sky-300' : 'font-semibold text-slate-200'}>
                           {isAdmin ? `Admin (${reply.senderName})` : reply.senderName}
                         </span>
                         <span aria-hidden="true" className="text-slate-600">·</span>
@@ -527,7 +527,7 @@ export function AdminInquiryReplyModal({
                       </div>
 
                       <div
-                        className={`rounded-xl px-3.5 py-2.5 text-xs sm:text-[13px] leading-snug space-y-1.5 border ${
+                        className={`rounded-2xl px-4 py-3 text-sm leading-[1.6] space-y-2 border ${
                           isAdmin
                             ? 'bg-blue-950/75 text-slate-100 border-blue-800/70'
                             : 'bg-slate-800/95 text-slate-100 border-slate-700/80'
@@ -539,8 +539,8 @@ export function AdminInquiryReplyModal({
                           <p>{reply.message}</p>
                         )}
                         {reply.statusUpdate && (
-                          <p className="pt-1 border-t border-slate-700/60 text-[10px] text-slate-300 flex items-center gap-1">
-                            <Check className="h-3 w-3 text-emerald-400 shrink-0" />
+                          <p className="pt-1.5 border-t border-slate-700/60 text-xs text-slate-300 flex items-center gap-1.5">
+                            <Check className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
                             <span>
                               Status set to{' '}
                               <strong className="uppercase text-white">
@@ -559,21 +559,21 @@ export function AdminInquiryReplyModal({
             </div>
           </div>
 
-          {/* Zone 3: Pinned Always-Visible Reply Composer */}
+          {/* Zone 3: Pinned Reply Composer & Footer */}
           <form
             onSubmit={handleSubmitReply}
-            className="px-5 py-3 bg-slate-950 border-t border-slate-800 shrink-0 space-y-2"
+            className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 shrink-0 space-y-2.5"
           >
             {/* Compact Controls Row */}
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex flex-wrap items-center gap-2">
-                <label className="text-[11px] font-semibold text-slate-400 whitespace-nowrap">
+                <label className="text-xs font-semibold text-slate-400 whitespace-nowrap">
                   Status:
                 </label>
                 <select
                   value={replyStatus}
                   onChange={e => setReplyStatus(e.target.value as ConsumerReport['status'])}
-                  className="px-2.5 py-1 bg-slate-900 border border-slate-700 rounded-lg text-xs font-semibold text-slate-100 focus:border-blue-500 focus:outline-none"
+                  className="px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-semibold text-slate-100 focus:border-blue-500 focus:outline-none"
                 >
                   <option value="pending">Pending Review</option>
                   <option value="in_progress">In Progress</option>
@@ -586,14 +586,14 @@ export function AdminInquiryReplyModal({
                   value={assignedCrew}
                   onChange={e => setAssignedCrew(e.target.value)}
                   placeholder="Assigned unit / crew (optional)"
-                  className="px-2.5 py-1 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:outline-none w-44 sm:w-52"
+                  className="px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:outline-none w-44 sm:w-52"
                 />
               </div>
 
               <select
                 value=""
                 onChange={e => handleApplyQuickTemplate(e.target.value)}
-                className="px-2.5 py-1 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-300 focus:border-blue-500 focus:outline-none max-w-[200px]"
+                className="px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-300 focus:border-blue-500 focus:outline-none max-w-[200px]"
                 aria-label="Insert quick reply template"
               >
                 <option value="">Quick reply template...</option>
@@ -617,12 +617,12 @@ export function AdminInquiryReplyModal({
                     ? `Write official reply to ${report.consumerName} regarding "${ref.subject}"...`
                     : `Write official reply to ${report.consumerName} (#${report.accountNumber})...`
                 }
-                className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl text-xs sm:text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none leading-snug"
+                className="flex-1 px-3.5 py-2.5 bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none leading-relaxed"
               />
               <button
                 type="submit"
                 disabled={isSubmittingReply || !replyText.trim()}
-                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-xs sm:text-sm rounded-xl transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
               >
                 <Send className="h-3.5 w-3.5" />
                 <span>{isSubmittingReply ? 'Sending...' : 'Send Reply'}</span>
@@ -630,7 +630,7 @@ export function AdminInquiryReplyModal({
             </div>
 
             {/* Subtle Secondary Footer Row */}
-            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400 pt-0.5">
+            <div className="flex items-center justify-between gap-2 text-xs text-slate-400 pt-0.5">
               <span className="truncate">
                 {ref
                   ? `Delivers to #${report.accountNumber}'s Notification Bell with "${ref.subject}" attached`
@@ -644,7 +644,7 @@ export function AdminInquiryReplyModal({
                     className="text-sky-400 hover:text-sky-300 font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
                   >
                     <span>All Inquiries</span>
-                    <ExternalLink className="h-3 w-3" />
+                    <ExternalLink className="h-3.5 w-3.5" />
                   </button>
                 )}
                 <button

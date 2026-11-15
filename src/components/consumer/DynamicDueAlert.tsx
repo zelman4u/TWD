@@ -132,43 +132,39 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
   // 1. ALL BILLS SETTLED STATE
   if (alertTier === 'all_settled') {
     return (
-      <div 
+      <div
         id="dynamic-due-alert-settled"
-        className="bg-gradient-to-r from-emerald-700 via-teal-700 to-emerald-800 rounded-3xl p-5 sm:p-6 text-white shadow-xl border border-emerald-500/30 relative overflow-hidden animate-fade-in"
+        className="bg-slate-900 border border-emerald-500/35 rounded-2xl p-6 text-slate-100 shadow-lg animate-fade-in"
       >
-        <div className="absolute top-0 right-0 h-40 w-40 bg-white/5 rounded-full blur-2xl transform translate-x-10 -translate-y-10 pointer-events-none"></div>
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative z-10">
-          <div className="flex items-start sm:items-center space-x-4">
-            <div className="p-3 bg-white/20 backdrop-blur-md rounded-2xl shrink-0 shadow-inner">
-              <CheckCircle2 className="h-6 w-6 text-emerald-200" />
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-4">
+            <div className="p-2.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-xl shrink-0 mt-0.5">
+              <CheckCircle2 className="h-5 w-5" />
             </div>
-            <div>
-              <div className="flex flex-wrap items-center gap-2 mb-1">
-                <span className="px-2.5 py-0.5 bg-white/20 text-emerald-100 font-black text-[10px] uppercase tracking-wider rounded-lg border border-white/20">
-                  Account Status: Good Standing
-                </span>
-                <span className="text-[11px] font-mono text-emerald-200">
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                <span className="font-semibold text-emerald-400">Good Standing</span>
+                <span aria-hidden="true" className="text-slate-600">·</span>
+                <span className="font-mono tabular-nums text-slate-400">
                   Account #{consumerRecord.accountNumber}
                 </span>
               </div>
-              <h3 className="text-lg sm:text-xl font-black tracking-tight text-white">
-                All Water Bills Settled in Full — ₱0.00 Outstanding
+              <h3 className="text-lg sm:text-xl font-bold tracking-tight text-white tabular-nums">
+                All Water Bills Settled — ₱0.00 Outstanding
               </h3>
-              <p className="text-xs text-emerald-100/90 leading-relaxed mt-0.5">
-                Current cycle ({latestReading.billingPeriod}) is fully paid. No active overdue balances. Your next monthly reading will automatically generate your next billing statement.
+              <p className="text-sm text-slate-300 leading-relaxed max-w-2xl">
+                Current cycle ({latestReading.billingPeriod}) is fully paid. Your next monthly meter reading will generate your next billing statement.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
-            <button
-              onClick={() => onViewBillDetails(latestReading)}
-              className="px-4 py-2.5 bg-white/15 hover:bg-white/25 border border-white/20 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer"
-            >
-              <ReceiptText className="h-4 w-4 text-emerald-200" />
-              <span>View Latest Receipt</span>
-            </button>
-          </div>
+          <button
+            onClick={() => onViewBillDetails(latestReading)}
+            className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 rounded-xl text-xs font-semibold transition flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 self-end sm:self-center"
+          >
+            <ReceiptText className="h-4 w-4 text-emerald-400" />
+            <span>View Latest Receipt</span>
+          </button>
         </div>
       </div>
     );
@@ -182,75 +178,63 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
     const activePaid = activeSettlement.paidAmount || (consumerRecord.outstandingBalance ? Math.max(0, activeSettlement.grossTotal - activeRemaining) : 0);
 
     return (
-      <div 
+      <div
         id="dynamic-due-alert-partial"
-        className="rounded-3xl p-5 sm:p-6 text-white shadow-xl relative overflow-hidden border-2 border-emerald-500/50 bg-gradient-to-r from-slate-900 via-emerald-950/80 to-slate-900 animate-fade-in ring-4 ring-emerald-500/10"
+        className="bg-slate-900 border border-emerald-500/40 rounded-2xl p-6 text-slate-100 shadow-lg animate-fade-in"
       >
-        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 relative z-10">
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
           <div className="space-y-3 max-w-3xl">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="px-3 py-1 font-black text-xs uppercase tracking-wider rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center space-x-1.5 shadow-xs">
-                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                <span>Partial Payment Credited · Disconnection Halted</span>
-              </span>
-
-              <span className="px-2.5 py-0.5 bg-black/40 text-amber-300 border border-amber-400/40 font-mono font-bold text-[10px] uppercase tracking-wider rounded-lg">
-                Account #{consumerRecord.accountNumber}
-              </span>
-
-              <span className="px-2.5 py-0.5 bg-slate-800 text-slate-300 text-[10px] font-bold uppercase tracking-wider rounded-lg">
-                Billing: {activeTargetBill.billingPeriod}
-              </span>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+              <span className="font-semibold text-emerald-400">Partial Payment Credited · Disconnection Halted</span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className="font-mono tabular-nums text-slate-400">Account #{consumerRecord.accountNumber}</span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className="text-slate-300">{activeTargetBill.billingPeriod}</span>
             </div>
 
-            <div className="space-y-1">
-              <h3 className="text-xl sm:text-2xl font-black tracking-tight text-white flex flex-wrap items-center gap-2">
-                <span>Remaining Balance: ₱{activeRemaining.toFixed(2)}</span>
-                <span className="text-xs font-semibold text-emerald-300 bg-emerald-950/80 px-2.5 py-0.5 rounded-md border border-emerald-700/60">
-                  Paid to Date: ₱{activePaid.toFixed(2)}
-                </span>
+            <div className="space-y-1.5">
+              <h3 className="text-lg sm:text-xl font-bold tracking-tight text-white tabular-nums">
+                Remaining Balance: ₱{activeRemaining.toFixed(2)}
               </h3>
-              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-                Your partial payment was verified and officially recorded. Disconnection procedures are <strong className="text-emerald-400 font-bold">halted</strong>. You can settle the remaining balance at any municipal cashier or upload an additional receipt anytime.
+              <p className="text-sm text-slate-200 leading-[1.6]">
+                Your partial payment of <strong className="font-mono tabular-nums text-emerald-400">₱{activePaid.toFixed(2)}</strong> was verified and recorded. Disconnection procedures are halted. You can settle the remaining balance at the municipal cashier or upload another receipt anytime.
               </p>
             </div>
 
-            {/* Itemized Outstanding Details Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1 text-xs">
-              <div className="bg-black/30 border border-slate-700/60 rounded-xl p-2.5">
-                <span className="text-slate-400 text-[10px] block">Total Assessment</span>
-                <span className="font-mono font-bold text-white text-sm">₱{activeSettlement.grossTotal.toFixed(2)}</span>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
+              <div className="bg-slate-950/75 border border-slate-800 rounded-xl px-3.5 py-2.5">
+                <span className="text-slate-400 text-xs block">Total Assessment</span>
+                <span className="font-mono tabular-nums font-bold text-white text-sm">₱{activeSettlement.grossTotal.toFixed(2)}</span>
               </div>
-              <div className="bg-black/30 border border-emerald-800/40 rounded-xl p-2.5">
-                <span className="text-emerald-400 text-[10px] block">Amount Credited</span>
-                <span className="font-mono font-bold text-emerald-300 text-sm">₱{activePaid.toFixed(2)}</span>
+              <div className="bg-slate-950/75 border border-slate-800 rounded-xl px-3.5 py-2.5">
+                <span className="text-slate-400 text-xs block">Amount Credited</span>
+                <span className="font-mono tabular-nums font-bold text-emerald-400 text-sm">₱{activePaid.toFixed(2)}</span>
               </div>
-              <div className="bg-black/30 border border-amber-800/40 rounded-xl p-2.5">
-                <span className="text-amber-400 text-[10px] block">Net Remaining</span>
-                <span className="font-mono font-black text-amber-300 text-sm">₱{activeRemaining.toFixed(2)}</span>
+              <div className="bg-slate-950/75 border border-slate-800 rounded-xl px-3.5 py-2.5">
+                <span className="text-slate-400 text-xs block">Net Remaining</span>
+                <span className="font-mono tabular-nums font-bold text-amber-300 text-sm">₱{activeRemaining.toFixed(2)}</span>
               </div>
-              <div className="bg-black/30 border border-slate-700/60 rounded-xl p-2.5">
-                <span className="text-slate-400 text-[10px] block">Target Statement</span>
-                <span className="font-bold text-slate-200 text-xs truncate block">{activeTargetBill.billingPeriod}</span>
+              <div className="bg-slate-950/75 border border-slate-800 rounded-xl px-3.5 py-2.5">
+                <span className="text-slate-400 text-xs block">Target Statement</span>
+                <span className="font-semibold text-slate-200 text-sm truncate block">{activeTargetBill.billingPeriod}</span>
               </div>
             </div>
           </div>
 
-          {/* Action CTAs */}
           <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 shrink-0 w-full lg:w-auto">
             <button
               onClick={() => onUploadReceipt(activeTargetBill)}
-              className="px-6 py-3.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl transition flex items-center justify-center space-x-2 cursor-pointer"
+              className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs sm:text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
             >
-              <Upload className="h-4 w-4" />
+              <Upload className="h-4 w-4 shrink-0" />
               <span>Upload Additional OR Slip</span>
             </button>
 
             <button
               onClick={() => onViewBillDetails(activeTargetBill)}
-              className="px-4 py-2.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center space-x-1.5 cursor-pointer"
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
             >
-              <FileText className="h-3.5 w-3.5 text-blue-300" />
+              <FileText className="h-3.5 w-3.5 text-sky-400 shrink-0" />
               <span>View Remaining Breakdown</span>
             </button>
           </div>
@@ -263,100 +247,90 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
   if (alertTier === 'critical_overdue' || alertTier === 'overdue') {
     const isCritical = alertTier === 'critical_overdue';
     return (
-      <div 
+      <div
         id="dynamic-due-alert-overdue"
-        className={`rounded-3xl p-5 sm:p-6 text-white shadow-2xl relative overflow-hidden border-2 animate-fade-in ${
-          isCritical 
-            ? 'bg-gradient-to-r from-red-950 via-rose-900 to-red-900 border-red-500 ring-4 ring-red-600/20' 
-            : 'bg-gradient-to-r from-rose-900 via-rose-850 to-amber-950 border-rose-500 ring-4 ring-rose-500/15'
+        className={`bg-slate-900 rounded-2xl p-6 text-slate-100 shadow-xl border animate-fade-in ${
+          isCritical ? 'border-rose-500/50' : 'border-amber-500/45'
         }`}
       >
-        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 relative z-10">
-          
-          {/* Main Info Block */}
-          <div className="space-y-2.5 max-w-3xl">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className={`px-2.5 py-0.5 font-black text-[10px] uppercase tracking-wider rounded-lg flex items-center space-x-1 shadow-xs ${
-                isCritical ? 'bg-red-600 text-white animate-pulse' : 'bg-rose-600 text-white'
-              }`}>
-                {isCritical ? <AlertOctagon className="h-3.5 w-3.5 mr-1" /> : <AlertTriangle className="h-3.5 w-3.5 mr-1" />}
-                <span>{isCritical ? 'CRITICAL DISCONNECTION NOTICE' : 'OVERDUE BALANCE DETECTED'}</span>
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+          <div className="space-y-3 max-w-3xl">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+              <span className={`font-semibold inline-flex items-center gap-1.5 ${isCritical ? 'text-rose-400' : 'text-amber-300'}`}>
+                {isCritical ? <AlertOctagon className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+                <span>{isCritical ? 'Final Disconnection Notice' : 'Overdue Balance Notice'}</span>
               </span>
-
-              <span className="px-2.5 py-0.5 bg-black/40 text-amber-300 border border-amber-400/40 font-mono font-bold text-[10px] uppercase tracking-wider rounded-lg">
-                {overdueBills.length} Cycle(s) Past Due
-              </span>
-
-              <span className="px-2.5 py-0.5 bg-white/10 text-white font-bold text-[10px] uppercase tracking-wider rounded-lg">
-                Account #{consumerRecord.accountNumber}
-              </span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className="text-slate-300 tabular-nums">{overdueBills.length} Cycle(s) Past Due</span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className="font-mono tabular-nums text-slate-400">Account #{consumerRecord.accountNumber}</span>
             </div>
 
-            <div className="space-y-1">
-              <h3 className="text-xl sm:text-2xl font-black tracking-tight text-white flex flex-wrap items-center gap-2">
-                <span>Account Flagged: Total Overdue ₱{totalOverdueWithPenalty.toFixed(2)}</span>
-                <span className="text-xs font-medium text-rose-200 bg-black/30 px-2 py-0.5 rounded-md">
-                  (Includes 10% Late Surcharge: ₱{totalPenalties.toFixed(2)})
+            <div className="space-y-1.5">
+              <h3 className="text-lg sm:text-xl font-bold tracking-tight text-white tabular-nums">
+                Total Overdue Due: ₱{totalOverdueWithPenalty.toFixed(2)}
+                <span className="text-xs font-normal text-slate-400 ml-2">
+                  (includes 10% late surcharge ₱{totalPenalties.toFixed(2)})
                 </span>
               </h3>
-              <p className="text-xs sm:text-sm text-rose-100/90 leading-relaxed">
-                {isCritical 
-                  ? 'Your water account has 3 or more unpaid billing cycles (or 90+ days overdue). Immediate settlement or official receipt presentation is required to avoid physical service line disconnection.' 
-                  : `Your water tariff bill is past its due date (${formattedDueDate}). Standard 10% late surcharge applies. Settle immediately to prevent service interruption.`}
+              <p className="text-sm text-slate-200 leading-[1.6]">
+                {isCritical
+                  ? 'Your water account has 3 or more unpaid billing cycles (or 90+ days overdue). Settle immediately or upload your cashier receipt to avoid physical line disconnection.'
+                  : `Your water statement passed its due date (${formattedDueDate}). Standard 10% late surcharge applies. Please settle promptly to prevent service interruption.`}
               </p>
             </div>
 
-            {/* Overdue Statements Summary Pill List */}
-            <div className="flex flex-wrap items-center gap-2 pt-1">
+            <div className="flex flex-wrap items-center gap-2 pt-0.5">
               {overdueBills.slice(0, 3).map((b, idx) => {
                 const bNet = getCanonicalBillSettlement(b, consumerRecord.consumerType).remainingBalance;
                 return (
-                  <div key={`overdue-pill-${b.id || idx}`} className="text-[11px] bg-black/30 border border-white/15 px-3 py-1 rounded-xl flex items-center space-x-2">
-                    <span className="font-bold text-amber-300">{b.billingPeriod}:</span>
-                    <span className="font-mono font-black text-white">₱{bNet.toFixed(2)}</span>
-                    <span className="text-[9px] text-rose-300 uppercase font-semibold">({b.dueDate || 'Past Due'})</span>
+                  <div
+                    key={`overdue-pill-${b.id || idx}`}
+                    className="text-xs bg-slate-950/80 border border-slate-800 px-3 py-1.5 rounded-xl flex items-center gap-2"
+                  >
+                    <span className="font-semibold text-slate-300">{b.billingPeriod}</span>
+                    <span className="font-mono tabular-nums font-bold text-white">₱{bNet.toFixed(2)}</span>
+                    <span className="text-slate-400">({b.dueDate || 'Past Due'})</span>
                   </div>
                 );
               })}
               {overdueBills.length > 3 && (
-                <span className="text-[11px] text-amber-200 font-bold">+{overdueBills.length - 3} more statements</span>
+                <span className="text-xs text-amber-300 font-semibold">+{overdueBills.length - 3} more</span>
               )}
             </div>
           </div>
 
-          {/* Action CTAs */}
           <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 shrink-0 w-full lg:w-auto">
             <button
               onClick={() => onUploadReceipt(overdueBills[0])}
-              className="px-6 py-3.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl hover:shadow-2xl transition flex items-center justify-center space-x-2 cursor-pointer transform active:scale-98"
+              className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs sm:text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap tabular-nums"
               id="dynamic-alert-pay-overdue-btn"
             >
-              <ReceiptText className="h-4 w-4" />
-              <span>Settle Overdue via Cashier Receipt (₱{totalOverdueWithPenalty.toFixed(2)})</span>
+              <ReceiptText className="h-4 w-4 shrink-0" />
+              <span>Upload Cashier Receipt (₱{totalOverdueWithPenalty.toFixed(2)})</span>
             </button>
 
             <div className="flex items-center gap-2 w-full">
               <button
                 onClick={() => onUploadReceipt(overdueBills[0])}
-                className="flex-1 px-4 py-2.5 bg-white/15 hover:bg-white/25 border border-white/20 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                className="flex-1 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 font-semibold text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                 id="dynamic-alert-upload-receipt-btn"
                 title="Already paid at municipal hall? Upload OR"
               >
-                <Upload className="h-3.5 w-3.5 text-amber-300" />
+                <Upload className="h-3.5 w-3.5 text-amber-300 shrink-0" />
                 <span>Upload OR Photo</span>
               </button>
 
               <button
                 onClick={() => onViewBillDetails(overdueBills[0])}
-                className="px-3 py-2.5 bg-black/30 hover:bg-black/40 border border-white/15 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center space-x-1 cursor-pointer"
+                className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                 id="dynamic-alert-details-btn"
               >
-                <FileText className="h-3.5 w-3.5" />
+                <FileText className="h-3.5 w-3.5 shrink-0" />
                 <span className="hidden sm:inline">Details</span>
               </button>
             </div>
           </div>
-
         </div>
       </div>
     );
@@ -368,132 +342,111 @@ export const DynamicDueAlert: React.FC<DynamicDueAlertProps> = ({
   const urgencyPercent = Math.max(0, Math.min(100, Math.round(((15 - remainingDays) / 15) * 100)));
 
   return (
-    <div 
+    <div
       id="dynamic-due-alert-current"
-      className={`rounded-3xl p-5 sm:p-6 text-white shadow-xl relative overflow-hidden border-2 animate-fade-in ${
-        isDueToday 
-          ? 'bg-gradient-to-r from-rose-700 via-rose-650 to-orange-650 border-rose-400 ring-4 ring-rose-500/20' 
-          : isDueSoon 
-          ? 'bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 border-amber-300 ring-4 ring-amber-500/20'
-          : 'bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-850 border-blue-400/40 ring-4 ring-blue-500/10'
+      className={`bg-slate-900 rounded-2xl p-6 text-slate-100 shadow-lg border animate-fade-in ${
+        isDueToday
+          ? 'border-rose-500/45'
+          : isDueSoon
+          ? 'border-amber-500/45'
+          : 'border-sky-500/35'
       }`}
     >
-      <div className="absolute top-0 right-0 h-48 w-48 bg-white/5 rounded-full blur-2xl transform translate-x-10 -translate-y-10 pointer-events-none"></div>
-
-      <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 relative z-10">
-        
-        {/* Left Info & Remaining Days Badge */}
-        <div className="space-y-3 max-w-3xl">
-          <div className="flex flex-wrap items-center gap-2">
-            
-            {/* Dynamic Days Remaining Badge */}
-            <span className={`px-3 py-1 font-black text-xs uppercase tracking-wider rounded-xl flex items-center space-x-1.5 shadow-md ${
-              isDueToday 
-                ? 'bg-red-600 text-white animate-pulse' 
-                : isDueSoon 
-                ? 'bg-amber-950 text-amber-300 border border-amber-300' 
-                : 'bg-white/20 text-white border border-white/20'
-            }`}>
-              <Timer className="h-4 w-4" />
+      <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+        <div className="space-y-3 max-w-3xl w-full">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+            <span
+              className={`font-semibold inline-flex items-center gap-1.5 ${
+                isDueToday ? 'text-rose-400' : isDueSoon ? 'text-amber-300' : 'text-sky-400'
+              }`}
+            >
+              <Timer className="h-3.5 w-3.5" />
               <span>
-                {isDueToday 
-                  ? '🚨 DUE TODAY' 
-                  : remainingDays === 1 
-                  ? '⚠️ DUE TOMORROW (1 DAY LEFT)' 
-                  : `🗓️ ${remainingDays} DAYS REMAINING`}
+                {isDueToday
+                  ? 'Due Today'
+                  : remainingDays === 1
+                  ? 'Due Tomorrow (1 Day Left)'
+                  : `${remainingDays} Days Remaining`}
               </span>
             </span>
-
-            <span className="px-2.5 py-0.5 bg-black/25 text-white font-mono text-[11px] font-bold rounded-lg border border-white/10">
-              Period: {latestReading.billingPeriod}
-            </span>
-
-            <span className="px-2.5 py-0.5 bg-white/10 text-white font-bold text-[10px] uppercase tracking-wider rounded-lg">
-              Due Date: {formattedDueDate}
-            </span>
+            <span aria-hidden="true" className="text-slate-600">·</span>
+            <span className="text-slate-300">{latestReading.billingPeriod}</span>
+            <span aria-hidden="true" className="text-slate-600">·</span>
+            <span className="font-mono tabular-nums text-slate-400">Due {formattedDueDate}</span>
           </div>
 
-          <div>
-            <h3 className="text-xl sm:text-2xl font-black tracking-tight text-white flex flex-wrap items-center gap-2">
-              <span>
-                {latestSt.isPartial
-                  ? `Remaining Balance Due: ₱${netLatestDue.toFixed(2)}`
-                  : `Water Tariff Statement Due: ₱${netLatestDue.toFixed(2)}`}
-              </span>
+          <div className="space-y-1.5">
+            <h3 className="text-lg sm:text-xl font-bold tracking-tight text-white tabular-nums">
+              {latestSt.isPartial
+                ? `Remaining Balance Due: ₱${netLatestDue.toFixed(2)}`
+                : `Current Water Statement Due: ₱${netLatestDue.toFixed(2)}`}
               {latestSt.isPartial && (
-                <span className="text-[10px] font-bold bg-amber-300 text-slate-900 px-2.5 py-0.5 rounded-full uppercase">
-                  Paid ₱{paidLatestAmt.toFixed(2)} of ₱{grossLatestCost.toFixed(2)}
+                <span className="text-xs font-normal text-emerald-400 ml-2">
+                  (Paid ₱{paidLatestAmt.toFixed(2)} of ₱{grossLatestCost.toFixed(2)})
                 </span>
               )}
             </h3>
-            <p className="text-xs sm:text-sm text-white/90 leading-relaxed mt-1">
+            <p className="text-sm text-slate-200 leading-[1.6]">
               {latestSt.isPartial
                 ? `Your partial payment of ₱${paidLatestAmt.toFixed(2)} for ${latestReading.billingPeriod} (${latestReading.consumption} m³) has been credited against your ₱${grossLatestCost.toFixed(2)} statement. Remaining balance of ₱${netLatestDue.toFixed(2)} is due on ${formattedDueDate}.`
                 : isDueToday
-                ? `Today (${formattedDueDate}) is the final payment cutoff for your ${latestReading.billingPeriod} consumption (${latestReading.consumption} m³). Pay now online or upload your municipal cashier receipt to avoid the 10% late surcharge.`
+                ? `Today (${formattedDueDate}) is the final payment cutoff for your ${latestReading.billingPeriod} consumption (${latestReading.consumption} m³). Pay online or upload your cashier receipt to avoid the 10% late surcharge.`
                 : isDueSoon
-                ? `Your water bill of ₱${netLatestDue.toFixed(2)} for ${latestReading.billingPeriod} is due in ${remainingDays} days on ${formattedDueDate}. Settle promptly to maintain uninterrupted district water supply.`
-                : `Your water bill of ₱${netLatestDue.toFixed(2)} for ${latestReading.billingPeriod} (${latestReading.consumption} m³) has been officially issued. Payment is due on ${formattedDueDate} (${remainingDays} days remaining).`}
+                ? `Your water bill of ₱${netLatestDue.toFixed(2)} for ${latestReading.billingPeriod} is due in ${remainingDays} days on ${formattedDueDate}. Settle promptly to keep your service in good standing.`
+                : `Your water bill of ₱${netLatestDue.toFixed(2)} for ${latestReading.billingPeriod} (${latestReading.consumption} m³) has been issued. Payment is due on ${formattedDueDate}.`}
             </p>
           </div>
 
-          {/* Timeline progress indicator */}
-          <div className="space-y-1 pt-1">
-            <div className="flex justify-between items-center text-[10px] text-white/80 font-bold uppercase tracking-wider">
-              <span>Reading Date: {latestReading.readingDate}</span>
-              <span className="font-mono text-amber-200">
-                {isDueToday ? 'Cutoff Reached' : `${remainingDays} days before due cutoff`}
+          <div className="space-y-1.5 pt-1">
+            <div className="flex justify-between items-center text-xs text-slate-400">
+              <span>Reading: <span className="font-mono tabular-nums text-slate-300">{latestReading.readingDate}</span></span>
+              <span className={`font-mono tabular-nums font-medium ${isDueToday ? 'text-rose-400' : isDueSoon ? 'text-amber-300' : 'text-sky-300'}`}>
+                {isDueToday ? 'Cutoff reached' : `${remainingDays} days before due date`}
               </span>
-              <span>Due: {formattedDueDate}</span>
+              <span>Due: <span className="font-mono tabular-nums text-slate-300">{formattedDueDate}</span></span>
             </div>
-            <div className="w-full h-2 bg-black/30 rounded-full overflow-hidden border border-white/10">
-              <div 
+            <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+              <div
                 className={`h-full transition-all duration-500 ${
-                  isDueToday ? 'bg-red-400' : isDueSoon ? 'bg-amber-300' : 'bg-sky-300'
+                  isDueToday ? 'bg-rose-500' : isDueSoon ? 'bg-amber-400' : 'bg-sky-400'
                 }`}
                 style={{ width: `${urgencyPercent}%` }}
-              ></div>
+              />
             </div>
           </div>
         </div>
 
-        {/* Right Action Buttons */}
         <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 shrink-0 w-full lg:w-auto">
           <button
             onClick={() => onUploadReceipt(latestReading)}
-            className={`px-6 py-3.5 font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl transition flex items-center justify-center space-x-2 cursor-pointer transform active:scale-98 ${
-              isDueToday || isDueSoon 
-                ? 'bg-white hover:bg-slate-50 text-slate-950 shadow-white/20' 
-                : 'bg-amber-400 hover:bg-amber-300 text-slate-950 shadow-amber-400/20'
-            }`}
+            className="px-5 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs sm:text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap tabular-nums"
             id="dynamic-alert-pay-current-btn"
           >
-            <ReceiptText className="h-4 w-4 text-blue-700" />
-            <span>Validate Cashier Receipt (₱{netLatestDue.toFixed(2)})</span>
+            <ReceiptText className="h-4 w-4 shrink-0" />
+            <span>Validate Receipt (₱{netLatestDue.toFixed(2)})</span>
           </button>
 
           <div className="flex items-center gap-2 w-full">
             <button
               onClick={() => onUploadReceipt(latestReading)}
-              className="flex-1 px-4 py-2.5 bg-white/15 hover:bg-white/25 border border-white/20 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center space-x-1.5 cursor-pointer"
+              className="flex-1 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 font-semibold text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
               id="dynamic-alert-upload-receipt-btn"
               title="Upload physical receipt from municipal office"
             >
-              <Upload className="h-3.5 w-3.5 text-amber-300" />
+              <Upload className="h-3.5 w-3.5 text-amber-300 shrink-0" />
               <span>Upload Photo</span>
             </button>
 
             <button
               onClick={() => onViewBillDetails(latestReading)}
-              className="px-3 py-2.5 bg-black/30 hover:bg-black/40 border border-white/15 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center space-x-1 cursor-pointer"
+              className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
               id="dynamic-alert-view-breakdown-btn"
             >
-              <FileText className="h-3.5 w-3.5" />
+              <FileText className="h-3.5 w-3.5 shrink-0" />
               <span className="hidden sm:inline">Breakdown</span>
             </button>
           </div>
         </div>
-
       </div>
     </div>
   );

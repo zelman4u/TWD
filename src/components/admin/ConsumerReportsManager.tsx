@@ -375,29 +375,35 @@ export function ConsumerReportsManager({
     <div className="space-y-6 animate-fade-in" id="admin-customer-service-manager">
       
       {/* Customer Service Header Banner */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 text-white shadow-xl">
-        <div className="flex items-start space-x-3.5">
-          <div className="p-3 bg-rose-600/20 text-rose-400 rounded-xl border border-rose-500/30 shrink-0">
-            <MessageSquare className="h-6 w-6" />
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 text-slate-100 shadow-lg">
+        <div className="flex items-start gap-3.5">
+          <div className="p-2.5 bg-blue-500/15 text-blue-400 rounded-xl border border-blue-500/30 shrink-0 mt-0.5">
+            <MessageSquare className="h-5 w-5" />
           </div>
-          <div>
-            <h3 className="text-base font-black uppercase tracking-wider text-white flex items-center gap-2">
-              <span>Customer Service & Consumer Inquiries</span>
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+              <span className="font-semibold text-blue-400">Customer Service Desk</span>
               {pendingCount > 0 && (
-                <span className="text-[10px] font-black uppercase px-2.5 py-0.5 bg-rose-500 text-white rounded-full animate-pulse">
-                  {pendingCount} Pending Review
-                </span>
+                <>
+                  <span aria-hidden="true" className="text-slate-600">·</span>
+                  <span className="font-semibold text-rose-400 tabular-nums">
+                    {pendingCount} Pending Review
+                  </span>
+                </>
               )}
+            </div>
+            <h3 className="text-base sm:text-lg font-bold text-white leading-snug">
+              Customer Service &amp; Consumer Inquiries
             </h3>
-            <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
-              Official customer service response desk for water consumer concerns, emergency leak reports, pressure issues, and service inquiries filed from the Consumer Portal.
+            <p className="text-sm text-slate-300 max-w-2xl leading-relaxed">
+              Manage consumer concerns, leak reports, pressure drops, and billing inquiries submitted from the Consumer Portal.
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={onRefreshReports}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold border border-slate-700 flex items-center space-x-1.5 transition cursor-pointer"
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-slate-700 flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
             title="Refresh Inquiries"
           >
             <RefreshCw className="h-3.5 w-3.5" />
@@ -411,37 +417,34 @@ export function ConsumerReportsManager({
         
         <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs flex items-center justify-between">
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Total Customer Inquiries</p>
-            <p className="text-2xl font-black text-slate-900 mt-1">{totalCount}</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">Customer Service Log</p>
+            <p className="text-xs font-semibold text-slate-500">Total Inquiries</p>
+            <p className="text-2xl font-bold text-slate-900 mt-1 tabular-nums">{totalCount}</p>
+            <p className="text-xs text-slate-500 mt-0.5">Customer service log</p>
           </div>
-          <div className="h-11 w-11 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center font-bold shrink-0">
+          <div className="h-11 w-11 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center shrink-0">
             <MessageSquare className="h-5 w-5" />
           </div>
         </div>
 
         <div className="bg-white rounded-2xl p-5 border border-amber-200/90 shadow-xs flex items-center justify-between">
           <div>
-            <div className="flex items-center gap-1.5">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">Pending Initial Review</p>
-              {pendingCount > 0 && <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>}
-            </div>
-            <p className="text-2xl font-black text-amber-600 mt-1">{pendingCount}</p>
-            <p className="text-[10px] text-amber-700/80 mt-0.5">Needs Administrative Action</p>
+            <p className="text-xs font-semibold text-amber-700">Pending Review</p>
+            <p className="text-2xl font-bold text-amber-600 mt-1 tabular-nums">{pendingCount}</p>
+            <p className="text-xs text-amber-700/80 mt-0.5">Needs admin action</p>
           </div>
-          <div className="h-11 w-11 rounded-xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center font-bold shrink-0">
+          <div className="h-11 w-11 rounded-xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center shrink-0">
             <Clock className="h-5 w-5" />
           </div>
         </div>
 
         <div className="bg-white rounded-2xl p-5 border border-blue-200/90 shadow-xs flex items-center justify-between">
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-blue-700">In Progress / Dispatched</p>
-            <p className="text-2xl font-black text-blue-600 mt-1">{inProgressCount}</p>
-            <p className="text-[10px] text-blue-600/80 mt-0.5">Field Crews Operating</p>
+            <p className="text-xs font-semibold text-blue-700">In Progress</p>
+            <p className="text-2xl font-bold text-blue-600 mt-1 tabular-nums">{inProgressCount}</p>
+            <p className="text-xs text-blue-600/80 mt-0.5">Field crews active</p>
           </div>
-          <div className="h-11 w-11 rounded-xl bg-blue-50 text-blue-600 border border-blue-200 flex items-center justify-center font-bold shrink-0">
-            <RefreshCw className="h-5 w-5 animate-spin" />
+          <div className="h-11 w-11 rounded-xl bg-blue-50 text-blue-600 border border-blue-200 flex items-center justify-center shrink-0">
+            <RefreshCw className="h-5 w-5" />
           </div>
         </div>
 
@@ -582,22 +585,22 @@ export function ConsumerReportsManager({
                                   {report.ticketNumber}
                                 </span>
                                 {mockDb.isReportUnreadForAdmin(report) && (
-                                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping" title="New update from consumer"></span>
+                                  <span className="w-2 h-2 rounded-full bg-blue-400" title="Unread update from consumer"></span>
                                 )}
                               </div>
                               <div>
                                 {report.urgency === 'emergency' && (
-                                  <span className="inline-block px-2 py-0.5 bg-rose-950/80 text-rose-300 border border-rose-800/80 font-extrabold text-[9px] uppercase rounded animate-pulse">
+                                  <span className="inline-block px-2 py-0.5 bg-rose-950/80 text-rose-300 border border-rose-800/80 font-bold text-[10px] uppercase rounded">
                                     Emergency
                                   </span>
                                 )}
                                 {report.urgency === 'urgent' && (
-                                  <span className="inline-block px-2 py-0.5 bg-amber-950/80 text-amber-300 border border-amber-800/80 font-bold text-[9px] uppercase rounded">
+                                  <span className="inline-block px-2 py-0.5 bg-amber-950/80 text-amber-300 border border-amber-800/80 font-bold text-[10px] uppercase rounded">
                                     Urgent
                                   </span>
                                 )}
                                 {report.urgency === 'normal' && (
-                                  <span className="inline-block px-2 py-0.5 bg-slate-800 text-slate-400 border border-slate-700 font-semibold text-[9px] rounded">
+                                  <span className="inline-block px-2 py-0.5 bg-slate-800 text-slate-300 border border-slate-700 font-semibold text-[10px] rounded">
                                     Normal
                                   </span>
                                 )}

@@ -653,6 +653,19 @@ table:not(#official-print-document table) [class*="bg-purple-50"] {
     print-color-adjust: exact !important;
   }
 
+  #official-print-document .print-break-before {
+    page-break-before: always !important;
+    break-before: page !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    border-top: none !important;
+  }
+
+  #official-print-document .print-avoid-break {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
   #official-print-document .no-print,
   .no-print {
     display: none !important;

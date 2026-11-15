@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Building,
   Building2, 
@@ -12,6 +13,10 @@ import {
   Search, 
   Filter, 
   Download, 
+  Printer,
+  Layers,
+  Moon,
+  Sun,
   CheckCircle, 
   Check, 
   Calendar, 
@@ -57,6 +62,21 @@ interface RecordsArchiveViewProps {
   exportToCsv: (filename: string, headers: string[], rows: (string | number | undefined)[][]) => void;
 }
 
+type ArchiveModuleKey = 'consumers' | 'meters' | 'readings' | 'bills' | 'payments' | 'audit';
+
+const ALL_ARCHIVE_MODULES: { key: ArchiveModuleKey; title: string; subtitle: string }[] = [
+  { key: 'consumers', title: 'MASTER CONSUMERS ARCHIVE REGISTRY', subtitle: 'Connected Accounts, Classification & Service Addresses' },
+  { key: 'meters', title: 'WATER METERS ASSET INVENTORY', subtitle: 'Meter Serials, Commissioning Dates & Assignments' },
+  { key: 'readings', title: 'METER READINGS & ODOMETER AUDIT TRAIL', subtitle: 'Field Odometer Captures, Consumption & Verification' },
+  { key: 'bills', title: 'OFFICIAL WATER BILLS ASSESSMENT LEDGER', subtitle: 'Billing Cycles, Tariff Charges & Settlement Status' },
+  { key: 'payments', title: 'PAYMENT RECEIPTS & CASHIER LOG', subtitle: 'Official Receipts, Payment Instruments & Cash Settlements' },
+  { key: 'audit', title: 'SYSTEM SECURITY & OPERATIONS AUDIT LOG', subtitle: 'Immutable Administrative & Operator Event Registry' },
+];
+
+const ARCHIVE_LOGO_URL = 'https://lh3.googleusercontent.com/d/1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg';
+const ARCHIVE_FALLBACK_LOGO_URL = 'https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w500';
+const ARCHIVE_PH_SEAL_URL = 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/84/Coat_of_arms_of_the_Philippines.svg/500px-Coat_of_arms_of_the_Philippines.svg.png';
+
 export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
   recordsTab,
   consumers,
@@ -77,19 +97,39 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
     type: 'consumer' | 'meter' | 'reading' | 'bill' | 'payment' | 'audit';
     data: any;
   } | null>(null);
+  const [archivePrintState, setArchivePrintState] = useState<{
+    scope: 'current_tab' | 'all_tabs' | 'single';
+    singleRecord?: { type: 'consumer' | 'meter' | 'reading' | 'bill' | 'payment' | 'audit'; data: any };
+  } | null>(null);
+  const [archivePrintTheme, setArchivePrintTheme] = useState<'dark' | 'paper'>('dark');
 
   useEffect(() => {
     setCurrentPage(1);
   }, [recordsTab, searchQuery, classificationFilter]);
 
   useEffect(() => {
-    if (!selectedArchiveRecord) return;
+    if (!selectedArchiveRecord && !archivePrintState) return;
+    const originalOverflow = document.body.style.overflow;
+    if (archivePrintState) {
+      document.body.style.overflow = 'hidden';
+    }
     const handleEsc = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') setSelectedArchiveRecord(null);
+      if (ev.key === 'Escape') {
+        if (archivePrintState) {
+          setArchivePrintState(null);
+        } else {
+          setSelectedArchiveRecord(null);
+        }
+      }
     };
     window.addEventListener('keydown', handleEsc);
-    return () => window.removeEventListener('keydown', handleEsc);
-  }, [selectedArchiveRecord]);
+    return () => {
+      if (archivePrintState) {
+        document.body.style.overflow = originalOverflow;
+      }
+      window.removeEventListener('keydown', handleEsc);
+    };
+  }, [selectedArchiveRecord, archivePrintState]);
 
   // Metrics for Cards
   const totalConsumers = consumers.length;
@@ -424,15 +464,35 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
           )}
         </div>
 
-        <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
-          <span className="text-[11px] font-mono tabular-nums text-slate-400">
+        <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2.5 shrink-0">
+          <span className="text-[11px] font-mono tabular-nums text-slate-400 mr-1">
             Showing <strong className="text-white font-bold">{activeFilteredCount}</strong> of {activeTotalCount} entries
           </span>
 
           <button
             type="button"
+            onClick={() => setArchivePrintState({ scope: 'current_tab' })}
+            className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold text-xs uppercase tracking-wider rounded-xl border border-slate-700 transition flex items-center space-x-1.5 cursor-pointer shadow-sm whitespace-nowrap shrink-0"
+            title={`Print all ${activeFilteredCount} filtered records in the current tab`}
+          >
+            <Printer className="h-3.5 w-3.5 text-sky-400" />
+            <span>Print Tab ({activeFilteredCount})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setArchivePrintState({ scope: 'all_tabs' })}
+            className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-1.5 cursor-pointer shadow-md whitespace-nowrap shrink-0"
+            title="Print all 6 archive modules together in one master document"
+          >
+            <Layers className="h-3.5 w-3.5 text-white" />
+            <span>Print All Records</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleExportCurrentView}
-            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-1.5 cursor-pointer shadow-md shrink-0"
+            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-1.5 cursor-pointer shadow-md whitespace-nowrap shrink-0"
           >
             <Download className="h-3.5 w-3.5 text-white" />
             <span>Export CSV</span>
@@ -993,6 +1053,28 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
             ? 'Payment Receipt Record Details'
             : 'Security Audit Log Entry';
 
+        const eyebrowLabel =
+          type === 'consumer'
+            ? 'Archive · Consumer Account'
+            : type === 'meter'
+            ? 'Archive · Meter Asset'
+            : type === 'reading'
+            ? 'Archive · Reading Trail'
+            : type === 'bill'
+            ? 'Archive · Assessed Bill'
+            : type === 'payment'
+            ? 'Archive · Official Receipt'
+            : 'Archive · Security Audit';
+
+        const recordIdentifier =
+          type === 'consumer'
+            ? data.accountNumber || data.applicationNumber || 'Pending ID'
+            : type === 'meter'
+            ? `Meter Tag #${data.meterNumber}`
+            : type === 'audit'
+            ? new Date(data.timestamp).toLocaleString()
+            : `Record #${data.orNumber || data.transactionId || data.id || 'N/A'}`;
+
         return (
           <div
             className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
@@ -1002,234 +1084,243 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
               onClick={(e) => e.stopPropagation()}
               className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100"
             >
-              <div className="px-5 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
+              <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="p-2 bg-sky-500/15 border border-sky-500/30 rounded-xl text-sky-400 shrink-0">
+                  <div className="p-2.5 bg-sky-500/15 border border-sky-500/30 rounded-xl text-sky-400 shrink-0">
                     <Database className="h-4 w-4" />
                   </div>
                   <div className="min-w-0">
-                    <h3 className="text-sm font-black text-white truncate">{modalTitle}</h3>
-                    <p className="text-[11px] font-mono tabular-nums text-slate-400 truncate">
-                      {type === 'consumer'
-                        ? data.accountNumber || data.applicationNumber || 'Pending ID'
-                        : type === 'meter'
-                        ? `Meter Tag #${data.meterNumber}`
-                        : type === 'audit'
-                        ? new Date(data.timestamp).toLocaleString()
-                        : `Record #${data.id || data.transactionId || 'N/A'}`}
-                    </p>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-sky-400 block truncate">
+                      {eyebrowLabel} · {recordIdentifier}
+                    </span>
+                    <h3 className="text-base sm:text-lg font-bold text-white tracking-tight truncate">{modalTitle}</h3>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setSelectedArchiveRecord(null)}
                   className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                  title="Close (Esc)"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
 
-              <div className="p-5 space-y-3.5 text-xs">
+              <div className="px-6 py-5 space-y-4 max-h-[75vh] overflow-y-auto">
                 {type === 'consumer' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 border border-slate-800 rounded-xl p-4">
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Consumer Name</span>
-                      <span className="font-bold text-white">{data.name}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Consumer Name</span>
+                      <span className="text-sm font-bold text-white mt-0.5 block">{data.name}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Official Account #</span>
-                      <span className="font-mono tabular-nums font-bold text-sky-400">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Official Account #</span>
+                      <span className="text-sm font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">
                         {data.accountNumber || 'Pending ID'}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Assigned Meter Tag #</span>
-                      <span className="font-mono tabular-nums font-bold text-white">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Assigned Meter Tag #</span>
+                      <span className="text-sm font-mono tabular-nums font-bold text-white mt-0.5 block">
                         {data.meterNumber || 'Pending Meter'}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Classification</span>
-                      <span className="font-semibold text-slate-200">{data.consumerType || 'Residential'}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Classification</span>
+                      <span className="text-sm font-semibold text-slate-200 mt-0.5 block">{data.consumerType || 'Residential'}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Contact Number</span>
-                      <span className="font-mono tabular-nums text-slate-200">{data.contactNumber || 'N/A'}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Contact Number</span>
+                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">{data.contactNumber || 'N/A'}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Email Address</span>
-                      <span className="text-slate-200">{data.email || 'N/A'}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Email Address</span>
+                      <span className="text-sm text-slate-200 mt-0.5 block break-all">{data.email || 'N/A'}</span>
                     </div>
                     <div className="sm:col-span-2">
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Registered Service Address</span>
-                      <span className="text-slate-200">{data.address}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Registered Service Address</span>
+                      <span className="text-sm text-slate-200 mt-0.5 block leading-relaxed">{data.address}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Connection Status</span>
-                      <span className="font-bold uppercase text-emerald-400">{data.status}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Connection Status</span>
+                      <span className="text-sm font-bold uppercase text-emerald-400 mt-0.5 block">{data.status}</span>
                     </div>
                     {data.applicationNumber && (
                       <div>
-                        <span className="text-[10px] font-bold uppercase text-slate-500 block">Application #</span>
-                        <span className="font-mono tabular-nums text-sky-300">{data.applicationNumber}</span>
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Application #</span>
+                        <span className="text-sm font-mono tabular-nums text-sky-300 mt-0.5 block">{data.applicationNumber}</span>
                       </div>
                     )}
                   </div>
                 )}
 
                 {type === 'meter' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 border border-slate-800 rounded-xl p-4">
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Meter Tag Number</span>
-                      <span className="font-mono tabular-nums font-bold text-white">{data.meterNumber}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Meter Tag Number</span>
+                      <span className="text-sm font-mono tabular-nums font-bold text-white mt-0.5 block">{data.meterNumber}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Brand / Manufacturer</span>
-                      <span className="font-semibold text-slate-200">{data.brand}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Brand / Manufacturer</span>
+                      <span className="text-sm font-semibold text-slate-200 mt-0.5 block">{data.brand}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Commissioning Date</span>
-                      <span className="font-mono tabular-nums text-slate-200">{data.installationDate || 'N/A'}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Commissioning Date</span>
+                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">{data.installationDate || 'N/A'}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Assigned Account #</span>
-                      <span className="font-mono tabular-nums font-bold text-sky-400">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Assigned Account #</span>
+                      <span className="text-sm font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">
                         {data.linkedAccountNumber || 'Unassigned'}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Operational Status</span>
-                      <span className="font-bold uppercase text-emerald-400">{data.status}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Operational Status</span>
+                      <span className="text-sm font-bold uppercase text-emerald-400 mt-0.5 block">{data.status}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Last Odometer Dial</span>
-                      <span className="font-mono tabular-nums font-bold text-white">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Last Odometer Dial</span>
+                      <span className="text-sm font-mono tabular-nums font-bold text-white mt-0.5 block">
                         {formatOdometerReading(data.lastReadingValue ?? 0)}
                       </span>
                     </div>
                     {data.remarks && (
                       <div className="sm:col-span-2">
-                        <span className="text-[10px] font-bold uppercase text-slate-500 block">Remarks</span>
-                        <span className="text-slate-300">{data.remarks}</span>
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Remarks</span>
+                        <span className="text-sm text-slate-200 mt-0.5 block leading-relaxed">{data.remarks}</span>
                       </div>
                     )}
                   </div>
                 )}
 
                 {(type === 'reading' || type === 'bill' || type === 'payment') && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 border border-slate-800 rounded-xl p-4">
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Consumer Name</span>
-                      <span className="font-bold text-white">{data.consumerName}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Consumer Name</span>
+                      <span className="text-sm font-bold text-white mt-0.5 block">{data.consumerName}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Account Number</span>
-                      <span className="font-mono tabular-nums font-bold text-sky-400">#{data.accountNumber}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Account Number</span>
+                      <span className="text-sm font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">#{data.accountNumber}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Billing Period</span>
-                      <span className="font-semibold text-slate-200">{data.billingPeriod || 'Current Period'}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Billing Period</span>
+                      <span className="text-sm font-semibold text-slate-200 mt-0.5 block">{data.billingPeriod || 'Current Period'}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Meter Tag Number</span>
-                      <span className="font-mono tabular-nums font-bold text-white">{data.meterNumber || 'N/A'}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Meter Tag Number</span>
+                      <span className="text-sm font-mono tabular-nums font-bold text-white mt-0.5 block">{data.meterNumber || 'N/A'}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Odometer Dial (00000–99999)</span>
-                      <span className="font-mono tabular-nums text-slate-200">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Odometer Dial (00000–99999)</span>
+                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">
                         Prev {formatOdometerReading(data.previousReading)} → Curr {formatOdometerReading(data.currentReading)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Consumption ({data.classification || 'Residential'} @ ₱{getEffectiveRatePerM3(data.classification === 'Commercial' ? 'Commercial' : 'Residential').toFixed(2)}/m³)</span>
-                      <span className="font-mono tabular-nums font-black text-sky-400">{data.consumption} m³</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                        Consumption ({data.classification || 'Residential'} @ ₱{getEffectiveRatePerM3(data.classification === 'Commercial' ? 'Commercial' : 'Residential').toFixed(2)}/m³)
+                      </span>
+                      <span className="text-sm font-mono tabular-nums font-black text-sky-400 mt-0.5 block">{data.consumption} m³</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Basic Water Charge</span>
-                      <span className="font-mono tabular-nums font-bold text-slate-200">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Basic Water Charge</span>
+                      <span className="text-sm font-mono tabular-nums font-bold text-slate-200 mt-0.5 block">
                         ₱{getReadingTotalAssessment(data, data.classification === 'Commercial' ? 'Commercial' : 'Residential').basicCharge.toFixed(2)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">2% Franchise Tax</span>
-                      <span className="font-mono tabular-nums font-bold text-indigo-300">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">2% Franchise Tax</span>
+                      <span className="text-sm font-mono tabular-nums font-bold text-indigo-300 mt-0.5 block">
                         ₱{getReadingTotalAssessment(data, data.classification === 'Commercial' ? 'Commercial' : 'Residential').franchiseTax.toFixed(2)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Total Assessed Amount</span>
-                      <span className="font-mono tabular-nums font-black text-white">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Total Assessed Amount</span>
+                      <span className="text-sm font-mono tabular-nums font-black text-white mt-0.5 block">
                         ₱{calculateCostOf(data, data.classification).toFixed(2)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Late Penalty (10% After Due)</span>
-                      <span className="font-mono tabular-nums font-bold text-amber-300">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Late Penalty (10% After Due)</span>
+                      <span className="text-sm font-mono tabular-nums font-bold text-amber-300 mt-0.5 block">
                         +₱{getReadingTotalAssessment(data, data.classification === 'Commercial' ? 'Commercial' : 'Residential').penaltyAmount.toFixed(2)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Settlement Status</span>
-                      <span className="font-bold uppercase text-emerald-400">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Settlement Status</span>
+                      <span className="text-sm font-bold uppercase text-emerald-400 mt-0.5 block">
                         {data.paymentStatus || data.status || 'unpaid'}
                       </span>
                     </div>
                     {(data.orNumber || data.transactionId) && (
                       <div>
-                        <span className="text-[10px] font-bold uppercase text-slate-500 block">OR / Reference #</span>
-                        <span className="font-mono tabular-nums text-emerald-300">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">OR / Reference #</span>
+                        <span className="text-sm font-mono tabular-nums text-emerald-300 mt-0.5 block">
                           {data.orNumber || data.transactionId}
                         </span>
                       </div>
                     )}
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Date Recorded</span>
-                      <span className="font-mono tabular-nums text-slate-300">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Date Recorded</span>
+                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">
                         {data.paymentDate || data.readingDate || 'N/A'}
                       </span>
                     </div>
                     {data.notes && (
                       <div className="sm:col-span-2">
-                        <span className="text-[10px] font-bold uppercase text-slate-500 block">Audit Notes</span>
-                        <span className="text-slate-300">{data.notes}</span>
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Audit Notes</span>
+                        <span className="text-sm text-slate-200 mt-0.5 block leading-relaxed">{data.notes}</span>
                       </div>
                     )}
                   </div>
                 )}
 
                 {type === 'audit' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 border border-slate-800 rounded-xl p-4">
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">User Operator</span>
-                      <span className="font-bold text-white">{data.userName}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">User Operator</span>
+                      <span className="text-sm font-bold text-white mt-0.5 block">{data.userName}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Action Code</span>
-                      <span className="font-mono font-bold text-sky-400">{data.action}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Action Code</span>
+                      <span className="text-sm font-mono font-bold text-sky-400 mt-0.5 block">{data.action}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Timestamp</span>
-                      <span className="font-mono tabular-nums text-slate-300">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Timestamp</span>
+                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">
                         {new Date(data.timestamp).toLocaleString()}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Host IP</span>
-                      <span className="font-mono tabular-nums text-slate-300">{data.ipAddress || '127.0.0.1'}</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Host IP</span>
+                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">{data.ipAddress || '127.0.0.1'}</span>
                     </div>
                     <div className="sm:col-span-2">
-                      <span className="text-[10px] font-bold uppercase text-slate-500 block">Operation Details</span>
-                      <p className="text-slate-200 leading-relaxed mt-0.5">{data.details}</p>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Operation Details</span>
+                      <p className="text-sm text-slate-200 leading-relaxed mt-1">{data.details}</p>
                     </div>
                   </div>
                 )}
               </div>
 
-              <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex justify-end">
+              <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const recordCopy = selectedArchiveRecord;
+                    setSelectedArchiveRecord(null);
+                    setArchivePrintState({ scope: 'single', singleRecord: recordCopy });
+                  }}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Printer className="h-3.5 w-3.5" />
+                  <span>Print Record</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => setSelectedArchiveRecord(null)}
-                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0"
                 >
                   Close
                 </button>
@@ -1238,6 +1329,565 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
           </div>
         );
       })()}
+
+      {/* Portaled Official Archive Print Preview Modal (Individual Record / Current Tab / All 6 Archive Modules) */}
+      {archivePrintState && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[99999] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-hidden no-print-bg"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setArchivePrintState(null);
+          }}
+        >
+          <div className="bg-slate-900 border border-slate-700 max-w-7xl w-full h-[94vh] max-h-[96vh] flex flex-col shadow-2xl rounded-3xl overflow-hidden">
+            {/* Toolbar (hidden when printing) */}
+            <div className="flex-shrink-0 flex justify-between items-center px-6 py-4 bg-slate-950 border-b border-slate-800 no-print flex-wrap gap-3">
+              <div className="flex items-center space-x-3">
+                <div className="h-10 w-10 bg-slate-900 rounded-xl border border-slate-700 p-1 flex items-center justify-center shrink-0">
+                  <img
+                    src={ARCHIVE_LOGO_URL}
+                    alt="Logo"
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = ARCHIVE_FALLBACK_LOGO_URL;
+                    }}
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white tracking-tight">
+                    {archivePrintState.scope === 'single'
+                      ? 'Official Individual Archive Record Print Preview'
+                      : archivePrintState.scope === 'all_tabs'
+                      ? 'Complete Central Archive Compendium (All 6 Modules)'
+                      : `${ALL_ARCHIVE_MODULES.find(m => m.key === recordsTab)?.title || 'Archive'} Print Preview`}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {archivePrintState.scope === 'single'
+                      ? 'Certified Single-Record Extract • Tagoloan Water District Archive'
+                      : archivePrintState.scope === 'all_tabs'
+                      ? 'Unpaginated Master Printout of Consumers, Meters, Readings, Bills, Receipts & Audit Logs'
+                      : `All ${activeFilteredCount} filtered records included (unpaginated master print)`}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {archivePrintState.scope !== 'single' && (
+                  <div className="flex items-center bg-slate-900 border border-slate-700 p-0.5 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => setArchivePrintState({ scope: 'current_tab' })}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                        archivePrintState.scope === 'current_tab'
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Current Tab ({activeFilteredCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setArchivePrintState({ scope: 'all_tabs' })}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                        archivePrintState.scope === 'all_tabs'
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      All 6 Archive Modules
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex items-center bg-slate-900 border border-slate-700 p-0.5 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setArchivePrintTheme('dark')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer whitespace-nowrap ${
+                      archivePrintTheme === 'dark'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Moon className="h-3.5 w-3.5" />
+                    <span>Dark Comfort View</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setArchivePrintTheme('paper')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer whitespace-nowrap ${
+                      archivePrintTheme === 'paper'
+                        ? 'bg-slate-200 text-slate-950 shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Sun className="h-3.5 w-3.5" />
+                    <span>Paper View</span>
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 shadow-md cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Printer className="h-4 w-4" />
+                  <span>
+                    {archivePrintState.scope === 'all_tabs'
+                      ? 'Print All Records'
+                      : archivePrintState.scope === 'single'
+                      ? 'Print Record'
+                      : 'Print Current Tab'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setArchivePrintState(null)}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl transition cursor-pointer shrink-0"
+                  title="Close Preview (Esc)"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Preview Sheet Container */}
+            <div className={`p-3 sm:p-6 overflow-y-auto overflow-x-auto flex-1 flex justify-center ${
+              archivePrintTheme === 'dark' ? 'bg-slate-950' : 'bg-slate-900'
+            }`}>
+              <div
+                id="official-print-document"
+                className={`p-6 sm:p-8 w-full max-w-[1100px] shadow-2xl border font-sans space-y-6 ${
+                  archivePrintTheme === 'dark'
+                    ? 'bg-slate-900 text-slate-100 border-slate-700'
+                    : 'bg-slate-50 text-slate-950 border-slate-400'
+                }`}
+              >
+                {/* Official Dual-Logo Letterhead */}
+                <div className={`print-header-center flex items-center justify-between border-b-2 pb-4 mb-4 ${
+                  archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-900'
+                }`}>
+                  <div className="w-20 h-20 flex-shrink-0 flex items-center justify-center">
+                    <img
+                      src={ARCHIVE_LOGO_URL}
+                      alt="Tagoloan Water District Seal"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = ARCHIVE_FALLBACK_LOGO_URL;
+                      }}
+                      className="h-20 w-20 object-contain"
+                    />
+                  </div>
+                  <div className="text-center flex-1 px-4">
+                    <span className={`text-xs font-bold uppercase tracking-widest block ${
+                      archivePrintTheme === 'dark' ? 'text-slate-300' : 'text-slate-700'
+                    }`}>
+                      Republic of the Philippines
+                    </span>
+                    <h1 className={`text-xl sm:text-2xl font-black tracking-tight mt-0.5 uppercase ${
+                      archivePrintTheme === 'dark' ? 'text-white' : 'text-slate-950'
+                    }`}>
+                      TAGOLOAN WATER DISTRICT
+                    </h1>
+                    <p className={`text-xs font-medium mt-0.5 ${
+                      archivePrintTheme === 'dark' ? 'text-slate-300' : 'text-slate-700'
+                    }`}>
+                      Poblacion, Tagoloan, Misamis Oriental 9001 • Tel: (088) 890-4946
+                    </p>
+                    <div className={`w-48 h-0.5 mx-auto my-2 ${
+                      archivePrintTheme === 'dark' ? 'bg-blue-500' : 'bg-slate-900'
+                    }`}></div>
+                    <h2 className={`text-base sm:text-lg font-black uppercase tracking-tight ${
+                      archivePrintTheme === 'dark' ? 'text-blue-400' : 'text-slate-950'
+                    }`}>
+                      {archivePrintState.scope === 'single'
+                        ? `OFFICIAL RECORD EXTRACT — ${(archivePrintState.singleRecord?.type || 'RECORD').toUpperCase()}`
+                        : archivePrintState.scope === 'all_tabs'
+                        ? 'CENTRAL RECORDS ARCHIVE — COMPLETE MASTER COMPENDIUM'
+                        : ALL_ARCHIVE_MODULES.find(m => m.key === recordsTab)?.title || 'CENTRAL RECORDS ARCHIVE'}
+                    </h2>
+                    <p className={`text-xs font-semibold mt-0.5 ${
+                      archivePrintTheme === 'dark' ? 'text-amber-400' : 'text-slate-700'
+                    }`}>
+                      Generated: {new Date().toLocaleString()} {searchQuery ? `• Filter: "${searchQuery}"` : '• Complete Unfiltered / Active Scope'}
+                    </p>
+                  </div>
+                  <div className="w-20 h-20 flex-shrink-0 flex items-center justify-center">
+                    <img
+                      src={ARCHIVE_PH_SEAL_URL}
+                      alt="Republic of the Philippines Seal"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = ARCHIVE_FALLBACK_LOGO_URL;
+                      }}
+                      className="h-20 w-20 object-contain"
+                    />
+                  </div>
+                </div>
+
+                {/* BODY: Single Record Extract OR Multi/Single Archive Module Tables */}
+                {archivePrintState.scope === 'single' && archivePrintState.singleRecord ? (() => {
+                  const { type, data } = archivePrintState.singleRecord;
+                  const rows: [string, string][] =
+                    type === 'consumer'
+                      ? [
+                          ['Account Number', data.accountNumber || 'Pending ID'],
+                          ['Consumer Name', data.name || 'N/A'],
+                          ['Assigned Meter #', data.meterNumber || 'Pending Meter'],
+                          ['Classification', data.consumerType || 'Residential'],
+                          ['Business Name (DBA)', data.businessName || '—'],
+                          ['Contact Number', data.contactNumber || 'N/A'],
+                          ['Email Address', data.email || 'N/A'],
+                          ['Service Address', data.address || 'N/A'],
+                          ['Connection Status', (data.status || 'active').toUpperCase()],
+                          ['Application #', data.applicationNumber || '—'],
+                        ]
+                      : type === 'meter'
+                      ? [
+                          ['Meter Tag Number', data.meterNumber || 'N/A'],
+                          ['Manufacturer / Brand', data.brand || 'N/A'],
+                          ['Commissioning Date', data.installationDate || 'N/A'],
+                          ['Assigned Account #', data.linkedAccountNumber || 'Unassigned'],
+                          ['Operational Status', (data.status || 'active').toUpperCase()],
+                          ['Last Odometer Dial', formatOdometerReading(data.lastReadingValue ?? 0)],
+                          ['Remarks', data.remarks || '—'],
+                        ]
+                      : type === 'audit'
+                      ? [
+                          ['Timestamp', data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'],
+                          ['User Operator', data.userName || 'System'],
+                          ['Role', data.userRole || 'Admin'],
+                          ['Action Code', data.action || 'EVENT'],
+                          ['Host IP', data.ipAddress || '127.0.0.1'],
+                          ['Operation Details', data.details || '—'],
+                        ]
+                      : [
+                          ['Record ID', data.id || 'N/A'],
+                          ['Account Number', data.accountNumber || 'N/A'],
+                          ['Consumer Name', data.consumerName || 'N/A'],
+                          ['Meter Tag Number', data.meterNumber || 'N/A'],
+                          ['Billing Period', data.billingPeriod || 'Current Period'],
+                          ['Odometer Dial', `${formatOdometerReading(data.previousReading)} → ${formatOdometerReading(data.currentReading)}`],
+                          ['Consumption', `${data.consumption ?? 0} m³`],
+                          ['Total Assessed Amount', `₱${calculateCostOf(data, data.classification).toFixed(2)}`],
+                          ['Payment / Audit Status', (data.paymentStatus || data.status || 'unpaid').toUpperCase()],
+                          ['Official Receipt / Ref #', data.orNumber || data.transactionId || data.paymentReference || '—'],
+                          ['Date Recorded', data.paymentDate || data.readingDate || 'N/A'],
+                          ['Notes', data.notes || '—'],
+                        ];
+
+                  return (
+                    <table className={`w-full text-xs text-left border-collapse border ${
+                      archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'
+                    }`}>
+                      <thead className={archivePrintTheme === 'dark' ? 'bg-slate-950 text-white' : 'bg-slate-200 text-slate-950'}>
+                        <tr>
+                          <th className="px-3 py-2.5 border border-slate-700 w-1/3">Archive Field</th>
+                          <th className="px-3 py-2.5 border border-slate-700">Recorded Official Value</th>
+                        </tr>
+                      </thead>
+                      <tbody className={`divide-y ${archivePrintTheme === 'dark' ? 'divide-slate-800 text-slate-200' : 'divide-slate-300 text-slate-900'}`}>
+                        {rows.map(([label, val], idx) => (
+                          <tr key={label} className={idx % 2 === 0
+                            ? (archivePrintTheme === 'dark' ? 'bg-slate-900' : 'bg-white')
+                            : (archivePrintTheme === 'dark' ? 'bg-slate-950/50' : 'bg-slate-100')
+                          }>
+                            <td className="px-3 py-2 font-bold uppercase text-[11px] border border-slate-700">{label}</td>
+                            <td className="px-3 py-2 font-mono text-xs border border-slate-700">{val}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  );
+                })() : (
+                  (archivePrintState.scope === 'all_tabs'
+                    ? ALL_ARCHIVE_MODULES
+                    : ALL_ARCHIVE_MODULES.filter(m => m.key === recordsTab)
+                  ).map((mod, modIdx) => (
+                    <div
+                      key={mod.key}
+                      className={`space-y-3 ${
+                        archivePrintState.scope === 'all_tabs' && modIdx > 0
+                          ? `print-break-before pt-6 border-t-2 ${archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-400'}`
+                          : ''
+                      }`}
+                    >
+                      <div className={`print-avoid-break flex items-center justify-between border-b pb-2 ${
+                        archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-400'
+                      }`}>
+                        <div>
+                          <span className={`text-[10px] font-mono font-bold uppercase tracking-wider ${
+                            archivePrintTheme === 'dark' ? 'text-emerald-400' : 'text-slate-600'
+                          }`}>
+                            {archivePrintState.scope === 'all_tabs'
+                              ? `Archive Module ${modIdx + 1} of ${ALL_ARCHIVE_MODULES.length} • ${mod.subtitle}`
+                              : mod.subtitle}
+                          </span>
+                          <h3 className={`text-sm sm:text-base font-black uppercase tracking-tight ${
+                            archivePrintTheme === 'dark' ? 'text-white' : 'text-slate-950'
+                          }`}>
+                            {mod.title}
+                          </h3>
+                        </div>
+                        <span className={`text-[11px] font-mono font-bold tabular-nums ${
+                          archivePrintTheme === 'dark' ? 'text-slate-300' : 'text-slate-700'
+                        }`}>
+                          {mod.key === 'consumers'
+                            ? `${filteredConsumers.length} records`
+                            : mod.key === 'meters'
+                            ? `${filteredMeters.length} records`
+                            : mod.key === 'readings'
+                            ? `${filteredReadings.length} records`
+                            : mod.key === 'bills'
+                            ? `${filteredBills.length} records`
+                            : mod.key === 'payments'
+                            ? `${filteredPayments.length} records`
+                            : `${filteredAuditLogs.length} records`}
+                        </span>
+                      </div>
+
+                      <div className="overflow-x-auto w-full">
+                        {mod.key === 'consumers' && (
+                          <table className={`w-full text-xs text-left border-collapse border ${archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'}`}>
+                            <thead className={archivePrintTheme === 'dark' ? 'bg-slate-950 text-white' : 'bg-slate-200 text-slate-950'}>
+                              <tr>
+                                <th className="px-2.5 py-2 border border-slate-700">Account #</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Consumer Name</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Service Address</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Meter #</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Class</th>
+                                <th className="px-2.5 py-2 text-center border border-slate-700">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody className={`divide-y ${archivePrintTheme === 'dark' ? 'divide-slate-800 text-slate-200' : 'divide-slate-300 text-slate-900'}`}>
+                              {filteredConsumers.map((c, idx) => (
+                                <tr key={`pr-c-${c.id || idx}`}>
+                                  <td className="px-2.5 py-1.5 font-mono font-bold border border-slate-700">{c.accountNumber || 'PENDING ID'}</td>
+                                  <td className="px-2.5 py-1.5 font-bold border border-slate-700">{c.name}</td>
+                                  <td className="px-2.5 py-1.5 border border-slate-700">{c.address}</td>
+                                  <td className="px-2.5 py-1.5 font-mono border border-slate-700">{c.meterNumber || 'Pending'}</td>
+                                  <td className="px-2.5 py-1.5 border border-slate-700">{c.consumerType || 'Residential'}</td>
+                                  <td className="px-2.5 py-1.5 text-center font-bold uppercase border border-slate-700">{c.status}</td>
+                                </tr>
+                              ))}
+                              {filteredConsumers.length === 0 && (
+                                <tr><td colSpan={6} className="px-4 py-4 text-center text-slate-400">No consumer records match the active filter.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        )}
+
+                        {mod.key === 'meters' && (
+                          <table className={`w-full text-xs text-left border-collapse border ${archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'}`}>
+                            <thead className={archivePrintTheme === 'dark' ? 'bg-slate-950 text-white' : 'bg-slate-200 text-slate-950'}>
+                              <tr>
+                                <th className="px-2.5 py-2 border border-slate-700">Meter Tag #</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Brand / Model</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Commissioning Date</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Assigned Account #</th>
+                                <th className="px-2.5 py-2 text-center border border-slate-700">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody className={`divide-y ${archivePrintTheme === 'dark' ? 'divide-slate-800 text-slate-200' : 'divide-slate-300 text-slate-900'}`}>
+                              {filteredMeters.map((m, idx) => (
+                                <tr key={`pr-m-${m.meterNumber || idx}`}>
+                                  <td className="px-2.5 py-1.5 font-mono font-bold border border-slate-700">{m.meterNumber}</td>
+                                  <td className="px-2.5 py-1.5 font-semibold border border-slate-700">{m.brand}</td>
+                                  <td className="px-2.5 py-1.5 font-mono border border-slate-700">{m.installationDate}</td>
+                                  <td className="px-2.5 py-1.5 font-mono border border-slate-700">{m.linkedAccountNumber || 'Unassigned'}</td>
+                                  <td className="px-2.5 py-1.5 text-center font-bold uppercase border border-slate-700">{m.status === 'maintenance' ? 'Under Maintenance' : m.status}</td>
+                                </tr>
+                              ))}
+                              {filteredMeters.length === 0 && (
+                                <tr><td colSpan={5} className="px-4 py-4 text-center text-slate-400">No meter records match the active filter.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        )}
+
+                        {mod.key === 'readings' && (
+                          <table className={`w-full text-xs text-left border-collapse border ${archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'}`}>
+                            <thead className={archivePrintTheme === 'dark' ? 'bg-slate-950 text-white' : 'bg-slate-200 text-slate-950'}>
+                              <tr>
+                                <th className="px-2.5 py-2 border border-slate-700">Reading ID</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Account #</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Consumer Name</th>
+                                <th className="px-2.5 py-2 text-center border border-slate-700">Dial (Prev → Curr)</th>
+                                <th className="px-2.5 py-2 text-right border border-slate-700">Volume (m³)</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Date</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Reader</th>
+                                <th className="px-2.5 py-2 text-center border border-slate-700">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody className={`divide-y ${archivePrintTheme === 'dark' ? 'divide-slate-800 text-slate-200' : 'divide-slate-300 text-slate-900'}`}>
+                              {filteredReadings.map((r, idx) => (
+                                <tr key={`pr-r-${r.id || idx}`}>
+                                  <td className="px-2.5 py-1.5 font-mono border border-slate-700">{r.id}</td>
+                                  <td className="px-2.5 py-1.5 font-mono font-bold border border-slate-700">{r.accountNumber}</td>
+                                  <td className="px-2.5 py-1.5 font-bold border border-slate-700">{r.consumerName}</td>
+                                  <td className="px-2.5 py-1.5 font-mono text-center border border-slate-700">{formatOdometerReading(r.previousReading)} → {formatOdometerReading(r.currentReading)}</td>
+                                  <td className="px-2.5 py-1.5 font-mono text-right font-bold border border-slate-700">{r.consumption} m³</td>
+                                  <td className="px-2.5 py-1.5 font-mono border border-slate-700">{r.readingDate}</td>
+                                  <td className="px-2.5 py-1.5 border border-slate-700">{r.meterReaderName || 'Field Reader'}</td>
+                                  <td className="px-2.5 py-1.5 text-center font-bold uppercase border border-slate-700">{r.status}</td>
+                                </tr>
+                              ))}
+                              {filteredReadings.length === 0 && (
+                                <tr><td colSpan={8} className="px-4 py-4 text-center text-slate-400">No reading records match the active filter.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        )}
+
+                        {mod.key === 'bills' && (
+                          <table className={`w-full text-xs text-left border-collapse border ${archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'}`}>
+                            <thead className={archivePrintTheme === 'dark' ? 'bg-slate-950 text-white' : 'bg-slate-200 text-slate-950'}>
+                              <tr>
+                                <th className="px-2.5 py-2 border border-slate-700">Billing Period</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Account #</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Consumer Name</th>
+                                <th className="px-2.5 py-2 text-right border border-slate-700">Volume (m³)</th>
+                                <th className="px-2.5 py-2 text-right border border-slate-700">Assessed Amount</th>
+                                <th className="px-2.5 py-2 text-center border border-slate-700">Settlement Status</th>
+                              </tr>
+                            </thead>
+                            <tbody className={`divide-y ${archivePrintTheme === 'dark' ? 'divide-slate-800 text-slate-200' : 'divide-slate-300 text-slate-900'}`}>
+                              {filteredBills.map((b, idx) => (
+                                <tr key={`pr-b-${b.id || idx}`}>
+                                  <td className="px-2.5 py-1.5 font-mono border border-slate-700">{b.billingPeriod || 'Current Period'}</td>
+                                  <td className="px-2.5 py-1.5 font-mono font-bold border border-slate-700">{b.accountNumber}</td>
+                                  <td className="px-2.5 py-1.5 font-bold border border-slate-700">{b.consumerName}</td>
+                                  <td className="px-2.5 py-1.5 font-mono text-right border border-slate-700">{b.consumption} m³</td>
+                                  <td className="px-2.5 py-1.5 font-mono text-right font-bold border border-slate-700">₱{calculateCostOf(b, b.classification).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  <td className="px-2.5 py-1.5 text-center font-bold uppercase border border-slate-700">{b.paymentStatus || 'unpaid'}</td>
+                                </tr>
+                              ))}
+                              {filteredBills.length === 0 && (
+                                <tr><td colSpan={6} className="px-4 py-4 text-center text-slate-400">No bill records match the active filter.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        )}
+
+                        {mod.key === 'payments' && (
+                          <table className={`w-full text-xs text-left border-collapse border ${archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'}`}>
+                            <thead className={archivePrintTheme === 'dark' ? 'bg-slate-950 text-white' : 'bg-slate-200 text-slate-950'}>
+                              <tr>
+                                <th className="px-2.5 py-2 border border-slate-700">Official Receipt #</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Payment Date</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Account #</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Consumer Name</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Method</th>
+                                <th className="px-2.5 py-2 text-right border border-slate-700">Settled Amount</th>
+                              </tr>
+                            </thead>
+                            <tbody className={`divide-y ${archivePrintTheme === 'dark' ? 'divide-slate-800 text-slate-200' : 'divide-slate-300 text-slate-900'}`}>
+                              {filteredPayments.map((p, idx) => {
+                                const amt = p.paidAmount && p.paidAmount > 0 ? p.paidAmount : calculateCostOf(p, p.classification);
+                                return (
+                                  <tr key={`pr-p-${p.id || idx}`}>
+                                    <td className="px-2.5 py-1.5 font-mono font-bold border border-slate-700">{p.orNumber || p.transactionId || p.paymentReference || 'OR-OFFICIAL'}</td>
+                                    <td className="px-2.5 py-1.5 font-mono border border-slate-700">{p.paymentDate || p.readingDate}</td>
+                                    <td className="px-2.5 py-1.5 font-mono font-bold border border-slate-700">{p.accountNumber}</td>
+                                    <td className="px-2.5 py-1.5 font-bold border border-slate-700">{p.consumerName}</td>
+                                    <td className="px-2.5 py-1.5 border border-slate-700">{p.paymentMethod || 'Cash'}</td>
+                                    <td className="px-2.5 py-1.5 font-mono text-right font-bold border border-slate-700">₱{amt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  </tr>
+                                );
+                              })}
+                              {filteredPayments.length === 0 && (
+                                <tr><td colSpan={6} className="px-4 py-4 text-center text-slate-400">No payment receipts match the active filter.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        )}
+
+                        {mod.key === 'audit' && (
+                          <table className={`w-full text-xs text-left border-collapse border ${archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-600'}`}>
+                            <thead className={archivePrintTheme === 'dark' ? 'bg-slate-950 text-white' : 'bg-slate-200 text-slate-950'}>
+                              <tr>
+                                <th className="px-2.5 py-2 border border-slate-700">Audit Timestamp</th>
+                                <th className="px-2.5 py-2 border border-slate-700">User Operator</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Action Code</th>
+                                <th className="px-2.5 py-2 border border-slate-700">Operation Details</th>
+                                <th className="px-2.5 py-2 text-right border border-slate-700">Host IP</th>
+                              </tr>
+                            </thead>
+                            <tbody className={`divide-y ${archivePrintTheme === 'dark' ? 'divide-slate-800 text-slate-200' : 'divide-slate-300 text-slate-900'}`}>
+                              {filteredAuditLogs.map((log, idx) => (
+                                <tr key={`pr-a-${log.id || idx}`}>
+                                  <td className="px-2.5 py-1.5 font-mono border border-slate-700">{new Date(log.timestamp).toLocaleString()}</td>
+                                  <td className="px-2.5 py-1.5 font-bold border border-slate-700">{log.userName}</td>
+                                  <td className="px-2.5 py-1.5 font-mono font-bold border border-slate-700">{log.action}</td>
+                                  <td className="px-2.5 py-1.5 border border-slate-700">{log.details}</td>
+                                  <td className="px-2.5 py-1.5 font-mono text-right border border-slate-700">{log.ipAddress || '127.0.0.1'}</td>
+                                </tr>
+                              ))}
+                              {filteredAuditLogs.length === 0 && (
+                                <tr><td colSpan={5} className="px-4 py-4 text-center text-slate-400">No audit log entries match the active filter.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+
+                {/* Certification Footer */}
+                <div className={`print-avoid-break grid grid-cols-3 gap-6 pt-6 border-t-2 text-xs ${
+                  archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-900'
+                }`}>
+                  <div className="space-y-4">
+                    <span className={`font-bold block ${archivePrintTheme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>
+                      PREPARED & VERIFIED BY:
+                    </span>
+                    <div className={`border-b pt-6 ${archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-900'}`}></div>
+                    <div>
+                      <span className={`font-black block ${archivePrintTheme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
+                        CENTRAL RECORDS OFFICER
+                      </span>
+                      <span className={`text-[10px] ${archivePrintTheme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
+                        Records & Archive Section
+                      </span>
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <span className={`font-bold block ${archivePrintTheme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>
+                      REVIEWED BY:
+                    </span>
+                    <div className={`border-b pt-6 ${archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-900'}`}></div>
+                    <div>
+                      <span className={`font-black block ${archivePrintTheme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
+                        COMMERCIAL DIVISION HEAD
+                      </span>
+                      <span className={`text-[10px] ${archivePrintTheme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
+                        Tagoloan Water District
+                      </span>
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <span className={`font-bold block ${archivePrintTheme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>
+                      CERTIFIED OFFICIAL COPY:
+                    </span>
+                    <div className={`border-b pt-6 ${archivePrintTheme === 'dark' ? 'border-slate-700' : 'border-slate-900'}`}></div>
+                    <div>
+                      <span className={`font-black block ${archivePrintTheme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
+                        GENERAL MANAGER
+                      </span>
+                      <span className={`text-[10px] ${archivePrintTheme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
+                        Tagoloan Water District
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };

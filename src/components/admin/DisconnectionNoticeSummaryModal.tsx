@@ -71,31 +71,31 @@ export const DisconnectionNoticeSummaryModal: React.FC<DisconnectionNoticeSummar
       onClick={onClose}
     >
       <div 
-        className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden print:border-none print:shadow-none print:bg-white print:text-black print:max-h-none print:rounded-none"
+        className="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl w-full max-w-4xl max-h-[88vh] flex flex-col shadow-2xl overflow-hidden print:border-none print:shadow-none print:bg-white print:text-black print:max-h-none print:rounded-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Top Control Bar (Hidden on print) */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0 bg-slate-950/70 print:hidden">
-          <div className="flex items-center space-x-2.5">
-            <div className="p-2 bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/30">
+        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0 bg-slate-950 print:hidden">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 bg-rose-500/15 text-rose-400 rounded-xl border border-rose-500/30 shrink-0">
               <AlertOctagon className="h-5 w-5" />
             </div>
-            <div>
-              <h3 className="text-sm font-black text-white uppercase tracking-wider">
+            <div className="min-w-0">
+              <h3 className="text-base font-bold text-white leading-snug truncate">
                 Official Disconnection Notice Summary &amp; Cutoff Roster
               </h3>
-              <p className="text-[11px] text-slate-400">
-                Tagoloan Water District • 2-Month Delinquent Accounts Roster
+              <p className="text-xs text-slate-400">
+                Tagoloan Water District · 2-Month Delinquent Accounts Roster
               </p>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center gap-2 shrink-0">
             {activeView === 'single_notice' && (
               <button
                 type="button"
                 onClick={() => setActiveView('summary')}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 rounded-xl transition"
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 rounded-xl transition cursor-pointer whitespace-nowrap"
               >
                 Back to Summary
               </button>
@@ -104,7 +104,7 @@ export const DisconnectionNoticeSummaryModal: React.FC<DisconnectionNoticeSummar
             <button
               type="button"
               onClick={handlePrint}
-              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-black text-xs uppercase tracking-wider rounded-xl transition flex items-center space-x-1.5 shadow-md cursor-pointer"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-xl transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
             >
               <Printer className="h-4 w-4" />
               <span>Print Report</span>
@@ -113,7 +113,7 @@ export const DisconnectionNoticeSummaryModal: React.FC<DisconnectionNoticeSummar
             <button
               type="button"
               onClick={onClose}
-              className="p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800 hover:bg-slate-700 transition cursor-pointer"
+              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
               title="Close modal"
             >
               <X className="h-4 w-4" />
@@ -357,32 +357,32 @@ export const DisconnectionNoticeSummaryModal: React.FC<DisconnectionNoticeSummar
           ) : (
             /* Printable Individual Notice Letter */
             selectedConsumerForNotice && (
-              <div id="single-notice-letter" className="max-w-2xl mx-auto space-y-6 p-6 bg-slate-950 border border-slate-800 rounded-3xl print:border-none print:bg-white print:p-0">
+              <div id="single-notice-letter" className="max-w-2xl mx-auto space-y-6 p-6 bg-slate-950 border border-slate-800 rounded-2xl print:border-none print:bg-white print:p-0">
                 <div className="text-center space-y-1 pb-4 border-b border-slate-800 print:border-black">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 print:text-slate-600">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 print:text-slate-600">
                     Republic of the Philippines
                   </p>
-                  <h3 className="text-base font-black uppercase text-white print:text-black">
+                  <h3 className="text-lg font-bold uppercase text-white print:text-black">
                     TAGOLOAN WATER DISTRICT
                   </h3>
                   <p className="text-xs text-slate-400 print:text-slate-600">
                     Guani Building, National Highway, Tagoloan, Misamis Oriental
                   </p>
-                  <div className="inline-block px-3 py-1 bg-rose-950 text-rose-300 border border-rose-800 print:bg-slate-100 print:text-black rounded-lg text-xs font-black uppercase mt-2">
-                    OFFICIAL NOTICE OF WATER SERVICE DISCONNECTION
-                  </div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-rose-400 print:text-black pt-2">
+                    Official Notice of Water Service Disconnection
+                  </p>
                 </div>
 
-                <div className="space-y-3 text-xs leading-relaxed text-slate-300 print:text-black">
-                  <div className="flex justify-between font-mono">
+                <div className="space-y-4 text-sm print:text-xs leading-[1.6] text-slate-200 print:text-black">
+                  <div className="flex flex-wrap justify-between gap-2 text-xs font-mono tabular-nums text-slate-300 print:text-black">
                     <span>Date: <strong>{new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</strong></span>
                     <span>Notice #: <strong>DISC-{selectedConsumerForNotice.accountNumber}-{Date.now().toString().slice(-4)}</strong></span>
                   </div>
 
-                  <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl print:bg-slate-50 print:border-black space-y-1">
+                  <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl print:bg-slate-50 print:border-black space-y-1 text-xs sm:text-sm print:text-xs">
                     <p><strong>To:</strong> {selectedConsumerForNotice.name}</p>
-                    <p><strong>Account Number:</strong> {selectedConsumerForNotice.accountNumber}</p>
-                    <p><strong>Meter Tag Number:</strong> {selectedConsumerForNotice.meterNumber}</p>
+                    <p><strong>Account Number:</strong> <span className="font-mono tabular-nums">{selectedConsumerForNotice.accountNumber}</span></p>
+                    <p><strong>Meter Tag Number:</strong> <span className="font-mono tabular-nums">{selectedConsumerForNotice.meterNumber}</span></p>
                     <p><strong>Service Address:</strong> {selectedConsumerForNotice.address}, {selectedConsumerForNotice.barangay}</p>
                   </div>
 
@@ -390,7 +390,7 @@ export const DisconnectionNoticeSummaryModal: React.FC<DisconnectionNoticeSummar
                     Dear Consumer,
                   </p>
                   <p>
-                    Our administrative billing records indicate that your water utility account has exceeded <strong>two (2) months of unpaid billing cycles</strong> with an accumulated outstanding arrears balance of <strong className="text-rose-400 print:text-black font-mono">₱{(selectedConsumerForNotice.outstandingBalance || 0).toFixed(2)}</strong>.
+                    Our administrative billing records indicate that your water utility account has exceeded <strong>two (2) months of unpaid billing cycles</strong> with an accumulated outstanding arrears balance of <strong className="text-rose-400 print:text-black font-mono tabular-nums">₱{(selectedConsumerForNotice.outstandingBalance || 0).toFixed(2)}</strong>.
                   </p>
                   <p>
                     In accordance with Tagoloan Water District operational regulations, please be advised that our field disconnection team is scheduled to <strong>physically disconnect your water service connection</strong> within <strong>five (5) working days</strong> from the receipt of this notice, unless full payment or an approved extension agreement is executed.
@@ -402,16 +402,16 @@ export const DisconnectionNoticeSummaryModal: React.FC<DisconnectionNoticeSummar
                     Please note: Disconnected accounts remain accessible in inactive mode, and all prior billing liabilities remain fully accountable to this account. Lines remaining inactive for six (6) months become eligible for assumption transfer.
                   </p>
 
-                  <div className="pt-6 grid grid-cols-2 gap-4 text-center">
+                  <div className="pt-6 grid grid-cols-2 gap-4 text-center text-xs">
                     <div className="space-y-6">
-                      <p className="text-[10px] text-slate-400 print:text-slate-600">Issued by:</p>
-                      <div className="border-t border-slate-700 print:border-black pt-1">
+                      <p className="text-slate-400 print:text-slate-600">Issued by:</p>
+                      <div className="border-t border-slate-700 print:border-black pt-1.5">
                         <p className="font-bold">Commercial Accounts Officer</p>
                       </div>
                     </div>
                     <div className="space-y-6">
-                      <p className="text-[10px] text-slate-400 print:text-slate-600">Approved by:</p>
-                      <div className="border-t border-slate-700 print:border-black pt-1">
+                      <p className="text-slate-400 print:text-slate-600">Approved by:</p>
+                      <div className="border-t border-slate-700 print:border-black pt-1.5">
                         <p className="font-bold">General Manager, TWD</p>
                       </div>
                     </div>
