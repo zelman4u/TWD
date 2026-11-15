@@ -73,12 +73,14 @@ import {
   MessageSquare,
   Smartphone,
   Bell,
-  Wrench
+  Wrench,
+  ArrowLeft
 } from 'lucide-react';
 import { mockDb } from '../mockDb';
 import { User, Barangay, Consumer, MeterReader, WaterMeter, MeterReading, RouteAssignment, Announcement, AuditLog, ConsumerReport, WaterMeterInstallationRequest, MobileBridgeStatus } from '../types';
 import { 
   scanAndUpdateAccounts, 
+  evaluateAccountGracePeriod,
   getScannerStatus, 
   subscribeToScanner, 
   ScannerStatus,
@@ -524,6 +526,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   // 4. Approvals Module Correction & History State
   const [approvalsSubTab, setApprovalsSubTab] = useState<'pending' | 'history'>('pending');
   const [approvalHistorySearch, setApprovalHistorySearch] = useState('');
+  const [selectedHistoryReaderKey, setSelectedHistoryReaderKey] = useState<string | null>(null);
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'verified' | 'corrected' | 'rejected'>('all');
+  const [historyShowAllFlatTable, setHistoryShowAllFlatTable] = useState(false);
   const [pendingApprovalSearch, setPendingApprovalSearch] = useState('');
   const [selectedPendingReaderFilter, setSelectedPendingReaderFilter] = useState('all');
   const [collapsedReaderGroups, setCollapsedReaderGroups] = useState<Record<string, boolean>>({});
@@ -583,7 +588,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
   useEffect(() => {
     setApprovalHistoryPage(1);
-  }, [approvalHistorySearch]);
+  }, [approvalHistorySearch, selectedHistoryReaderKey, historyStatusFilter, historyShowAllFlatTable]);
 
   useEffect(() => {
     setMeterPage(1);
@@ -1129,9 +1134,46 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 existing.accountNumber = ac.accountNumber;
                 existing.meterNumber = ac.meterNumber || `MT-${ac.accountNumber}`;
                 existing.status = ac.status && !isPendingConsumerStatus(ac.status) ? ac.status : 'active';
+                if (ac.statusUpdatedAt) existing.statusUpdatedAt = ac.statusUpdatedAt;
+                if (ac.disconnectionNoticeDate) existing.disconnectionNoticeDate = ac.disconnectionNoticeDate;
+                if (ac.disconnectionCutoffDate) existing.disconnectionCutoffDate = ac.disconnectionCutoffDate;
+                if (ac.blockReason) existing.blockReason = ac.blockReason;
                 hasChanges = true;
-              } else if (!isLocallyIssuedAndActive && ac.status && ac.status !== existing.status) {
-                existing.status = ac.status;
+              } else if (ac.status && !isPendingConsumerStatus(ac.status)) {
+                const normalizeAdminStatus = (st?: string) =>
+                  st === 'disconnection_notice' ? 'Disconnection Notice' : (st || 'active');
+                const acStatus = normalizeAdminStatus(ac.status);
+                const exStatus = normalizeAdminStatus(existing.status);
+                const acTs = ac.statusUpdatedAt ? Date.parse(ac.statusUpdatedAt) || 0 : 0;
+                const exTs = existing.statusUpdatedAt ? Date.parse(existing.statusUpdatedAt) || 0 : 0;
+                const localZeroBal = Number(existing.outstandingBalance ?? ac.outstandingBalance ?? 0) <= 0.5;
+                const shouldAcceptServerStatus = !isLocallyIssuedAndActive
+                  ? acStatus !== exStatus
+                  : (acStatus !== exStatus && (acTs > exTs || (acStatus === 'active' && exStatus === 'Disconnection Notice' && localZeroBal && exTs === 0)));
+
+                if (shouldAcceptServerStatus) {
+                  existing.status = acStatus as Consumer['status'];
+                  existing.statusUpdatedAt = ac.statusUpdatedAt || new Date().toISOString();
+                  if (acStatus === 'active') {
+                    existing.disconnectionNoticeDate = undefined;
+                    existing.disconnectionCutoffDate = undefined;
+                    existing.blockReason = undefined;
+                    existing.gracePeriodOverdueDays = 0;
+                    existing.unpaidCyclesCount = 0;
+                  } else {
+                    if (ac.disconnectionNoticeDate !== undefined) existing.disconnectionNoticeDate = ac.disconnectionNoticeDate;
+                    if (ac.disconnectionCutoffDate !== undefined) existing.disconnectionCutoffDate = ac.disconnectionCutoffDate;
+                    if (ac.blockReason !== undefined) existing.blockReason = ac.blockReason;
+                  }
+                  hasChanges = true;
+                }
+              }
+              if (ac.extensionStatus && ac.extensionStatus !== existing.extensionStatus) {
+                existing.extensionStatus = ac.extensionStatus;
+                existing.extensionGrantedUntil = ac.extensionGrantedUntil ?? existing.extensionGrantedUntil;
+                existing.extensionDays = ac.extensionDays ?? existing.extensionDays;
+                existing.extensionReason = ac.extensionReason ?? existing.extensionReason;
+                existing.extensionRequestedAt = ac.extensionRequestedAt ?? existing.extensionRequestedAt;
                 hasChanges = true;
               }
               if (typeof ac.hasExistingMeter === 'boolean' && typeof existing.hasExistingMeter !== 'boolean') {
@@ -1152,6 +1194,32 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
               }
               if (ac.linkedUserId && !existing.linkedUserId) {
                 existing.linkedUserId = ac.linkedUserId;
+                hasChanges = true;
+              }
+            }
+          });
+
+          // Heal any stale Disconnection Notice accounts in Admin Portal when balance is ₱0.00 / bills settled
+          const localReadingsSnapshot = mockDb.getReadings();
+          currentLocal.forEach((c, idx) => {
+            if (
+              c &&
+              isRealIssuedAccountNumber(c.accountNumber) &&
+              (c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice')
+            ) {
+              const evalRes = evaluateAccountGracePeriod(c, localReadingsSnapshot);
+              const knownZero = Number(c.outstandingBalance || 0) <= 0.5 && evalRes.totalOverdueAmount <= 0.5;
+              if (!evalRes.isExceeded && knownZero) {
+                currentLocal[idx] = {
+                  ...c,
+                  status: 'active',
+                  statusUpdatedAt: new Date().toISOString(),
+                  disconnectionNoticeDate: undefined,
+                  disconnectionCutoffDate: undefined,
+                  blockReason: undefined,
+                  gracePeriodOverdueDays: 0,
+                  unpaidCyclesCount: 0
+                };
                 hasChanges = true;
               }
             }
@@ -1861,6 +1929,11 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     }
 
     const hasIssuedAccount = isRealIssuedAccountNumber(selectedConsumerModal.accountNumber);
+    const nextEditStatus: Consumer['status'] = hasIssuedAccount
+      ? (modalEditStatus || 'active')
+      : (isPendingConsumerStatus(selectedConsumerModal.status) ? selectedConsumerModal.status : 'pending_approval');
+    const clearNoticeFields = nextEditStatus === 'active';
+    const nowStatusIso = new Date().toISOString();
     const updated: Consumer = {
       ...selectedConsumerModal,
       name: modalEditName,
@@ -1871,9 +1944,15 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       businessName: modalEditConsumerType === 'Commercial' ? modalEditBusinessName : undefined,
       businessType: modalEditConsumerType === 'Commercial' ? modalEditBusinessType : undefined,
       householdInfo: modalEditConsumerType === 'Residential' ? modalEditHouseholdInfo : undefined,
-      status: hasIssuedAccount
-        ? (modalEditStatus || 'active')
-        : (isPendingConsumerStatus(selectedConsumerModal.status) ? selectedConsumerModal.status : 'pending_approval')
+      status: nextEditStatus,
+      statusUpdatedAt: nextEditStatus !== selectedConsumerModal.status ? nowStatusIso : (selectedConsumerModal.statusUpdatedAt || nowStatusIso),
+      ...(clearNoticeFields ? {
+        disconnectionNoticeDate: undefined,
+        disconnectionCutoffDate: undefined,
+        blockReason: undefined,
+        gracePeriodOverdueDays: 0,
+        unpaidCyclesCount: 0,
+      } : {}),
     };
 
     const newConsumers = consumers.map(item => {
@@ -1889,6 +1968,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
     if (hasIssuedAccount) {
       pushIssuedConsumerToFirestore(updated, undefined, undefined, true).catch(() => {});
+      apiClient.reconcileConsumers([updated]).catch(() => {});
     }
 
     // Sync update to backend server
@@ -3681,9 +3761,21 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         .sort(compareReadingsCanonical);
       const latestVerified = consumerVerified[0];
       const newArrears = computeAccountOutstandingBalance(updatedReadings, c.accountNumber, c.consumerType);
+      const isNotice = c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice';
+      const evalRes = isNotice ? evaluateAccountGracePeriod(c, updatedReadings) : null;
+      const shouldRestore = Boolean(isNotice && (newArrears <= 0.5 || (evalRes && !evalRes.isExceeded)));
       return {
         ...c,
         outstandingBalance: newArrears,
+        ...(shouldRestore ? {
+          status: 'active' as const,
+          statusUpdatedAt: new Date().toISOString(),
+          disconnectionNoticeDate: undefined,
+          disconnectionCutoffDate: undefined,
+          blockReason: undefined,
+          gracePeriodOverdueDays: 0,
+          unpaidCyclesCount: 0,
+        } : {}),
         previousReading: latestVerified ? latestVerified.previousReading : c.previousReading,
         presentReading: latestVerified ? (latestVerified.presentReading ?? latestVerified.currentReading) : c.presentReading,
         currentReading: latestVerified ? latestVerified.currentReading : c.currentReading,
@@ -5715,192 +5807,936 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                 </>
               )}
 
-              {/* PERMANENT APPROVAL HISTORY SUB-TAB */}
+              {/* PERMANENT APPROVAL HISTORY SUB-TAB (Reader Directory -> Assigned Consumers Read) */}
               {approvalsSubTab === 'history' && (
                 <div className="space-y-4">
                   {(() => {
                     const allHistoryItems = readings
                       .filter(r => r.status !== 'pending' && r.status !== 'flagged_abnormal')
                       .sort(compareReadingsCanonical);
-                    const filteredHistory = allHistoryItems.filter(r =>
+
+                    // Build canonical reader profiles keyed cleanly (so 'MARCO POLO' & 'Marco Polo' unify)
+                    type ReaderHistoryBucket = {
+                      key: string;
+                      readerName: string;
+                      readerObj?: MeterReader;
+                      assignedRoutes: string[];
+                      readings: MeterReading[];
+                      uniqueConsumersRead: Array<{
+                        accountNumber: string;
+                        consumerName: string;
+                        meterNumber: string;
+                        classification?: string;
+                        barangay?: string;
+                        route?: string;
+                        latestReading: MeterReading;
+                        readingsCount: number;
+                      }>;
+                      totalAssignedRouteConsumers: number;
+                      totalConsumption: number;
+                      totalBill: number;
+                      verifiedCount: number;
+                      correctedCount: number;
+                      rejectedCount: number;
+                      latestReadDate: string;
+                    };
+
+                    const readerBucketsMap = new Map<string, ReaderHistoryBucket>();
+
+                    const findMatchingOfficer = (rawName?: string, rawId?: string): MeterReader | undefined => {
+                      const cleanName = (rawName || '').trim().toLowerCase();
+                      const cleanId = (rawId || '').trim().toLowerCase();
+                      return readers.find((rd) => {
+                        const rdName = (rd.name || '').trim().toLowerCase();
+                        const rdUser = (rd.username || '').trim().toLowerCase();
+                        const rdId = (rd.id || '').trim().toLowerCase();
+                        const rdEmp = (rd.employeeId || '').trim().toLowerCase();
+                        return (
+                          (cleanId && (rdId === cleanId || rdEmp === cleanId)) ||
+                          (cleanName && (rdName === cleanName || rdUser === cleanName))
+                        );
+                      });
+                    };
+
+                    const ensureBucket = (key: string, readerName: string, readerObj?: MeterReader): ReaderHistoryBucket => {
+                      const existing = readerBucketsMap.get(key);
+                      if (existing) return existing;
+                      const assignedRoutes = readerObj ? resolveReaderAssignedRoutes(readerObj) : [];
+                      const created: ReaderHistoryBucket = {
+                        key,
+                        readerName,
+                        readerObj,
+                        assignedRoutes,
+                        readings: [],
+                        uniqueConsumersRead: [],
+                        totalAssignedRouteConsumers: 0,
+                        totalConsumption: 0,
+                        totalBill: 0,
+                        verifiedCount: 0,
+                        correctedCount: 0,
+                        rejectedCount: 0,
+                        latestReadDate: '',
+                      };
+                      readerBucketsMap.set(key, created);
+                      return created;
+                    };
+
+                    // Distribute all approval history readings into their Reader bucket (only readers with readings are included)
+                    allHistoryItems.forEach((r) => {
+                      const rawReaderName = (r.meterReaderName && r.meterReaderName.trim()) ? r.meterReaderName.trim() : 'Field Reader';
+                      const matchedOfficer = findMatchingOfficer(rawReaderName, (r as any).meterReaderId);
+                      const key = matchedOfficer
+                        ? `officer:${(matchedOfficer.id || matchedOfficer.name || '').trim().toLowerCase()}`
+                        : `name:${rawReaderName.toLowerCase()}`;
+                      const bucket = ensureBucket(key, matchedOfficer ? matchedOfficer.name : rawReaderName, matchedOfficer);
+                      bucket.readings.push(r);
+                    });
+
+                    // Finalize stats & assigned consumers been read for each reader
+                    const consumerByAccount = new Map<string, Consumer>();
+                    consumers.forEach((c) => {
+                      const acc = (c.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+                      if (acc) consumerByAccount.set(acc, c);
+                    });
+
+                    readerBucketsMap.forEach((bucket) => {
+                      const consMap = new Map<string, {
+                        accountNumber: string;
+                        consumerName: string;
+                        meterNumber: string;
+                        classification?: string;
+                        barangay?: string;
+                        route?: string;
+                        latestReading: MeterReading;
+                        readingsCount: number;
+                      }>();
+
+                      bucket.readings.forEach((r) => {
+                        const accKey = (r.accountNumber || r.meterNumber || r.consumerName || r.id).replace(/^#/, '').trim().toUpperCase();
+                        const linkedCon = consumerByAccount.get(accKey);
+                        const isCorrected = Boolean(r.notes && r.notes.includes('CORRECTED'));
+                        const isRejected = r.status === ('rejected' as any) || Boolean(r.notes && r.notes.includes('REJECTED'));
+
+                        if (isRejected) bucket.rejectedCount += 1;
+                        else if (isCorrected) bucket.correctedCount += 1;
+                        else bucket.verifiedCount += 1;
+
+                        bucket.totalConsumption += Number(r.consumption || 0);
+                        bucket.totalBill += calculateCostOf(r, r.classification || linkedCon?.consumerType);
+
+                        const readDate = r.readingDate || r.meterReaderDate || '';
+                        if (readDate && (!bucket.latestReadDate || readDate > bucket.latestReadDate)) {
+                          bucket.latestReadDate = readDate;
+                        }
+
+                        const existingCons = consMap.get(accKey);
+                        if (!existingCons) {
+                          consMap.set(accKey, {
+                            accountNumber: r.accountNumber || linkedCon?.accountNumber || 'PENDING',
+                            consumerName: r.consumerName || linkedCon?.name || 'Consumer',
+                            meterNumber: r.meterNumber || linkedCon?.meterNumber || 'N/A',
+                            classification: r.classification || linkedCon?.consumerType,
+                            barangay: linkedCon?.barangay,
+                            route: r.route || linkedCon?.sitioZone,
+                            latestReading: r,
+                            readingsCount: 1,
+                          });
+                        } else {
+                          existingCons.readingsCount += 1;
+                        }
+                      });
+
+                      bucket.uniqueConsumersRead = Array.from(consMap.values());
+
+                      // Count consumers assigned to this reader's routes/barangays
+                      if (bucket.assignedRoutes.length > 0) {
+                        const matchedRouteConsumers = consumers.filter((c) => {
+                          if (!c.accountNumber || c.accountNumber.toUpperCase().startsWith('PENDING')) return false;
+                          const cBrgy = (c.barangay || '').toLowerCase();
+                          const cAddr = (c.address || '').toLowerCase();
+                          const cZone = (c.sitioZone || '').toLowerCase();
+                          return bucket.assignedRoutes.some((rtName) => {
+                            const rtLow = rtName.toLowerCase();
+                            return (
+                              (cBrgy && (rtLow.includes(cBrgy) || cBrgy.includes(rtLow))) ||
+                              (cZone && rtLow.includes(cZone)) ||
+                              (cAddr && rtLow.includes(cAddr))
+                            );
+                          });
+                        });
+                        bucket.totalAssignedRouteConsumers = Math.max(matchedRouteConsumers.length, bucket.uniqueConsumersRead.length);
+                      } else {
+                        bucket.totalAssignedRouteConsumers = bucket.uniqueConsumersRead.length;
+                      }
+                    });
+
+                    const readerBuckets = Array.from(readerBucketsMap.values())
+                      .filter((b) => b.readings.length > 0)
+                      .sort((a, b) => {
+                        if (b.readings.length !== a.readings.length) return b.readings.length - a.readings.length;
+                        return a.readerName.localeCompare(b.readerName);
+                      });
+
+                    const selectedReaderBucket = selectedHistoryReaderKey
+                      ? readerBuckets.find(b => b.key === selectedHistoryReaderKey) || null
+                      : null;
+
+                    // VIEW 1: SELECTED READER -> SHOW ASSIGNED CONSUMERS BEEN READ
+                    if (selectedReaderBucket && !historyShowAllFlatTable) {
+                      const readerHistoryFiltered = selectedReaderBucket.readings.filter((r) => {
+                        const isCorrected = Boolean(r.notes && r.notes.includes('CORRECTED'));
+                        const isRejected = r.status === ('rejected' as any) || Boolean(r.notes && r.notes.includes('REJECTED'));
+                        if (historyStatusFilter === 'verified' && (isRejected || isCorrected || r.status !== 'verified')) return false;
+                        if (historyStatusFilter === 'corrected' && !isCorrected) return false;
+                        if (historyStatusFilter === 'rejected' && !isRejected) return false;
+
+                        return smartMatch(approvalHistorySearch, [
+                          r.id,
+                          r.accountNumber,
+                          r.consumerName,
+                          r.meterNumber,
+                          r.billingPeriod,
+                          r.readingDate,
+                          r.route,
+                          r.meterReaderName,
+                          r.status,
+                          r.notes,
+                          formatOdometerReading(r.previousReading),
+                          formatOdometerReading(r.presentReading ?? r.currentReading)
+                        ]);
+                      });
+
+                      const safeReaderPage = Math.min(approvalHistoryPage, Math.max(1, Math.ceil(readerHistoryFiltered.length / 10)));
+                      const paginatedReaderHistory = readerHistoryFiltered.slice((safeReaderPage - 1) * 10, safeReaderPage * 10);
+
+                      const readerInitials = selectedReaderBucket.readerName
+                        .split(' ')
+                        .map(w => w[0])
+                        .join('')
+                        .substring(0, 2)
+                        .toUpperCase() || 'MR';
+
+                      return (
+                        <div className="space-y-4 animate-fade-in">
+                          {/* Selected Reader Header Card & Back Navigation */}
+                          <div className="bg-slate-900 border border-blue-500/40 rounded-2xl p-5 shadow-xl space-y-4">
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                              <div className="flex items-start sm:items-center gap-3.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedHistoryReaderKey(null);
+                                    setApprovalHistorySearch('');
+                                    setHistoryStatusFilter('all');
+                                    setApprovalHistoryPage(1);
+                                  }}
+                                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold border border-slate-700 transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                                  id="history-back-to-readers-btn"
+                                >
+                                  <ArrowLeft className="h-4 w-4" />
+                                  <span>Back to Readers</span>
+                                </button>
+
+                                <div className="h-11 w-11 rounded-2xl bg-blue-600 text-white font-black text-sm flex items-center justify-center shrink-0 shadow-md">
+                                  {readerInitials}
+                                </div>
+
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <h4 className="text-base sm:text-lg font-black text-white tracking-tight">
+                                      {selectedReaderBucket.readerName}
+                                    </h4>
+                                    {selectedReaderBucket.readerObj?.employeeId && (
+                                      <span className="px-2 py-0.5 rounded-md bg-slate-950 border border-slate-700 text-sky-400 font-mono text-[10px] font-bold">
+                                        {selectedReaderBucket.readerObj.employeeId}
+                                      </span>
+                                    )}
+                                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-700/60 text-emerald-300 text-[10px] font-black uppercase tracking-wider">
+                                      Assigned Consumers Read: {selectedReaderBucket.uniqueConsumersRead.length}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2 text-xs text-slate-400 mt-1 flex-wrap">
+                                    <MapPin className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                                    <span className="text-slate-300 font-medium">
+                                      {selectedReaderBucket.assignedRoutes.length > 0
+                                        ? selectedReaderBucket.assignedRoutes.join(', ')
+                                        : 'All Assigned Field Routes'}
+                                    </span>
+                                    {selectedReaderBucket.latestReadDate && (
+                                      <>
+                                        <span>•</span>
+                                        <span>Latest Read: <strong className="text-amber-300 font-mono">{selectedReaderBucket.latestReadDate}</strong></span>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const headers = ['Tx ID', 'Read Date', 'Billing Period', 'Account Number', 'Consumer Name', 'Meter Tag #', 'Prev Dial', 'Curr Dial', 'Consumption (m3)', 'Status', 'Reader Staff', 'Notes'];
+                                  const rows = readerHistoryFiltered.map(r => [
+                                    r.id, r.readingDate || r.meterReaderDate || '', r.billingPeriod, r.accountNumber, r.consumerName, r.meterNumber, formatOdometerReading(r.previousReading), formatOdometerReading(r.presentReading ?? r.currentReading), r.consumption, r.status.toUpperCase(), r.meterReaderName || selectedReaderBucket.readerName, r.notes || ''
+                                  ]);
+                                  const safeFileReader = selectedReaderBucket.readerName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+                                  exportToCsv(`twd_reader_history_${safeFileReader}.csv`, headers, rows);
+                                }}
+                                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 transition shadow-sm border border-blue-700 shrink-0 cursor-pointer"
+                              >
+                                <Download className="h-4 w-4 text-white" />
+                                <span>Export Reader History CSV</span>
+                              </button>
+                            </div>
+
+                            {/* Reader KPI Strip */}
+                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-2 border-t border-slate-800/80">
+                              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                                <span className="text-[10px] font-bold uppercase text-slate-400 block">Consumers Read</span>
+                                <span className="text-base font-black font-mono text-sky-400 mt-0.5 block">
+                                  {selectedReaderBucket.uniqueConsumersRead.length}
+                                  {selectedReaderBucket.totalAssignedRouteConsumers > selectedReaderBucket.uniqueConsumersRead.length && (
+                                    <span className="text-[11px] font-semibold text-slate-500 ml-1">
+                                      / {selectedReaderBucket.totalAssignedRouteConsumers} assigned
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
+                              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                                <span className="text-[10px] font-bold uppercase text-slate-400 block">Total Readings</span>
+                                <span className="text-base font-black font-mono text-white mt-0.5 block">
+                                  {selectedReaderBucket.readings.length}
+                                </span>
+                              </div>
+                              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                                <span className="text-[10px] font-bold uppercase text-slate-400 block">Verified / Approved</span>
+                                <span className="text-base font-black font-mono text-emerald-400 mt-0.5 block">
+                                  {selectedReaderBucket.verifiedCount}
+                                  {selectedReaderBucket.correctedCount > 0 && (
+                                    <span className="text-[11px] text-amber-300 ml-1.5">({selectedReaderBucket.correctedCount} edited)</span>
+                                  )}
+                                </span>
+                              </div>
+                              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                                <span className="text-[10px] font-bold uppercase text-slate-400 block">Volume Read</span>
+                                <span className="text-base font-black font-mono text-cyan-400 mt-0.5 block">
+                                  {selectedReaderBucket.totalConsumption} m³
+                                </span>
+                              </div>
+                              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                                <span className="text-[10px] font-bold uppercase text-slate-400 block">Total Billed</span>
+                                <span className="text-base font-black font-mono text-amber-300 mt-0.5 block">
+                                  ₱{selectedReaderBucket.totalBill.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Assigned Consumers Been Read - Quick Filter Chips */}
+                          {selectedReaderBucket.uniqueConsumersRead.length > 0 && (
+                            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2.5 shadow-md">
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <h5 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                                  <Users className="h-3.5 w-3.5 text-sky-400" />
+                                  <span>Assigned Consumers Read by {selectedReaderBucket.readerName} ({selectedReaderBucket.uniqueConsumersRead.length})</span>
+                                </h5>
+                                {approvalHistorySearch.trim() && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setApprovalHistorySearch('')}
+                                    className="text-[11px] font-bold text-blue-400 hover:text-blue-300 cursor-pointer"
+                                  >
+                                    Show all consumers read
+                                  </button>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto pr-1">
+                                {selectedReaderBucket.uniqueConsumersRead.map((uc, ucIdx) => {
+                                  const isHighlighted = approvalHistorySearch.trim().toLowerCase() === uc.accountNumber.toLowerCase();
+                                  return (
+                                    <button
+                                      key={`reader-cons-chip-${uc.accountNumber}-${ucIdx}`}
+                                      type="button"
+                                      onClick={() => {
+                                        setApprovalHistorySearch(isHighlighted ? '' : uc.accountNumber);
+                                      }}
+                                      title={`Filter readings for ${uc.consumerName} (#${uc.accountNumber})`}
+                                      className={`px-3 py-1.5 rounded-xl border text-left text-xs transition cursor-pointer flex items-center gap-2 ${
+                                        isHighlighted
+                                          ? 'bg-blue-600/30 border-blue-400 text-white shadow-sm'
+                                          : 'bg-slate-950 border-slate-800 hover:border-blue-500/60 text-slate-200'
+                                      }`}
+                                    >
+                                      <span className="font-mono font-black text-sky-400 text-[11px]">#{uc.accountNumber}</span>
+                                      <span className="font-bold truncate max-w-[160px]">{uc.consumerName}</span>
+                                      <span className="px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-800/70 text-emerald-300 font-mono text-[10px] font-bold">
+                                        {uc.latestReading.consumption} m³
+                                      </span>
+                                      {uc.readingsCount > 1 && (
+                                        <span className="text-[10px] text-slate-400 font-mono">({uc.readingsCount}x)</span>
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Search & Status Filter inside Reader History */}
+                          <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+                            <div className="flex-1 sm:max-w-lg">
+                              <SmartSearchBar
+                                variant="dark"
+                                value={approvalHistorySearch}
+                                onChange={setApprovalHistorySearch}
+                                resultCount={readerHistoryFiltered.length}
+                                totalCount={selectedReaderBucket.readings.length}
+                                placeholder={`Search ${selectedReaderBucket.readerName}'s read consumers by account #, name, meter #, dial, or period...`}
+                                id="admin-approvals-reader-history-smart-search"
+                              />
+                            </div>
+
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {([
+                                { id: 'all', label: 'All' },
+                                { id: 'verified', label: 'Verified' },
+                                { id: 'corrected', label: 'Corrected' },
+                                { id: 'rejected', label: 'Rejected' },
+                              ] as const).map(st => (
+                                <button
+                                  key={st.id}
+                                  type="button"
+                                  onClick={() => setHistoryStatusFilter(st.id)}
+                                  className={`px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer border ${
+                                    historyStatusFilter === st.id
+                                      ? 'bg-blue-600 text-white border-blue-500'
+                                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
+                                  }`}
+                                >
+                                  {st.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Assigned Consumers Read Table */}
+                          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs text-left border-collapse">
+                                <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[10px] tracking-wider border-b border-slate-800">
+                                  <tr>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Tx ID</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Read Date</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Billing Period</th>
+                                    <th className="px-3.5 py-3 min-w-[160px]">Assigned Consumer Read</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Meter Tag #</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Odometer Dial (Prev → Curr)</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Usage & Bill</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Status</th>
+                                    <th className="px-3.5 py-3 min-w-[160px]">Route & Audit Notes</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-800/80 text-slate-200 bg-slate-900">
+                                  {readerHistoryFiltered.length === 0 ? (
+                                    <tr>
+                                      <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
+                                        <div className="space-y-1">
+                                          <p className="text-xs font-bold text-slate-300">No consumer readings recorded for {selectedReaderBucket.readerName}</p>
+                                          <p className="text-[11px] text-slate-500">
+                                            {approvalHistorySearch || historyStatusFilter !== 'all'
+                                              ? 'Try clearing your search or status filter.'
+                                              : 'Once readings submitted by this reader are approved or processed, their assigned consumers will appear here.'}
+                                          </p>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    paginatedReaderHistory.map((r, hIdx) => {
+                                      const totalBill = calculateCostOf(r, r.classification);
+                                      const isCorrected = r.notes && r.notes.includes('CORRECTED');
+                                      const isRejected = r.status === ('rejected' as any) || (r.notes && r.notes.includes('REJECTED'));
+                                      const linkedCon = consumerByAccount.get((r.accountNumber || '').replace(/^#/, '').trim().toUpperCase());
+
+                                      return (
+                                        <tr
+                                          key={`reader-hist-read-${r.id || `${r.accountNumber}-${hIdx}`}`}
+                                          onClick={() => setViewingReadingDetailModal(r)}
+                                          title="Click row to view complete meter reading, dial photo & verification details"
+                                          className="hover:bg-slate-800/70 transition cursor-pointer"
+                                        >
+                                          <td className="px-3.5 py-3 font-mono font-bold text-slate-400 text-[11px] whitespace-nowrap">
+                                            {r.id}
+                                          </td>
+                                          <td className="px-3.5 py-3 whitespace-nowrap">
+                                            <span className="inline-flex items-center gap-1 font-bold text-amber-300 bg-amber-950/60 border border-amber-800/70 px-2 py-0.5 rounded text-[11px]">
+                                              📅 {r.readingDate || r.meterReaderDate || 'Recent'}
+                                            </span>
+                                          </td>
+                                          <td className="px-3.5 py-3 font-bold text-slate-200 whitespace-nowrap">
+                                            {r.billingPeriod || 'Current Period'}
+                                          </td>
+                                          <td className="px-3.5 py-3 space-y-1 min-w-[160px]">
+                                            <span className="font-bold text-white block leading-tight">{r.consumerName}</span>
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                              <span className="font-mono text-sky-400 text-xs font-black bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 inline-block">
+                                                {r.accountNumber ? (r.accountNumber.startsWith('#') ? r.accountNumber : `#${r.accountNumber}`) : 'Pending Acct'}
+                                              </span>
+                                              {r.classification?.toLowerCase().includes('comm') ? (
+                                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-950/80 text-purple-300 border border-purple-800/80">
+                                                  <Building className="h-2.5 w-2.5 text-purple-400 shrink-0" />
+                                                  <span>COMMERCIAL</span>
+                                                </span>
+                                              ) : (
+                                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-emerald-950/80 text-emerald-300 border border-emerald-800/80">
+                                                  <Home className="h-2.5 w-2.5 text-emerald-400 shrink-0" />
+                                                  <span>RESIDENTIAL</span>
+                                                </span>
+                                              )}
+                                            </div>
+                                          </td>
+                                          <td className="px-3.5 py-3 font-mono text-slate-200 font-bold whitespace-nowrap">
+                                            {r.meterNumber}
+                                          </td>
+                                          <td className="px-3.5 py-3 font-mono tabular-nums whitespace-nowrap">
+                                            <span className="text-slate-400">{formatOdometerReading(r.previousReading)}</span>
+                                            <span className="text-slate-500 mx-1">→</span>
+                                            <span className="font-bold text-white">{formatOdometerReading(r.presentReading ?? r.currentReading)}</span>
+                                          </td>
+                                          <td className="px-3.5 py-3 space-y-0.5 whitespace-nowrap">
+                                            <span className="font-mono font-bold text-emerald-400 block">{r.consumption} m³</span>
+                                            <span className="font-mono font-black text-white text-xs">₱{totalBill.toFixed(2)}</span>
+                                          </td>
+                                          <td className="px-3.5 py-3 whitespace-nowrap">
+                                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                                              isRejected
+                                                ? 'bg-rose-950/80 text-rose-300 border border-rose-800/80'
+                                                : isCorrected
+                                                ? 'bg-amber-950/80 text-amber-300 border border-amber-800/80'
+                                                : r.status === 'verified'
+                                                ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/80'
+                                                : 'bg-rose-950/80 text-rose-300 border border-rose-800/80'
+                                            }`}>
+                                              {isRejected ? 'REJECTED' : isCorrected ? 'CORRECTED' : r.status.toUpperCase()}
+                                            </span>
+                                          </td>
+                                          <td className="px-3.5 py-3 max-w-xs space-y-1 min-w-[160px]">
+                                            <p className="text-[11px] text-sky-300 font-semibold truncate">
+                                              {r.route || linkedCon?.barangay || 'Assigned Route'}
+                                            </p>
+                                            {r.notes ? (
+                                              <p className="text-[11px] text-slate-300 truncate">{r.notes}</p>
+                                            ) : (
+                                              <span className="text-[11px] text-slate-500 font-medium">Verified & Auto-Billed</span>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                            <TablePagination
+                              currentPage={safeReaderPage}
+                              totalItems={readerHistoryFiltered.length}
+                              pageSize={10}
+                              onPageChange={setApprovalHistoryPage}
+                              itemName="consumer readings"
+                            />
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    // VIEW 2: FLAT FULL AUDIT TABLE (optional toggle)
+                    if (historyShowAllFlatTable) {
+                      const filteredHistory = allHistoryItems.filter(r =>
+                        smartMatch(approvalHistorySearch, [
+                          r.id,
+                          r.accountNumber,
+                          r.consumerName,
+                          r.meterNumber,
+                          r.billingPeriod,
+                          r.readingDate,
+                          r.meterReaderName,
+                          r.status,
+                          r.notes,
+                          formatOdometerReading(r.previousReading),
+                          formatOdometerReading(r.presentReading ?? r.currentReading)
+                        ])
+                      );
+                      const safeApprovalHistoryPage = Math.min(approvalHistoryPage, Math.max(1, Math.ceil(filteredHistory.length / 10)));
+                      const paginatedHistory = filteredHistory.slice((safeApprovalHistoryPage - 1) * 10, safeApprovalHistoryPage * 10);
+
+                      return (
+                        <>
+                          <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+                            <div className="flex items-center gap-2.5 flex-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setHistoryShowAllFlatTable(false);
+                                  setSelectedHistoryReaderKey(null);
+                                }}
+                                className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold border border-slate-700 transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                              >
+                                <ArrowLeft className="h-4 w-4" />
+                                <span>Readers View</span>
+                              </button>
+                              <div className="flex-1 sm:max-w-lg">
+                                <SmartSearchBar
+                                  variant="dark"
+                                  value={approvalHistorySearch}
+                                  onChange={setApprovalHistorySearch}
+                                  resultCount={filteredHistory.length}
+                                  totalCount={allHistoryItems.length}
+                                  placeholder="Smart search history by Tx ID, account #, consumer name, meter #, 5-digit dial, reader, or notes..."
+                                  id="admin-approvals-history-smart-search"
+                                />
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() => {
+                                const headers = ['Tx ID', 'Billing Period', 'Account Number', 'Consumer Name', 'Meter Tag #', 'Prev Dial (00000-99999)', 'Curr Dial (00000-99999)', 'Consumption (m3)', 'Status', 'Reader Staff', 'Notes'];
+                                const rows = filteredHistory.map(r => [
+                                  r.id, r.billingPeriod, r.accountNumber, r.consumerName, r.meterNumber, formatOdometerReading(r.previousReading), formatOdometerReading(r.presentReading ?? r.currentReading), r.consumption, r.status.toUpperCase(), r.meterReaderName, r.notes || ''
+                                ]);
+                                exportToCsv('twd_approval_history_audit_export.csv', headers, rows);
+                              }}
+                              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 transition shadow-sm border border-blue-700 shrink-0 cursor-pointer"
+                            >
+                              <Download className="h-4 w-4 text-white" />
+                              <span className="text-white font-bold tracking-wide">Export Approval History CSV</span>
+                            </button>
+                          </div>
+
+                          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs text-left border-collapse">
+                                <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[10px] tracking-wider border-b border-slate-800">
+                                  <tr>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Tx ID</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Read Date</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Billing Period</th>
+                                    <th className="px-3.5 py-3 min-w-[140px]">Account & Consumer</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Meter Tag #</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Odometer Dial (Prev → Curr)</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Usage & Bill</th>
+                                    <th className="px-3.5 py-3 whitespace-nowrap">Status</th>
+                                    <th className="px-3.5 py-3 min-w-[160px]">Audit Notes & Reader</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-800/80 text-slate-200 bg-slate-900">
+                                  {filteredHistory.length === 0 ? (
+                                    <tr>
+                                      <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
+                                        <div className="space-y-1">
+                                          <p className="text-xs font-bold text-slate-300">No approval history found</p>
+                                          <p className="text-[11px] text-slate-500">No verified or rejected meter reading transactions match your filter.</p>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    paginatedHistory.map((r, hIdx) => {
+                                      const totalBill = calculateCostOf(r, r.classification);
+                                      const isCorrected = r.notes && r.notes.includes('CORRECTED');
+                                      const isRejected = r.status === ('rejected' as any) || (r.notes && r.notes.includes('REJECTED'));
+
+                                      return (
+                                        <tr
+                                          key={`hist-read-${r.id || `${r.accountNumber}-${hIdx}`}`}
+                                          onClick={() => setViewingReadingDetailModal(r)}
+                                          title="Click row to view complete meter reading & verification details"
+                                          className="hover:bg-slate-800/70 transition cursor-pointer"
+                                        >
+                                          <td className="px-3.5 py-3 font-mono font-bold text-slate-400 text-[11px] whitespace-nowrap">
+                                            {r.id}
+                                          </td>
+                                          <td className="px-3.5 py-3 whitespace-nowrap">
+                                            <span className="inline-flex items-center gap-1 font-bold text-amber-300 bg-amber-950/60 border border-amber-800/70 px-2 py-0.5 rounded text-[11px]">
+                                              📅 {r.readingDate || r.meterReaderDate || 'Recent'}
+                                            </span>
+                                          </td>
+                                          <td className="px-3.5 py-3 font-bold text-slate-200 whitespace-nowrap">
+                                            {r.billingPeriod || 'Current Period'}
+                                          </td>
+                                          <td className="px-3.5 py-3 space-y-1 min-w-[140px]">
+                                            <span className="font-bold text-white block leading-tight">{r.consumerName}</span>
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                              <span className="font-mono text-sky-400 text-xs font-black bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 inline-block">
+                                                {r.accountNumber ? (r.accountNumber.startsWith('#') ? r.accountNumber : `#${r.accountNumber}`) : 'Pending Acct'}
+                                              </span>
+                                              {r.classification?.toLowerCase().includes('comm') ? (
+                                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-950/80 text-purple-300 border border-purple-800/80">
+                                                  <Building className="h-2.5 w-2.5 text-purple-400 shrink-0" />
+                                                  <span>COMMERCIAL</span>
+                                                </span>
+                                              ) : (
+                                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-emerald-950/80 text-emerald-300 border border-emerald-800/80">
+                                                  <Home className="h-2.5 w-2.5 text-emerald-400 shrink-0" />
+                                                  <span>RESIDENTIAL</span>
+                                                </span>
+                                              )}
+                                            </div>
+                                          </td>
+                                          <td className="px-3.5 py-3 font-mono text-slate-200 font-bold whitespace-nowrap">
+                                            {r.meterNumber}
+                                          </td>
+                                          <td className="px-3.5 py-3 font-mono tabular-nums whitespace-nowrap">
+                                            <span className="text-slate-400">{formatOdometerReading(r.previousReading)}</span>
+                                            <span className="text-slate-500 mx-1">→</span>
+                                            <span className="font-bold text-white">{formatOdometerReading(r.presentReading ?? r.currentReading)}</span>
+                                          </td>
+                                          <td className="px-3.5 py-3 space-y-0.5 whitespace-nowrap">
+                                            <span className="font-mono font-bold text-emerald-400 block">{r.consumption} m³</span>
+                                            <span className="font-mono font-black text-white text-xs">₱{totalBill.toFixed(2)}</span>
+                                          </td>
+                                          <td className="px-3.5 py-3 whitespace-nowrap">
+                                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                                              isRejected
+                                                ? 'bg-rose-950/80 text-rose-300 border border-rose-800/80'
+                                                : isCorrected
+                                                ? 'bg-amber-950/80 text-amber-300 border border-amber-800/80'
+                                                : r.status === 'verified'
+                                                ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/80'
+                                                : 'bg-rose-950/80 text-rose-300 border border-rose-800/80'
+                                            }`}>
+                                              {isRejected ? 'REJECTED' : isCorrected ? 'CORRECTED' : r.status.toUpperCase()}
+                                            </span>
+                                          </td>
+                                          <td className="px-3.5 py-3 max-w-xs space-y-1 min-w-[180px]">
+                                            {r.notes ? (
+                                              <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-1.5 text-xs text-slate-200 font-medium">
+                                                {r.notes.includes('°') ? (
+                                                  <div>
+                                                    <span className="font-mono font-black text-rose-400 text-[11px] block">📍 {r.notes.split('•')[0].trim()}</span>
+                                                    <span className="text-[11px] text-slate-300 font-bold block">{r.notes.split('•').slice(1).join('•').trim() || r.notes}</span>
+                                                  </div>
+                                                ) : (
+                                                  <p className="text-[11px] text-slate-300 font-semibold">{r.notes}</p>
+                                                )}
+                                              </div>
+                                            ) : (
+                                              <span className="text-[11px] text-slate-500 font-medium">Verified & Auto-Billed</span>
+                                            )}
+                                            <p className="text-[11px] text-slate-400 font-medium">
+                                              Reader: <strong className="text-slate-200 font-bold">{r.meterReaderName || 'Field Reader'}</strong>
+                                            </p>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                            <TablePagination
+                              currentPage={safeApprovalHistoryPage}
+                              totalItems={filteredHistory.length}
+                              pageSize={10}
+                              onPageChange={setApprovalHistoryPage}
+                              itemName="approval records"
+                            />
+                          </div>
+                        </>
+                      );
+                    }
+
+                    // VIEW 3 (DEFAULT): CLICKABLE METER READERS DIRECTORY IN APPROVAL HISTORY
+                    const filteredReaders = readerBuckets.filter((b) =>
                       smartMatch(approvalHistorySearch, [
-                        r.id,
-                        r.accountNumber,
-                        r.consumerName,
-                        r.meterNumber,
-                        r.billingPeriod,
-                        r.readingDate,
-                        r.meterReaderName,
-                        r.status,
-                        r.notes,
-                        formatOdometerReading(r.previousReading),
-                        formatOdometerReading(r.presentReading ?? r.currentReading)
+                        b.readerName,
+                        b.readerObj?.employeeId,
+                        b.readerObj?.username,
+                        ...b.assignedRoutes,
+                        ...b.uniqueConsumersRead.flatMap(c => [c.accountNumber, c.consumerName, c.meterNumber]),
                       ])
                     );
-                    const safeApprovalHistoryPage = Math.min(approvalHistoryPage, Math.max(1, Math.ceil(filteredHistory.length / 10)));
-                    const paginatedHistory = filteredHistory.slice((safeApprovalHistoryPage - 1) * 10, safeApprovalHistoryPage * 10);
 
                     return (
-                      <>
+                      <div className="space-y-4">
                         <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
                           <div className="flex-1 sm:max-w-lg">
                             <SmartSearchBar
                               variant="dark"
                               value={approvalHistorySearch}
                               onChange={setApprovalHistorySearch}
-                              resultCount={filteredHistory.length}
-                              totalCount={allHistoryItems.length}
-                              placeholder="Smart search history by Tx ID, account #, consumer name, meter #, 5-digit dial, reader, or notes..."
+                              resultCount={filteredReaders.length}
+                              totalCount={readerBuckets.length}
+                              placeholder="Search readers by name, badge ID, assigned route, or consumer read..."
                               id="admin-approvals-history-smart-search"
                             />
                           </div>
 
-                          <button
-                            onClick={() => {
-                              const headers = ['Tx ID', 'Billing Period', 'Account Number', 'Consumer Name', 'Meter Tag #', 'Prev Dial (00000-99999)', 'Curr Dial (00000-99999)', 'Consumption (m3)', 'Status', 'Reader Staff', 'Notes'];
-                              const rows = filteredHistory.map(r => [
-                                r.id, r.billingPeriod, r.accountNumber, r.consumerName, r.meterNumber, formatOdometerReading(r.previousReading), formatOdometerReading(r.presentReading ?? r.currentReading), r.consumption, r.status.toUpperCase(), r.meterReaderName, r.notes || ''
-                              ]);
-                              exportToCsv('twd_approval_history_audit_export.csv', headers, rows);
-                            }}
-                            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 transition shadow-sm border border-blue-700 shrink-0 cursor-pointer"
-                          >
-                            <Download className="h-4 w-4 text-white" />
-                            <span className="text-white font-bold tracking-wide">Export Approval History CSV</span>
-                          </button>
+                          <div className="flex items-center gap-2 flex-wrap shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setHistoryShowAllFlatTable(true)}
+                              className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold rounded-xl text-xs transition flex items-center space-x-1.5 border border-slate-700 cursor-pointer"
+                            >
+                              <FileSpreadsheet className="h-4 w-4 text-sky-400" />
+                              <span>View All History Table ({allHistoryItems.length})</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const headers = ['Tx ID', 'Billing Period', 'Account Number', 'Consumer Name', 'Meter Tag #', 'Prev Dial (00000-99999)', 'Curr Dial (00000-99999)', 'Consumption (m3)', 'Status', 'Reader Staff', 'Notes'];
+                                const rows = allHistoryItems.map(r => [
+                                  r.id, r.billingPeriod, r.accountNumber, r.consumerName, r.meterNumber, formatOdometerReading(r.previousReading), formatOdometerReading(r.presentReading ?? r.currentReading), r.consumption, r.status.toUpperCase(), r.meterReaderName, r.notes || ''
+                                ]);
+                                exportToCsv('twd_approval_history_audit_export.csv', headers, rows);
+                              }}
+                              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 transition shadow-sm border border-blue-700 cursor-pointer"
+                            >
+                              <Download className="h-4 w-4 text-white" />
+                              <span className="text-white font-bold tracking-wide">Export All History CSV</span>
+                            </button>
+                          </div>
                         </div>
 
-                        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-xs text-left border-collapse">
-                            <thead className="bg-slate-950 text-slate-300 font-bold uppercase text-[10px] tracking-wider border-b border-slate-800">
-                              <tr>
-                                <th className="px-3.5 py-3 whitespace-nowrap">Tx ID</th>
-                                <th className="px-3.5 py-3 whitespace-nowrap">Read Date</th>
-                                <th className="px-3.5 py-3 whitespace-nowrap">Billing Period</th>
-                                <th className="px-3.5 py-3 min-w-[140px]">Account & Consumer</th>
-                                <th className="px-3.5 py-3 whitespace-nowrap">Meter Tag #</th>
-                                <th className="px-3.5 py-3 whitespace-nowrap">Odometer Dial (Prev → Curr)</th>
-                                <th className="px-3.5 py-3 whitespace-nowrap">Usage & Bill</th>
-                                <th className="px-3.5 py-3 whitespace-nowrap">Status</th>
-                                <th className="px-3.5 py-3 min-w-[160px]">Audit Notes & Reader</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-800/80 text-slate-200 bg-slate-900">
-                              {filteredHistory.length === 0 ? (
-                                <tr>
-                                  <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
-                                    <div className="space-y-1">
-                                      <p className="text-xs font-bold text-slate-300">No approval history found</p>
-                                      <p className="text-[11px] text-slate-500">No verified or rejected meter reading transactions match your filter.</p>
-                                    </div>
-                                  </td>
-                                </tr>
-                              ) : (
-                                paginatedHistory.map((r, hIdx) => {
-                                  const totalBill = calculateCostOf(r, r.classification);
-                              const isCorrected = r.notes && r.notes.includes('CORRECTED');
-                              const isRejected = r.status === ('rejected' as any) || (r.notes && r.notes.includes('REJECTED'));
+                        {filteredReaders.length === 0 ? (
+                          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-3 shadow-xl">
+                            <Users className="h-12 w-12 text-slate-600 mx-auto" />
+                            <h4 className="text-base font-bold text-white">
+                              {readerBuckets.length === 0 ? 'No Readers With Reading History' : 'No Matching Field Readers Found'}
+                            </h4>
+                            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                              {readerBuckets.length === 0
+                                ? 'Only meter readers who have performed readings in approval history are displayed here.'
+                                : 'No field meter readers with reading history match your search query.'}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                            {filteredReaders.map((bucket) => {
+                              const initials = bucket.readerName
+                                .split(' ')
+                                .map(w => w[0])
+                                .join('')
+                                .substring(0, 2)
+                                .toUpperCase() || 'MR';
 
                               return (
-                                <tr
-                                  key={`hist-read-${r.id || `${r.accountNumber}-${hIdx}`}`}
-                                  onClick={() => setViewingReadingDetailModal(r)}
-                                  title="Click row to view complete meter reading & verification details"
-                                  className="hover:bg-slate-800/70 transition cursor-pointer"
+                                <button
+                                  key={`hist-reader-card-${bucket.key}`}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedHistoryReaderKey(bucket.key);
+                                    setApprovalHistorySearch('');
+                                    setHistoryStatusFilter('all');
+                                    setApprovalHistoryPage(1);
+                                  }}
+                                  className="group text-left bg-slate-900 hover:bg-slate-900/95 border border-slate-800 hover:border-blue-500/70 rounded-2xl p-5 shadow-lg transition-all cursor-pointer flex flex-col justify-between space-y-4"
                                 >
-                                  <td className="px-3.5 py-3 font-mono font-bold text-slate-400 text-[11px] whitespace-nowrap">
-                                    {r.id}
-                                  </td>
-                                  <td className="px-3.5 py-3 whitespace-nowrap">
-                                    <span className="inline-flex items-center gap-1 font-bold text-amber-300 bg-amber-950/60 border border-amber-800/70 px-2 py-0.5 rounded text-[11px]">
-                                      📅 {r.readingDate || r.meterReaderDate || 'Recent'}
-                                    </span>
-                                  </td>
-                                  <td className="px-3.5 py-3 font-bold text-slate-200 whitespace-nowrap">
-                                    {r.billingPeriod || 'Current Period'}
-                                  </td>
-                                  <td className="px-3.5 py-3 space-y-1 min-w-[140px]">
-                                    <span className="font-bold text-white block leading-tight">{r.consumerName}</span>
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className="font-mono text-sky-400 text-xs font-black bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 inline-block">
-                                        {r.accountNumber ? (r.accountNumber.startsWith('#') ? r.accountNumber : `#${r.accountNumber}`) : 'Pending Acct'}
-                                      </span>
-                                      {r.classification?.toLowerCase().includes('comm') ? (
-                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-950/80 text-purple-300 border border-purple-800/80">
-                                          <Building className="h-2.5 w-2.5 text-purple-400 shrink-0" />
-                                          <span>COMMERCIAL</span>
-                                        </span>
-                                      ) : (
-                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-emerald-950/80 text-emerald-300 border border-emerald-800/80">
-                                          <Home className="h-2.5 w-2.5 text-emerald-400 shrink-0" />
-                                          <span>RESIDENTIAL</span>
-                                        </span>
-                                      )}
-                                    </div>
-                                  </td>
-                                  <td className="px-3.5 py-3 font-mono text-slate-200 font-bold whitespace-nowrap">
-                                    {r.meterNumber}
-                                  </td>
-                                  <td className="px-3.5 py-3 font-mono tabular-nums whitespace-nowrap">
-                                    <span className="text-slate-400">{formatOdometerReading(r.previousReading)}</span>
-                                    <span className="text-slate-500 mx-1">→</span>
-                                    <span className="font-bold text-white">{formatOdometerReading(r.presentReading ?? r.currentReading)}</span>
-                                  </td>
-                                  <td className="px-3.5 py-3 space-y-0.5 whitespace-nowrap">
-                                    <span className="font-mono font-bold text-emerald-400 block">{r.consumption} m³</span>
-                                    <span className="font-mono font-black text-white text-xs">₱{totalBill.toFixed(2)}</span>
-                                  </td>
-                                  <td className="px-3.5 py-3 whitespace-nowrap">
-                                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
-                                      isRejected
-                                        ? 'bg-rose-950/80 text-rose-300 border border-rose-800/80'
-                                        : isCorrected
-                                        ? 'bg-amber-950/80 text-amber-300 border border-amber-800/80'
-                                        : r.status === 'verified'
-                                        ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/80'
-                                        : 'bg-rose-950/80 text-rose-300 border border-rose-800/80'
-                                    }`}>
-                                      {isRejected ? 'REJECTED' : isCorrected ? 'CORRECTED' : r.status.toUpperCase()}
-                                    </span>
-                                  </td>
-                                  <td className="px-3.5 py-3 max-w-xs space-y-1 min-w-[180px]">
-                                    {r.notes ? (
-                                      <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-1.5 text-xs text-slate-200 font-medium">
-                                        {r.notes.includes('°') ? (
-                                          <div>
-                                            <span className="font-mono font-black text-rose-400 text-[11px] block">📍 {r.notes.split('•')[0].trim()}</span>
-                                            <span className="text-[11px] text-slate-300 font-bold block">{r.notes.split('•').slice(1).join('•').trim() || r.notes}</span>
+                                  <div className="space-y-3">
+                                    {/* Reader Header */}
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="flex items-center gap-3 min-w-0">
+                                        <div className="h-11 w-11 rounded-2xl bg-blue-600 group-hover:bg-blue-500 text-white font-black text-sm flex items-center justify-center shrink-0 shadow-md transition">
+                                          {initials}
+                                        </div>
+                                        <div className="min-w-0">
+                                          <h4 className="text-sm sm:text-base font-black text-white truncate group-hover:text-sky-300 transition">
+                                            {bucket.readerName}
+                                          </h4>
+                                          <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mt-0.5 flex-wrap">
+                                            {bucket.readerObj?.employeeId ? (
+                                              <span className="font-mono font-bold text-blue-400">{bucket.readerObj.employeeId}</span>
+                                            ) : (
+                                              <span className="font-medium text-slate-400">Field Meter Staff</span>
+                                            )}
+                                            {bucket.latestReadDate && (
+                                              <>
+                                                <span>•</span>
+                                                <span className="font-mono text-amber-300">{bucket.latestReadDate}</span>
+                                              </>
+                                            )}
                                           </div>
-                                        ) : (
-                                          <p className="text-[11px] text-slate-300 font-semibold">{r.notes}</p>
+                                        </div>
+                                      </div>
+
+                                      <span className="px-2.5 py-1 rounded-lg bg-emerald-950/70 border border-emerald-800/70 text-emerald-300 font-mono font-black text-[10px] shrink-0">
+                                        {bucket.uniqueConsumersRead.length} Read
+                                      </span>
+                                    </div>
+
+                                    {/* Assigned Routes */}
+                                    <div className="bg-slate-950/90 border border-slate-800/90 rounded-xl p-3 space-y-1">
+                                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                                        Assigned Route(s)
+                                      </span>
+                                      <p className="text-xs font-semibold text-slate-200 line-clamp-2 flex items-start gap-1.5">
+                                        <MapPin className="h-3.5 w-3.5 text-sky-400 shrink-0 mt-0.5" />
+                                        <span>
+                                          {bucket.assignedRoutes.length > 0
+                                            ? bucket.assignedRoutes.join(', ')
+                                            : 'District Assigned Consumers'}
+                                        </span>
+                                      </p>
+                                    </div>
+
+                                    {/* Reader Summary Metrics */}
+                                    <div className="grid grid-cols-3 gap-2">
+                                      <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-center">
+                                        <span className="text-[10px] font-bold text-slate-500 block">Consumers</span>
+                                        <span className="text-xs font-black font-mono text-sky-400 mt-0.5 block">
+                                          {bucket.uniqueConsumersRead.length} Read
+                                        </span>
+                                      </div>
+                                      <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-center">
+                                        <span className="text-[10px] font-bold text-slate-500 block">Readings</span>
+                                        <span className="text-xs font-black font-mono text-white mt-0.5 block">
+                                          {bucket.readings.length} Total
+                                        </span>
+                                      </div>
+                                      <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-center">
+                                        <span className="text-[10px] font-bold text-slate-500 block">Volume</span>
+                                        <span className="text-xs font-black font-mono text-emerald-400 mt-0.5 block">
+                                          {bucket.totalConsumption} m³
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    {/* Preview of Assigned Consumers Been Read */}
+                                    {bucket.uniqueConsumersRead.length > 0 && (
+                                      <div className="flex flex-wrap gap-1.5 pt-1">
+                                        {bucket.uniqueConsumersRead.slice(0, 3).map((uc, ucIdx) => (
+                                          <span
+                                            key={`preview-uc-${bucket.key}-${uc.accountNumber}-${ucIdx}`}
+                                            className="px-2 py-0.5 rounded-md bg-slate-950 border border-slate-800 text-[10px] text-slate-300 font-medium truncate max-w-[140px]"
+                                          >
+                                            #{uc.accountNumber} {uc.consumerName.split(',')[0]}
+                                          </span>
+                                        ))}
+                                        {bucket.uniqueConsumersRead.length > 3 && (
+                                          <span className="px-2 py-0.5 rounded-md bg-blue-950/60 border border-blue-800/60 text-[10px] font-bold text-blue-300">
+                                            +{bucket.uniqueConsumersRead.length - 3} more
+                                          </span>
                                         )}
                                       </div>
-                                    ) : (
-                                      <span className="text-[11px] text-slate-500 font-medium">Verified & Auto-Billed</span>
                                     )}
-                                    <p className="text-[11px] text-slate-400 font-medium">
-                                      Reader: <strong className="text-slate-200 font-bold">{r.meterReaderName || 'Field Reader'}</strong>
-                                    </p>
-                                  </td>
-                                </tr>
+                                  </div>
+
+                                  {/* Footer Click Prompt */}
+                                  <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
+                                    <span className="text-amber-300 font-mono font-bold">
+                                      ₱{bucket.totalBill.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </span>
+                                    <span className="font-bold text-blue-400 group-hover:text-blue-300 inline-flex items-center gap-1">
+                                      <span>View Assigned Consumers Read</span>
+                                      <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                                    </span>
+                                  </div>
+                                </button>
                               );
-                            })
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                    <TablePagination
-                      currentPage={safeApprovalHistoryPage}
-                      totalItems={filteredHistory.length}
-                      pageSize={10}
-                      onPageChange={setApprovalHistoryPage}
-                      itemName="approval records"
-                    />
-                  </div>
-                </>
-                );
-              })()}
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
@@ -9646,14 +10482,37 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                             selectedPaymentAccount.consumerType
                           );
 
+                          const evalAfterPay = evaluateAccountGracePeriod(
+                            { ...selectedPaymentAccount, outstandingBalance: newConsumerArrears },
+                            updatedReadings
+                          );
+                          const isNoticeStatus =
+                            selectedPaymentAccount.status === 'Disconnection Notice' ||
+                            (selectedPaymentAccount.status as string) === 'disconnection_notice';
+                          const shouldRestoreStatus = Boolean(
+                            isNoticeStatus && (newConsumerArrears <= 0.5 || !evalAfterPay.isExceeded || totalApplied > 0)
+                          );
+                          const nowPayStatusIso = new Date().toISOString();
+
                           const updatedTargetConsumer: Consumer = {
                             ...selectedPaymentAccount,
                             outstandingBalance: newConsumerArrears,
+                            ...(shouldRestoreStatus
+                              ? {
+                                  status: 'active' as const,
+                                  statusUpdatedAt: nowPayStatusIso,
+                                  disconnectionNoticeDate: undefined,
+                                  disconnectionCutoffDate: undefined,
+                                  blockReason: undefined,
+                                  gracePeriodOverdueDays: 0,
+                                  unpaidCyclesCount: 0,
+                                }
+                              : {}),
                           };
 
                           const updatedConsumersList = consumers.map(c =>
                             c.accountNumber === selectedPaymentAccount.accountNumber
-                              ? { ...c, outstandingBalance: newConsumerArrears }
+                              ? updatedTargetConsumer
                               : c
                           );
                           mockDb.saveConsumers(updatedConsumersList);
@@ -9661,6 +10520,9 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                           setSelectedPaymentAccount(updatedTargetConsumer);
                           setSelectedBillIds(updatedUnpaid.map(r => r.id));
                           setPaymentAmountPaid(newConsumerArrears);
+                          if (shouldRestoreStatus) {
+                            pushIssuedConsumerToFirestore(updatedTargetConsumer, undefined, undefined, false).catch(() => {});
+                          }
 
                           // Immutable Audit Log
                           mockDb.addAuditLog(

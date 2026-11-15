@@ -1577,6 +1577,21 @@ function getStored<T>(key: string, initial: T): T {
               );
               if (!hasIssuedBills) return c;
               const exactBal = computeAccountOutstandingBalance(allReads, c.accountNumber, c.consumerType);
+              const isNotice = c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice';
+              if (isNotice && exactBal <= 0.5) {
+                changed = true;
+                return {
+                  ...c,
+                  outstandingBalance: exactBal,
+                  status: 'active' as const,
+                  statusUpdatedAt: new Date().toISOString(),
+                  disconnectionNoticeDate: undefined,
+                  disconnectionCutoffDate: undefined,
+                  blockReason: undefined,
+                  gracePeriodOverdueDays: 0,
+                  unpaidCyclesCount: 0,
+                };
+              }
               if (Math.abs((c.outstandingBalance || 0) - exactBal) > 0.009) {
                 changed = true;
                 return { ...c, outstandingBalance: exactBal };

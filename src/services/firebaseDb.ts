@@ -267,6 +267,18 @@ const STRING_SCHEMA_KEYS: Record<string, number> = {
   meterSerialNumber: 64,
   serialNumber: 64,
   installedBy: 200,
+  statusUpdatedAt: 64,
+  disconnectionNoticeDate: 64,
+  disconnectionCutoffDate: 64,
+  blockReason: 500,
+  extensionStatus: 64,
+  extensionGrantedUntil: 64,
+  extensionReason: 300,
+  lastReadingDate: 64,
+  disconnectedAt: 64,
+  assumedAt: 64,
+  assumptionEligibleDate: 64,
+  assumptionNotes: 500,
 };
 
 function sanitizeForFirestore<T>(input: T, keyName?: string): T {
@@ -662,16 +674,60 @@ function mergeConsumerPair(existing: Consumer, incoming: Consumer): Consumer {
           ? `MT-${mergedAcc}`
           : '';
 
+  const exTs = existing.statusUpdatedAt ? Date.parse(existing.statusUpdatedAt) || 0 : 0;
+  const inTs = incoming.statusUpdatedAt ? Date.parse(incoming.statusUpdatedAt) || 0 : 0;
+  const statusOwner = exTs > inTs ? existing : incoming;
+  const otherOwner = statusOwner === existing ? incoming : existing;
+
+  let resolvedStatus: Consumer['status'];
+  if (isRealIssuedAccountNumber(mergedAcc)) {
+    const ownerRaw = statusOwner.status;
+    const otherRaw = otherOwner.status;
+    const ownerNorm = !ownerRaw || isPendingConsumerStatus(ownerRaw)
+      ? 'active'
+      : (ownerRaw as string) === 'disconnection_notice'
+        ? 'Disconnection Notice'
+        : ownerRaw;
+    const otherNorm = !otherRaw || isPendingConsumerStatus(otherRaw)
+      ? 'active'
+      : (otherRaw as string) === 'disconnection_notice'
+        ? 'Disconnection Notice'
+        : otherRaw;
+
+    if (exTs !== inTs) {
+      resolvedStatus = ownerNorm;
+    } else {
+      const effBal = Number(incoming.outstandingBalance ?? existing.outstandingBalance ?? 0);
+      if (effBal <= 0.5 && (ownerNorm === 'active' || otherNorm === 'active') &&
+          (ownerNorm === 'Disconnection Notice' || otherNorm === 'Disconnection Notice')) {
+        resolvedStatus = 'active';
+      } else {
+        resolvedStatus = ownerNorm;
+      }
+    }
+  } else {
+    resolvedStatus = primary.status || secondary.status || 'pending_approval';
+  }
+
+  const maxStatusTs = Math.max(exTs, inTs);
+  const clearNoticeFields = resolvedStatus === 'active';
+
   return {
     ...secondary,
     ...primary,
     accountNumber: mergedAcc,
     meterNumber: mergedMeter,
-    status: isRealIssuedAccountNumber(mergedAcc)
-      ? isPendingConsumerStatus(primary.status)
-        ? 'active'
-        : primary.status || 'active'
-      : primary.status || secondary.status || 'pending_approval',
+    status: resolvedStatus,
+    ...(maxStatusTs > 0 ? { statusUpdatedAt: new Date(maxStatusTs).toISOString() } : {}),
+    disconnectionNoticeDate: clearNoticeFields ? undefined : statusOwner.disconnectionNoticeDate ?? otherOwner.disconnectionNoticeDate,
+    disconnectionCutoffDate: clearNoticeFields ? undefined : statusOwner.disconnectionCutoffDate ?? otherOwner.disconnectionCutoffDate,
+    blockReason: clearNoticeFields ? undefined : statusOwner.blockReason ?? otherOwner.blockReason,
+    gracePeriodOverdueDays: clearNoticeFields ? 0 : statusOwner.gracePeriodOverdueDays ?? otherOwner.gracePeriodOverdueDays,
+    unpaidCyclesCount: clearNoticeFields ? 0 : statusOwner.unpaidCyclesCount ?? otherOwner.unpaidCyclesCount,
+    extensionStatus: statusOwner.extensionStatus ?? otherOwner.extensionStatus,
+    extensionGrantedUntil: statusOwner.extensionGrantedUntil ?? otherOwner.extensionGrantedUntil,
+    extensionDays: statusOwner.extensionDays ?? otherOwner.extensionDays,
+    extensionReason: statusOwner.extensionReason ?? otherOwner.extensionReason,
     email: primary.email || secondary.email || '',
     linkedUserId: primary.linkedUserId || secondary.linkedUserId,
     contactNumber: primary.contactNumber || secondary.contactNumber || '',
@@ -987,9 +1043,39 @@ export function startRealtimeFirestoreListeners() {
                       )
                   );
                   if (hasIssuedBills) {
+                    const exactBal = computeAccountOutstandingBalance(allReads, c.accountNumber, c.consumerType);
+                    const isNotice = c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice';
+                    if (isNotice && exactBal <= 0.5) {
+                      finalMergedConsumers[i] = {
+                        ...c,
+                        outstandingBalance: exactBal,
+                        status: 'active',
+                        statusUpdatedAt: new Date().toISOString(),
+                        disconnectionNoticeDate: undefined,
+                        disconnectionCutoffDate: undefined,
+                        blockReason: undefined,
+                        gracePeriodOverdueDays: 0,
+                        unpaidCyclesCount: 0,
+                      };
+                    } else {
+                      finalMergedConsumers[i] = {
+                        ...c,
+                        outstandingBalance: exactBal,
+                      };
+                    }
+                  } else if (
+                    (c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice') &&
+                    Number(c.outstandingBalance || 0) <= 0.5
+                  ) {
                     finalMergedConsumers[i] = {
                       ...c,
-                      outstandingBalance: computeAccountOutstandingBalance(allReads, c.accountNumber, c.consumerType),
+                      status: 'active',
+                      statusUpdatedAt: new Date().toISOString(),
+                      disconnectionNoticeDate: undefined,
+                      disconnectionCutoffDate: undefined,
+                      blockReason: undefined,
+                      gracePeriodOverdueDays: 0,
+                      unpaidCyclesCount: 0,
                     };
                   }
                 }
@@ -1334,6 +1420,21 @@ export function startRealtimeFirestoreListeners() {
                   );
                   if (!hasIssuedBills) return c;
                   const exactBal = computeAccountOutstandingBalance(finalReadings, c.accountNumber, c.consumerType);
+                  const isNotice = c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice';
+                  if (isNotice && exactBal <= 0.5) {
+                    consUpdated = true;
+                    return {
+                      ...c,
+                      outstandingBalance: exactBal,
+                      status: 'active' as const,
+                      statusUpdatedAt: new Date().toISOString(),
+                      disconnectionNoticeDate: undefined,
+                      disconnectionCutoffDate: undefined,
+                      blockReason: undefined,
+                      gracePeriodOverdueDays: 0,
+                      unpaidCyclesCount: 0,
+                    };
+                  }
                   if (Math.abs((c.outstandingBalance || 0) - exactBal) > 0.009) {
                     consUpdated = true;
                     return { ...c, outstandingBalance: exactBal };

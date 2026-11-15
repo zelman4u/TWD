@@ -85,6 +85,7 @@ export interface Consumer {
   currentReading?: number;
   lastConsumption?: number;
   lastReadingDate?: string;
+  statusUpdatedAt?: string;
 }
 
 export interface MeterReader {

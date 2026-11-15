@@ -364,6 +364,16 @@ interface MobileConsumerSync {
   isRegistered?: boolean;
   id?: string;
   outstandingBalance?: number;
+  statusUpdatedAt?: string;
+  disconnectionNoticeDate?: string;
+  disconnectionCutoffDate?: string;
+  blockReason?: string;
+  extensionStatus?: string;
+  extensionGrantedUntil?: string;
+  extensionReason?: string;
+  extensionDays?: number;
+  gracePeriodOverdueDays?: number;
+  unpaidCyclesCount?: number;
 }
 
 interface PortalSyncUser {
@@ -2679,6 +2689,48 @@ app.post("/api/consumers/reconcile", (req, res) => {
             rawIncomingIdx !== undefined && rawIncomingIdx !== null
               ? (((Math.floor(Math.max(0, Number(rawIncomingIdx) || 0)) % 100000) + 100000) % 100000)
               : (((Math.floor(Math.max(0, Number(existing.previousReading || 0))) % 100000) + 100000) % 100000);
+          const existingStatusTs = existing.statusUpdatedAt ? Date.parse(existing.statusUpdatedAt) || 0 : 0;
+          const incomingStatusTs = ic.statusUpdatedAt ? Date.parse(ic.statusUpdatedAt) || 0 : 0;
+          const incomingStatus =
+            ic.status && ic.status !== "pending_approval" && ic.status !== "pending"
+              ? ((ic.status as string) === "disconnection_notice" ? "Disconnection Notice" : ic.status)
+              : "active";
+          const existingStatus =
+            existing.status && existing.status !== "pending_approval" && existing.status !== "pending"
+              ? ((existing.status as string) === "disconnection_notice" ? "Disconnection Notice" : existing.status)
+              : "active";
+
+          // Deterministic status resolution by statusUpdatedAt timestamp (never let stale Disconnection Notice overwrite active)
+          let resolvedStatus = incomingStatus;
+          let resolvedStatusTs = Math.max(existingStatusTs, incomingStatusTs);
+          let resolvedNoticeDate = ic.disconnectionNoticeDate ?? existing.disconnectionNoticeDate;
+          let resolvedCutoffDate = ic.disconnectionCutoffDate ?? existing.disconnectionCutoffDate;
+          let resolvedBlockReason = ic.blockReason ?? existing.blockReason;
+
+          if (existingStatus !== incomingStatus) {
+            if (existingStatusTs > incomingStatusTs) {
+              resolvedStatus = existingStatus;
+              resolvedNoticeDate = existing.disconnectionNoticeDate;
+              resolvedCutoffDate = existing.disconnectionCutoffDate;
+              resolvedBlockReason = existing.blockReason;
+            } else if (incomingStatusTs === existingStatusTs) {
+              // Tie-breaker: if incoming is 'active' with 0 balance or existing is 'active' with 0 balance, prefer 'active'
+              const effBal = Number(ic.outstandingBalance ?? existing.outstandingBalance ?? 0);
+              if (effBal <= 0.5 && (incomingStatus === "active" || existingStatus === "active")) {
+                resolvedStatus = "active";
+                resolvedNoticeDate = undefined;
+                resolvedCutoffDate = undefined;
+                resolvedBlockReason = undefined;
+              }
+            }
+          }
+
+          if (resolvedStatus === "active") {
+            resolvedNoticeDate = undefined;
+            resolvedCutoffDate = undefined;
+            resolvedBlockReason = undefined;
+          }
+
           const merged: MobileConsumerSync = {
             ...existing,
             ...ic,
@@ -2689,9 +2741,14 @@ app.post("/api/consumers/reconcile", (req, res) => {
             email: icEmail || existing.email || "",
             contactNumber: ic.contactNumber || existing.contactNumber || "",
             linkedUserId: existing.linkedUserId || icUid,
-            status: (ic.status && ic.status !== "pending_approval" && ic.status !== "pending") ? ic.status : "active",
+            status: resolvedStatus as MobileConsumerSync["status"],
+            statusUpdatedAt: resolvedStatusTs > 0 ? new Date(resolvedStatusTs).toISOString() : (ic.statusUpdatedAt || existing.statusUpdatedAt),
+            disconnectionNoticeDate: resolvedNoticeDate,
+            disconnectionCutoffDate: resolvedCutoffDate,
+            blockReason: resolvedBlockReason,
             isRegistered: true
           };
+          reconcileConsumerDisconnectionStateServer(merged);
           syncedConsumers[matchIdx] = merged;
           const ensuredNotif = ensureIssuedConsumerNotificationServer(merged);
           syncConsumerToServerPortalUser(merged);
@@ -2953,9 +3010,12 @@ app.post("/api/consumers/resolve-account", async (req, res) => {
     const isIssued = resolvedConsumer ? isValidatedConsumerForReader(resolvedConsumer) : false;
 
     if (resolvedConsumer && isIssued) {
+      const healed = reconcileConsumerDisconnectionStateServer(resolvedConsumer);
       ensureIssuedConsumerNotificationServer(resolvedConsumer);
       syncConsumerToServerPortalUser(resolvedConsumer);
-      savePortalSyncStore();
+      if (healed.changed || true) {
+        savePortalSyncStore();
+      }
     }
 
     // 3. Gather all notifications belonging to this consumer
@@ -4132,7 +4192,8 @@ app.post("/api/billings/reconcile", (req, res) => {
     }
   }
 
-  // Reconcile affected consumers' outstandingBalance from authoritative issued unsettled bills
+  // Reconcile affected consumers' outstandingBalance & Disconnection Notice status from authoritative issued unsettled bills
+  const statusUpdatedConsumers: MobileConsumerSync[] = [];
   if (affectedAccounts.size > 0) {
     const allStoredBills = Array.from(reconciledBillingRecords.values());
     for (const accUpper of affectedAccounts) {
@@ -4160,8 +4221,23 @@ app.post("/api/billings/reconcile", (req, res) => {
           targetConsumer.outstandingBalance = sumRemaining;
           storeChanged = true;
         }
+        const statusRes = reconcileConsumerDisconnectionStateServer(targetConsumer, accountIssuedBills);
+        if (statusRes.changed) {
+          storeChanged = true;
+          statusUpdatedConsumers.push(targetConsumer);
+        }
       }
     }
+  }
+
+  for (const suConsumer of statusUpdatedConsumers) {
+    broadcast("CONSUMER_UPDATED", {
+      consumer: suConsumer,
+      accountNumber: suConsumer.accountNumber,
+      status: suConsumer.status,
+      outstandingBalance: suConsumer.outstandingBalance,
+      statusUpdatedAt: suConsumer.statusUpdatedAt
+    });
   }
 
   if (storeChanged) {
@@ -5423,7 +5499,13 @@ function loadPortalSyncStore(): void {
     }
 
     reconcileAllServerConsumersAndUsers();
-    if (cleanedStore) {
+    let healedNoticeOnBoot = false;
+    syncedConsumers.forEach((sc) => {
+      if (reconcileConsumerDisconnectionStateServer(sc).changed) {
+        healedNoticeOnBoot = true;
+      }
+    });
+    if (cleanedStore || healedNoticeOnBoot) {
       savePortalSyncStore();
     }
   } catch (err) {
@@ -6341,56 +6423,195 @@ interface ServerGracePeriodScanResult {
 let serverLastScanResult: ServerGracePeriodScanResult | null = null;
 let serverTotalScanCycles = 0;
 
-function runServerGracePeriodScan(): ServerGracePeriodScanResult {
+function reconcileConsumerDisconnectionStateServer(
+  consumer: MobileConsumerSync,
+  preFilteredAccountBills?: any[]
+): { changed: boolean; daysOverdue: number; unpaidCycles: number; totalOverdueAmount: number; transition?: "updated_to_disconnection" | "restored_to_active" } {
+  if (
+    !consumer ||
+    !consumer.accountNumber ||
+    consumer.accountNumber.toUpperCase().startsWith("PENDING") ||
+    consumer.status === "pending_approval" ||
+    consumer.status === "pending_installation" ||
+    consumer.status === "installation_not_scheduled" ||
+    consumer.status === "pending" ||
+    consumer.status === "inactive" ||
+    consumer.status === "disconnected" ||
+    (consumer.status as string) === "archived" ||
+    (consumer.status as string) === "blocked"
+  ) {
+    return { changed: false, daysOverdue: 0, unpaidCycles: 0, totalOverdueAmount: 0 };
+  }
+
+  const accUpper = String(consumer.accountNumber).replace(/^#/, "").trim().toUpperCase();
+  const sourceBills = preFilteredAccountBills || Array.from(reconciledBillingRecords.values());
+  const accountIssuedBills = sourceBills.filter((b) => {
+    if (!b || b.status === "cancelled" || b.status === "pending" || b.status === "flagged_abnormal") return false;
+    const bAcc = String(b.accountNumber || "").replace(/^#/, "").trim().toUpperCase();
+    if (bAcc !== accUpper) return false;
+    return Boolean(
+      b.isBillingIssued ||
+        b.billingIssuedAt ||
+        b.invoiceNumber ||
+        b.paymentStatus === "paid" ||
+        b.paymentStatus === "partial" ||
+        Number(b.paidAmount || 0) > 0 ||
+        Boolean(b.orNumber) ||
+        (b.status === "verified" && typeof b.billAmount === "number" && Boolean(b.dueDate))
+    );
+  });
+
   const now = Date.now();
-  let updatedCount = 0;
-  const details: ServerGracePeriodScanResult["details"] = [];
+  let changed = false;
 
-  syncedConsumers.forEach((consumer) => {
-    // Only evaluate accounts with issued account numbers that aren't pending or inactive
-    if (
-      !consumer.accountNumber ||
-      consumer.accountNumber.toUpperCase().startsWith("PENDING") ||
-      consumer.status === "pending_approval" ||
-      consumer.status === "pending_installation" ||
-      consumer.status === "installation_not_scheduled" ||
-      consumer.status === "inactive"
-    ) {
-      return;
-    }
+  // Compute unpaid bills & canonical remaining balance when bills are available on server
+  const unpaidBills = accountIssuedBills.filter((b) => {
+    if (b.paymentStatus === "paid") return false;
+    const gross = Number(b.totalAmount ?? b.billAmount ?? 0);
+    const paid = Number(b.paidAmount || 0);
+    const rem = typeof b.remainingBalance === "number" ? b.remainingBalance : Math.max(0, gross - paid);
+    return rem > 0.5;
+  });
 
-    // Determine days since last reading / billing date
-    let lastDateObj: Date;
-    if (consumer.lastReadingDate) {
-      lastDateObj = new Date(consumer.lastReadingDate);
-      if (isNaN(lastDateObj.getTime())) {
-        lastDateObj = new Date("2024-10-15");
+  const totalOverdueAmount = Math.round(
+    unpaidBills.reduce((sum, b) => {
+      const gross = Number(b.totalAmount ?? b.billAmount ?? 0);
+      const paid = Number(b.paidAmount || 0);
+      const rem = typeof b.remainingBalance === "number" ? b.remainingBalance : Math.max(0, gross - paid);
+      return sum + Math.max(0, rem);
+    }, 0) * 100
+  ) / 100;
+
+  if (accountIssuedBills.length > 0 && Math.abs(Number(consumer.outstandingBalance || 0) - totalOverdueAmount) > 0.009) {
+    consumer.outstandingBalance = totalOverdueAmount;
+    changed = true;
+  }
+
+  let maxDaysOverdue = 0;
+  unpaidBills.forEach((bill) => {
+    let dueObj: Date | null = null;
+    if (bill.dueDate) {
+      const d = new Date(bill.dueDate);
+      if (!isNaN(d.getTime())) dueObj = d;
+    } else if (bill.readingDate) {
+      const d = new Date(bill.readingDate);
+      if (!isNaN(d.getTime())) {
+        d.setDate(d.getDate() + 15);
+        dueObj = d;
       }
-    } else {
-      lastDateObj = new Date("2024-10-15");
     }
-
-    // Bill due date standard: 15 days after reading date
-    const dueDate = new Date(lastDateObj.getTime() + 15 * 24 * 60 * 60 * 1000);
-    const daysOverdue = Math.max(0, Math.floor((now - dueDate.getTime()) / (1000 * 60 * 60 * 24)));
-
-    // Standard 3-month payment grace period = 90 days past due
-    const isExceeded = daysOverdue >= 90;
-
-    if (isExceeded) {
-      if (consumer.status !== "Disconnection Notice") {
-        consumer.status = "Disconnection Notice";
-        updatedCount++;
-        details.push({
-          accountNumber: consumer.accountNumber,
-          name: consumer.name,
-          status: "Disconnection Notice",
-          daysOverdue,
-          reason: `Exceeded 3-month grace period (${daysOverdue} days overdue)`
-        });
-      }
+    if (dueObj) {
+      const diffDays = Math.max(0, Math.floor((now - dueObj.getTime()) / (1000 * 60 * 60 * 24)));
+      if (diffDays > maxDaysOverdue) maxDaysOverdue = diffDays;
     }
   });
+
+  const hasPartialPayment = unpaidBills.some((b) => b.paymentStatus === "partial" || Number(b.paidAmount || 0) > 0);
+  const fullyUnpaidBills = unpaidBills.filter((b) => b.paymentStatus !== "partial" && Number(b.paidAmount || 0) <= 0);
+  const unpaidCycles = fullyUnpaidBills.length;
+
+  const isExtensionActive = Boolean(
+    consumer.extensionStatus === "approved" &&
+      consumer.extensionGrantedUntil &&
+      !isNaN(new Date(consumer.extensionGrantedUntil).getTime()) &&
+      new Date(consumer.extensionGrantedUntil).getTime() >= new Date().setHours(0, 0, 0, 0)
+  );
+
+  // Never flag zero-balance or < 2-cycle accounts as Disconnection Notice!
+  let isExceeded = false;
+  if (accountIssuedBills.length > 0) {
+    isExceeded =
+      totalOverdueAmount > 0.5 &&
+      !hasPartialPayment &&
+      (unpaidCycles >= 2 ||
+        unpaidBills.some((b) => b.isDisconnectionNoticeIssued === true) ||
+        (maxDaysOverdue >= 60 && unpaidBills.length >= 2));
+  } else {
+    // No issued bills synced to server yet:
+    // If balance is <= 0.50, account CANNOT legitimately be in Disconnection Notice.
+    // If balance > 0.50 and already flagged, preserve status until billing records sync.
+    const recordedBal = Number(consumer.outstandingBalance || 0);
+    isExceeded = recordedBal > 0.5 && ((consumer.status as string) === "Disconnection Notice" || (consumer.status as string) === "disconnection_notice");
+  }
+
+  const isCurrentlyNotice =
+    (consumer.status as string) === "Disconnection Notice" ||
+    (consumer.status as string) === "disconnection_notice";
+
+  if (isExceeded) {
+    if (!isExtensionActive && !isCurrentlyNotice) {
+      const nowIso = new Date().toISOString();
+      consumer.status = "Disconnection Notice";
+      consumer.statusUpdatedAt = nowIso;
+      consumer.disconnectionNoticeDate = consumer.disconnectionNoticeDate || nowIso;
+      consumer.gracePeriodOverdueDays = maxDaysOverdue;
+      consumer.unpaidCyclesCount = unpaidCycles;
+      consumer.blockReason = `Exceeded 2-month payment grace period (${maxDaysOverdue} days overdue, ${unpaidCycles} unpaid cycles). Disconnection Notice issued.`;
+      return { changed: true, daysOverdue: maxDaysOverdue, unpaidCycles, totalOverdueAmount, transition: "updated_to_disconnection" };
+    }
+    return { changed, daysOverdue: maxDaysOverdue, unpaidCycles, totalOverdueAmount };
+  } else {
+    // Balance is zero/settled, partial payment halted notice, or fewer than 2 cycles overdue
+    if (isCurrentlyNotice) {
+      consumer.status = "active";
+      consumer.statusUpdatedAt = new Date().toISOString();
+      consumer.disconnectionNoticeDate = undefined;
+      consumer.disconnectionCutoffDate = undefined;
+      consumer.blockReason = undefined;
+      consumer.gracePeriodOverdueDays = 0;
+      consumer.unpaidCyclesCount = 0;
+      return { changed: true, daysOverdue: maxDaysOverdue, unpaidCycles, totalOverdueAmount, transition: "restored_to_active" };
+    }
+    return { changed, daysOverdue: maxDaysOverdue, unpaidCycles, totalOverdueAmount };
+  }
+}
+
+function runServerGracePeriodScan(): ServerGracePeriodScanResult {
+  let updatedCount = 0;
+  let restoredCount = 0;
+  let anyChanged = false;
+  const details: ServerGracePeriodScanResult["details"] = [];
+  const changedConsumers: MobileConsumerSync[] = [];
+
+  syncedConsumers.forEach((consumer) => {
+    const res = reconcileConsumerDisconnectionStateServer(consumer);
+    if (res.changed) {
+      anyChanged = true;
+      changedConsumers.push(consumer);
+    }
+    if (res.transition === "updated_to_disconnection") {
+      updatedCount++;
+      details.push({
+        accountNumber: consumer.accountNumber,
+        name: consumer.name,
+        status: "Disconnection Notice",
+        daysOverdue: res.daysOverdue,
+        reason: `Exceeded 2-month grace period (${res.daysOverdue} days overdue, ${res.unpaidCycles} unpaid cycles)`
+      });
+    } else if (res.transition === "restored_to_active") {
+      restoredCount++;
+      details.push({
+        accountNumber: consumer.accountNumber,
+        name: consumer.name,
+        status: "active",
+        daysOverdue: res.daysOverdue,
+        reason: "Balance settled or within grace period — restored to Active"
+      });
+    }
+  });
+
+  if (anyChanged) {
+    savePortalSyncStore();
+    for (const c of changedConsumers) {
+      broadcast("CONSUMER_UPDATED", {
+        consumer: c,
+        accountNumber: c.accountNumber,
+        status: c.status,
+        outstandingBalance: c.outstandingBalance,
+        statusUpdatedAt: c.statusUpdatedAt
+      });
+    }
+  }
 
   const disconnectionNoticeTotal = syncedConsumers.filter(c => c.status === "Disconnection Notice").length;
 
@@ -6404,10 +6625,11 @@ function runServerGracePeriodScan(): ServerGracePeriodScanResult {
   serverTotalScanCycles++;
 
   // Broadcast update to all active WebSocket clients if any account status changed
-  if (updatedCount > 0) {
+  if (updatedCount > 0 || restoredCount > 0 || anyChanged) {
     const broadcastMsg = JSON.stringify({
       type: "service:grace_period_scan_complete",
       updatedCount,
+      restoredCount,
       disconnectionNoticeTotal,
       timestamp: serverLastScanResult.timestamp
     });

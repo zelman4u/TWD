@@ -5,6 +5,8 @@
 
 import { mockDb } from '../mockDb';
 import { apiClient } from './apiClient';
+import { pushIssuedConsumerToFirestore } from './firebaseDb';
+import { isOfficialBillIssued, getCanonicalBillSettlement } from '../utils/tariffCalculator';
 import { Consumer, MeterReading, AuditLog } from '../types';
 
 export interface GracePeriodEvaluation {
@@ -69,18 +71,20 @@ export function evaluateAccountGracePeriod(
     };
   }
 
-  // Find all verified bills for this account
-  const consumerBills = allReadings.filter(r => 
-    r.status === 'verified' &&
-    (r.accountNumber === consumer.accountNumber || (r.consumerName && r.consumerName.toLowerCase() === consumer.name.toLowerCase()))
-  );
+  const normConsumerAcc = String(consumer.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
 
-  // Filter for genuine unpaid balances
+  // Find all official issued bills for this account
+  const consumerBills = allReadings.filter(r => {
+    if (!r || !isOfficialBillIssued(r)) return false;
+    const rAcc = String(r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+    if (rAcc && normConsumerAcc) return rAcc === normConsumerAcc;
+    return Boolean(!rAcc && r.consumerName && consumer.name && r.consumerName.toLowerCase() === consumer.name.toLowerCase());
+  });
+
+  // Filter for genuine unpaid balances using canonical settlement
   const unpaidBills = consumerBills.filter(r => {
-    if (r.paymentStatus === 'paid') return false;
-    const gross = r.totalAmount || r.billAmount || 0;
-    const paid = r.paidAmount || 0;
-    return (gross - paid) > 0.5; // Has outstanding balance
+    const settlement = getCanonicalBillSettlement(r, r.classification || consumer.consumerType);
+    return !settlement.isPaid && settlement.remainingBalance > 0.5;
   });
 
   if (unpaidBills.length === 0) {
@@ -101,54 +105,53 @@ export function evaluateAccountGracePeriod(
   let oldestTime = Infinity;
 
   unpaidBills.forEach(bill => {
-    let dueDateObj: Date;
+    let dueDateObj: Date | null = null;
     if (bill.dueDate) {
-      dueDateObj = new Date(bill.dueDate);
-      if (isNaN(dueDateObj.getTime())) {
-        dueDateObj = new Date('2024-10-15');
-      }
+      const parsed = new Date(bill.dueDate);
+      if (!isNaN(parsed.getTime())) dueDateObj = parsed;
     } else if (bill.readingDate) {
-      dueDateObj = new Date(bill.readingDate);
-      if (!isNaN(dueDateObj.getTime())) {
-        dueDateObj.setDate(dueDateObj.getDate() + 15);
-      } else {
-        dueDateObj = new Date('2024-10-15');
+      const parsed = new Date(bill.readingDate);
+      if (!isNaN(parsed.getTime())) {
+        parsed.setDate(parsed.getDate() + 15);
+        dueDateObj = parsed;
       }
-    } else {
-      dueDateObj = new Date('2024-10-15');
     }
 
-    const dueTime = dueDateObj.getTime();
-    if (dueTime < oldestTime) {
-      oldestTime = dueTime;
-      oldestDueDate = dueDateObj.toISOString().split('T')[0];
+    if (dueDateObj) {
+      const dueTime = dueDateObj.getTime();
+      if (dueTime < oldestTime) {
+        oldestTime = dueTime;
+        oldestDueDate = dueDateObj.toISOString().split('T')[0];
+      }
+
+      const diffDays = Math.max(0, Math.floor((now - dueTime) / (1000 * 60 * 60 * 24)));
+      if (diffDays > maxDaysOverdue) {
+        maxDaysOverdue = diffDays;
+      }
     }
 
-    const diffDays = Math.max(0, Math.floor((now - dueTime) / (1000 * 60 * 60 * 24)));
-    if (diffDays > maxDaysOverdue) {
-      maxDaysOverdue = diffDays;
-    }
-
-    const gross = bill.totalAmount || bill.billAmount || 0;
-    const paid = bill.paidAmount || 0;
-    totalOverdueAmount += Math.max(0, gross - paid);
+    const settlement = getCanonicalBillSettlement(bill, bill.classification || consumer.consumerType);
+    totalOverdueAmount += settlement.remainingBalance;
   });
 
+  totalOverdueAmount = Math.round(totalOverdueAmount * 100) / 100;
+
   // Check if consumer has an active partial payment on any bill
-  const hasPartialPayment = unpaidBills.some(b => b.paymentStatus === 'partial' || (b.paidAmount && b.paidAmount > 0));
-  if (hasPartialPayment) {
-    unpaidBills.forEach(b => {
-      b.isDisconnectionNoticeIssued = false;
-    });
-  }
+  const hasPartialPayment = unpaidBills.some(b => {
+    const settlement = getCanonicalBillSettlement(b, b.classification || consumer.consumerType);
+    return settlement.isPartial || settlement.paidAmount > 0;
+  });
 
   // Count only completely unpaid cycles without partial payments for strict disconnection threshold
-  const fullyUnpaidBills = unpaidBills.filter(b => b.paymentStatus !== 'partial' && (!b.paidAmount || b.paidAmount <= 0));
+  const fullyUnpaidBills = unpaidBills.filter(b => {
+    const settlement = getCanonicalBillSettlement(b, b.classification || consumer.consumerType);
+    return !settlement.isPartial && settlement.paidAmount <= 0;
+  });
   const unpaidCycles = fullyUnpaidBills.length;
 
   // 2 months grace period check: >= 2 fully unpaid cycles OR explicit notice issued OR (>= 60 days overdue AND >= 2 statements)
   // When a consumer makes a partial payment, the disconnection order is suspended (halted) while maintaining the remaining balance!
-  const isExceeded = !hasPartialPayment && (
+  const isExceeded = totalOverdueAmount > 0.5 && !hasPartialPayment && (
     unpaidCycles >= 2 ||
     unpaidBills.some(r => r.isDisconnectionNoticeIssued === true) ||
     (maxDaysOverdue >= 60 && unpaidBills.length >= 2)
@@ -192,19 +195,36 @@ function notifyListeners() {
  * Scans all consumer accounts and automatically updates delinquent accounts exceeding 
  * the 3-month grace period to 'Disconnection Notice' status.
  */
-export function scanAndUpdateAccounts(): ScanSummary {
+export function scanAndUpdateAccounts(options?: { forceAllConsumers?: boolean }): ScanSummary {
   const consumers = mockDb.getConsumers();
   const readings = mockDb.getReadings();
+  const activeSession = mockDb.getCurrentUser();
+  const isConsumerSessionOnly = Boolean(activeSession && activeSession.role === 'consumer' && !options?.forceAllConsumers);
   const now = new Date();
+  const nowIso = now.toISOString();
   const timestamp = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   let hasConsumerChanges = false;
   let hasReadingChanges = false;
+  const changedIssuedConsumers: Consumer[] = [];
   const items: AccountScanItem[] = [];
   let updatedToDisconnectionCount = 0;
   let restoredToActiveCount = 0;
 
   const updatedConsumers = consumers.map(consumer => {
+    // In Consumer Portal sessions, only evaluate the signed-in consumer's own account
+    if (isConsumerSessionOnly) {
+      const sAcc = String(activeSession?.linkedAccountNumber || '').replace(/^#/, '').trim().toUpperCase();
+      const cAcc = String(consumer.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+      const sameUser =
+        (sAcc && cAcc && sAcc === cAcc) ||
+        (activeSession?.id && consumer.linkedUserId === activeSession.id) ||
+        (activeSession?.email && consumer.email && consumer.email.toLowerCase() === activeSession.email.toLowerCase());
+      if (!sameUser) {
+        return consumer;
+      }
+    }
+
     // Skip accounts that are pending ID issuance or already blocked/archived manually
     if (!consumer.accountNumber || consumer.accountNumber.toUpperCase().startsWith('PENDING') || consumer.status === 'pending_approval') {
       items.push({
@@ -309,9 +329,10 @@ export function scanAndUpdateAccounts(): ScanSummary {
           reason: `Extension expired on ${consumer.extensionGrantedUntil} without payment — Line Disconnected`
         });
 
-        return {
+        const disconnectedConsumer: Consumer = {
           ...consumer,
           status: 'disconnected' as const,
+          statusUpdatedAt: nowIso,
           isDisconnected: true,
           disconnectedAt: discDate,
           extensionStatus: 'expired' as const,
@@ -319,6 +340,8 @@ export function scanAndUpdateAccounts(): ScanSummary {
           unpaidCyclesCount: evalResult.unpaidCycles,
           blockReason: `Water service disconnected on ${new Date().toLocaleDateString('en-US')}. Extension expired without full settlement.`
         };
+        changedIssuedConsumers.push(disconnectedConsumer);
+        return disconnectedConsumer;
       }
 
       if (isExtensionActive) {
@@ -339,7 +362,8 @@ export function scanAndUpdateAccounts(): ScanSummary {
         return consumer;
       }
 
-      if (prevStatus !== 'Disconnection Notice') {
+      const isCurrentlyNotice = prevStatus === 'Disconnection Notice' || (prevStatus as string) === 'disconnection_notice';
+      if (!isCurrentlyNotice) {
         // AUTOMATICALLY UPDATE STATUS TO 'Disconnection Notice' (2 months unpaid)
         hasConsumerChanges = true;
         updatedToDisconnectionCount++;
@@ -395,14 +419,17 @@ export function scanAndUpdateAccounts(): ScanSummary {
           reason: `Exceeded 2-month grace period (${evalResult.maxDaysOverdue}d overdue, ${evalResult.unpaidCycles} cycles)`
         });
 
-        return {
+        const updatedNoticeConsumer: Consumer = {
           ...consumer,
           status: 'Disconnection Notice' as const,
-          disconnectionNoticeDate: new Date().toISOString(),
+          statusUpdatedAt: nowIso,
+          disconnectionNoticeDate: nowIso,
           gracePeriodOverdueDays: evalResult.maxDaysOverdue,
           unpaidCyclesCount: evalResult.unpaidCycles,
           blockReason: `Exceeded 2-month payment grace period (${evalResult.maxDaysOverdue} days overdue, ${evalResult.unpaidCycles} unpaid cycles). Disconnection Notice issued.`
         };
+        changedIssuedConsumers.push(updatedNoticeConsumer);
+        return updatedNoticeConsumer;
       } else {
         // Retained in Disconnection Notice
         items.push({
@@ -427,10 +454,42 @@ export function scanAndUpdateAccounts(): ScanSummary {
       }
     } else {
       // Account is within grace period
-      if (prevStatus === 'Disconnection Notice') {
-        // Arrears settled! Restore account to 'active'
+      if (prevStatus === 'Disconnection Notice' || (prevStatus as string) === 'disconnection_notice') {
+        const normAcc = String(consumer.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+        const hasLocalIssuedBills = readings.some(r => {
+          if (!r || !isOfficialBillIssued(r)) return false;
+          const rAcc = String(r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+          return rAcc === normAcc;
+        });
+        const hasKnownZeroBalance = Number(consumer.outstandingBalance || 0) <= 0.5;
+        if (!hasKnownZeroBalance && !hasLocalIssuedBills) {
+          // Positive balance recorded on account but local bills haven't hydrated yet — keep current status until bills arrive
+          items.push({
+            accountNumber: consumer.accountNumber,
+            name: consumer.name,
+            barangay: consumer.barangay,
+            previousStatus: prevStatus,
+            newStatus: prevStatus,
+            maxDaysOverdue: evalResult.maxDaysOverdue,
+            unpaidCycles: evalResult.unpaidCycles,
+            totalOverdueAmount: Number(consumer.outstandingBalance || 0),
+            actionTaken: 'retained_disconnection',
+            reason: 'Awaiting local bill sync for positive balance'
+          });
+          return consumer;
+        }
+
+        // Arrears settled or within grace period! Restore account to 'active'
         hasConsumerChanges = true;
         restoredToActiveCount++;
+
+        readings.forEach(r => {
+          const rAcc = String(r.accountNumber || '').replace(/^#/, '').trim().toUpperCase();
+          if (rAcc === normAcc && r.isDisconnectionNoticeIssued) {
+            r.isDisconnectionNoticeIssued = false;
+            hasReadingChanges = true;
+          }
+        });
 
         mockDb.addAuditLog(
           'system-background-service',
@@ -453,14 +512,18 @@ export function scanAndUpdateAccounts(): ScanSummary {
           reason: 'Arrears settled, account restored within grace period'
         });
 
-        return {
+        const restoredConsumer: Consumer = {
           ...consumer,
           status: 'active' as const,
+          statusUpdatedAt: nowIso,
           blockReason: undefined,
           disconnectionNoticeDate: undefined,
+          disconnectionCutoffDate: undefined,
           gracePeriodOverdueDays: 0,
           unpaidCyclesCount: 0
         };
+        changedIssuedConsumers.push(restoredConsumer);
+        return restoredConsumer;
       }
 
       items.push({
@@ -483,7 +546,12 @@ export function scanAndUpdateAccounts(): ScanSummary {
   // Save changes if any status or readings changed
   if (hasConsumerChanges) {
     mockDb.saveConsumers(updatedConsumers);
-    apiClient.reconcileConsumers(updatedConsumers).catch(() => {});
+    if (changedIssuedConsumers.length > 0) {
+      apiClient.reconcileConsumers(changedIssuedConsumers).catch(() => {});
+      changedIssuedConsumers.forEach((cc) => {
+        pushIssuedConsumerToFirestore(cc, undefined, undefined, false).catch(() => {});
+      });
+    }
   }
   if (hasReadingChanges) {
     mockDb.saveReadings(readings);
@@ -615,12 +683,14 @@ export function grantAccountExtension(
     extensionGrantedUntil: extensionDateStr,
     extensionStatus: 'approved',
     disconnectionCutoffDate: extensionDateStr,
+    statusUpdatedAt: new Date().toISOString(),
     blockReason: `Extension granted for ${extensionDays} days until ${extensionDateStr}. Reason: ${extensionReason}`
   };
 
   consumers[index] = updated;
   mockDb.saveConsumers(consumers);
-  apiClient.reconcileConsumers(consumers).catch(() => {});
+  apiClient.reconcileConsumers([updated]).catch(() => {});
+  pushIssuedConsumerToFirestore(updated, undefined, undefined, false).catch(() => {});
 
   mockDb.addNotification({
     accountNumber: consumer.accountNumber,
@@ -676,12 +746,14 @@ export function requestAccountExtension(
     extensionReason,
     extensionRequestedAt: new Date().toISOString(),
     extensionStatus: 'pending',
-    extensionGrantedUntil: proposedDate
+    extensionGrantedUntil: proposedDate,
+    statusUpdatedAt: new Date().toISOString(),
   };
 
   consumers[index] = updated;
   mockDb.saveConsumers(consumers);
-  apiClient.reconcileConsumers(consumers).catch(() => {});
+  apiClient.reconcileConsumers([updated]).catch(() => {});
+  pushIssuedConsumerToFirestore(updated, undefined, undefined, false).catch(() => {});
 
   mockDb.addAuditLog(
     'consumer-portal',
@@ -723,6 +795,7 @@ export function disconnectAccount(
   const updated: Consumer = {
     ...consumer,
     status: 'disconnected',
+    statusUpdatedAt: now,
     isDisconnected: true,
     disconnectedAt: now,
     extensionStatus: 'expired',
@@ -731,7 +804,8 @@ export function disconnectAccount(
 
   consumers[index] = updated;
   mockDb.saveConsumers(consumers);
-  apiClient.reconcileConsumers(consumers).catch(() => {});
+  apiClient.reconcileConsumers([updated]).catch(() => {});
+  pushIssuedConsumerToFirestore(updated, undefined, undefined, false).catch(() => {});
 
   // Update water meter status to inactive
   const meters = mockDb.getMeters().map(m => {
@@ -795,16 +869,21 @@ export function reconnectAccount(
   const updated: Consumer = {
     ...consumer,
     status: 'active',
+    statusUpdatedAt: new Date().toISOString(),
     isDisconnected: false,
     disconnectedAt: undefined,
     blockReason: undefined,
     disconnectionNoticeDate: undefined,
+    disconnectionCutoffDate: undefined,
+    gracePeriodOverdueDays: 0,
+    unpaidCyclesCount: 0,
     extensionGrantedUntil: undefined
   };
 
   consumers[index] = updated;
   mockDb.saveConsumers(consumers);
-  apiClient.reconcileConsumers(consumers).catch(() => {});
+  apiClient.reconcileConsumers([updated]).catch(() => {});
+  pushIssuedConsumerToFirestore(updated, undefined, undefined, false).catch(() => {});
 
   // Update water meter status to active
   const meters = mockDb.getMeters().map(m => {
@@ -877,6 +956,7 @@ export function assumeAccount(
     sitioZone: newOwnerData.sitioZone?.trim() || original.sitioZone,
     consumerType: newOwnerData.consumerType || original.consumerType,
     status: 'active',
+    statusUpdatedAt: now,
     isDisconnected: false,
     disconnectedAt: undefined,
     isAvailableForAssumption: false,
@@ -885,13 +965,17 @@ export function assumeAccount(
     assumedAt: now,
     blockReason: undefined,
     disconnectionNoticeDate: undefined,
+    disconnectionCutoffDate: undefined,
+    gracePeriodOverdueDays: 0,
+    unpaidCyclesCount: 0,
     extensionGrantedUntil: undefined,
     assumptionNotes: `Account assumed by ${newOwnerData.name.trim()} from ${oldOwnerName} approved by ${adminName} on ${new Date().toLocaleDateString('en-US')}. Previous bills remain accounted in historical records.`
   };
 
   consumers[index] = updated;
   mockDb.saveConsumers(consumers);
-  apiClient.reconcileConsumers(consumers).catch(() => {});
+  apiClient.reconcileConsumers([updated]).catch(() => {});
+  pushIssuedConsumerToFirestore(updated, undefined, undefined, false).catch(() => {});
 
   // If account number changed, update linked readings' accountNumber mapping
   if (targetAcc !== original.accountNumber) {

@@ -27,6 +27,7 @@ import {
 import { Consumer, MeterReading } from '../../types';
 import { mockDb } from '../../mockDb';
 import { apiClient, safeBackendFetch } from '../../services/apiClient';
+import { pushIssuedConsumerToFirestore } from '../../services/firebaseDb';
 import { sendRealtimeMessage } from '../../services/realtimeSocket';
 import {
   getCanonicalBillSettlement,
@@ -408,17 +409,28 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
       );
 
       let updatedConsumerObj: Consumer | null = null;
+      const nowPayIso = new Date().toISOString();
       const updatedConsumers = mockDb.getConsumers().map(c => {
         if (c.accountNumber === consumerRecord.accountNumber) {
+          const isNoticeOrBlocked =
+            c.status === 'Disconnection Notice' ||
+            (c.status as string) === 'disconnection_notice' ||
+            (c.status === 'blocked' && newTotalArrears <= 0.5);
           const nextC: Consumer = {
             ...c,
             outstandingBalance: newTotalArrears,
             // When payment (partial or full) is recorded, halt any disconnection notice and restore to 'active'
-            status: (c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice' || (c.status === 'blocked' && newTotalArrears === 0))
-              ? 'active'
-              : c.status,
-            disconnectionNoticeDate: undefined,
-            blockReason: undefined,
+            status: isNoticeOrBlocked ? 'active' : c.status,
+            ...(isNoticeOrBlocked
+              ? {
+                  statusUpdatedAt: nowPayIso,
+                  disconnectionNoticeDate: undefined,
+                  disconnectionCutoffDate: undefined,
+                  blockReason: undefined,
+                  gracePeriodOverdueDays: 0,
+                  unpaidCyclesCount: 0,
+                }
+              : {}),
           };
           updatedConsumerObj = nextC;
           return nextC;
@@ -479,6 +491,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
         .catch(() => {});
 
       if (updatedConsumerObj) {
+        pushIssuedConsumerToFirestore(updatedConsumerObj, undefined, undefined, false).catch(() => {});
         safeBackendFetch('/api/consumers/reconcile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-portal': 'consumer' },

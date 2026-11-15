@@ -109,6 +109,7 @@ import {
   resolveConsumerAccountInFirestore,
   ensureRealtimeFirestoreListeners,
   subscribeToConsumerIdentityInFirestore,
+  pushIssuedConsumerToFirestore,
   isRealIssuedAccountNumber,
   syncDocToFirestore,
   COLLECTIONS
@@ -1012,17 +1013,40 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       (issuedConsumer.email && lc.email && lc.email.toLowerCase() === issuedConsumer.email.toLowerCase()) ||
       (issuedConsumer.linkedUserId && lc.linkedUserId && lc.linkedUserId === issuedConsumer.linkedUserId)
     );
-    const existingLocalStatus = existingIdx >= 0 ? localConsumers[existingIdx]?.status : consumerRecordRef.current?.status;
-    const isDelinquentLocal = existingLocalStatus === 'Disconnection Notice' || existingLocalStatus === 'disconnected';
+    const existingConsumer = existingIdx >= 0 ? localConsumers[existingIdx] : consumerRecordRef.current;
+    const localStatusTs = existingConsumer?.statusUpdatedAt ? Date.parse(existingConsumer.statusUpdatedAt) || 0 : 0;
+    const remoteStatusTs = issuedConsumer.statusUpdatedAt ? Date.parse(issuedConsumer.statusUpdatedAt) || 0 : 0;
+    const remoteNormStatus: Consumer['status'] =
+      issuedConsumer.status && !isPendingConsumerStatus(issuedConsumer.status)
+        ? ((issuedConsumer.status as string) === 'disconnection_notice' ? 'Disconnection Notice' : issuedConsumer.status)
+        : 'active';
+    const localNormStatus: Consumer['status'] =
+      existingConsumer?.status && !isPendingConsumerStatus(existingConsumer.status)
+        ? ((existingConsumer.status as string) === 'disconnection_notice' ? 'Disconnection Notice' : existingConsumer.status)
+        : 'active';
+    const isRemoteActiveWithZeroBal =
+      remoteNormStatus === 'active' &&
+      Number(issuedConsumer.outstandingBalance ?? existingConsumer?.outstandingBalance ?? 0) <= 0.5;
+    const resolvedStatus: Consumer['status'] =
+      localStatusTs > remoteStatusTs && !isRemoteActiveWithZeroBal
+        ? localNormStatus
+        : remoteNormStatus;
 
     const normalizedConsumer: Consumer = {
       ...consumerRecordRef.current,
       ...issuedConsumer,
       accountNumber: accNum,
       meterNumber: meterNum,
-      status: isDelinquentLocal
-        ? existingLocalStatus
-        : (issuedConsumer.status && !isPendingConsumerStatus(issuedConsumer.status) ? issuedConsumer.status : 'active'),
+      status: resolvedStatus,
+      ...(resolvedStatus === 'active'
+        ? {
+            disconnectionNoticeDate: undefined,
+            disconnectionCutoffDate: undefined,
+            blockReason: undefined,
+            gracePeriodOverdueDays: 0,
+            unpaidCyclesCount: 0,
+          }
+        : {}),
       isRegistered: true
     };
 
@@ -1260,16 +1284,40 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               );
               let targetConsumer = matchedRemote;
               if (idx >= 0) {
-                const isDelinquentLocal =
-                  currentLocal[idx]?.status === 'Disconnection Notice' ||
-                  currentLocal[idx]?.status === 'disconnected';
-                const remoteIsStaleActive = matchedRemote.status === 'active';
-                const shouldPreserveLocalStatus = isDelinquentLocal && remoteIsStaleActive;
+                const localRec = currentLocal[idx];
+                const localTs = localRec?.statusUpdatedAt ? Date.parse(localRec.statusUpdatedAt) || 0 : 0;
+                const remoteTs = matchedRemote.statusUpdatedAt ? Date.parse(matchedRemote.statusUpdatedAt) || 0 : 0;
+                const remoteStatus =
+                  matchedRemote.status && !isPendingConsumerStatus(matchedRemote.status)
+                    ? ((matchedRemote.status as string) === 'disconnection_notice' ? 'Disconnection Notice' : matchedRemote.status)
+                    : 'active';
+                const localStatus =
+                  localRec?.status && !isPendingConsumerStatus(localRec.status)
+                    ? ((localRec.status as string) === 'disconnection_notice' ? 'Disconnection Notice' : localRec.status)
+                    : 'active';
+                const remoteZeroActive =
+                  remoteStatus === 'active' &&
+                  Number(matchedRemote.outstandingBalance ?? localRec?.outstandingBalance ?? 0) <= 0.5;
+                const useLocalStatus = localTs > remoteTs && !remoteZeroActive;
+                const chosenStatus = useLocalStatus ? localStatus : remoteStatus;
 
                 targetConsumer = {
-                  ...currentLocal[idx],
+                  ...localRec,
                   ...matchedRemote,
-                  ...(shouldPreserveLocalStatus ? { status: currentLocal[idx].status } : {})
+                  status: chosenStatus,
+                  statusUpdatedAt:
+                    Math.max(localTs, remoteTs) > 0
+                      ? new Date(Math.max(localTs, remoteTs)).toISOString()
+                      : (matchedRemote.statusUpdatedAt || localRec?.statusUpdatedAt),
+                  ...(chosenStatus === 'active'
+                    ? {
+                        disconnectionNoticeDate: undefined,
+                        disconnectionCutoffDate: undefined,
+                        blockReason: undefined,
+                        gracePeriodOverdueDays: 0,
+                        unpaidCyclesCount: 0,
+                      }
+                    : {}),
                 };
                 currentLocal[idx] = targetConsumer;
               } else {
@@ -1278,7 +1326,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               if (prevSnapshot !== JSON.stringify(currentLocal)) {
                 mockDb.saveConsumers(currentLocal);
               }
-              if (!consumerRecordRef.current || consumerRecordRef.current.accountNumber !== matchedRemote.accountNumber) {
+              if (!consumerRecordRef.current || JSON.stringify(consumerRecordRef.current) !== JSON.stringify(targetConsumer)) {
                 consumerRecordRef.current = targetConsumer;
                 setConsumerRecord(targetConsumer);
               }
@@ -1293,16 +1341,14 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             );
             let targetConsumer = matchedRemote;
             if (idx >= 0) {
-              const isDelinquentLocal =
-                currentLocal[idx]?.status === 'Disconnection Notice' ||
-                currentLocal[idx]?.status === 'disconnected';
-              const remoteIsStaleActive = matchedRemote.status === 'active';
-              const shouldPreserveLocalStatus = isDelinquentLocal && remoteIsStaleActive;
-
+              const localRec = currentLocal[idx];
+              const localTs = localRec?.statusUpdatedAt ? Date.parse(localRec.statusUpdatedAt) || 0 : 0;
+              const remoteTs = matchedRemote.statusUpdatedAt ? Date.parse(matchedRemote.statusUpdatedAt) || 0 : 0;
+              const useLocalStatus = localTs > remoteTs && !(matchedRemote.status === 'active' && Number(matchedRemote.outstandingBalance ?? 0) <= 0.5);
               targetConsumer = {
-                ...currentLocal[idx],
+                ...localRec,
                 ...matchedRemote,
-                ...(shouldPreserveLocalStatus ? { status: currentLocal[idx].status } : {})
+                ...(useLocalStatus ? { status: localRec.status } : {})
               };
               currentLocal[idx] = targetConsumer;
             } else {
@@ -1792,21 +1838,45 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           record.extensionStatus === 'approved'
         );
 
-        if (hasPartialGoodwill && (record.status === 'Disconnection Notice' || (record.status as string) === 'disconnection_notice')) {
+        const isCurrentlyNotice = record.status === 'Disconnection Notice' || (record.status as string) === 'disconnection_notice';
+        const isConfirmedZeroOrSettled =
+          unpaidList.length === 0 &&
+          (hasCompletedFirstRemoteBillSyncRef.current || issuedBills.length > 0 || Number(record.outstandingBalance || 0) <= 0.5);
+        const shouldAutoRestoreNotice =
+          isCurrentlyNotice &&
+          (hasPartialGoodwill || isConfirmedZeroOrSettled || (issuedBills.length > 0 && !has2MonthsOverdue));
+
+        if (shouldAutoRestoreNotice) {
+          const restoredIso = new Date().toISOString();
           record = {
             ...record,
             status: 'active',
+            statusUpdatedAt: restoredIso,
             disconnectionNoticeDate: undefined,
+            disconnectionCutoffDate: undefined,
             blockReason: undefined,
+            gracePeriodOverdueDays: 0,
+            unpaidCyclesCount: 0,
           };
           consumerRecordRef.current = record;
           setConsumerRecord(record);
           const currentAll = mockDb.getConsumers();
           const target = currentAll.find(c => c.accountNumber === record.accountNumber);
           if (target && (target.status === 'Disconnection Notice' || (target.status as string) === 'disconnection_notice')) {
-            const allC = currentAll.map(c => c.accountNumber === record.accountNumber ? { ...c, status: 'active' as const } : c);
+            const restoredRec: Consumer = {
+              ...target,
+              status: 'active' as const,
+              statusUpdatedAt: restoredIso,
+              disconnectionNoticeDate: undefined,
+              disconnectionCutoffDate: undefined,
+              blockReason: undefined,
+              gracePeriodOverdueDays: 0,
+              unpaidCyclesCount: 0,
+            };
+            const allC = currentAll.map(c => c.accountNumber === record.accountNumber ? restoredRec : c);
             mockDb.saveConsumers(allC);
-            apiClient.reconcileConsumers(allC).catch(() => {});
+            apiClient.reconcileConsumers([restoredRec]).catch(() => {});
+            pushIssuedConsumerToFirestore(restoredRec, undefined, undefined, false).catch(() => {});
           }
         }
 
@@ -2553,6 +2623,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       return acc + getCanonicalBillSettlement(b, consumerRecord?.consumerType).remainingBalance;
     }, 0) * 100
   ) / 100;
+
+  // Guard Disconnection Notice display against stale zero-balance flags
+  const hasActiveDisconnectionNotice = Boolean(
+    consumerRecord &&
+      (consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice') &&
+      (unpaidBills.length > 0 || outstandingSum > 0.5 || (!hasCompletedFirstRemoteBillSyncRef.current && Number(consumerRecord.outstandingBalance || 0) > 0.5))
+  );
 
   // Trend vs Previous Month & Problem / Leak Detection
   const previousMonthRead = readings[1] || null;
@@ -3373,21 +3450,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               <span className={`inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase border ${
                 consumerRecord.status === 'disconnected'
                   ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
-                  : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
+                  : hasActiveDisconnectionNotice
                   ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
                   : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
               }`}>
                 <span className={`h-1 w-1 rounded-full ${
                   consumerRecord.status === 'disconnected'
                     ? 'bg-rose-400'
-                    : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
+                    : hasActiveDisconnectionNotice
                     ? 'bg-amber-400 animate-pulse'
                     : 'bg-emerald-400 animate-ping'
                 }`}></span>
                 <span>
                   {consumerRecord.status === 'disconnected'
                     ? 'Disconnected (Inactive)'
-                    : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
+                    : hasActiveDisconnectionNotice
                     ? 'Disconnection Notice'
                     : 'Line Active'}
                 </span>
@@ -4225,7 +4302,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               <div className={`rounded-3xl p-6 sm:p-7 text-white shadow-lg relative overflow-hidden ${
                 consumerRecord.status === 'disconnected'
                   ? 'bg-gradient-to-r from-rose-950 via-slate-900 to-slate-900 border border-rose-700/60'
-                  : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
+                  : hasActiveDisconnectionNotice
                   ? 'bg-gradient-to-r from-amber-950 via-slate-900 to-blue-950 border border-amber-600/50'
                   : 'bg-gradient-to-r from-blue-700 via-blue-650 to-sky-600'
               }`}>
@@ -4241,7 +4318,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <span className={
                         consumerRecord.status === 'disconnected'
                           ? 'text-rose-400 font-bold flex items-center gap-1'
-                          : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice'
+                          : hasActiveDisconnectionNotice
                           ? 'text-amber-300 font-bold flex items-center gap-1'
                           : 'text-emerald-200 font-bold'
                       }>
@@ -4250,7 +4327,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             <span className="h-1.5 w-1.5 rounded-full bg-rose-400"></span>
                             Water Service Disconnected (Inactive Account)
                           </>
-                        ) : consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice' ? (
+                        ) : hasActiveDisconnectionNotice ? (
                           <>
                             <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse"></span>
                             Disconnection Notice (2 Months Unpaid)
@@ -4351,7 +4428,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               )}
 
               {/* 2-MONTH DISCONNECTION NOTICE & EXTENSION REQUEST BANNER */}
-              {(consumerRecord.status === 'Disconnection Notice' || (consumerRecord.status as string) === 'disconnection_notice') && (
+              {hasActiveDisconnectionNotice && (
                 <div className="p-5 rounded-2xl bg-amber-950/40 border border-amber-500/50 text-amber-200 text-xs space-y-3">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
@@ -8071,9 +8148,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               const next: Consumer = {
                 ...prev,
                 status: 'active',
+                statusUpdatedAt: new Date().toISOString(),
                 outstandingBalance: currentBal,
                 disconnectionNoticeDate: undefined,
+                disconnectionCutoffDate: undefined,
                 blockReason: undefined,
+                gracePeriodOverdueDays: 0,
+                unpaidCyclesCount: 0,
               };
               consumerRecordRef.current = next;
               return next;
@@ -8097,9 +8178,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               const next: Consumer = {
                 ...prev,
                 status: 'active',
+                statusUpdatedAt: new Date().toISOString(),
                 outstandingBalance: currentBal,
                 disconnectionNoticeDate: undefined,
+                disconnectionCutoffDate: undefined,
                 blockReason: undefined,
+                gracePeriodOverdueDays: 0,
+                unpaidCyclesCount: 0,
               };
               consumerRecordRef.current = next;
               return next;
