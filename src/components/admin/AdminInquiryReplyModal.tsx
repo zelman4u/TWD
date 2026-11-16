@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import {
   Check,
+  ChevronDown,
   ExternalLink,
   Image as ImageIcon,
   Maximize2,
@@ -19,6 +19,7 @@ import {
   normalizeMeterStatus,
 } from '../../utils/meterStatusNotification';
 import { normalizeCompactParagraphs } from '../../utils/notificationContext';
+import { Modal, ModalHeader, ModalBody, ModalButton } from '../ui/Modal';
 
 export const ADMIN_REPORT_CATEGORY_LABELS: Record<string, string> = {
   leak: 'Water Leak / Burst',
@@ -109,21 +110,6 @@ export function AdminInquiryReplyModal({
     }
   }, [report?.id, report?.replies?.length]);
 
-  useEffect(() => {
-    if (!report && !selectedPhotoPreview) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (selectedPhotoPreview) {
-          setSelectedPhotoPreview(null);
-        } else {
-          onClose();
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [report, selectedPhotoPreview, onClose]);
-
   if (!report) return null;
 
   const categoryLabel =
@@ -137,22 +123,6 @@ export function AdminInquiryReplyModal({
       : report.status === 'resolved'
       ? 'Resolved'
       : 'Closed';
-
-  const statusColorClass =
-    report.status === 'pending'
-      ? 'text-amber-300'
-      : report.status === 'in_progress'
-      ? 'text-sky-300'
-      : report.status === 'resolved'
-      ? 'text-emerald-300'
-      : 'text-slate-400';
-
-  const urgencyColorClass =
-    report.urgency === 'emergency'
-      ? 'text-rose-400 font-bold'
-      : report.urgency === 'urgent'
-      ? 'text-amber-300 font-semibold'
-      : 'text-slate-400';
 
   const humanReplies = mockDb
     .dedupeReplies(report.replies)
@@ -281,122 +251,157 @@ export function AdminInquiryReplyModal({
   const ref = report.referencedNotice;
   const meterNorm = ref?.meterStatus ? normalizeMeterStatus(ref.meterStatus) : null;
   const meterLabel = meterNorm ? formatMeterStatusLabel(meterNorm) : null;
+  const formattedTime = new Date(report.createdAt).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 
-  const modalContent = (
+  const priorityLabel =
+    report.urgency === 'emergency'
+      ? 'Emergency'
+      : report.urgency === 'urgent'
+      ? 'Urgent'
+      : 'Normal';
+
+  const priorityColorClass =
+    report.urgency === 'emergency'
+      ? 'text-rose-400 font-semibold'
+      : report.urgency === 'urgent'
+      ? 'text-amber-300 font-semibold'
+      : 'text-slate-400';
+
+  const statusBadgeClass =
+    report.status === 'pending'
+      ? 'bg-amber-950/70 text-amber-300 border-amber-700/60'
+      : report.status === 'in_progress'
+      ? 'bg-sky-950/70 text-sky-300 border-sky-700/60'
+      : report.status === 'resolved'
+      ? 'bg-emerald-950/70 text-emerald-300 border-emerald-700/60'
+      : 'bg-slate-800 text-slate-300 border-slate-700';
+
+  const meterTag = report.meterNumber || ref?.meterNumber;
+
+  return (
     <>
-      <div
-        className="fixed inset-0 z-[150] flex items-start justify-center pt-3 sm:pt-5 px-3 sm:px-4 pb-6 overflow-y-auto bg-slate-950/85 backdrop-blur-sm animate-fade-in"
-        onClick={onClose}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="admin-inquiry-modal-title"
+      <Modal
+        portal
+        isOpen={true}
+        onClose={onClose}
+        closeOnEscape={!selectedPhotoPreview}
+        size="lg"
+        maxHeightClass="max-h-[90vh]"
+        zIndexClass="z-[150]"
+        ariaLabelledBy="admin-inquiry-modal-title"
       >
-        <div
-          className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[86vh] shadow-2xl overflow-hidden flex flex-col animate-scale-up text-slate-100"
-          onClick={e => e.stopPropagation()}
-        >
-          {/* Zone 1: Standardized Header */}
-          <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-3 shrink-0">
-            <div className="min-w-0 space-y-1">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
-                <span className="font-mono tabular-nums font-semibold text-sky-400">
-                  {report.ticketNumber}
-                </span>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span className="text-slate-300 font-medium">{categoryLabel}</span>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span className={urgencyColorClass}>
-                  {report.urgency === 'emergency'
-                    ? 'Emergency'
-                    : report.urgency === 'urgent'
-                    ? 'Urgent'
-                    : 'Normal'}
-                </span>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span className={`font-semibold ${statusColorClass}`}>{statusLabel}</span>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span className="font-mono tabular-nums">
-                  {new Date(report.createdAt).toLocaleString([], {
-                    month: 'short',
-                    day: 'numeric',
-                    hour: 'numeric',
-                    minute: '2-digit',
-                  })}
-                </span>
-              </div>
+        {/* 1. Header: Inquiry Identification, Dominant Title, Consumer Details, Status & Close */}
+        <div className="px-4 sm:px-5 py-2.5 bg-slate-950 border-b border-slate-800 shrink-0 space-y-1">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] min-w-0">
+              <span className="font-mono tabular-nums font-semibold text-sky-400">
+                {report.ticketNumber}
+              </span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className="text-slate-300 font-medium">{categoryLabel}</span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className={priorityColorClass}>{priorityLabel}</span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className="font-mono tabular-nums text-slate-400">{formattedTime}</span>
+            </div>
 
-              <h3
-                id="admin-inquiry-modal-title"
-                className="text-base sm:text-lg font-bold text-white leading-snug break-words"
+            <div className="flex items-center gap-2 shrink-0">
+              <span
+                className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold leading-tight whitespace-nowrap ${statusBadgeClass}`}
               >
-                {report.title}
-              </h3>
+                {statusLabel}
+              </span>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close modal"
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
 
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
-                <span>
-                  Consumer: <strong className="text-slate-100">{report.consumerName}</strong>
-                </span>
+          <h3
+            id="admin-inquiry-modal-title"
+            className="text-[15px] sm:text-base font-bold text-white leading-snug tracking-tight break-words"
+          >
+            {report.title}
+          </h3>
+
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11.5px] text-slate-400 leading-tight">
+            <span className="font-medium text-slate-200">{report.consumerName}</span>
+            <span aria-hidden="true" className="text-slate-600">·</span>
+            <span className="font-mono tabular-nums text-sky-300">#{report.accountNumber}</span>
+            {meterTag && (
+              <>
                 <span aria-hidden="true" className="text-slate-600">·</span>
-                <span>
-                  Account{' '}
-                  <strong className="font-mono tabular-nums text-sky-300">
-                    #{report.accountNumber}
-                  </strong>
+                <span className="font-mono tabular-nums text-slate-300">Meter #{meterTag}</span>
+              </>
+            )}
+            {report.barangay && (
+              <>
+                <span aria-hidden="true" className="text-slate-600">·</span>
+                <span>{report.barangay}</span>
+              </>
+            )}
+            {report.consumerPhone && (
+              <>
+                <span aria-hidden="true" className="text-slate-600">·</span>
+                <span className="font-mono tabular-nums">{report.consumerPhone}</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* 2. Reference Information: Collapsible Original Notification / Advisory */}
+        {ref && (
+          <details className="group bg-slate-950/60 border-b border-slate-800 px-4 sm:px-5 py-1.5 text-xs shrink-0">
+            <summary className="flex items-center justify-between gap-2 cursor-pointer list-none select-none">
+              <div className="flex items-center gap-1.5 min-w-0 truncate">
+                <span className="text-[11px] font-medium text-slate-400 shrink-0">
+                  Referenced Notice:
                 </span>
-                {(report.meterNumber || ref?.meterNumber) && (
+                <span className="text-xs font-semibold text-sky-300 truncate">{ref.subject}</span>
+              </div>
+              <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 group-hover:text-slate-200 shrink-0">
+                <span className="hidden sm:inline">Details</span>
+                <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+              </span>
+            </summary>
+            <div className="mt-1.5 pt-1.5 border-t border-slate-800/80 space-y-1 text-[11px] text-slate-400">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                {meterTag && (
                   <>
-                    <span aria-hidden="true" className="text-slate-600">·</span>
                     <span>
                       Meter{' '}
                       <strong className="font-mono tabular-nums text-slate-200">
-                        #{report.meterNumber || ref?.meterNumber}
+                        #{meterTag}
                       </strong>
                     </span>
+                    <span aria-hidden="true" className="text-slate-600">·</span>
                   </>
                 )}
-                {report.barangay && (
+                <span>
+                  Issued{' '}
+                  <span className="font-mono tabular-nums text-slate-300">
+                    {formatMeterStatusUpdateDate(ref.statusUpdateDate || ref.sentAt)}
+                  </span>
+                </span>
+                <span aria-hidden="true" className="text-slate-600">·</span>
+                <span>
+                  Sent by <span className="text-slate-300">{ref.sentByAdmin || 'TWD Administration'}</span>
+                </span>
+                {meterLabel && (
                   <>
                     <span aria-hidden="true" className="text-slate-600">·</span>
-                    <span className="text-slate-300">{report.barangay}</span>
-                  </>
-                )}
-                {report.consumerPhone && (
-                  <>
-                    <span aria-hidden="true" className="text-slate-600">·</span>
-                    <span className="font-mono tabular-nums text-slate-300">
-                      {report.consumerPhone}
-                    </span>
-                  </>
-                )}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
-              aria-label="Close modal"
-              title="Close (Esc)"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-
-          {/* Zone 2: Context Strip + Readable Conversation Stream */}
-          <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-4 bg-slate-900">
-            {/* Referenced Official Notice Strip */}
-            {ref && (
-              <div className="rounded-xl bg-slate-950/75 border border-slate-800 px-4 py-3 text-xs space-y-1.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <span className="text-sky-400 font-semibold mr-1.5">
-                      Referenced Notice:
-                    </span>
-                    <span className="font-bold text-white text-[13px]">{ref.subject}</span>
-                  </div>
-                  {meterLabel && (
                     <span
-                      className={`font-semibold text-xs whitespace-nowrap shrink-0 ${
+                      className={`font-semibold ${
                         meterNorm === 'damaged'
                           ? 'text-rose-400'
                           : meterNorm === 'maintenance'
@@ -410,292 +415,241 @@ export function AdminInquiryReplyModal({
                         ? `${ref.previousMeterStatus} → ${meterLabel}`
                         : `Meter Status: ${meterLabel}`}
                     </span>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
-                  {ref.meterNumber && (
-                    <>
-                      <span>
-                        Meter{' '}
-                        <strong className="font-mono tabular-nums text-slate-200">
-                          #{ref.meterNumber}
-                        </strong>
-                      </span>
-                      <span aria-hidden="true" className="text-slate-600">·</span>
-                    </>
-                  )}
-                  <span>
-                    Issued{' '}
-                    <span className="font-mono tabular-nums text-slate-300">
-                      {formatMeterStatusUpdateDate(ref.statusUpdateDate || ref.sentAt)}
-                    </span>
-                  </span>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span>
-                    Sent by <span className="text-slate-300">{ref.sentByAdmin || 'TWD Administration'}</span>
-                  </span>
-                </div>
-
-                {ref.remarks && (
-                  <p className="text-[13px] text-slate-200 pt-1.5 border-t border-slate-800/80 leading-relaxed">
-                    <span className="text-slate-400 font-semibold">Original Remarks: </span>
-                    {ref.remarks}
-                  </p>
+                  </>
                 )}
               </div>
-            )}
-
-            {/* Unified Chronological Message Stream */}
-            <div className="space-y-3.5">
-              {/* Initial Consumer Message */}
-              <div className="flex flex-col items-start">
-                <div className="max-w-[90%] space-y-1">
-                  <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                    <span className="font-semibold text-slate-200">{report.consumerName}</span>
-                    <span aria-hidden="true" className="text-slate-600">·</span>
-                    <span>Consumer</span>
-                    <span aria-hidden="true" className="text-slate-600">·</span>
-                    <span className="font-mono tabular-nums">
-                      {new Date(report.createdAt).toLocaleString([], {
-                        month: 'short',
-                        day: 'numeric',
-                        hour: 'numeric',
-                        minute: '2-digit',
-                      })}
-                    </span>
-                  </div>
-                  <div className="rounded-2xl bg-slate-800/95 border border-slate-700/80 px-4 py-3 text-sm text-slate-100 leading-[1.6] space-y-2">
-                    {initialParagraphs.length > 0 ? (
-                      initialParagraphs.map((p, idx) => <p key={idx}>{p}</p>)
-                    ) : (
-                      <p>{report.description}</p>
-                    )}
-
-                    {report.photoUrl && (
-                      <button
-                        type="button"
-                        onClick={() => setSelectedPhotoPreview(report.photoUrl!)}
-                        className="mt-1.5 inline-flex items-center gap-2 p-1.5 bg-slate-900 hover:bg-slate-950 border border-slate-700 rounded-lg transition cursor-pointer text-left"
-                      >
-                        <img
-                          src={report.photoUrl}
-                          alt="Attached consumer evidence"
-                          referrerPolicy="no-referrer"
-                          className="h-10 w-10 object-cover rounded border border-slate-700 shrink-0"
-                        />
-                        <span className="text-xs font-semibold text-sky-300 inline-flex items-center gap-1 pr-1.5 whitespace-nowrap">
-                          <span>View Attached Photo</span>
-                          <Maximize2 className="h-3.5 w-3.5" />
-                        </span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Follow-up Replies */}
-              {threadReplies.map((reply, idx) => {
-                const isAdmin = reply.senderRole === 'admin' || reply.senderRole === 'staff';
-                const paragraphs = normalizeCompactParagraphs(reply.message, {
-                  stripAdminEnvelope: true,
-                });
-
-                return (
-                  <div
-                    key={reply.id || idx}
-                    className={`flex flex-col ${isAdmin ? 'items-end' : 'items-start'}`}
-                  >
-                    <div className="max-w-[90%] space-y-1">
-                      <div
-                        className={`flex items-center gap-1.5 text-xs text-slate-400 ${
-                          isAdmin ? 'justify-end' : 'justify-start'
-                        }`}
-                      >
-                        <span className={isAdmin ? 'font-semibold text-sky-300' : 'font-semibold text-slate-200'}>
-                          {isAdmin ? `Admin (${reply.senderName})` : reply.senderName}
-                        </span>
-                        <span aria-hidden="true" className="text-slate-600">·</span>
-                        <span className="font-mono tabular-nums">
-                          {new Date(reply.timestamp).toLocaleString([], {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: 'numeric',
-                            minute: '2-digit',
-                          })}
-                        </span>
-                      </div>
-
-                      <div
-                        className={`rounded-2xl px-4 py-3 text-sm leading-[1.6] space-y-2 border ${
-                          isAdmin
-                            ? 'bg-blue-950/75 text-slate-100 border-blue-800/70'
-                            : 'bg-slate-800/95 text-slate-100 border-slate-700/80'
-                        }`}
-                      >
-                        {paragraphs.length > 0 ? (
-                          paragraphs.map((p, pIdx) => <p key={pIdx}>{p}</p>)
-                        ) : (
-                          <p>{reply.message}</p>
-                        )}
-                        {reply.statusUpdate && (
-                          <p className="pt-1.5 border-t border-slate-700/60 text-xs text-slate-300 flex items-center gap-1.5">
-                            <Check className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                            <span>
-                              Status set to{' '}
-                              <strong className="uppercase text-white">
-                                {reply.statusUpdate.replace('_', ' ')}
-                              </strong>
-                            </span>
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              <div ref={messagesEndRef} />
+              {ref.remarks && (
+                <p className="text-xs text-slate-300 leading-relaxed break-words">
+                  <span className="text-slate-400 font-semibold">Remarks: </span>
+                  {ref.remarks}
+                </p>
+              )}
             </div>
-          </div>
+          </details>
+        )}
 
-          {/* Zone 3: Pinned Reply Composer & Footer */}
-          <form
-            onSubmit={handleSubmitReply}
-            className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 shrink-0 space-y-2.5"
-          >
-            {/* Compact Controls Row */}
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="text-xs font-semibold text-slate-400 whitespace-nowrap">
-                  Status:
-                </label>
-                <select
-                  value={replyStatus}
-                  onChange={e => setReplyStatus(e.target.value as ConsumerReport['status'])}
-                  className="px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-semibold text-slate-100 focus:border-blue-500 focus:outline-none"
-                >
-                  <option value="pending">Pending Review</option>
-                  <option value="in_progress">In Progress</option>
-                  <option value="resolved">Resolved</option>
-                  <option value="closed">Closed</option>
-                </select>
-
-                <input
-                  type="text"
-                  value={assignedCrew}
-                  onChange={e => setAssignedCrew(e.target.value)}
-                  placeholder="Assigned unit / crew (optional)"
-                  className="px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:outline-none w-44 sm:w-52"
-                />
-              </div>
-
-              <select
-                value=""
-                onChange={e => handleApplyQuickTemplate(e.target.value)}
-                className="px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-300 focus:border-blue-500 focus:outline-none max-w-[200px]"
-                aria-label="Insert quick reply template"
-              >
-                <option value="">Quick reply template...</option>
-                {ADMIN_QUICK_REPLIES.map((q, idx) => (
-                  <option key={idx} value={String(idx)}>
-                    {q.label}
-                  </option>
-                ))}
-              </select>
+        {/* 3. Conversation Body: Distinct Consumer vs Admin Bubbles */}
+        <ModalBody className="bg-slate-900 px-4 sm:px-5 py-3 space-y-2.5">
+          {/* Initial Consumer Message (Left-aligned, cool slate surface) */}
+          <div className="flex flex-col items-start gap-0.5">
+            <div className="flex items-center gap-1.5 text-[11px] leading-tight text-slate-400 px-1">
+              <span className="font-medium text-slate-300">{report.consumerName}</span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span>Consumer</span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className="font-mono tabular-nums text-slate-400">{formattedTime}</span>
             </div>
+            <div className="w-fit max-w-[82%] sm:max-w-[70%] rounded-2xl rounded-tl-sm bg-slate-800 border border-slate-700/85 px-3 py-2 text-[13.5px] text-slate-100 leading-[1.55] space-y-1.5 break-words">
+              {initialParagraphs.length > 0 ? (
+                initialParagraphs.map((p, idx) => <p key={idx}>{p}</p>)
+              ) : (
+                <p>{report.description}</p>
+              )}
 
-            {/* Side-by-Side Reply Input & Send Button */}
-            <div className="flex items-end gap-2">
-              <textarea
-                required
-                rows={2}
-                value={replyText}
-                onChange={e => setReplyText(e.target.value)}
-                placeholder={
-                  ref
-                    ? `Write official reply to ${report.consumerName} regarding "${ref.subject}"...`
-                    : `Write official reply to ${report.consumerName} (#${report.accountNumber})...`
-                }
-                className="flex-1 px-3.5 py-2.5 bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none leading-relaxed"
-              />
-              <button
-                type="submit"
-                disabled={isSubmittingReply || !replyText.trim()}
-                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-xs sm:text-sm rounded-xl transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <Send className="h-3.5 w-3.5" />
-                <span>{isSubmittingReply ? 'Sending...' : 'Send Reply'}</span>
-              </button>
-            </div>
-
-            {/* Subtle Secondary Footer Row */}
-            <div className="flex items-center justify-between gap-2 text-xs text-slate-400 pt-0.5">
-              <span className="truncate">
-                {ref
-                  ? `Delivers to #${report.accountNumber}'s Notification Bell with "${ref.subject}" attached`
-                  : `Delivers directly to Account #${report.accountNumber}'s Notification Bell`}
-              </span>
-              <div className="flex items-center gap-3 shrink-0">
-                {onOpenInCustomerService && (
-                  <button
-                    type="button"
-                    onClick={() => onOpenInCustomerService(report)}
-                    className="text-sky-400 hover:text-sky-300 font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
-                  >
-                    <span>All Inquiries</span>
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </button>
-                )}
+              {report.photoUrl && (
                 <button
                   type="button"
-                  onClick={onClose}
-                  className="text-slate-300 hover:text-white font-semibold cursor-pointer whitespace-nowrap"
+                  onClick={() => setSelectedPhotoPreview(report.photoUrl!)}
+                  className="mt-1 inline-flex items-center gap-2 p-1.5 bg-slate-900 hover:bg-slate-950 border border-slate-700 rounded-lg transition cursor-pointer text-left"
                 >
-                  Close
+                  <img
+                    src={report.photoUrl}
+                    alt="Attached consumer evidence"
+                    referrerPolicy="no-referrer"
+                    className="h-9 w-9 object-cover rounded border border-slate-700 shrink-0"
+                  />
+                  <span className="text-xs font-semibold text-sky-300 inline-flex items-center gap-1 pr-1.5 whitespace-nowrap">
+                    <span>View Photo</span>
+                    <Maximize2 className="h-3.5 w-3.5" />
+                  </span>
                 </button>
-              </div>
-            </div>
-          </form>
-        </div>
-      </div>
-
-      {/* Photo Lightbox */}
-      {selectedPhotoPreview && (
-        <div
-          className="fixed inset-0 z-[160] bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-start pt-4 sm:pt-6 p-4 overflow-y-auto animate-fade-in"
-          onClick={() => setSelectedPhotoPreview(null)}
-        >
-          <div
-            className="max-w-3xl w-full flex flex-col items-center space-y-2.5"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="w-full flex items-center justify-between text-white pb-2 border-b border-slate-800">
-              <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                <ImageIcon className="h-4 w-4 text-sky-400" />
-                <span>Attached Consumer Photo</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => setSelectedPhotoPreview(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="max-h-[78vh] overflow-hidden rounded-xl border border-slate-800 bg-black">
-              <img
-                src={selectedPhotoPreview}
-                alt="Consumer attachment"
-                referrerPolicy="no-referrer"
-                className="max-h-[74vh] w-auto max-w-full object-contain mx-auto"
-              />
+              )}
             </div>
           </div>
-        </div>
-      )}
+
+          {/* Follow-up Replies */}
+          {threadReplies.map((reply, idx) => {
+            const isAdmin = reply.senderRole === 'admin' || reply.senderRole === 'staff';
+            const paragraphs = normalizeCompactParagraphs(reply.message, {
+              stripAdminEnvelope: true,
+            });
+            const replyTime = new Date(reply.timestamp).toLocaleString([], {
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+            });
+
+            return (
+              <div
+                key={reply.id || idx}
+                className={`flex flex-col gap-0.5 ${isAdmin ? 'items-end' : 'items-start'}`}
+              >
+                <div
+                  className={`flex items-center gap-1.5 text-[11px] leading-tight text-slate-400 px-1 ${
+                    isAdmin ? 'justify-end' : 'justify-start'
+                  }`}
+                >
+                  <span className={isAdmin ? 'font-medium text-sky-300' : 'font-medium text-slate-300'}>
+                    {isAdmin ? `Admin · ${reply.senderName}` : `${reply.senderName} · Consumer`}
+                  </span>
+                  <span aria-hidden="true" className="text-slate-600">·</span>
+                  <span className="font-mono tabular-nums text-slate-400">{replyTime}</span>
+                </div>
+
+                <div
+                  className={`w-fit max-w-[82%] sm:max-w-[70%] rounded-2xl px-3 py-2 text-[13.5px] leading-[1.55] space-y-1.5 border break-words ${
+                    isAdmin
+                      ? 'rounded-tr-sm bg-[#132b4f] text-slate-50 border-blue-600/45'
+                      : 'rounded-tl-sm bg-slate-800 text-slate-100 border-slate-700/85'
+                  }`}
+                >
+                  {paragraphs.length > 0 ? (
+                    paragraphs.map((p, pIdx) => <p key={pIdx}>{p}</p>)
+                  ) : (
+                    <p>{reply.message}</p>
+                  )}
+                  {reply.statusUpdate && (
+                    <p className="pt-1 border-t border-white/10 text-[11.5px] text-slate-300 flex items-center gap-1.5">
+                      <Check className="h-3 w-3 text-emerald-400 shrink-0" />
+                      <span>
+                        Status updated to{' '}
+                        <strong className="text-white capitalize">
+                          {reply.statusUpdate.replace('_', ' ')}
+                        </strong>
+                      </span>
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          <div ref={messagesEndRef} />
+        </ModalBody>
+
+        {/* 4. Reply & Action Section: Aligned Controls, Compact Input, Slim Delivery Bar */}
+        <form
+          onSubmit={handleSubmitReply}
+          className="px-4 sm:px-5 py-2 bg-slate-950 border-t border-slate-800 shrink-0 space-y-1.5"
+        >
+          {/* Row 1: Neatly Aligned Status, Department/Crew, Quick Reply */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+            <select
+              value={replyStatus}
+              onChange={e => setReplyStatus(e.target.value as ConsumerReport['status'])}
+              aria-label="Set inquiry status"
+              className="h-8 w-full px-2.5 bg-slate-900 border border-slate-700 rounded-lg text-[11.5px] font-medium text-slate-100 focus:border-blue-500 focus:outline-none"
+            >
+              <option value="pending">Status: Pending Review</option>
+              <option value="in_progress">Status: In Progress</option>
+              <option value="resolved">Status: Resolved</option>
+              <option value="closed">Status: Closed</option>
+            </select>
+
+            <input
+              type="text"
+              value={assignedCrew}
+              onChange={e => setAssignedCrew(e.target.value)}
+              placeholder="Assigned unit / crew (optional)"
+              aria-label="Assigned unit or crew"
+              className="h-8 w-full px-2.5 bg-slate-900 border border-slate-700 rounded-lg text-[11.5px] text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+            />
+
+            <select
+              value=""
+              onChange={e => handleApplyQuickTemplate(e.target.value)}
+              className="h-8 w-full px-2.5 bg-slate-900 border border-slate-700 rounded-lg text-[11.5px] text-slate-300 focus:border-blue-500 focus:outline-none"
+              aria-label="Insert quick reply template"
+            >
+              <option value="">Quick reply template...</option>
+              {ADMIN_QUICK_REPLIES.map((q, idx) => (
+                <option key={idx} value={String(idx)}>
+                  {q.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Row 2: Compact Textarea + Aligned Send Reply Button */}
+          <div className="flex items-end gap-2">
+            <textarea
+              required
+              rows={2}
+              value={replyText}
+              onChange={e => setReplyText(e.target.value)}
+              placeholder={`Write official reply to ${report.consumerName}...`}
+              className="flex-1 min-h-[44px] max-h-24 px-3 py-1.5 bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl text-[13.5px] text-slate-100 placeholder:text-slate-500 focus:outline-none resize-y leading-snug"
+            />
+            <ModalButton
+              type="submit"
+              variant="primary"
+              disabled={isSubmittingReply || !replyText.trim()}
+              className="h-[44px] px-4"
+            >
+              <Send className="h-3.5 w-3.5" />
+              <span>{isSubmittingReply ? 'Sending...' : 'Send Reply'}</span>
+            </ModalButton>
+          </div>
+
+          {/* Row 3: Slim Delivery Info + Bottom Navigation Links */}
+          <div className="flex items-center justify-between gap-2 text-[11px] leading-tight pt-0.5">
+            <span className="text-slate-400 truncate">
+              Delivers to <span className="font-mono tabular-nums text-slate-300">#{report.accountNumber}</span> notification bell
+            </span>
+
+            <div className="flex items-center gap-3 shrink-0">
+              {onOpenInCustomerService && (
+                <button
+                  type="button"
+                  onClick={() => onOpenInCustomerService(report)}
+                  className="text-sky-400 hover:text-sky-300 font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                >
+                  <span>All Inquiries</span>
+                  <ExternalLink className="h-3 w-3" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-slate-300 hover:text-white font-semibold cursor-pointer whitespace-nowrap"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Photo Lightbox */}
+      <Modal
+        portal
+        isOpen={Boolean(selectedPhotoPreview)}
+        onClose={() => setSelectedPhotoPreview(null)}
+        size="lg"
+        zIndexClass="z-[160]"
+        backdropClassName="fixed inset-0 z-[160] bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-fade-in"
+        ariaLabel="Attached Consumer Photo"
+      >
+        <ModalHeader
+          tone="info"
+          icon={<ImageIcon className="h-4 w-4" />}
+          title="Attached Consumer Photo"
+          onClose={() => setSelectedPhotoPreview(null)}
+          closeLabel="Close photo preview"
+        />
+        <ModalBody noPadding className="p-3 bg-black flex items-center justify-center">
+          {selectedPhotoPreview && (
+            <img
+              src={selectedPhotoPreview}
+              alt="Consumer attachment"
+              referrerPolicy="no-referrer"
+              className="max-h-[70vh] w-auto max-w-full object-contain rounded-lg"
+            />
+          )}
+        </ModalBody>
+      </Modal>
     </>
   );
-
-  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 }
+

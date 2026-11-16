@@ -43,6 +43,7 @@ import {
 } from '../../utils/tariffCalculator';
 import { computeOdometerConsumption, formatOdometerReading } from '../../utils/odometer';
 import { downloadWaterBillingNoticePdf, printCleanElement } from '../../utils/receiptPdfGenerator';
+import { Modal, ModalHeader, ModalBody, ModalFooter, ModalButton } from '../ui/Modal';
 
 export interface BillDetailsProps {
   reading: MeterReading | null;
@@ -267,43 +268,46 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
 
   if (!reading || !isOfficialBillIssued(reading)) {
     const emptyNotice = (
-      <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 sm:p-8 text-center space-y-3 text-slate-200" id="bill-details-empty-state">
-        <div className="h-12 w-12 rounded-2xl bg-slate-900 border border-slate-800 text-slate-400 flex items-center justify-center mx-auto">
-          <ReceiptText className="h-6 w-6" />
+      <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 text-center space-y-2.5 text-slate-200" id="bill-details-empty-state">
+        <div className="h-10 w-10 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 flex items-center justify-center mx-auto">
+          <ReceiptText className="h-5 w-5" />
         </div>
-        <div className="space-y-1 max-w-lg mx-auto">
-          <h4 className="text-sm sm:text-base font-bold text-white">
+        <div className="space-y-1 max-w-md mx-auto">
+          <h4 className="text-sm font-bold text-white">
             No Official Billing Statement or Receipt Issued Yet
           </h4>
           <p className="text-xs text-slate-400 leading-relaxed">
-            Account <span className="font-mono font-semibold text-slate-200">#{consumer.accountNumber || 'PENDING'}</span> does not have an official billing statement yet. Your itemized Water Billing Notice and receipt will automatically appear here once Tagoloan Water District Administration generates and issues your billing.
+            Account <span className="font-mono font-semibold text-slate-200">#{consumer.accountNumber || 'PENDING'}</span> does not have an official billing statement yet. Your itemized Water Billing Notice and receipt will appear here once Administration generates and issues your billing.
           </p>
         </div>
-        {isModal && onClose && (
-          <div className="pt-2">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold rounded-xl transition cursor-pointer"
-            >
-              Close
-            </button>
-          </div>
-        )}
       </div>
     );
 
     if (isModal) {
       return (
-        <div
-          className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-5 overflow-y-auto animate-fade-in"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && onClose) onClose();
-          }}
+        <Modal
+          isOpen={isOpen}
+          onClose={onClose}
+          size="md"
+          zIndexClass="z-50"
+          ariaLabel="Billing Notice Status"
         >
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-5 sm:p-7 shadow-2xl my-auto">
-            {emptyNotice}
-          </div>
-        </div>
+          <ModalHeader
+            icon={<ReceiptText className="h-4 w-4" />}
+            tone="neutral"
+            eyebrow={`Account #${consumer.accountNumber || 'PENDING'}`}
+            title="Water Billing Statement Status"
+            onClose={onClose}
+          />
+          <ModalBody>{emptyNotice}</ModalBody>
+          {onClose && (
+            <ModalFooter>
+              <ModalButton variant="secondary" onClick={onClose}>
+                Close
+              </ModalButton>
+            </ModalFooter>
+          )}
+        </Modal>
       );
     }
     return emptyNotice;
@@ -949,16 +953,18 @@ export const BillDetails: React.FC<BillDetailsProps> = ({
   // Render either as modal or inline
   if (isModal) {
     return (
-      <div 
-        className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-5 overflow-y-auto animate-fade-in"
-        onClick={(e) => {
-          if (e.target === e.currentTarget && onClose) onClose();
-        }}
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        size="xl"
+        zIndexClass="z-50"
+        maxHeightClass="max-h-[90vh]"
+        ariaLabel="Water Billing Notice & Statement"
       >
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-3xl w-full max-h-[92vh] overflow-y-auto p-5 sm:p-7 shadow-2xl space-y-6 my-auto">
+        <ModalBody className="p-4 sm:p-5">
           {content}
-        </div>
-      </div>
+        </ModalBody>
+      </Modal>
     );
   }
 

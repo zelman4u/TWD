@@ -33,6 +33,7 @@ import { useLoading } from '../context/LoadingContext';
 import { useToast } from '../context/ToastContext';
 import { normalizePhoneNumber, detectExistingPhoneAccount } from '../utils/phoneValidation';
 import { generateApplicationNumber, formatInstallationDateDisplay } from '../utils/installationWorkflow';
+import { Modal, ModalHeader, ModalBody, ModalFooter, ModalButton } from './ui/Modal';
 
 const OFFICIAL_LOGO_URL = 'https://lh3.googleusercontent.com/d/1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg';
 const FALLBACK_LOGO_URL = 'https://drive.google.com/thumbnail?id=1R8aOCfamLWF4BN_r3Nk02-6juOR6Zqjg&sz=w200';
@@ -887,19 +888,19 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
           </div>
         ) : (
           /* Confirmation & Registration Summary Modal */
-          <div className="bg-slate-900 p-6 sm:p-8 text-center space-y-4 max-w-lg mx-auto rounded-3xl border border-slate-800 shadow-2xl">
-            <div className="flex items-center justify-center space-x-3 mb-2">
+          <div className="bg-slate-900 p-5 sm:p-6 text-center space-y-3.5 max-w-lg mx-auto rounded-2xl border border-slate-800 shadow-2xl">
+            <div className="flex items-center justify-center">
               <div
-                className={`h-14 w-14 rounded-2xl border flex items-center justify-center shadow-lg ${
+                className={`h-12 w-12 rounded-xl border flex items-center justify-center shadow-lg ${
                   registeredSummary?.scheduleOption === 'now'
                     ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
                     : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
                 }`}
               >
                 {registeredSummary?.scheduleOption === 'now' ? (
-                  <CheckCircle2 className="h-8 w-8" />
+                  <CheckCircle2 className="h-6 w-6" />
                 ) : (
-                  <Clock className="h-8 w-8" />
+                  <Clock className="h-6 w-6" />
                 )}
               </div>
             </div>
@@ -994,53 +995,35 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
       </div>
 
       {/* Water Meter Installation & Setup Modal */}
-      {isScheduleModalOpen && !isSuccessModal && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200 overflow-y-auto"
-          onClick={() => setIsScheduleModalOpen(false)}
-        >
-          <div
-            className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden text-left my-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal Header with Official District Emblem & Application Number */}
-            <div className="px-5 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="h-10 w-10 rounded-xl bg-slate-900 border border-slate-700/80 p-1 flex items-center justify-center shrink-0 overflow-hidden shadow-inner">
-                  <img
-                    src={OFFICIAL_LOGO_URL}
-                    alt="Tagoloan Water District Logo"
-                    className="h-full w-full object-contain"
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).src = FALLBACK_LOGO_URL;
-                    }}
-                  />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="text-sm font-black text-white truncate">
-                    Water Meter Installation & Setup
-                  </h3>
-                  <p className="text-[11px] text-slate-400 truncate flex items-center gap-1.5 mt-0.5">
-                    <span>Tagoloan Water District</span>
-                    <span>·</span>
-                    <span className="font-mono tabular-nums font-bold text-sky-400">
-                      App #: {previewApplicationNumber}
-                    </span>
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsScheduleModalOpen(false)}
-                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
-                aria-label="Close modal"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+      <Modal
+        isOpen={Boolean(isScheduleModalOpen && !isSuccessModal)}
+        onClose={() => setIsScheduleModalOpen(false)}
+        size="lg"
+        zIndexClass="z-50"
+        ariaLabel="Water Meter Installation and Setup"
+      >
+        <ModalHeader
+          icon={
+            <img
+              src={OFFICIAL_LOGO_URL}
+              alt="Tagoloan Water District Logo"
+              className="h-5 w-5 object-contain"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).src = FALLBACK_LOGO_URL;
+              }}
+            />
+          }
+          tone="info"
+          eyebrow={
+            <span className="font-mono tabular-nums">
+              Tagoloan Water District · App #{previewApplicationNumber}
+            </span>
+          }
+          title="Water Meter Installation & Setup"
+          onClose={() => setIsScheduleModalOpen(false)}
+        />
 
-            {/* Modal Body */}
-            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+        <ModalBody className="space-y-3.5 text-left">
               {/* Question 1: Water Meter Status */}
               <div className="space-y-2 text-left">
                 <label className="block text-xs font-black text-slate-100 uppercase tracking-wider flex items-center gap-1.5">
@@ -1213,7 +1196,7 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                             </label>
                             <div className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs font-bold text-sky-300 flex items-center justify-between">
                               <span className="flex items-center gap-1.5">
-                                <span className="h-2 w-2 rounded-full bg-sky-400 animate-pulse" />
+                                <span className="h-2 w-2 rounded-full bg-sky-400" />
                                 <span>Pending Installation</span>
                               </span>
                               <span className="text-[10px] font-mono text-slate-400">
@@ -1287,36 +1270,28 @@ export default function RegistrationPage({ onBackToHome, onNavigateToLogin }: Re
                   <span className="font-semibold">{scheduleModalError}</span>
                 </div>
               )}
-            </div>
+        </ModalBody>
 
-            {/* Modal Footer */}
-            <div className="px-5 py-4 bg-slate-950 border-t border-slate-800 flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => setIsScheduleModalOpen(false)}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer"
-              >
-                Back to Registration Form
-              </button>
+        <ModalFooter align="between">
+          <ModalButton variant="secondary" onClick={() => setIsScheduleModalOpen(false)}>
+            Back to Registration Form
+          </ModalButton>
 
-              <button
-                type="button"
-                onClick={handleCompleteRegistrationFromModal}
-                disabled={isValidating}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-600 hover:from-blue-500 hover:to-sky-500 text-white text-xs font-black uppercase tracking-wider transition cursor-pointer shadow-lg shadow-blue-600/30 border border-blue-400/30 whitespace-nowrap flex items-center justify-center gap-2"
-              >
-                {isValidating ? (
-                  <span>Submitting...</span>
-                ) : !hasExistingMeter && scheduleOption === 'now' ? (
-                  <span>Complete Registration & Submit Installation Request</span>
-                ) : (
-                  <span>Complete Registration</span>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          <ModalButton
+            variant="primary"
+            onClick={handleCompleteRegistrationFromModal}
+            disabled={isValidating}
+          >
+            {isValidating ? (
+              <span>Submitting...</span>
+            ) : !hasExistingMeter && scheduleOption === 'now' ? (
+              <span>Complete Registration &amp; Submit Installation Request</span>
+            ) : (
+              <span>Complete Registration</span>
+            )}
+          </ModalButton>
+        </ModalFooter>
+      </Modal>
     </div>
   );
 }

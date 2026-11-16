@@ -13,3 +13,4 @@ export * from './GlobalLoadingSpinner';
 export * from './DataLoadingIndicator';
 export * from './TablePagination';
 export * from './BaymaxChatWidget';
+export * from './ModalShell';

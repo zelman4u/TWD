@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, AlertCircle, AlertTriangle, Info, X } from 'lucide-react';
 
@@ -11,6 +11,7 @@ export type ToastType = 'success' | 'error' | 'warning' | 'info';
 
 export interface ToastOptions {
   id?: string;
+  dedupeKey?: string;
   type?: ToastType;
   title: string;
   description?: string;
@@ -25,6 +26,8 @@ export interface ToastItem extends ToastOptions {
   id: string;
   type: ToastType;
   createdAt: number;
+  semanticKey: string;
+  repeatCount?: number;
 }
 
 interface ToastContextType {
@@ -40,44 +43,111 @@ interface ToastContextType {
 
 const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
+const TOAST_DEDUPE_WINDOW_MS = 6500;
+const MAX_VISIBLE_TOASTS = 3;
+
+function buildToastSemanticKey(options: ToastOptions, type: ToastType): string {
+  if (options.dedupeKey) {
+    return `k:${options.dedupeKey.trim().toLowerCase()}`;
+  }
+  if (options.id) {
+    return `id:${options.id.trim().toLowerCase()}`;
+  }
+  const cleanTitle = (options.title || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const cleanDesc = (options.description || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  return `${type}::${cleanTitle}::${cleanDesc}`;
+}
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const recentSemanticMapRef = useRef<Map<string, { id: string; timestamp: number }>>(new Map());
+  const toastTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+  const clearToastTimer = useCallback((id: string) => {
+    const existing = toastTimersRef.current.get(id);
+    if (existing) {
+      clearTimeout(existing);
+      toastTimersRef.current.delete(id);
+    }
   }, []);
 
+  const dismissToast = useCallback((id: string) => {
+    clearToastTimer(id);
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, [clearToastTimer]);
+
   const dismissAll = useCallback(() => {
+    toastTimersRef.current.forEach((timer) => clearTimeout(timer));
+    toastTimersRef.current.clear();
     setToasts([]);
   }, []);
 
   const showToast = useCallback((options: ToastOptions): string => {
-    const id = options.id || `toast-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const type: ToastType = options.type || 'info';
-    const duration = options.duration !== undefined ? options.duration : 4000;
+    const duration = options.duration !== undefined ? options.duration : 4200;
+    const semanticKey = buildToastSemanticKey(options, type);
+    const now = Date.now();
+
+    // Prune expired semantic entries (> 20s) to keep map bounded
+    for (const [k, entry] of recentSemanticMapRef.current.entries()) {
+      if (now - entry.timestamp > 20000) {
+        recentSemanticMapRef.current.delete(k);
+      }
+    }
+
+    const recentEntry = recentSemanticMapRef.current.get(semanticKey);
+    const isWithinDedupeWindow = Boolean(
+      recentEntry && now - recentEntry.timestamp < TOAST_DEDUPE_WINDOW_MS
+    );
+
+    const targetId =
+      options.id ||
+      (isWithinDedupeWindow && recentEntry
+        ? recentEntry.id
+        : `toast-${now}-${Math.random().toString(36).substring(2, 7)}`);
+
+    // Suppress back-to-back duplicate banner emissions (e.g. WebSocket + BroadcastChannel + Firestore + Polling firing together)
+    recentSemanticMapRef.current.set(semanticKey, { id: targetId, timestamp: now });
 
     const newToast: ToastItem = {
       ...options,
-      id,
+      id: targetId,
       type,
       duration,
-      createdAt: Date.now(),
+      createdAt: now,
+      semanticKey,
+      repeatCount: 1,
     };
 
     setToasts((prev) => {
-      // Keep maximum 5 toasts active
-      const filtered = prev.filter((t) => t.id !== id);
-      return [newToast, ...filtered].slice(0, 5);
+      const existingIdx = prev.findIndex(
+        (t) => t.id === targetId || t.semanticKey === semanticKey
+      );
+      if (existingIdx >= 0) {
+        // Refresh existing banner in place instead of spawning a second rapid banner
+        const existing = prev[existingIdx];
+        const refreshed: ToastItem = {
+          ...existing,
+          ...newToast,
+          id: existing.id,
+          repeatCount: existing.repeatCount || 1,
+        };
+        const rest = prev.filter((_, idx) => idx !== existingIdx);
+        return [refreshed, ...rest].slice(0, MAX_VISIBLE_TOASTS);
+      }
+      return [newToast, ...prev].slice(0, MAX_VISIBLE_TOASTS);
     });
 
+    clearToastTimer(targetId);
     if (duration > 0) {
-      setTimeout(() => {
-        dismissToast(id);
+      const timer = setTimeout(() => {
+        dismissToast(targetId);
       }, duration);
+      toastTimersRef.current.set(targetId, timer);
     }
 
-    return id;
-  }, [dismissToast]);
+    return targetId;
+  }, [clearToastTimer, dismissToast]);
 
   const success = useCallback(
     (title: string, description?: string, duration?: number) =>
@@ -119,9 +189,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       {children}
 
       {/* Toast Notification Container */}
-      <aside 
-        aria-label="Notifications" 
-        className="fixed top-5 right-5 z-[9999] flex flex-col space-y-3 w-[380px] max-w-[calc(100vw-2rem)] pointer-events-none"
+      <aside
+        aria-label="Notifications"
+        className="fixed top-4 right-4 z-[9999] flex flex-col space-y-2.5 w-[360px] max-w-[calc(100vw-1.5rem)] pointer-events-none"
         id="twd-toast-container"
       >
         <AnimatePresence mode="popLayout">
@@ -166,42 +236,45 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               <motion.div
                 key={t.id}
                 layout
-                initial={{ opacity: 0, y: -16, scale: 0.96 }}
+                initial={{ opacity: 0, y: -12, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.94, y: -8, transition: { duration: 0.15 } }}
-                transition={{ duration: 0.18, ease: 'easeOut' }}
+                exit={{ opacity: 0, scale: 0.95, y: -6, transition: { duration: 0.14 } }}
+                transition={{ duration: 0.16, ease: 'easeOut' }}
                 role="status"
                 id={`toast-item-${t.id}`}
-                className={`pointer-events-auto w-full backdrop-blur-md border rounded-2xl p-4 shadow-2xl flex items-start gap-3.5 relative overflow-hidden ${borderStyles}`}
+                className={`pointer-events-auto w-full backdrop-blur-md border rounded-2xl p-3.5 shadow-2xl flex items-start gap-3 relative overflow-hidden ${borderStyles}`}
               >
                 {/* Visual Icon */}
-                <div className={`p-2 rounded-xl shrink-0 mt-0.5 ${iconStyles}`}>
+                <div className={`p-1.5 rounded-xl shrink-0 mt-0.5 ${iconStyles}`}>
                   {isSuccess && <CheckCircle2 className="h-4 w-4" />}
                   {isError && <AlertCircle className="h-4 w-4" />}
                   {isWarning && <AlertTriangle className="h-4 w-4" />}
                   {!isSuccess && !isError && !isWarning && <Info className="h-4 w-4" />}
                 </div>
 
-                {/* Content Hierarchy: Eyebrow -> Clear Title -> Readable Body */}
+                {/* Clear 3-step reading order: Category -> Title -> Readable message */}
                 <div className="flex-1 min-w-0">
-                  <span className={`block text-[11px] font-semibold ${labelStyles}`}>
-                    {categoryText}
-                  </span>
-                  <h4 className="text-sm font-bold tracking-tight text-white leading-snug mt-0.5 break-words">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-[11px] font-semibold leading-tight ${labelStyles}`}>
+                      {categoryText}
+                    </span>
+                  </div>
+                  <h4 className="text-[13.5px] font-bold tracking-tight text-white leading-snug mt-0.5 break-words">
                     {t.title}
                   </h4>
                   {t.description && (
-                    <p className="text-[13px] text-slate-200 mt-1 leading-relaxed break-words">
+                    <p className="text-xs text-slate-200 mt-1 leading-relaxed break-words">
                       {t.description}
                     </p>
                   )}
                   {t.action && (
                     <button
+                      type="button"
                       onClick={() => {
                         t.action?.onClick();
                         dismissToast(t.id);
                       }}
-                      className="mt-2.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-lg text-xs font-semibold transition cursor-pointer whitespace-nowrap"
+                      className="mt-2 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-lg text-xs font-semibold transition cursor-pointer whitespace-nowrap"
                     >
                       {t.action.label}
                     </button>
@@ -210,16 +283,18 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
                 {/* Close Button */}
                 <button
+                  type="button"
                   onClick={() => dismissToast(t.id)}
                   aria-label="Close notification"
                   className="shrink-0 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-3.5 w-3.5" />
                 </button>
 
                 {/* Subtle progress indicator */}
                 {t.duration && t.duration > 0 ? (
                   <motion.div
+                    key={`${t.id}-${t.createdAt}`}
                     initial={{ width: '100%' }}
                     animate={{ width: '0%' }}
                     transition={{ duration: t.duration / 1000, ease: 'linear' }}

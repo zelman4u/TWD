@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { 
   Building,
   Building2, 
@@ -30,6 +29,7 @@ import {
 import { Consumer, WaterMeter, MeterReading, AuditLog } from '../../types';
 import { TablePagination } from '../common/TablePagination';
 import { SmartSearchBar } from '../common/SmartSearchBar';
+import { Modal, ModalHeader, ModalBody, ModalFooter, ModalButton } from '../ui/Modal';
 import { smartMatch } from '../../utils/smartSearch';
 import {
   isOfficialBillIssued,
@@ -533,7 +533,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                         <td className="px-5 py-3 font-mono font-bold border-r border-slate-800/80">
                           {isPending ? (
                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40 text-[11px] font-bold">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
                               <span>Pending ID</span>
                             </span>
                           ) : (
@@ -589,7 +589,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                               : c.status === 'active'
                               ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80'
                               : c.status === 'Disconnection Notice' || (c.status as string) === 'disconnection_notice'
-                              ? 'bg-rose-950/80 text-rose-300 border-rose-800/80 shadow-2xs font-black animate-pulse'
+                              ? 'bg-rose-950/80 text-rose-300 border-rose-800/80 shadow-2xs font-black'
                               : 'bg-rose-950/80 text-rose-300 border-rose-800/80'
                           }`}>
                             {isPending ? 'PENDING ID' : c.status}
@@ -1076,273 +1076,259 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
             : `Record #${data.orNumber || data.transactionId || data.id || 'N/A'}`;
 
         return (
-          <div
-            className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
-            onClick={() => setSelectedArchiveRecord(null)}
+          <Modal
+            isOpen={true}
+            onClose={() => setSelectedArchiveRecord(null)}
+            size="lg"
+            zIndexClass="z-50"
+            ariaLabel={modalTitle}
           >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100"
-            >
-              <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="p-2.5 bg-sky-500/15 border border-sky-500/30 rounded-xl text-sky-400 shrink-0">
-                    <Database className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-sky-400 block truncate">
-                      {eyebrowLabel} · {recordIdentifier}
-                    </span>
-                    <h3 className="text-base sm:text-lg font-bold text-white tracking-tight truncate">{modalTitle}</h3>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedArchiveRecord(null)}
-                  className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
-                  title="Close (Esc)"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
+            <ModalHeader
+              tone="info"
+              icon={<Database className="h-4 w-4" />}
+              eyebrow={`${eyebrowLabel} · ${recordIdentifier}`}
+              title={modalTitle}
+              onClose={() => setSelectedArchiveRecord(null)}
+            />
 
-              <div className="px-6 py-5 space-y-4 max-h-[75vh] overflow-y-auto">
+            <ModalBody>
                 {type === 'consumer' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/75 border border-slate-800 rounded-xl px-4 py-3 text-xs">
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Consumer Name</span>
-                      <span className="text-sm font-bold text-white mt-0.5 block">{data.name}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Consumer Name</span>
+                      <span className="text-[13.5px] font-bold text-white mt-0.5 block">{data.name}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Official Account #</span>
-                      <span className="text-sm font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">Official Account #</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">
                         {data.accountNumber || 'Pending ID'}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Assigned Meter Tag #</span>
-                      <span className="text-sm font-mono tabular-nums font-bold text-white mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">Assigned Meter Tag #</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-white mt-0.5 block">
                         {data.meterNumber || 'Pending Meter'}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Classification</span>
-                      <span className="text-sm font-semibold text-slate-200 mt-0.5 block">{data.consumerType || 'Residential'}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Classification</span>
+                      <span className="text-[13.5px] font-semibold text-slate-200 mt-0.5 block">{data.consumerType || 'Residential'}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Contact Number</span>
-                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">{data.contactNumber || 'N/A'}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Contact Number</span>
+                      <span className="text-[13.5px] font-mono tabular-nums text-slate-200 mt-0.5 block">{data.contactNumber || 'N/A'}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Email Address</span>
-                      <span className="text-sm text-slate-200 mt-0.5 block break-all">{data.email || 'N/A'}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Email Address</span>
+                      <span className="text-[13.5px] text-slate-200 mt-0.5 block break-all">{data.email || 'N/A'}</span>
                     </div>
                     <div className="sm:col-span-2">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Registered Service Address</span>
-                      <span className="text-sm text-slate-200 mt-0.5 block leading-relaxed">{data.address}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Registered Service Address</span>
+                      <span className="text-[13.5px] text-slate-200 mt-0.5 block leading-relaxed">{data.address}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Connection Status</span>
-                      <span className="text-sm font-bold uppercase text-emerald-400 mt-0.5 block">{data.status}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Connection Status</span>
+                      <span className="text-[13.5px] font-bold uppercase text-emerald-400 mt-0.5 block">{data.status}</span>
                     </div>
                     {data.applicationNumber && (
                       <div>
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Application #</span>
-                        <span className="text-sm font-mono tabular-nums text-sky-300 mt-0.5 block">{data.applicationNumber}</span>
+                        <span className="text-[11px] font-semibold text-slate-400 block">Application #</span>
+                        <span className="text-[13.5px] font-mono tabular-nums text-sky-300 mt-0.5 block">{data.applicationNumber}</span>
                       </div>
                     )}
                   </div>
                 )}
 
                 {type === 'meter' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/75 border border-slate-800 rounded-xl px-4 py-3 text-xs">
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Meter Tag Number</span>
-                      <span className="text-sm font-mono tabular-nums font-bold text-white mt-0.5 block">{data.meterNumber}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Meter Tag Number</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-white mt-0.5 block">{data.meterNumber}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Brand / Manufacturer</span>
-                      <span className="text-sm font-semibold text-slate-200 mt-0.5 block">{data.brand}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Brand / Manufacturer</span>
+                      <span className="text-[13.5px] font-semibold text-slate-200 mt-0.5 block">{data.brand}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Commissioning Date</span>
-                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">{data.installationDate || 'N/A'}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Commissioning Date</span>
+                      <span className="text-[13.5px] font-mono tabular-nums text-slate-200 mt-0.5 block">{data.installationDate || 'N/A'}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Assigned Account #</span>
-                      <span className="text-sm font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">Assigned Account #</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">
                         {data.linkedAccountNumber || 'Unassigned'}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Operational Status</span>
-                      <span className="text-sm font-bold uppercase text-emerald-400 mt-0.5 block">{data.status}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Operational Status</span>
+                      <span className="text-[13.5px] font-bold uppercase text-emerald-400 mt-0.5 block">{data.status}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Last Odometer Dial</span>
-                      <span className="text-sm font-mono tabular-nums font-bold text-white mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">Last Odometer Dial</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-white mt-0.5 block">
                         {formatOdometerReading(data.lastReadingValue ?? 0)}
                       </span>
                     </div>
                     {data.remarks && (
                       <div className="sm:col-span-2">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Remarks</span>
-                        <span className="text-sm text-slate-200 mt-0.5 block leading-relaxed">{data.remarks}</span>
+                        <span className="text-[11px] font-semibold text-slate-400 block">Remarks</span>
+                        <span className="text-[13.5px] text-slate-200 mt-0.5 block leading-relaxed">{data.remarks}</span>
                       </div>
                     )}
                   </div>
                 )}
 
                 {(type === 'reading' || type === 'bill' || type === 'payment') && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/75 border border-slate-800 rounded-xl px-4 py-3 text-xs">
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Consumer Name</span>
-                      <span className="text-sm font-bold text-white mt-0.5 block">{data.consumerName}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Consumer Name</span>
+                      <span className="text-[13.5px] font-bold text-white mt-0.5 block">{data.consumerName}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Account Number</span>
-                      <span className="text-sm font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">#{data.accountNumber}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Account Number</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">#{data.accountNumber}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Billing Period</span>
-                      <span className="text-sm font-semibold text-slate-200 mt-0.5 block">{data.billingPeriod || 'Current Period'}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Billing Period</span>
+                      <span className="text-[13.5px] font-semibold text-slate-200 mt-0.5 block">{data.billingPeriod || 'Current Period'}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Meter Tag Number</span>
-                      <span className="text-sm font-mono tabular-nums font-bold text-white mt-0.5 block">{data.meterNumber || 'N/A'}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Meter Tag Number</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-white mt-0.5 block">{data.meterNumber || 'N/A'}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Odometer Dial (00000–99999)</span>
-                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">Odometer Dial (00000–99999)</span>
+                      <span className="text-[13.5px] font-mono tabular-nums text-slate-200 mt-0.5 block">
                         Prev {formatOdometerReading(data.previousReading)} → Curr {formatOdometerReading(data.currentReading)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">
                         Consumption ({data.classification || 'Residential'} @ ₱{getEffectiveRatePerM3(data.classification === 'Commercial' ? 'Commercial' : 'Residential').toFixed(2)}/m³)
                       </span>
-                      <span className="text-sm font-mono tabular-nums font-black text-sky-400 mt-0.5 block">{data.consumption} m³</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-sky-400 mt-0.5 block">{data.consumption} m³</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Basic Water Charge</span>
-                      <span className="text-sm font-mono tabular-nums font-bold text-slate-200 mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">Basic Water Charge</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-slate-200 mt-0.5 block">
                         ₱{getReadingTotalAssessment(data, data.classification === 'Commercial' ? 'Commercial' : 'Residential').basicCharge.toFixed(2)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">2% Franchise Tax</span>
-                      <span className="text-sm font-mono tabular-nums font-bold text-indigo-300 mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">2% Franchise Tax</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-indigo-300 mt-0.5 block">
                         ₱{getReadingTotalAssessment(data, data.classification === 'Commercial' ? 'Commercial' : 'Residential').franchiseTax.toFixed(2)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Total Assessed Amount</span>
-                      <span className="text-sm font-mono tabular-nums font-black text-white mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">Total Assessed Amount</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-white mt-0.5 block">
                         ₱{calculateCostOf(data, data.classification).toFixed(2)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Late Penalty (10% After Due)</span>
-                      <span className="text-sm font-mono tabular-nums font-bold text-amber-300 mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">Late Penalty (10% After Due)</span>
+                      <span className="text-[13.5px] font-mono tabular-nums font-bold text-amber-300 mt-0.5 block">
                         +₱{getReadingTotalAssessment(data, data.classification === 'Commercial' ? 'Commercial' : 'Residential').penaltyAmount.toFixed(2)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Settlement Status</span>
-                      <span className="text-sm font-bold uppercase text-emerald-400 mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">Settlement Status</span>
+                      <span className="text-[13.5px] font-bold uppercase text-emerald-400 mt-0.5 block">
                         {data.paymentStatus || data.status || 'unpaid'}
                       </span>
                     </div>
                     {(data.orNumber || data.transactionId) && (
                       <div>
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">OR / Reference #</span>
-                        <span className="text-sm font-mono tabular-nums text-emerald-300 mt-0.5 block">
+                        <span className="text-[11px] font-semibold text-slate-400 block">OR / Reference #</span>
+                        <span className="text-[13.5px] font-mono tabular-nums text-emerald-300 mt-0.5 block">
                           {data.orNumber || data.transactionId}
                         </span>
                       </div>
                     )}
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Date Recorded</span>
-                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">Date Recorded</span>
+                      <span className="text-[13.5px] font-mono tabular-nums text-slate-200 mt-0.5 block">
                         {data.paymentDate || data.readingDate || 'N/A'}
                       </span>
                     </div>
                     {data.notes && (
                       <div className="sm:col-span-2">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Audit Notes</span>
-                        <span className="text-sm text-slate-200 mt-0.5 block leading-relaxed">{data.notes}</span>
+                        <span className="text-[11px] font-semibold text-slate-400 block">Audit Notes</span>
+                        <span className="text-[13.5px] text-slate-200 mt-0.5 block leading-relaxed">{data.notes}</span>
                       </div>
                     )}
                   </div>
                 )}
 
                 {type === 'audit' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 border border-slate-800 rounded-xl p-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/75 border border-slate-800 rounded-xl px-4 py-3 text-xs">
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">User Operator</span>
-                      <span className="text-sm font-bold text-white mt-0.5 block">{data.userName}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">User Operator</span>
+                      <span className="text-[13.5px] font-bold text-white mt-0.5 block">{data.userName}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Action Code</span>
-                      <span className="text-sm font-mono font-bold text-sky-400 mt-0.5 block">{data.action}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Action Code</span>
+                      <span className="text-[13.5px] font-mono font-bold text-sky-400 mt-0.5 block">{data.action}</span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Timestamp</span>
-                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">
+                      <span className="text-[11px] font-semibold text-slate-400 block">Timestamp</span>
+                      <span className="text-[13.5px] font-mono tabular-nums text-slate-200 mt-0.5 block">
                         {new Date(data.timestamp).toLocaleString()}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Host IP</span>
-                      <span className="text-sm font-mono tabular-nums text-slate-200 mt-0.5 block">{data.ipAddress || '127.0.0.1'}</span>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Host IP</span>
+                      <span className="text-[13.5px] font-mono tabular-nums text-slate-200 mt-0.5 block">{data.ipAddress || '127.0.0.1'}</span>
                     </div>
                     <div className="sm:col-span-2">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Operation Details</span>
-                      <p className="text-sm text-slate-200 leading-relaxed mt-1">{data.details}</p>
+                      <span className="text-[11px] font-semibold text-slate-400 block">Operation Details</span>
+                      <p className="text-[13.5px] text-slate-200 leading-relaxed mt-1">{data.details}</p>
                     </div>
                   </div>
                 )}
-              </div>
+              </ModalBody>
 
-              <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2.5">
-                <button
-                  type="button"
+              <ModalFooter>
+                <ModalButton
+                  variant="success"
                   onClick={() => {
                     const recordCopy = selectedArchiveRecord;
                     setSelectedArchiveRecord(null);
                     setArchivePrintState({ scope: 'single', singleRecord: recordCopy });
                   }}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <Printer className="h-3.5 w-3.5" />
                   <span>Print Record</span>
-                </button>
-                <button
-                  type="button"
+                </ModalButton>
+                <ModalButton
+                  variant="secondary"
                   onClick={() => setSelectedArchiveRecord(null)}
-                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0"
                 >
                   Close
-                </button>
-              </div>
-            </div>
-          </div>
+                </ModalButton>
+              </ModalFooter>
+          </Modal>
         );
       })()}
 
       {/* Portaled Official Archive Print Preview Modal (Individual Record / Current Tab / All 6 Archive Modules) */}
-      {archivePrintState && typeof document !== 'undefined' && createPortal(
-        <div
-          className="fixed inset-0 z-[99999] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-hidden no-print-bg"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setArchivePrintState(null);
-          }}
-        >
-          <div className="bg-slate-900 border border-slate-700 max-w-7xl w-full h-[94vh] max-h-[96vh] flex flex-col shadow-2xl rounded-3xl overflow-hidden">
-            {/* Toolbar (hidden when printing) */}
-            <div className="flex-shrink-0 flex justify-between items-center px-6 py-4 bg-slate-950 border-b border-slate-800 no-print flex-wrap gap-3">
-              <div className="flex items-center space-x-3">
-                <div className="h-10 w-10 bg-slate-900 rounded-xl border border-slate-700 p-1 flex items-center justify-center shrink-0">
+      <Modal
+        portal
+        isOpen={Boolean(archivePrintState)}
+        onClose={() => setArchivePrintState(null)}
+        size="2xl"
+        zIndexClass="z-[99999]"
+        backdropClassName="fixed inset-0 z-[99999] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-5 overflow-hidden no-print-bg"
+        dialogClassName="bg-slate-900 border border-slate-700 max-w-6xl w-full h-[90vh] max-h-[92vh] flex flex-col shadow-2xl rounded-2xl overflow-hidden text-slate-100"
+        ariaLabel="Official Archive Print Preview"
+      >
+        {archivePrintState && (
+          <>
+            {/* Compact Toolbar (hidden when printing) */}
+            <div className="flex-shrink-0 flex justify-between items-center px-4 sm:px-5 py-2.5 sm:py-3 bg-slate-950 border-b border-slate-800 no-print flex-wrap gap-2.5">
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 bg-slate-900 rounded-xl border border-slate-700 p-1 flex items-center justify-center shrink-0">
                   <img
                     src={ARCHIVE_LOGO_URL}
                     alt="Logo"
@@ -1354,7 +1340,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                   />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white tracking-tight">
+                  <h3 className="text-sm sm:text-base font-bold text-white tracking-tight leading-snug">
                     {archivePrintState.scope === 'single'
                       ? 'Official Individual Archive Record Print Preview'
                       : archivePrintState.scope === 'all_tabs'
@@ -1363,7 +1349,7 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                   </h3>
                   <p className="text-xs text-slate-400">
                     {archivePrintState.scope === 'single'
-                      ? 'Certified Single-Record Extract • Tagoloan Water District Archive'
+                      ? 'Certified Single-Record Extract · Tagoloan Water District Archive'
                       : archivePrintState.scope === 'all_tabs'
                       ? 'Unpaginated Master Printout of Consumers, Meters, Readings, Bills, Receipts & Audit Logs'
                       : `All ${activeFilteredCount} filtered records included (unpaginated master print)`}
@@ -1884,10 +1870,9 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
                 </div>
               </div>
             </div>
-          </div>
-        </div>,
-        document.body
-      )}
+          </>
+        )}
+      </Modal>
     </div>
   );
 };

@@ -25,6 +25,7 @@ import {
   formatInstallationDateDisplay,
   generateApplicationNumber,
 } from '../../utils/installationWorkflow';
+import { Modal, ModalHeader, ModalBody, ModalFooter, NoticeDetailGrid, ModalButton } from '../ui/Modal';
 
 interface ConsumerInstallationSectionProps {
   user: User;
@@ -693,244 +694,214 @@ export const ConsumerInstallationSection: React.FC<ConsumerInstallationSectionPr
       )}
 
       {/* Water Meter Installation Scheduling Modal */}
-      {isScheduleModalOpen && submissionCheck.allowed && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
-          onClick={() => setIsScheduleModalOpen(false)}
-        >
-          <form
-            onSubmit={handleSubmitRequest}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-2xl bg-slate-900 border border-slate-700 rounded-3xl shadow-2xl overflow-hidden text-left"
-          >
-            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3.5 min-w-0">
-                <div className="h-10 w-10 rounded-xl bg-blue-500/20 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0">
-                  <Wrench className="h-5 w-5" />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="text-sm sm:text-base font-black text-white truncate">
-                    Schedule Water Meter Installation
-                  </h3>
-                  <p className="text-[11px] text-slate-400 truncate">
-                    Application <span className="font-mono tabular-nums font-bold text-blue-400">{defaultApplicationNumber}</span>
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsScheduleModalOpen(false)}
-                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+      <Modal
+        isOpen={Boolean(isScheduleModalOpen && submissionCheck.allowed)}
+        onClose={() => setIsScheduleModalOpen(false)}
+        size="lg"
+        zIndexClass="z-50"
+        ariaLabel="Schedule Water Meter Installation"
+      >
+        <ModalHeader
+          icon={<Wrench className="h-4 w-4" />}
+          tone="info"
+          eyebrow={
+            <span className="font-mono tabular-nums">
+              Application #{defaultApplicationNumber}
+            </span>
+          }
+          title="Schedule Water Meter Installation"
+          onClose={() => setIsScheduleModalOpen(false)}
+        />
 
-            <div className="p-6 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
-                    Consumer Name <span className="text-rose-400">*</span>
-                  </label>
-                  <div className="relative">
-                    <UserIcon className="h-3.5 w-3.5 text-slate-500 absolute left-3 top-2.5" />
-                    <input
-                      type="text"
-                      required
-                      value={consumerName}
-                      onChange={(e) => setConsumerName(e.target.value)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
-                    Contact Number (11 Digits) <span className="text-rose-400">*</span>
-                  </label>
-                  <div className="relative">
-                    <Phone className="h-3.5 w-3.5 text-slate-500 absolute left-3 top-2.5" />
-                    <input
-                      type="tel"
-                      inputMode="numeric"
-                      maxLength={11}
-                      required
-                      value={contactNumber}
-                      onChange={(e) => setContactNumber(e.target.value.replace(/\D/g, '').slice(0, 11))}
-                      placeholder="09XXXXXXXXX"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs font-mono tabular-nums font-semibold text-white focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
-                    Barangay <span className="text-rose-400">*</span>
-                  </label>
-                  <select
-                    required
-                    value={barangay}
-                    onChange={(e) => setBarangay(e.target.value)}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="">-- Select Barangay --</option>
-                    {availableBarangays.map((b) => (
-                      <option key={b.id} value={b.name}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
-                    Preferred Installation Date <span className="text-rose-400">*</span>
-                  </label>
+        <form onSubmit={handleSubmitRequest} className="flex flex-col flex-1 min-h-0 overflow-hidden text-left">
+          <ModalBody className="space-y-3.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-300">
+                  Consumer Name <span className="text-rose-400">*</span>
+                </label>
+                <div className="relative">
+                  <UserIcon className="h-3.5 w-3.5 text-slate-500 absolute left-3 top-2.5" />
                   <input
-                    type="date"
+                    type="text"
                     required
-                    min={minSelectableDate}
-                    value={preferredDate}
-                    onChange={(e) => setPreferredDate(e.target.value)}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono tabular-nums font-semibold text-white focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div className="space-y-1 sm:col-span-2">
-                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
-                    Complete Service Address <span className="text-rose-400">*</span>
-                  </label>
-                  <div className="relative">
-                    <MapPin className="h-3.5 w-3.5 text-slate-500 absolute left-3 top-2.5" />
-                    <input
-                      type="text"
-                      required
-                      value={address}
-                      onChange={(e) => setAddress(e.target.value)}
-                      placeholder="Sitio / Zone / Street, Barangay, Tagoloan, Misamis Oriental"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs font-medium text-white focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1 sm:col-span-2">
-                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">
-                    Additional Remarks or Installation Instructions (Optional)
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={consumerRemarks}
-                    onChange={(e) => setConsumerRemarks(e.target.value)}
-                    placeholder="House landmark, gate instructions, preferred morning/afternoon availability..."
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none"
+                    value={consumerName}
+                    onChange={(e) => setConsumerName(e.target.value)}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-blue-500"
                   />
                 </div>
               </div>
 
-              {formError && (
-                <div className="rounded-xl bg-rose-950/60 border border-rose-800/80 p-3 flex items-center gap-2 text-xs text-rose-300 font-semibold">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  <span>{formError}</span>
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-300">
+                  Contact Number (11 Digits) <span className="text-rose-400">*</span>
+                </label>
+                <div className="relative">
+                  <Phone className="h-3.5 w-3.5 text-slate-500 absolute left-3 top-2.5" />
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    maxLength={11}
+                    required
+                    value={contactNumber}
+                    onChange={(e) => setContactNumber(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                    placeholder="09XXXXXXXXX"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs font-mono tabular-nums font-semibold text-white focus:outline-none focus:border-blue-500"
+                  />
                 </div>
-              )}
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-300">
+                  Barangay <span className="text-rose-400">*</span>
+                </label>
+                <select
+                  required
+                  value={barangay}
+                  onChange={(e) => setBarangay(e.target.value)}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-blue-500"
+                >
+                  <option value="">-- Select Barangay --</option>
+                  {availableBarangays.map((b) => (
+                    <option key={b.id} value={b.name}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-300">
+                  Preferred Installation Date <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="date"
+                  required
+                  min={minSelectableDate}
+                  value={preferredDate}
+                  onChange={(e) => setPreferredDate(e.target.value)}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono tabular-nums font-semibold text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="space-y-1 sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-300">
+                  Complete Service Address <span className="text-rose-400">*</span>
+                </label>
+                <div className="relative">
+                  <MapPin className="h-3.5 w-3.5 text-slate-500 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    required
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    placeholder="Sitio / Zone / Street, Barangay, Tagoloan, Misamis Oriental"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs font-medium text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1 sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-300">
+                  Additional Remarks or Installation Instructions (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  value={consumerRemarks}
+                  onChange={(e) => setConsumerRemarks(e.target.value)}
+                  placeholder="House landmark, gate instructions, preferred morning/afternoon availability..."
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none"
+                />
+              </div>
             </div>
 
-            <div className="px-6 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setIsScheduleModalOpen(false)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="inline-flex items-center justify-center gap-2 px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider shadow-md shadow-blue-600/30 transition cursor-pointer disabled:opacity-50 whitespace-nowrap"
-              >
-                <Send className="h-3.5 w-3.5" />
-                <span>{isSubmitting ? 'Submitting...' : 'Submit Installation Request'}</span>
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+            {formError && (
+              <div className="rounded-xl bg-rose-950/60 border border-rose-800/80 p-3 flex items-center gap-2 text-xs text-rose-300 font-semibold">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
+          </ModalBody>
+
+          <ModalFooter>
+            <ModalButton variant="secondary" onClick={() => setIsScheduleModalOpen(false)}>
+              Cancel
+            </ModalButton>
+            <ModalButton type="submit" variant="primary" disabled={isSubmitting}>
+              <Send className="h-3.5 w-3.5" />
+              <span>{isSubmitting ? 'Submitting...' : 'Submit Installation Request'}</span>
+            </ModalButton>
+          </ModalFooter>
+        </form>
+      </Modal>
 
       {/* Installation Activity Detail Modal */}
-      {selectedHistoryEntry && latestRequest && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
-          onClick={() => setSelectedHistoryEntry(null)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-3xl shadow-2xl overflow-hidden text-left"
-          >
-            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
-              <div>
-                <h4 className="text-sm font-black text-white">
-                  {selectedHistoryEntry.action || selectedHistoryEntry.status}
-                </h4>
-                <p className="text-[11px] font-mono tabular-nums text-slate-400">
+      <Modal
+        isOpen={Boolean(selectedHistoryEntry && latestRequest)}
+        onClose={() => setSelectedHistoryEntry(null)}
+        size="sm"
+        zIndexClass="z-50"
+        ariaLabel="Installation Activity Detail"
+      >
+        {selectedHistoryEntry && latestRequest && (
+          <>
+            <ModalHeader
+              icon={<History className="h-4 w-4" />}
+              tone="info"
+              eyebrow={
+                <span className="font-mono tabular-nums">
                   Application #{latestRequest.applicationNumber}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedHistoryEntry(null)}
-                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="p-6 space-y-3.5 text-xs">
-              <div className="grid grid-cols-2 gap-3 bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                <div>
-                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Status</span>
-                  <span className="font-bold text-white">{selectedHistoryEntry.status}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Recorded At</span>
-                  <span className="font-mono tabular-nums text-slate-300">
-                    {new Date(selectedHistoryEntry.timestamp).toLocaleString()}
-                  </span>
-                </div>
-                {selectedHistoryEntry.scheduledDate && (
-                  <div>
-                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Scheduled Date</span>
-                    <span className="font-mono tabular-nums font-bold text-blue-400">
-                      {formatInstallationDateDisplay(selectedHistoryEntry.scheduledDate)}
-                    </span>
-                  </div>
-                )}
-                <div>
-                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Updated By</span>
-                  <span className="font-semibold text-slate-200">
-                    {selectedHistoryEntry.actorRole === 'admin' ? 'Tagoloan Water District' : selectedHistoryEntry.actorName}
-                  </span>
-                </div>
-              </div>
+                </span>
+              }
+              title={selectedHistoryEntry.action || selectedHistoryEntry.status}
+              onClose={() => setSelectedHistoryEntry(null)}
+            />
+            <ModalBody className="text-left">
+              <NoticeDetailGrid
+                items={[
+                  { label: 'Status', value: selectedHistoryEntry.status },
+                  {
+                    label: 'Recorded At',
+                    value: new Date(selectedHistoryEntry.timestamp).toLocaleString(),
+                    mono: true,
+                  },
+                  ...(selectedHistoryEntry.scheduledDate
+                    ? [
+                        {
+                          label: 'Scheduled Date',
+                          value: formatInstallationDateDisplay(selectedHistoryEntry.scheduledDate),
+                          tone: 'info' as const,
+                          mono: true,
+                        },
+                      ]
+                    : []),
+                  {
+                    label: 'Updated By',
+                    value:
+                      selectedHistoryEntry.actorRole === 'admin'
+                        ? 'Tagoloan Water District'
+                        : selectedHistoryEntry.actorName,
+                  },
+                ]}
+              />
+
               {selectedHistoryEntry.remarks && (
-                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1">
-                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Remarks & Details</span>
-                  <p className="text-slate-200 leading-relaxed whitespace-pre-wrap">
+                <div className="rounded-xl bg-slate-950/75 border border-slate-800 px-3.5 py-2.5 space-y-1">
+                  <div className="text-[11px] font-medium text-slate-400">Remarks &amp; Details</div>
+                  <p className="text-[13px] text-slate-200 leading-relaxed whitespace-pre-wrap">
                     {selectedHistoryEntry.remarks}
                   </p>
                 </div>
               )}
-            </div>
-            <div className="px-6 py-4 bg-slate-950 border-t border-slate-800 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setSelectedHistoryEntry(null)}
-                className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold cursor-pointer transition"
-              >
+            </ModalBody>
+            <ModalFooter>
+              <ModalButton variant="primary" onClick={() => setSelectedHistoryEntry(null)}>
                 Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+              </ModalButton>
+            </ModalFooter>
+          </>
+        )}
+      </Modal>
     </div>
   );
 };

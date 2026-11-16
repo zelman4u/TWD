@@ -35,6 +35,15 @@ import { User, Consumer, MeterReading, Announcement } from '../../types';
 import { sendRealtimeMessage } from '../../services/realtimeSocket';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../../context/ToastContext';
+import {
+  Modal,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+  ModalButton,
+  NoticeDetailGrid,
+  ActionGuidanceBox,
+} from '../ui/Modal';
 
 interface TariffRateManagerProps {
   currentUser: User;
@@ -306,7 +315,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
                 <span>WATER TARIFF & PRICE HIKE MANAGER</span>
               </span>
               <span className="px-3 py-1 bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 font-black text-[10px] uppercase tracking-wider rounded-xl flex items-center space-x-1.5">
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="h-2 w-2 rounded-full bg-emerald-400"></span>
                 <span>v{activeTariff.version || 1} Active</span>
               </span>
               <span className="px-3 py-1 bg-slate-800 text-slate-300 font-mono text-[10px] rounded-xl border border-slate-700">
@@ -896,80 +905,81 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
       </div>
 
       {/* Confirmation Modal */}
-      {showConfirmModal && (
-        <div 
-          className="fixed inset-0 z-[120] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto animate-fade-in"
-          onClick={() => setShowConfirmModal(false)}
-        >
-          <div 
-            className="bg-slate-900 rounded-3xl max-w-lg w-full border border-slate-800 shadow-2xl p-6 sm:p-7 space-y-5 text-slate-100"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center space-x-3 text-amber-400">
-              <div className="p-3 bg-amber-950/80 rounded-2xl border border-amber-800/80">
-                <AlertTriangle className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-base font-black text-white tracking-tight">Confirm Water Tariff Adjustment</h3>
-                <p className="text-xs text-slate-400 font-mono">{formConfig.resolutionNumber}</p>
-              </div>
-            </div>
+      <Modal
+        isOpen={showConfirmModal}
+        onClose={() => setShowConfirmModal(false)}
+        size="sm"
+        zIndexClass="z-[120]"
+        ariaLabel="Confirm Water Tariff Adjustment"
+      >
+        <ModalHeader
+          eyebrow="Tariff Rate Adjustment"
+          title="Confirm New Water Rates"
+          subtitle={`Resolution ${formConfig.resolutionNumber}`}
+          icon={<AlertTriangle className="h-4 w-4" />}
+          tone="warning"
+          onClose={() => setShowConfirmModal(false)}
+        />
+        <ModalBody>
+          <p className="text-[13.5px] text-slate-200 leading-[1.6]">
+            New tariff rates will apply automatically to all upcoming water meter readings while keeping historical bills locked at their original rates.
+          </p>
 
-            <div className="p-4 bg-slate-950 border border-slate-800 rounded-2xl space-y-2.5 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Target Classification:</span>
-                <span className="font-bold text-white uppercase">{targetScope}</span>
-              </div>
-              {(targetScope === 'both' || targetScope === 'Residential') && (
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Residential Base (0–10 m³):</span>
-                  <span className="font-mono font-bold text-emerald-400">
-                    ₱{activeResRate.toFixed(2)}/m³ → ₱{effectiveResRate.toFixed(2)}/m³
-                  </span>
-                </div>
-              )}
-              {(targetScope === 'both' || targetScope === 'Commercial') && (
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Commercial Base (0–10 m³):</span>
-                  <span className="font-mono font-bold text-blue-400">
-                    ₱{activeCommRate.toFixed(2)}/m³ → ₱{effectiveCommRate.toFixed(2)}/m³
-                  </span>
-                </div>
-              )}
-              <div className="flex justify-between">
-                <span className="text-slate-400">Effective Date:</span>
-                <span className="font-bold text-white">{formConfig.effectiveDate}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Historical Readings:</span>
-                <span className="font-bold text-emerald-400">Preserved &amp; Locked ({readings.length} bills)</span>
-              </div>
-            </div>
+          <NoticeDetailGrid
+            columns={2}
+            items={[
+              {
+                label: 'Target Classification',
+                value: <span className="uppercase">{targetScope}</span>,
+              },
+              {
+                label: 'Effective Date',
+                value: formConfig.effectiveDate,
+                mono: true,
+              },
+              ...(targetScope === 'both' || targetScope === 'Residential'
+                ? [
+                    {
+                      label: 'Residential (0–10 m³)',
+                      value: `₱${activeResRate.toFixed(2)} → ₱${effectiveResRate.toFixed(2)}/m³`,
+                      tone: 'success' as const,
+                      mono: true,
+                    },
+                  ]
+                : []),
+              ...(targetScope === 'both' || targetScope === 'Commercial'
+                ? [
+                    {
+                      label: 'Commercial (0–10 m³)',
+                      value: `₱${activeCommRate.toFixed(2)} → ₱${effectiveCommRate.toFixed(2)}/m³`,
+                      tone: 'info' as const,
+                      mono: true,
+                    },
+                  ]
+                : []),
+              {
+                label: 'Historical Bills',
+                value: `Locked & preserved (${readings.length})`,
+                tone: 'success',
+              },
+            ]}
+          />
 
-            <p className="text-xs text-slate-300 leading-relaxed">
-              New rates will automatically apply to all NEW water meter readings going forward. Existing and historical bills remain protected at their original rates.
-            </p>
-
-            <div className="flex gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowConfirmModal(false)}
-                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs uppercase rounded-xl transition cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleApplyTariff}
-                disabled={isApplying}
-                className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition flex items-center justify-center space-x-2 cursor-pointer shadow-lg shadow-blue-600/30"
-              >
-                {isApplying ? <span>Applying...</span> : <span>Confirm &amp; Implement</span>}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          <ActionGuidanceBox
+            tone="warning"
+            title="Required Confirmation"
+            description="Confirming will publish this tariff update across Admin Billing and Consumer portals."
+          />
+        </ModalBody>
+        <ModalFooter>
+          <ModalButton variant="secondary" onClick={() => setShowConfirmModal(false)}>
+            Cancel
+          </ModalButton>
+          <ModalButton variant="primary" onClick={handleApplyTariff} disabled={isApplying}>
+            {isApplying ? 'Applying...' : 'Confirm & Implement'}
+          </ModalButton>
+        </ModalFooter>
+      </Modal>
     </div>
   );
 };

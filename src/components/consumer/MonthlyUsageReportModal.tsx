@@ -30,6 +30,7 @@ import {
 import { computeOdometerConsumption, formatOdometerReading } from '../../utils/odometer';
 import { mockDb } from '../../mockDb';
 import { useToast } from '../../context/ToastContext';
+import { Modal, ModalHeader, ModalFooter, ModalButton } from '../ui/Modal';
 
 interface MonthlyUsageReportModalProps {
   consumer: Consumer;
@@ -684,91 +685,63 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-fade-in"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      size="xl"
+      zIndexClass="z-50"
+      maxHeightClass="max-h-[90vh]"
+      id="monthly-usage-report-modal"
+      ariaLabel="Monthly Water Usage & Efficiency Report"
     >
-      <div
-        className="bg-slate-900 text-slate-100 rounded-3xl shadow-2xl border border-slate-800 w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-        id="monthly-usage-report-modal"
-      >
-        {/* Modal Header */}
-        <div className="bg-gradient-to-r from-blue-950 via-slate-900 to-indigo-950 p-5 sm:p-6 text-white flex items-center justify-between border-b border-slate-800 shrink-0">
-          <div className="flex items-center space-x-3.5 min-w-0">
-            <div className="p-2.5 bg-blue-500/20 text-blue-400 rounded-2xl border border-blue-500/30 shrink-0">
-              <FileText className="h-6 w-6" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-md">
-                  Official Utility Report
-                </span>
-                <span className="text-[10px] font-mono text-slate-400 hidden sm:inline">
-                  Account #{consumer.accountNumber || 'Pending'}
-                </span>
-              </div>
-              <h3 className="text-base sm:text-lg font-black tracking-tight text-white uppercase truncate mt-0.5">
-                Monthly Water Usage & Efficiency Report
-              </h3>
-              <p className="text-xs text-slate-300 truncate">
-                Official consumption benchmark against average household usage in Tagoloan
-              </p>
-            </div>
-          </div>
+      <ModalHeader
+        icon={<FileText className="h-5 w-5" />}
+        tone="info"
+        eyebrow={`Official Utility Report · Account #${consumer.accountNumber || 'Pending'}`}
+        title="Monthly Water Usage & Efficiency Report"
+        subtitle="Consumption benchmark against average household usage in Tagoloan"
+        onClose={onClose}
+      />
 
-          <button
-            onClick={onClose}
-            className="p-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800 hover:border-slate-700 transition cursor-pointer shrink-0"
-            title="Close Report"
+      {/* Action Toolbar & Period Filter */}
+      <div className="bg-slate-950/90 border-b border-slate-800 px-5 py-2.5 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
+        <div className="flex items-center gap-2">
+          <Calendar className="h-4 w-4 text-blue-400" />
+          <span className="text-xs font-semibold text-slate-300">Billing Period:</span>
+          <select
+            value={selectedPeriod}
+            onChange={(e) => setSelectedPeriod(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-white focus:outline-none focus:border-blue-500 cursor-pointer"
           >
-            <X className="h-5 w-5" />
-          </button>
+            {availablePeriods.map((p) => (
+              <option key={p} value={p} className="bg-slate-900 text-white">
+                {p}
+              </option>
+            ))}
+          </select>
         </div>
 
-        {/* Action Toolbar & Period Filter - Dark Slate */}
-        <div className="bg-slate-950/90 border-b border-slate-800 px-5 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center space-x-2.5">
-            <Calendar className="h-4 w-4 text-blue-400" />
-            <span className="text-xs font-bold text-slate-300">Billing Period:</span>
-            <select
-              value={selectedPeriod}
-              onChange={(e) => setSelectedPeriod(e.target.value)}
-              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-white focus:outline-none focus:border-blue-500 cursor-pointer"
-            >
-              {availablePeriods.map((p) => (
-                <option key={p} value={p} className="bg-slate-900 text-white">
-                  {p}
-                </option>
-              ))}
-            </select>
-          </div>
+        <div className="flex items-center gap-2">
+          <ModalButton size="sm" variant="secondary" onClick={handlePrint}>
+            <Printer className="h-3.5 w-3.5" />
+            <span>Print Report</span>
+          </ModalButton>
 
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={handlePrint}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs rounded-xl flex items-center space-x-1.5 transition cursor-pointer"
-            >
-              <Printer className="h-3.5 w-3.5 text-slate-300" />
-              <span>Print Report</span>
-            </button>
-
-            <button
-              onClick={handleDownloadPDF}
-              disabled={isGeneratingPdf}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl flex items-center space-x-1.5 transition shadow-md shadow-blue-600/20 cursor-pointer disabled:opacity-50"
-              id="modal-download-official-pdf-btn"
-            >
-              <Download className="h-3.5 w-3.5" />
-              <span>{isGeneratingPdf ? 'Generating PDF...' : 'Download Official PDF'}</span>
-            </button>
-          </div>
+          <ModalButton
+            size="sm"
+            variant="primary"
+            onClick={handleDownloadPDF}
+            disabled={isGeneratingPdf}
+            id="modal-download-official-pdf-btn"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span>{isGeneratingPdf ? 'Generating PDF...' : 'Download Official PDF'}</span>
+          </ModalButton>
         </div>
+      </div>
 
-        {/* Scrollable Report Content - Dark Slate Enterprise Theme */}
-        <div className="p-5 sm:p-6 overflow-y-auto space-y-6 text-slate-100" ref={printAreaRef}>
+      {/* Scrollable Report Content */}
+      <div className="flex-1 min-h-0 p-4 sm:p-5 overflow-y-auto space-y-5 text-slate-100" ref={printAreaRef}>
           {/* Consumer Identification Card */}
           <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
             <div>
@@ -1069,35 +1042,26 @@ export const MonthlyUsageReportModal: React.FC<MonthlyUsageReportModalProps> = (
           </div>
         </div>
 
-        {/* Modal Footer - Dark Slate */}
-        <div className="bg-slate-950 border-t border-slate-800 py-4 px-5 sm:px-6 flex flex-wrap items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-2 text-[11px] text-slate-400 font-medium">
+        <ModalFooter align="between">
+          <div className="flex items-center gap-2 text-xs text-slate-400 font-medium">
             <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
-            <span>Tagoloan Water District • Authenticated Consumer Telemetry Report</span>
+            <span>Tagoloan Water District · Authenticated Consumer Telemetry Report</span>
           </div>
 
-          <div className="flex items-center space-x-2 ml-auto">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer"
-            >
+          <div className="flex items-center gap-2 ml-auto">
+            <ModalButton variant="secondary" onClick={onClose}>
               Close
-            </button>
-            <button
-              onClick={handleDownloadPDF}
-              disabled={isGeneratingPdf}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl flex items-center space-x-1.5 transition cursor-pointer shadow-md shadow-blue-600/20 disabled:opacity-50"
-            >
+            </ModalButton>
+            <ModalButton variant="primary" onClick={handleDownloadPDF} disabled={isGeneratingPdf}>
               {isGeneratingPdf ? (
-                <CheckCircle2 className="h-3.5 w-3.5 animate-pulse" />
+                <CheckCircle2 className="h-3.5 w-3.5" />
               ) : (
                 <Download className="h-3.5 w-3.5" />
               )}
               <span>{isGeneratingPdf ? 'Downloading...' : 'Download PDF'}</span>
-            </button>
+            </ModalButton>
           </div>
-        </div>
-      </div>
-    </div>
+        </ModalFooter>
+    </Modal>
   );
 };

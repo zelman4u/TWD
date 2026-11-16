@@ -1,5 +1,4 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { 
   FileText, 
   Download, 
@@ -33,6 +32,7 @@ import {
   CheckSquare
 } from 'lucide-react';
 import jsPDF from 'jspdf';
+import { Modal } from '../ui/Modal';
 import autoTable from 'jspdf-autotable';
 import { Consumer, MeterReading, WaterMeter, Barangay, MeterReader, User } from '../../types';
 import {
@@ -2927,18 +2927,20 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
       {/* =========================================================================
           6. OFFICIAL PRINTABLE DOCUMENT (PORTALED TO BODY FOR INSTANT VIEWPORT CENTER)
           ========================================================================= */}
-      {showPrintModal && typeof document !== 'undefined' && createPortal(
-        <div 
-          className="fixed inset-0 z-[99999] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-hidden no-print-bg"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setShowPrintModal(false);
-          }}
-        >
-          <div className="bg-slate-900 border border-slate-700 max-w-7xl w-full h-[94vh] max-h-[96vh] flex flex-col shadow-2xl rounded-3xl overflow-hidden">
+      <Modal
+        portal
+        isOpen={showPrintModal}
+        onClose={() => setShowPrintModal(false)}
+        size="2xl"
+        zIndexClass="z-[99999]"
+        backdropClassName="fixed inset-0 z-[99999] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-5 overflow-hidden no-print-bg"
+        dialogClassName="bg-slate-900 border border-slate-800 max-w-6xl w-full h-[90vh] max-h-[90vh] flex flex-col shadow-2xl rounded-2xl overflow-hidden text-slate-100"
+        ariaLabel="Official Report Print Preview"
+      >
             {/* Modal Toolbar (hidden when printing) */}
-            <div className="flex-shrink-0 flex justify-between items-center px-6 py-4 bg-slate-950 border-b border-slate-800 no-print flex-wrap gap-3">
-              <div className="flex items-center space-x-3">
-                <div className="h-10 w-10 bg-slate-900 rounded-xl border border-slate-700 p-1 flex items-center justify-center shrink-0">
+            <div className="flex-shrink-0 flex justify-between items-center px-4 sm:px-5 py-2.5 sm:py-3 bg-slate-950 border-b border-slate-800 no-print flex-wrap gap-2.5">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-9 w-9 bg-slate-900 rounded-xl border border-slate-700 p-1 flex items-center justify-center shrink-0">
                   <img 
                     src={OFFICIAL_LOGO_URL} 
                     alt="Logo"
@@ -2949,25 +2951,25 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                     className="w-full h-full object-contain"
                   />
                 </div>
-                <div>
-                  <h3 className="text-base font-bold text-white tracking-tight">
+                <div className="min-w-0">
+                  <h3 className="text-sm sm:text-base font-bold text-white tracking-tight truncate">
                     {printScope === 'all' ? `Complete Official Reports Batch (${ALL_PRINTABLE_REPORTS.length} Reports)` : 'Official Report Print Preview'}
                   </h3>
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-slate-400 truncate">
                     {printScope === 'all'
-                      ? `${selectedMonth} ${selectedYear} • All 11 Regulatory & Ledger Reports • Auto Page Breaks`
-                      : `Centered Official Letterhead • High-Contrast Layout • ${reportTitles[reportCategory].title}`}
+                      ? `${selectedMonth} ${selectedYear} · All 11 Regulatory & Ledger Reports · Auto Page Breaks`
+                      : `Centered Official Letterhead · ${reportTitles[reportCategory].title}`}
                   </p>
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
                 {/* Print Scope Switcher */}
-                <div className="flex items-center bg-slate-900 border border-slate-700 p-0.5 rounded-xl">
+                <div className="flex items-center bg-slate-900 border border-slate-700 p-0.5 rounded-lg">
                   <button
                     type="button"
                     onClick={() => setPrintScope('single')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                    className={`px-2.5 py-1.5 rounded-md text-xs font-semibold transition cursor-pointer whitespace-nowrap ${
                       printScope === 'single'
                         ? 'bg-blue-600 text-white shadow-sm'
                         : 'text-slate-400 hover:text-white'
@@ -2978,7 +2980,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                   <button
                     type="button"
                     onClick={() => setPrintScope('all')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                    className={`px-2.5 py-1.5 rounded-md text-xs font-semibold transition cursor-pointer whitespace-nowrap ${
                       printScope === 'all'
                         ? 'bg-emerald-600 text-white shadow-sm'
                         : 'text-slate-400 hover:text-white'
@@ -2989,11 +2991,11 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                 </div>
 
                 {/* Visual Preview Mode Switcher */}
-                <div className="flex items-center bg-slate-900 border border-slate-700 p-0.5 rounded-xl">
+                <div className="flex items-center bg-slate-900 border border-slate-700 p-0.5 rounded-lg">
                   <button
                     type="button"
                     onClick={() => setPreviewTheme('dark')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer whitespace-nowrap ${
+                    className={`px-2.5 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
                       previewTheme === 'dark'
                         ? 'bg-blue-600 text-white shadow-sm'
                         : 'text-slate-400 hover:text-white'
@@ -3001,12 +3003,12 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                     title="Comfortable dark view for screen reading"
                   >
                     <Moon className="h-3.5 w-3.5" />
-                    <span>Dark Comfort View</span>
+                    <span>Dark Comfort</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setPreviewTheme('paper')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer whitespace-nowrap ${
+                    className={`px-2.5 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
                       previewTheme === 'paper'
                         ? 'bg-slate-200 text-slate-950 shadow-sm'
                         : 'text-slate-400 hover:text-white'
@@ -3014,25 +3016,25 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                     title="Soft paper view with black ink"
                   >
                     <Sun className="h-3.5 w-3.5" />
-                    <span>Paper View</span>
+                    <span>Paper</span>
                   </button>
                 </div>
 
                 <button
                   type="button"
                   onClick={() => window.print()}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 shadow-md cursor-pointer whitespace-nowrap shrink-0"
+                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg flex items-center gap-1.5 shadow-sm cursor-pointer whitespace-nowrap shrink-0"
                 >
-                  <Printer className="h-4 w-4" />
+                  <Printer className="h-3.5 w-3.5" />
                   <span>{printScope === 'all' ? `Print All (${ALL_PRINTABLE_REPORTS.length})` : 'Print Document'}</span>
                 </button>
                 <button
                   type="button"
                   onClick={printScope === 'all' ? handleDownloadAllPDF : handleDownloadPDF}
                   disabled={isGeneratingPdf || isGeneratingAllPdf}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs uppercase rounded-xl flex items-center space-x-1.5 border border-slate-700 cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
+                  className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-lg flex items-center gap-1.5 border border-slate-700 cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
                 >
-                  <Download className="h-4 w-4" />
+                  <Download className="h-3.5 w-3.5" />
                   <span>
                     {printScope === 'all'
                       ? (isGeneratingAllPdf ? 'Bundling PDF...' : 'Download All (PDF)')
@@ -3042,16 +3044,17 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                 <button
                   type="button"
                   onClick={() => setShowPrintModal(false)}
-                  className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl transition cursor-pointer shrink-0"
+                  className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg transition cursor-pointer shrink-0"
                   title="Close Preview (Esc)"
+                  aria-label="Close Preview"
                 >
-                  <X className="h-5 w-5" />
+                  <X className="h-4 w-4" />
                 </button>
               </div>
             </div>
 
             {/* Preview Sheet Container with Dynamic Dark / Soft Paper Theme */}
-            <div className={`p-3 sm:p-6 overflow-y-auto overflow-x-auto flex-1 flex justify-center ${
+            <div className={`p-3 sm:p-5 overflow-y-auto overflow-x-auto flex-1 min-h-0 flex justify-center ${
               previewTheme === 'dark' ? 'bg-slate-950' : 'bg-slate-900'
             }`}>
               <div 
@@ -4000,10 +4003,7 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
                 </div>
               </div>
             </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      </Modal>
     </div>
   );
 };

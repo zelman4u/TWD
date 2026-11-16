@@ -37,6 +37,7 @@ import {
   allocatePaymentOldestFirst,
 } from '../../utils/tariffCalculator';
 import { stripOversizedImagesForSync } from '../../services/storageSafe';
+import { Modal, ModalHeader, ModalBody, ModalFooter, ModalButton } from '../ui/Modal';
 
 interface UploadReceiptModalProps {
   isOpen: boolean;
@@ -544,49 +545,26 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
   };
 
   return (
-    <div 
-      className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in overflow-y-auto"
-      onClick={onClose}
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      size="lg"
+      zIndexClass="z-50"
       id="upload-receipt-modal-backdrop"
+      ariaLabel="Cashier Receipt Smart Photo Scanner"
     >
-      <div 
-        className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl w-full max-w-2xl shadow-2xl relative overflow-hidden my-8 animate-scale-up"
-        onClick={(e) => e.stopPropagation()}
-        id="upload-receipt-modal"
-      >
-        {/* Header */}
-        <div className="bg-gradient-to-r from-blue-950 via-slate-900 to-indigo-950 text-white p-5 sm:p-6 flex items-start justify-between relative border-b border-slate-800">
-          <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
-              <span className="text-blue-400 flex items-center space-x-1">
-                <ScanLine className="h-3.5 w-3.5" />
-                <span>Smart Photo Identification</span>
-              </span>
-              <span aria-hidden="true" className="text-slate-600">·</span>
-              <span className="text-emerald-400 flex items-center space-x-1">
-                <ShieldCheck className="h-3.5 w-3.5" />
-                <span>Instant Due Alert Clearance</span>
-              </span>
-            </div>
-            <h3 className="text-xl font-black text-white tracking-tight">
-              Cashier Receipt Smart Photo Scanner
-            </h3>
-            <p className="text-xs text-blue-200/90 leading-relaxed max-w-lg">
-              Paid in person at the Tagoloan Water District Office? Upload or snap a photo of your Official Receipt. The Smart Scanner automatically identifies if the statement is <strong>Fully Paid</strong> or <strong>Partially Paid</strong> and computes rolling arrears.
-            </p>
-          </div>
+      <div id="upload-receipt-modal" className="flex flex-col flex-1 min-h-0 overflow-hidden">
+        <ModalHeader
+          icon={<ScanLine className="h-5 w-5" />}
+          tone="info"
+          eyebrow="Smart Photo Identification · Instant Due Alert Clearance"
+          title="Cashier Receipt Smart Photo Scanner"
+          subtitle="Upload or photograph your Official Receipt to validate full or partial settlement and update rolling arrears."
+          onClose={onClose}
+        />
 
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-white/10 transition cursor-pointer"
-            title="Close"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        {/* Form */}
-        <form onSubmit={handleSubmitReceipt} className="p-6 space-y-6 max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSubmitReceipt} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+          <ModalBody className="space-y-4">
           
           {/* Validation Error Banner */}
           {validationError && (
@@ -726,7 +704,7 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
                           style={{ width: `${scanProgress}%` }}
                         ></div>
                       </div>
-                      <div className="flex items-center space-x-2 bg-black/75 text-cyan-300 px-3.5 py-1.5 rounded-xl border border-cyan-500/30 text-xs font-mono font-bold shadow-lg animate-pulse">
+                      <div className="flex items-center space-x-2 bg-black/75 text-cyan-300 px-3.5 py-1.5 rounded-xl border border-cyan-500/30 text-xs font-mono font-bold shadow-lg">
                         <ScanLine className="h-4 w-4 animate-spin text-cyan-400" />
                         <span>Smart Photo OCR Analyzing Receipt...</span>
                       </div>
@@ -1156,83 +1134,86 @@ export const UploadReceiptModal: React.FC<UploadReceiptModalProps> = ({
             />
           </div>
 
-          {/* Summary & Submit Action */}
-          <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div>
-              <span className="text-[11px] text-slate-400 font-semibold block">
-                Total Payment Credited
-              </span>
-              <span className="text-xl font-black font-mono tabular-nums text-emerald-400">
-                ₱{numericPayment.toFixed(2)}
-              </span>
-              <span className="text-[11px] text-slate-400 block">
+          </ModalBody>
+
+          <ModalFooter align="between">
+            <div className="min-w-0">
+              <div className="flex items-baseline gap-2">
+                <span className="text-[11px] text-slate-400 font-semibold">Total Payment Credited:</span>
+                <span className="text-base font-black font-mono tabular-nums text-emerald-400">
+                  ₱{numericPayment.toFixed(2)}
+                </span>
+              </div>
+              <span className="text-[11px] text-slate-400 block truncate">
                 {settlementType === 'full' 
                   ? 'Clears statement balance in full (₱0.00 arrears)' 
                   : `Carries over ₱${calculatedRemaining.toFixed(2)} into next cycle arrears`}
               </span>
             </div>
 
-            <div className="flex items-center space-x-2.5 w-full sm:w-auto">
-              <button
-                type="button"
+            <div className="flex items-center gap-2 ml-auto shrink-0">
+              <ModalButton
+                variant="secondary"
                 onClick={onClose}
                 disabled={isSubmitting}
-                className="flex-1 sm:flex-none px-4 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer"
               >
                 Cancel
-              </button>
+              </ModalButton>
 
-              <button
+              <ModalButton
                 type="submit"
+                variant="success"
                 disabled={isSubmitting || isLessThan50Percent || !receiptPhotoUrl || !orNumber.trim() || smartScanResult?.isValidReceipt === false}
-                className={`flex-1 sm:flex-none px-6 py-3 font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center space-x-2 ${
-                  isSubmitting || isLessThan50Percent || !receiptPhotoUrl || !orNumber.trim() || smartScanResult?.isValidReceipt === false
-                    ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
-                    : 'bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer'
-                }`}
                 id="submit-receipt-confirm-btn"
               >
                 {isSubmitting ? (
                   <>
-                    <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                    <span>Verifying Receipt...</span>
+                    <div className="h-3.5 w-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                    <span>Verifying...</span>
                   </>
                 ) : (
                   <>
-                    <ShieldCheck className="h-4 w-4" />
-                    <span>Confirm & Validate Payment</span>
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    <span>Confirm &amp; Validate Payment</span>
                   </>
                 )}
-              </button>
+              </ModalButton>
             </div>
-          </div>
-
+          </ModalFooter>
         </form>
 
         {/* Full Image Zoom Modal */}
-        {showPhotoZoom && receiptPhotoUrl && (
-          <div 
-            className="fixed inset-0 bg-black/90 z-60 flex items-center justify-center p-4"
-            onClick={() => setShowPhotoZoom(false)}
-          >
-            <div className="relative max-w-3xl max-h-[90vh]">
+        <Modal
+          isOpen={Boolean(showPhotoZoom && receiptPhotoUrl)}
+          onClose={() => setShowPhotoZoom(false)}
+          size="lg"
+          zIndexClass="z-[60]"
+          ariaLabel="Receipt Full Preview"
+        >
+          <ModalHeader
+            icon={<ImageIcon className="h-4 w-4" />}
+            tone="info"
+            eyebrow="Cashier Receipt Attachment"
+            title="Full Receipt Image Preview"
+            onClose={() => setShowPhotoZoom(false)}
+          />
+          <ModalBody className="bg-slate-950 flex items-center justify-center">
+            {receiptPhotoUrl && (
               <img
                 src={receiptPhotoUrl}
                 alt="Receipt Full Preview"
-                className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain"
+                className="max-w-full max-h-[68vh] rounded-xl shadow-2xl object-contain"
               />
-              <button
-                onClick={() => setShowPhotoZoom(false)}
-                className="absolute top-4 right-4 p-2 bg-black/70 hover:bg-black text-white rounded-full transition cursor-pointer"
-              >
-                <X className="h-6 w-6" />
-              </button>
-            </div>
-          </div>
-        )}
-
+            )}
+          </ModalBody>
+          <ModalFooter>
+            <ModalButton variant="primary" onClick={() => setShowPhotoZoom(false)}>
+              Close Preview
+            </ModalButton>
+          </ModalFooter>
+        </Modal>
       </div>
-    </div>
+    </Modal>
   );
 };
 

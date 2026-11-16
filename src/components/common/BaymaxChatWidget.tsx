@@ -572,7 +572,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
       let parsed = line.replace(
         /\*\*(.*?)\*\*/g,
         isUserMsg
-          ? '<strong class="font-bold text-white">$1</strong>'
+          ? '<strong class="font-semibold text-white">$1</strong>'
           : '<strong class="font-semibold text-white">$1</strong>'
       );
       parsed = parsed.replace(
@@ -583,38 +583,35 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
       // Bullet lists
       if (line.trim().startsWith('- ') || line.trim().startsWith('• ')) {
         return (
-          <div key={idx} className="flex items-start gap-2 my-1 pl-1">
+          <div key={idx} className="flex items-start gap-2 my-0.5 pl-1">
             <span className={isUserMsg ? 'text-blue-200 mt-0.5 shrink-0' : 'text-sky-400 mt-0.5 shrink-0'}>•</span>
-            <span className="leading-relaxed" dangerouslySetInnerHTML={{ __html: parsed.replace(/^[-•]\s*/, '') }} />
+            <span className="leading-[1.55] break-words" dangerouslySetInnerHTML={{ __html: parsed.replace(/^[-•]\s*/, '') }} />
           </div>
         );
       }
       // Numbered lists
       if (/^\d+\.\s/.test(line.trim())) {
         return (
-          <div key={idx} className="flex items-start gap-2 my-1 pl-1">
-            <span className={`${isUserMsg ? 'text-blue-200' : 'text-sky-400'} font-mono tabular-nums text-xs mt-1 shrink-0 font-semibold`}>
+          <div key={idx} className="flex items-start gap-2 my-0.5 pl-1">
+            <span className={`${isUserMsg ? 'text-blue-200' : 'text-sky-400'} font-mono tabular-nums text-[11px] mt-0.5 shrink-0 font-semibold`}>
               {line.trim().match(/^\d+\./)?.[0]}
             </span>
-            <span className="leading-relaxed" dangerouslySetInnerHTML={{ __html: parsed.replace(/^\d+\.\s*/, '') }} />
+            <span className="leading-[1.55] break-words" dangerouslySetInnerHTML={{ __html: parsed.replace(/^\d+\.\s*/, '') }} />
           </div>
         );
       }
       // Empty line spacer
       if (!line.trim()) {
-        return <div key={idx} className="h-2" />;
+        return <div key={idx} className="h-1.5" />;
       }
-      return <p key={idx} className="leading-[1.6]" dangerouslySetInnerHTML={{ __html: parsed }} />;
+      return <p key={idx} className="leading-[1.55] break-words" dangerouslySetInnerHTML={{ __html: parsed }} />;
     });
   };
 
   return (
     <>
       {/* ============================================================ */}
-      {/* FLOATING LAUNCHER BUTTON & GREETING TOAST                    */}
-      {/* ============================================================ */}
-      {/* ============================================================ */}
-      {/* FLOATING DRAGGABLE LAUNCHER BUTTON & GREETING TOAST         */}
+      {/* FLOATING DRAGGABLE LAUNCHER BUTTON & COMPACT GREETING TOAST  */}
       {/* ============================================================ */}
       {!isOpen && (
         <div
@@ -626,17 +623,17 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
           }}
           className="pointer-events-none select-none flex flex-col items-end"
         >
-          {/* Floating Greeting Toast */}
+          {/* Compact Greeting Toast */}
           {showGreetingBubble && (
             <div
               data-no-drag="true"
               onClick={() => setIsOpen(true)}
               style={{
                 position: 'absolute',
-                [launcherPos.y > 220 ? 'bottom' : 'top']: 'calc(100% + 12px)',
+                [launcherPos.y > 220 ? 'bottom' : 'top']: 'calc(100% + 10px)',
                 [launcherPos.x > (typeof window !== 'undefined' ? window.innerWidth / 2 : 400) ? 'right' : 'left']: 0,
               }}
-              className="pointer-events-auto group w-80 max-w-[calc(100vw-2rem)] bg-slate-900 border border-slate-700/90 rounded-2xl p-4 shadow-2xl cursor-pointer hover:border-sky-500/70 transition duration-200"
+              className="pointer-events-auto group w-72 sm:w-80 max-w-[calc(100vw-2rem)] bg-slate-900 border border-slate-700/90 rounded-2xl p-3.5 shadow-2xl cursor-pointer hover:border-sky-500/70 transition duration-200"
             >
               <button
                 type="button"
@@ -645,13 +642,13 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                   e.stopPropagation();
                   setShowGreetingBubble(false);
                 }}
-                className="absolute top-2.5 right-2.5 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                className="absolute top-2 right-2 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
                 aria-label="Dismiss greeting"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
-              <div className="flex items-start gap-3 pr-5">
-                <div className={`p-2 rounded-xl shrink-0 border ${
+              <div className="flex items-start gap-2.5 pr-5">
+                <div className={`p-1.5 rounded-xl shrink-0 border mt-0.5 ${
                   isConsumer
                     ? 'bg-sky-500/15 text-sky-400 border-sky-500/30'
                     : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
@@ -663,13 +660,13 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                     <span className="font-bold text-white">{botName}</span>
                     <span aria-hidden="true" className="text-slate-600">·</span>
                     <span className={isConsumer ? 'font-medium text-sky-400' : 'font-medium text-emerald-400'}>
-                      Ready to assist
+                      Assistant Ready
                     </span>
                   </div>
-                  <p className="text-[13px] text-slate-200 leading-relaxed">
+                  <p className="text-xs text-slate-200 leading-relaxed">
                     {isConsumer
-                      ? 'Kumusta! Ask me about your water bill, 50% partial payment, or reporting a leak (English, Tagalog, Bisaya).'
-                      : 'Operational & billing support ready in English, Tagalog, and Bisaya.'}
+                      ? 'Ask about your water bill, 50% partial payment, or reporting a leak (EN / TL / Bisaya).'
+                      : 'Operational, arrears & billing guidance ready in EN, TL, and Bisaya.'}
                   </p>
                 </div>
               </div>
@@ -685,7 +682,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
             onClick={handleLauncherClick}
             onDoubleClick={resetLauncherPosition}
             title="Grab and drag anywhere to avoid blocking buttons behind • Click to open • Double-click to snap back"
-            className={`pointer-events-auto touch-none group relative flex items-center space-x-2 px-3 sm:px-4 py-2.5 sm:py-3 rounded-full shadow-2xl transition-[box-shadow,transform,ring] duration-150 select-none ${
+            className={`pointer-events-auto touch-none group relative flex items-center space-x-2 px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-full shadow-2xl transition-[box-shadow,transform,ring] duration-150 select-none ${
               isDraggingLauncher
                 ? 'cursor-grabbing scale-105 ring-4 ring-sky-400/70 shadow-sky-500/50 opacity-95'
                 : 'cursor-grab hover:scale-105 active:scale-95'
@@ -695,7 +692,6 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                 : 'bg-slate-900 border border-emerald-500/50 text-white hover:border-emerald-400 hover:shadow-emerald-500/20'
             }`}
           >
-            {/* Grab Grip handle */}
             <div
               className="p-0.5 text-white/60 group-hover:text-white transition flex items-center justify-center shrink-0"
               title="Drag to reposition"
@@ -703,19 +699,15 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
               <GripVertical className="h-4 w-4" />
             </div>
 
-            {/* Robot Avatar Icon */}
             <div className="relative flex items-center justify-center shrink-0">
-              <div className={`p-2 rounded-full ${isConsumer ? 'bg-white/15' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                <Bot className="h-5 w-5" />
+              <div className={`p-1.5 rounded-full ${isConsumer ? 'bg-white/15' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                <Bot className="h-4 w-4" />
               </div>
             </div>
 
-            {/* Label */}
             <div className="text-left hidden sm:block pr-1">
-              <div className="text-xs font-bold tracking-tight flex items-center gap-1.5">
-                <span>{botName}</span>
-              </div>
-              <div className="text-[11px] text-slate-200/90 font-medium leading-none mt-0.5">
+              <div className="text-xs font-bold tracking-tight leading-none">{botName}</div>
+              <div className="text-[11px] text-slate-200/85 font-medium leading-none mt-1">
                 {botSubtitle}
               </div>
             </div>
@@ -741,10 +733,10 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
           className={`z-50 transition-[box-shadow,border-color] duration-150 flex flex-col shadow-2xl overflow-hidden bg-slate-900 border border-slate-800 rounded-2xl ${
             isExpanded
               ? 'fixed inset-3 sm:inset-6 md:inset-10'
-              : 'w-[calc(100vw-2rem)] sm:w-[460px] max-h-[88vh] h-[640px]'
+              : 'w-[calc(100vw-1.5rem)] sm:w-[410px] min-h-[380px] h-[min(560px,80vh)] max-h-[84vh]'
           }`}
         >
-          {/* Header - Grabbable / Draggable when not expanded */}
+          {/* Compact Header - Grabbable / Draggable when not expanded */}
           <div
             onPointerDown={handleModalPointerDown}
             onPointerMove={handleModalPointerMove}
@@ -752,19 +744,18 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
             onPointerCancel={handleModalPointerUp}
             onDoubleClick={resetModalPosition}
             title={isExpanded ? undefined : 'Drag header to move chat window • Double-click to snap back'}
-            className={`px-5 py-3.5 flex items-center justify-between border-b border-slate-800 bg-slate-950 shrink-0 select-none touch-none ${
+            className={`px-4 py-3 flex items-center justify-between border-b border-slate-800 bg-slate-950 shrink-0 select-none touch-none ${
               !isExpanded ? (isDraggingModal ? 'cursor-grabbing' : 'cursor-grab') : ''
             }`}
           >
-            {/* Bot Identity + Drag Grip indicator */}
-            <div className="flex items-center gap-2.5 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
               {!isExpanded && (
                 <div className="text-slate-500 hover:text-slate-300 transition shrink-0" title="Drag to reposition">
                   <GripVertical className="h-4 w-4" />
                 </div>
               )}
               <div
-                className={`p-2 rounded-xl border shrink-0 ${
+                className={`p-1.5 rounded-xl border shrink-0 ${
                   isConsumer
                     ? 'bg-sky-500/15 border-sky-500/30 text-sky-400'
                     : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
@@ -773,20 +764,18 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                 <Bot className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-white truncate tracking-tight">{botName}</h3>
+                <div className="flex items-center gap-1.5">
+                  <h3 className="text-sm font-bold text-white truncate tracking-tight leading-snug">{botName}</h3>
                   <span className="text-slate-600 text-xs" aria-hidden="true">·</span>
-                  <span className={`text-xs font-medium truncate ${isConsumer ? 'text-sky-400' : 'text-emerald-400'}`}>
-                    {isConsumer ? 'Consumer Help' : 'Admin Assistant'}
+                  <span className={`text-[11px] font-semibold truncate ${isConsumer ? 'text-sky-400' : 'text-emerald-400'}`}>
+                    {isConsumer ? 'Consumer Help' : 'Admin Companion'}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 truncate">{botSubtitle}</p>
               </div>
             </div>
 
-            {/* Window Controls */}
             <div
-              className="flex items-center space-x-1 shrink-0 ml-2"
+              className="flex items-center gap-0.5 shrink-0 ml-2"
               onPointerDown={(e) => e.stopPropagation()}
             >
               {!isExpanded && (
@@ -797,7 +786,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                   title="Snap chat window back to corner"
                   className="p-1.5 rounded-lg text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition cursor-pointer"
                 >
-                  <LocateFixed className="h-4 w-4" />
+                  <LocateFixed className="h-3.5 w-3.5" />
                 </button>
               )}
 
@@ -808,7 +797,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                 title={soundEnabled ? 'Mute sound' : 'Enable sound'}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
               >
-                {soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+                {soundEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
               </button>
 
               <button
@@ -822,7 +811,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                     : 'text-slate-400 hover:text-amber-300 hover:bg-slate-800'
                 }`}
               >
-                <RotateCcw className="h-4 w-4" />
+                <RotateCcw className="h-3.5 w-3.5" />
               </button>
 
               <button
@@ -832,7 +821,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                 title={isExpanded ? 'Restore size' : 'Expand'}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer hidden sm:block"
               >
-                {isExpanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                {isExpanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
               </button>
 
               <button
@@ -842,27 +831,27 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                 title="Close chat"
                 className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
               >
-                <X className="h-4 w-4" />
+                <X className="h-3.5 w-3.5" />
               </button>
             </div>
           </div>
 
-          {/* Inline Reset Confirmation Bar (replaces browser confirm dialog) */}
+          {/* Inline Reset Confirmation Bar */}
           {confirmingReset && (
-            <div className="px-5 py-2.5 bg-amber-950/60 border-b border-amber-500/30 flex items-center justify-between gap-3 text-xs shrink-0">
+            <div className="px-4 py-2 bg-amber-950/60 border-b border-amber-500/30 flex items-center justify-between gap-2 text-xs shrink-0">
               <span className="text-amber-200 font-medium">Start a fresh conversation?</span>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => setConfirmingReset(false)}
-                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold cursor-pointer"
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold cursor-pointer whitespace-nowrap"
                 >
                   Keep Chat
                 </button>
                 <button
                   type="button"
                   onClick={handleClearHistory}
-                  className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold cursor-pointer"
+                  className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold cursor-pointer whitespace-nowrap"
                 >
                   Reset
                 </button>
@@ -870,11 +859,11 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
             </div>
           )}
 
-          {/* Subheader: Language Selector Bar */}
-          <div className="px-5 py-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0 text-xs">
+          {/* Slim Language Selector Sub-bar */}
+          <div className="px-4 py-1.5 bg-slate-950/50 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0 text-xs">
             <div className="flex items-center gap-1.5 text-slate-400 font-medium">
               <Globe className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-              <span className="hidden sm:inline">Language</span>
+              <span className="text-[11px]">Reply Language</span>
             </div>
             <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
               {([
@@ -887,7 +876,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                   key={langOpt.id}
                   type="button"
                   onClick={() => setLanguage(langOpt.id)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
                     language === langOpt.id
                       ? 'bg-sky-600 text-white'
                       : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700'
@@ -900,21 +889,18 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
           </div>
 
           {/* Scrollable Message Thread */}
-          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 bg-slate-900 text-slate-100">
-            {/* Quiet Language Guide Intro */}
-            <div className="rounded-xl bg-slate-950/70 border border-slate-800 px-4 py-3 flex items-start gap-2.5">
-              <Sparkles className="h-4 w-4 text-sky-400 shrink-0 mt-0.5" />
-              <div className="space-y-0.5">
-                <p className="text-xs font-bold text-white">
-                  {isConsumer ? 'Nakasabot ko sa Bisaya, Tagalog, ug English' : 'Operational & Billing Guidance'}
-                </p>
-                <p className="text-[13px] text-slate-300 leading-relaxed">
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3 bg-slate-900 text-slate-100">
+            {/* Compact helper tip shown only before user starts conversing */}
+            {messages.length <= 1 && (
+              <div className="rounded-xl bg-slate-950/75 border border-slate-800 px-3 py-2 flex items-center gap-2 text-xs text-slate-300">
+                <Sparkles className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                <span className="leading-snug">
                   {isConsumer
-                    ? 'Ask about your monthly water bill, 50% partial payment rule, or how to report a service issue.'
-                    : 'Ask about arrears carryover, 2-month disconnection scanning, or meter reader telemetry.'}
-                </p>
+                    ? 'Understands English, Tagalog, and Bisaya — ask about bills, 50% partial payment, or leaks.'
+                    : 'Operational guidance ready for arrears, disconnection scanning, and reader telemetry.'}
+                </span>
               </div>
-            </div>
+            )}
 
             {/* Conversation Messages */}
             {messages.map((m) => {
@@ -922,56 +908,55 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
               return (
                 <div
                   key={m.id}
-                  className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
+                  className={`flex flex-col gap-0.5 ${isUser ? 'items-end' : 'items-start'}`}
                 >
-                  <div className="max-w-[90%] space-y-1.5">
-                    {/* Clear Speaker + Timestamp Eyebrow Above Message */}
-                    <div
-                      className={`flex items-center gap-1.5 text-xs text-slate-400 ${
-                        isUser ? 'justify-end' : 'justify-start'
-                      }`}
-                    >
-                      <span className={`font-semibold ${isUser ? 'text-slate-200' : isConsumer ? 'text-sky-300' : 'text-emerald-300'}`}>
-                        {isUser ? 'You' : botName}
-                      </span>
-                      <span aria-hidden="true" className="text-slate-600">·</span>
-                      <span className="font-mono tabular-nums text-[11px] text-slate-400">
-                        {m.timestamp}
-                      </span>
-                    </div>
+                  {/* Aligned Speaker · Timestamp · Inline Copy Row */}
+                  <div
+                    className={`flex items-center gap-1.5 text-[11px] leading-tight text-slate-400 px-1 ${
+                      isUser ? 'justify-end' : 'justify-start'
+                    }`}
+                  >
+                    <span className={`font-medium ${isUser ? 'text-slate-300' : isConsumer ? 'text-sky-300' : 'text-emerald-300'}`}>
+                      {isUser ? 'You' : botName}
+                    </span>
+                    <span aria-hidden="true" className="text-slate-600">·</span>
+                    <span className="font-mono tabular-nums text-[11px] text-slate-400">
+                      {m.timestamp}
+                    </span>
+                    {!isUser && (
+                      <>
+                        <span aria-hidden="true" className="text-slate-600">·</span>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyMessage(m.text, m.id)}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-400 hover:text-white transition cursor-pointer"
+                          title="Copy response"
+                        >
+                          {copiedId === m.id ? (
+                            <>
+                              <Check className="h-3 w-3 text-emerald-400" />
+                              <span className="text-emerald-400">Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-3 w-3" />
+                              <span>Copy</span>
+                            </>
+                          )}
+                        </button>
+                      </>
+                    )}
+                  </div>
 
-                    {/* Message Content Surface */}
-                    <div
-                      className={`rounded-2xl px-4 py-3 text-sm leading-[1.6] ${
-                        isUser
-                          ? 'bg-blue-600 text-white border border-blue-500/70'
-                          : 'bg-slate-950 border border-slate-800 text-slate-100'
-                      }`}
-                    >
-                      <div className="space-y-2">{renderFormattedText(m.text, isUser)}</div>
-
-                      {!isUser && (
-                        <div className="flex items-center justify-end mt-2.5 pt-2 border-t border-slate-800/80">
-                          <button
-                            type="button"
-                            onClick={() => handleCopyMessage(m.text, m.id)}
-                            className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-white transition cursor-pointer"
-                          >
-                            {copiedId === m.id ? (
-                              <>
-                                <Check className="h-3.5 w-3.5 text-emerald-400" />
-                                <span className="text-emerald-400">Copied</span>
-                              </>
-                            ) : (
-                              <>
-                                <Copy className="h-3.5 w-3.5" />
-                                <span>Copy message</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                  {/* Compact Content-Proportioned Message Bubble */}
+                  <div
+                    className={`w-fit max-w-[84%] sm:max-w-[min(78%,60ch)] rounded-2xl px-3 py-2 text-[13.5px] leading-[1.55] break-words ${
+                      isUser
+                        ? 'rounded-tr-sm bg-blue-600 text-white border border-blue-500/70'
+                        : 'rounded-tl-sm bg-slate-950 border border-slate-800 text-slate-100'
+                    }`}
+                  >
+                    <div className="space-y-1.5">{renderFormattedText(m.text, isUser)}</div>
                   </div>
                 </div>
               );
@@ -980,13 +965,13 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
             {/* Live Typing / Thinking Indicator */}
             {isTyping && (
               <div className="flex flex-col items-start">
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1.5 text-[11px] text-slate-400 px-0.5">
                     <span className={`font-semibold ${isConsumer ? 'text-sky-300' : 'text-emerald-300'}`}>
                       {botName}
                     </span>
                   </div>
-                  <div className="bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm text-slate-200 flex items-center gap-2.5">
+                  <div className="bg-slate-950 border border-slate-800 rounded-2xl px-3.5 py-2 text-xs text-slate-200 flex items-center gap-2">
                     <span>Thinking</span>
                     <div className="flex items-center space-x-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-sky-400 animate-bounce [animation-delay:-0.3s]"></span>
@@ -1001,31 +986,31 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Quick Prompt Actions */}
-          <div className="px-5 py-2.5 bg-slate-950/60 border-t border-slate-800 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+          {/* Quick Prompt Suggestions */}
+          <div className="px-4 py-2 bg-slate-950/60 border-t border-slate-800 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
             {getSuggestions().map((s, idx) => (
               <button
                 key={idx}
                 type="button"
                 onClick={() => handleSendMessage(s)}
                 disabled={isTyping}
-                className="whitespace-nowrap shrink-0 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-medium transition cursor-pointer disabled:opacity-50"
+                className="whitespace-nowrap shrink-0 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-[11px] font-medium transition cursor-pointer disabled:opacity-50"
               >
                 {s}
               </button>
             ))}
           </div>
 
-          {/* Footer Input Area */}
-          <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 shrink-0">
+          {/* Compact Footer Input Composer */}
+          <div className="px-4 py-3 bg-slate-950 border-t border-slate-800 shrink-0">
             <form
               onSubmit={(e) => {
                 e.preventDefault();
                 handleSendMessage();
               }}
-              className="flex items-end gap-2.5"
+              className="flex items-end gap-2"
             >
-              <div className="flex-1 bg-slate-900 border border-slate-700 focus-within:border-sky-500 rounded-xl px-3.5 py-2.5 transition">
+              <div className="flex-1 bg-slate-900 border border-slate-700 focus-within:border-sky-500 rounded-xl px-3 py-2 transition">
                 <textarea
                   ref={inputRef}
                   value={inputMessage}
@@ -1042,27 +1027,27 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                       ? 'Ask about your bill, leak report, or water service...'
                       : 'Ask operational query, arrears calculation, or notices...'
                   }
-                  className="w-full bg-transparent text-slate-100 text-sm leading-relaxed placeholder-slate-500 focus:outline-none resize-none max-h-28"
+                  className="w-full bg-transparent text-slate-100 text-[13.5px] leading-snug placeholder-slate-500 focus:outline-none resize-none max-h-24"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={!inputMessage.trim() || isTyping}
-                className={`px-3.5 py-2.5 rounded-xl text-white font-semibold transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0 flex items-center gap-1.5 text-xs whitespace-nowrap ${
+                className={`px-3 py-2 rounded-xl text-white font-semibold transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0 flex items-center gap-1.5 text-xs whitespace-nowrap ${
                   isConsumer
                     ? 'bg-blue-600 hover:bg-blue-500'
                     : 'bg-emerald-600 hover:bg-emerald-500'
                 }`}
                 aria-label="Send message"
               >
-                <Send className="h-4 w-4" />
+                <Send className="h-3.5 w-3.5" />
                 <span>Send</span>
               </button>
             </form>
 
-            <div className="flex items-center justify-between text-[11px] text-slate-500 mt-2">
-              <span>Press Enter to send · Shift+Enter for new line</span>
+            <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1.5">
+              <span>Enter to send · Shift+Enter for new line</span>
               <span>Tagoloan Water District</span>
             </div>
           </div>

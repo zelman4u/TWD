@@ -208,7 +208,7 @@ export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({
                 </div>
               </div>
 
-              <div className="relative bg-slate-950/80 border-l-4 border-blue-500 p-5 sm:p-6 rounded-r-2xl shadow-inner mb-6">
+              <div className="relative bg-slate-950/80 border border-blue-500/35 p-5 sm:p-6 rounded-2xl shadow-inner mb-6">
                 <p className="text-slate-200 text-base sm:text-lg lg:text-xl font-bold leading-relaxed tracking-normal">
                   “To become a premier local water district providing sufficient and potable water that conforms to the standards of quality, and be the beacon of public service in terms of efficient and effective performance.”
                 </p>
@@ -237,7 +237,7 @@ export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({
                 </div>
               </div>
 
-              <div className="relative bg-slate-950/80 border-l-4 border-emerald-500 p-5 sm:p-6 rounded-r-2xl shadow-inner mb-6">
+              <div className="relative bg-slate-950/80 border border-emerald-500/35 p-5 sm:p-6 rounded-2xl shadow-inner mb-6">
                 <p className="text-slate-200 text-base sm:text-lg lg:text-xl font-bold leading-relaxed tracking-normal">
                   “To supply adequate and safe water and to keep apace with industrial and social progress while recognizing the need to preserve the natural environment to sustain development.”
                 </p>
@@ -285,7 +285,7 @@ export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({
                   </div>
                 </div>
 
-                <div className="p-4 rounded-xl border-l-4 border-blue-500 shadow-inner bg-slate-900/90 border-slate-850">
+                <div className="p-4 rounded-xl border border-blue-500/35 shadow-inner bg-slate-900/90">
                   <p className="text-base sm:text-lg font-bold leading-relaxed text-slate-200">
                     <span className="text-blue-400 font-extrabold underline decoration-blue-500">To commitment</span> to efficient and trustworthy performance in carrying out our role as water provider.
                   </p>
@@ -318,7 +318,7 @@ export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({
                   </div>
                 </div>
 
-                <div className="p-4 rounded-xl border-l-4 border-sky-500 shadow-inner bg-slate-900/90 border-slate-850">
+                <div className="p-4 rounded-xl border border-sky-500/35 shadow-inner bg-slate-900/90">
                   <p className="text-base sm:text-lg font-bold leading-relaxed text-slate-200">
                     <span className="text-sky-400 font-extrabold underline decoration-sky-500">Willingly cater</span> to the needs and concerns of the consumers by providing appropriate assistance, addressing such without delay and doing so in accordance to the service standards that we live by.
                   </p>
@@ -351,7 +351,7 @@ export const DistrictProfileSection: React.FC<DistrictProfileSectionProps> = ({
                   </div>
                 </div>
 
-                <div className="p-4 rounded-xl border-l-4 border-indigo-500 shadow-inner bg-slate-900/90 border-slate-850">
+                <div className="p-4 rounded-xl border border-indigo-500/35 shadow-inner bg-slate-900/90">
                   <p className="text-base sm:text-lg font-bold leading-relaxed text-slate-200">
                     <span className="text-indigo-400 font-extrabold underline decoration-indigo-500">Dedicate ourselves</span> to true public service in the proper implementation of policies and guidelines, while conducting ourselves in a manner consistent with that expected of civil servant.
                   </p>

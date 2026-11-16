@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { createPortal } from 'react-dom';
+import { Modal } from '../ui/Modal';
 import {
   Wrench,
   Calendar,
@@ -735,7 +735,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                       <div className="flex items-center gap-1.5">
                         {isUnreadAlert && (
                           <span
-                            className="w-2 h-2 rounded-full bg-sky-400 animate-pulse shrink-0"
+                            className="w-2 h-2 rounded-full bg-sky-400 shrink-0"
                             title="New / Unread Installation Request"
                           />
                         )}
@@ -1003,39 +1003,37 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
       {/* =====================================================================
           MODAL 1: REVIEW & UPDATE INSTALLATION STATUS / SCHEDULE
       ====================================================================== */}
-      {reviewingRequest &&
-        (typeof document !== 'undefined'
-          ? createPortal(
-              <div
-                className="fixed inset-0 z-[160] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-2 sm:pt-3 px-3 sm:px-4 pb-6 overflow-y-auto"
-                onClick={() => setReviewingRequest(null)}
-                role="dialog"
-                aria-modal="true"
-              >
-                <div
-                  className="mt-0 self-start bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[calc(100vh-1.25rem)] sm:max-h-[calc(100vh-1.75rem)] shadow-2xl overflow-hidden flex flex-col text-slate-100"
-                  onClick={(e) => e.stopPropagation()}
-                >
-            {/* Header */}
-            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-3 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-400 shrink-0">
-                  <Calendar className="h-5 w-5" />
+      <Modal
+        portal
+        isOpen={Boolean(reviewingRequest)}
+        onClose={() => setReviewingRequest(null)}
+        size="lg"
+        zIndexClass="z-[160]"
+        ariaLabel="Review Installation Request and Schedule"
+      >
+        {reviewingRequest && (
+          <>
+            {/* Compact Header */}
+            <div className="px-4 sm:px-5 py-2.5 sm:py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-400 shrink-0">
+                  <Calendar className="h-4 w-4" />
                 </div>
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-[11px] font-mono tabular-nums font-bold text-cyan-300">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                    <span className="font-mono tabular-nums font-bold text-cyan-300">
                       {reviewingRequest.applicationNumber}
                     </span>
+                    <span aria-hidden="true" className="text-slate-600">·</span>
                     <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border ${getStatusBadgeClasses(
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase border ${getStatusBadgeClasses(
                         reviewingRequest.status
                       )}`}
                     >
                       {reviewingRequest.status}
                     </span>
                   </div>
-                  <h3 className="text-base font-extrabold text-white mt-0.5">
+                  <h3 className="text-sm sm:text-base font-bold text-white leading-snug mt-0.5 truncate">
                     Review Installation Request &amp; Schedule
                   </h3>
                 </div>
@@ -1043,14 +1041,15 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               <button
                 type="button"
                 onClick={() => setReviewingRequest(null)}
-                className="p-1.5 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                aria-label="Close modal"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
             {/* Body */}
-            <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-5">
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-3.5">
               {/* Applicant Info Summary */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div>
@@ -1307,12 +1306,12 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               )}
             </div>
 
-            {/* Footer */}
-            <div className="px-6 py-4 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-end gap-2.5 shrink-0">
+            {/* Compact Footer */}
+            <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-end gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setReviewingRequest(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer"
+                className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold whitespace-nowrap shrink-0 transition cursor-pointer"
               >
                 Cancel
               </button>
@@ -1322,9 +1321,9 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                   type="button"
                   disabled={isSavingSchedule}
                   onClick={() => handleSaveScheduleAndStatus(true)}
-                  className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer shadow-md flex items-center gap-1.5"
+                  className="px-3.5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold whitespace-nowrap shrink-0 transition cursor-pointer flex items-center gap-1.5"
                 >
-                  <span>Save &amp; Proceed to Account Validation</span>
+                  <span>Save &amp; Validate Account</span>
                   <ArrowRight className="h-3.5 w-3.5 shrink-0" />
                 </button>
               )}
@@ -1333,69 +1332,68 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                 type="button"
                 disabled={isSavingSchedule}
                 onClick={() => handleSaveScheduleAndStatus(false)}
-                className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer shadow-md flex items-center gap-1.5"
+                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold whitespace-nowrap shrink-0 transition cursor-pointer flex items-center gap-1.5"
               >
                 <Check className="h-3.5 w-3.5 shrink-0" />
                 <span>{isSavingSchedule ? 'Saving...' : 'Save Update & Notify Consumer'}</span>
               </button>
             </div>
-          </div>
-        </div>,
-              document.body
-            )
-          : null)}
+          </>
+        )}
+      </Modal>
 
       {/* =====================================================================
           MODAL 2: POST-INSTALLATION METER REGISTRATION & ACCOUNT VALIDATION
           (Strictly unlocked ONLY when status === 'Installed')
       ====================================================================== */}
-      {validatingRequest &&
-        (typeof document !== 'undefined'
-          ? createPortal(
-              <div
-                className="fixed inset-0 z-[165] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-2 sm:pt-3 px-3 sm:px-4 pb-6 overflow-y-auto"
-                onClick={() => setValidatingRequest(null)}
-                role="dialog"
-                aria-modal="true"
-              >
-                <form
-                  onSubmit={handleValidateAndActivateSubmit}
-                  className="mt-0 self-start bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[calc(100vh-1.25rem)] sm:max-h-[calc(100vh-1.75rem)] shadow-2xl overflow-hidden flex flex-col text-slate-100"
-                  onClick={(e) => e.stopPropagation()}
-                >
-            {/* Header */}
-            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-start justify-between gap-3 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 shrink-0">
-                  <ShieldCheck className="h-5 w-5" />
+      <Modal
+        portal
+        isOpen={Boolean(validatingRequest)}
+        onClose={() => setValidatingRequest(null)}
+        size="lg"
+        zIndexClass="z-[165]"
+        ariaLabel="Meter Registration and Account Validation"
+      >
+        {validatingRequest && (
+          <form
+            onSubmit={handleValidateAndActivateSubmit}
+            className="flex flex-col flex-1 min-h-0 overflow-hidden"
+          >
+            {/* Compact Header */}
+            <div className="px-4 sm:px-5 py-2.5 sm:py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 shrink-0">
+                  <ShieldCheck className="h-4 w-4" />
                 </div>
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-[11px] font-mono tabular-nums font-bold text-cyan-300">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                    <span className="font-mono tabular-nums font-bold text-cyan-300">
                       {validatingRequest.applicationNumber}
                     </span>
-                    <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 text-[10px] font-extrabold uppercase">
-                      Physical Meter Installed
+                    <span aria-hidden="true" className="text-slate-600">·</span>
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold uppercase">
+                      Meter Installed
                     </span>
                   </div>
-                  <h3 className="text-base font-extrabold text-white mt-0.5">
+                  <h3 className="text-sm sm:text-base font-bold text-white leading-snug mt-0.5 truncate">
                     {validatingRequest.accountValidationStatus === 'validated'
                       ? 'Validated Meter Registration & Activated Account'
-                      : 'Meter Registration, Account Validation & ID Issuance'}
+                      : 'Meter Registration & Account Validation'}
                   </h3>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setValidatingRequest(null)}
-                className="p-1.5 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                aria-label="Close modal"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
             {/* Body */}
-            <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-5">
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-3.5">
               {valError && (
                 <div className="p-3.5 rounded-xl bg-rose-950/70 border border-rose-700/70 text-rose-200 text-xs flex items-start gap-2.5">
                   <AlertCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
@@ -1646,12 +1644,12 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               )}
             </div>
 
-            {/* Footer */}
-            <div className="px-6 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2.5 shrink-0">
+            {/* Compact Footer */}
+            <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setValidatingRequest(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer"
+                className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold whitespace-nowrap shrink-0 transition cursor-pointer"
               >
                 {validatingRequest.accountValidationStatus === 'validated' ? 'Close' : 'Cancel'}
               </button>
@@ -1660,9 +1658,9 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                 <button
                   type="submit"
                   disabled={isValidatingAccount}
-                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer shadow-md flex items-center gap-1.5"
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold whitespace-nowrap shrink-0 transition cursor-pointer flex items-center gap-1.5"
                 >
-                  <ShieldCheck className="h-4 w-4 shrink-0" />
+                  <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
                   <span>
                     {isValidatingAccount
                       ? 'Validating & Activating...'
@@ -1672,37 +1670,32 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               )}
             </div>
           </form>
-        </div>,
-              document.body
-            )
-          : null)}
+        )}
+      </Modal>
 
       {/* Complete Read-Only Installation Request & Applicant Details Modal (Row Click) */}
-      {viewingRequestDetail &&
-        (typeof document !== 'undefined'
-          ? createPortal(
-              <div
-                className="fixed inset-0 z-[160] bg-slate-950/85 backdrop-blur-sm flex items-start justify-center pt-2 sm:pt-3 px-3 sm:px-4 pb-6 overflow-y-auto"
-                onClick={() => setViewingRequestDetail(null)}
-                role="dialog"
-                aria-modal="true"
-              >
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  className="mt-0 self-start w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 max-h-[calc(100vh-1.25rem)] sm:max-h-[calc(100vh-1.75rem)] flex flex-col"
-                >
-            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
+      <Modal
+        portal
+        isOpen={Boolean(viewingRequestDetail)}
+        onClose={() => setViewingRequestDetail(null)}
+        size="lg"
+        zIndexClass="z-[160]"
+        ariaLabel="Installation Request Details"
+      >
+        {viewingRequestDetail && (
+          <>
+            <div className="px-4 sm:px-5 py-2.5 sm:py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="p-2 bg-cyan-500/15 border border-cyan-500/30 rounded-xl text-cyan-400 shrink-0">
                   <FileText className="h-4 w-4" />
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-sm font-black text-white truncate">
+                    <h3 className="text-sm sm:text-base font-bold text-white truncate">
                       {viewingRequestDetail.consumerName}
                     </h3>
                     <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase border ${getStatusBadgeClasses(
+                      className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold uppercase border ${getStatusBadgeClasses(
                         viewingRequestDetail.status
                       )}`}
                     >
@@ -1717,13 +1710,14 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               <button
                 type="button"
                 onClick={() => setViewingRequestDetail(null)}
-                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer shrink-0"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
+                aria-label="Close modal"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="p-6 space-y-4 overflow-y-auto text-xs">
+            <div className="px-5 py-4 space-y-3.5 flex-1 min-h-0 overflow-y-auto text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-xl p-4">
                 <div>
                   <span className="text-[10px] font-bold uppercase text-slate-500 block">Consumer Name</span>
@@ -1845,7 +1839,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               )}
             </div>
 
-            <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
+            <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -1854,7 +1848,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                     setViewingRequestDetail(null);
                     openReviewModal(target);
                   }}
-                  className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition cursor-pointer"
+                  className="px-3.5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-semibold transition cursor-pointer whitespace-nowrap"
                 >
                   {viewingRequestDetail.status === 'Pending Review'
                     ? 'Accept / Update Status'
@@ -1868,7 +1862,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                       setViewingRequestDetail(null);
                       openValidationModal(target);
                     }}
-                    className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
+                    className="px-3.5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
                   >
                     <ShieldCheck className="h-3.5 w-3.5" />
                     <span>
@@ -1883,16 +1877,14 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               <button
                 type="button"
                 onClick={() => setViewingRequestDetail(null)}
-                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition cursor-pointer ml-auto"
+                className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-semibold transition cursor-pointer ml-auto whitespace-nowrap"
               >
                 Close
               </button>
             </div>
-          </div>
-        </div>,
-              document.body
-            )
-          : null)}
+          </>
+        )}
+      </Modal>
     </div>
   );
 };
