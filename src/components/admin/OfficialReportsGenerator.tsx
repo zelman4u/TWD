@@ -1965,64 +1965,101 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
       </div>
 
       {/* 3. EXECUTIVE KPI DASHBOARD SUMMARY (WITH OVERALL AMOUNT & EXPECTED COLLECTED) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 no-print">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 no-print">
         {/* OVERALL AMOUNT (TOTAL BILLED) */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
-          <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Overall Amount Billed</span>
-          <div className="text-2xl font-black font-mono tabular-nums text-white mt-1">
+        <div className="bg-slate-900 border border-slate-800 px-4 py-3.5 rounded-xl flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px]">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 truncate">
+              Overall Amount Billed
+            </span>
+          </div>
+          <div className="text-xl sm:text-[22px] font-bold font-mono tabular-nums tracking-tight leading-none text-white mt-2">
             ₱{aggregatedData.grandTotals.totalBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </div>
-          <span className="text-[11px] text-slate-400 font-medium">Total Assessed Tariff</span>
+          <div className="text-xs text-slate-400 leading-tight mt-1.5">
+            Total Assessed Tariff
+          </div>
         </div>
 
         {/* EXPECTED COLLECTED AMOUNT (TARGET: 95%) */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
-          <span className="text-[10px] font-black uppercase tracking-wider text-amber-400 flex items-center justify-between">
-            <span>Expected Collected</span>
-            <span className="text-[9px] font-mono text-slate-400">95% Target</span>
-          </span>
-          <div className="text-2xl font-black font-mono tabular-nums text-amber-300 mt-1">
+        <div className="bg-slate-900 border border-slate-800 px-4 py-3.5 rounded-xl flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px]">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-400 truncate">
+              Expected Collected
+            </span>
+            <span className="text-[11px] font-mono tabular-nums text-slate-400 shrink-0 whitespace-nowrap">
+              95% Target
+            </span>
+          </div>
+          <div className="text-xl sm:text-[22px] font-bold font-mono tabular-nums tracking-tight leading-none text-amber-300 mt-2">
             ₱{Math.round(aggregatedData.grandTotals.totalBilled * 0.95).toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </div>
-          <span className="text-[11px] text-slate-400 font-medium">Target Cash Inflow</span>
+          <div className="text-xs text-slate-400 leading-tight mt-1.5">
+            Target Cash Inflow
+          </div>
         </div>
 
         {/* REALIZED CASH COLLECTIONS */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
-          <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 block">Realized Collected</span>
-          <div className="text-2xl font-black font-mono tabular-nums text-emerald-400 mt-1">
+        <div className="bg-slate-900 border border-slate-800 px-4 py-3.5 rounded-xl flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px]">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-emerald-400 truncate">
+              Realized Collected
+            </span>
+          </div>
+          <div className="text-xl sm:text-[22px] font-bold font-mono tabular-nums tracking-tight leading-none text-emerald-400 mt-2">
             ₱{aggregatedData.grandTotals.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </div>
-          <span className="text-[11px] text-slate-400 font-medium">Verified Cashier Settlements</span>
+          <div className="text-xs text-slate-400 leading-tight mt-1.5">
+            Verified Cashier Settlements
+          </div>
         </div>
 
         {/* COLLECTION REALIZATION RATE */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
-          <span className="text-[10px] font-black uppercase tracking-wider text-cyan-400 block">Collection Realization</span>
-          <div className="text-2xl font-black font-mono tabular-nums text-cyan-400 mt-1">
+        <div className="bg-slate-900 border border-slate-800 px-4 py-3.5 rounded-xl flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px]">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-cyan-400 truncate">
+              Collection Realization
+            </span>
+          </div>
+          <div className="text-xl sm:text-[22px] font-bold font-mono tabular-nums tracking-tight leading-none text-cyan-400 mt-2">
             {aggregatedData.grandTotals.totalBilled > 0
               ? `${((aggregatedData.grandTotals.totalCollected / aggregatedData.grandTotals.totalBilled) * 100).toFixed(1)}%`
               : '100%'}
           </div>
-          <span className="text-[11px] text-slate-400 font-medium">Collection Efficiency</span>
+          <div className="text-xs text-slate-400 leading-tight mt-1.5">
+            Collection Efficiency
+          </div>
         </div>
 
         {/* TOTAL WATER CONSUMPTION */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
-          <span className="text-[10px] font-black uppercase tracking-wider text-blue-400 block">Total Volume Consumed</span>
-          <div className="text-2xl font-black font-mono tabular-nums text-blue-400 mt-1">
-            {aggregatedData.grandTotals.totalM3.toLocaleString()} m³
+        <div className="bg-slate-900 border border-slate-800 px-4 py-3.5 rounded-xl flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px]">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-blue-400 truncate">
+              Total Volume Consumed
+            </span>
           </div>
-          <span className="text-[11px] text-slate-400 font-medium">Across {aggregatedData.grandTotals.totalConsumers} accounts</span>
+          <div className="text-xl sm:text-[22px] font-bold font-mono tabular-nums tracking-tight leading-none text-blue-400 mt-2">
+            {aggregatedData.grandTotals.totalM3.toLocaleString()}{' '}
+            <span className="text-sm font-semibold text-blue-300/80">m³</span>
+          </div>
+          <div className="text-xs text-slate-400 leading-tight mt-1.5">
+            Across {aggregatedData.grandTotals.totalConsumers} accounts
+          </div>
         </div>
 
         {/* UNREAD METERS PENDING */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-md">
-          <span className="text-[10px] font-black uppercase tracking-wider text-rose-400 block">Unread Meters Pending</span>
-          <div className="text-2xl font-black font-mono tabular-nums text-rose-400 mt-1">
+        <div className="bg-slate-900 border border-slate-800 px-4 py-3.5 rounded-xl flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px]">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-rose-400 truncate">
+              Unread Meters Pending
+            </span>
+          </div>
+          <div className="text-xl sm:text-[22px] font-bold font-mono tabular-nums tracking-tight leading-none text-rose-400 mt-2">
             {unreadMetersData.totalUnread}
           </div>
-          <span className="text-[11px] text-slate-400 font-mono tabular-nums">Est: ₱{unreadMetersData.totalEstimatedBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+          <div className="text-xs text-slate-400 font-mono tabular-nums leading-tight mt-1.5">
+            Est: ₱{unreadMetersData.totalEstimatedBilled.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          </div>
         </div>
       </div>
 
@@ -2328,37 +2365,37 @@ export const OfficialReportsGenerator: React.FC<OfficialReportsGeneratorProps> =
             <div>
               {/* MoM Trend Banner & Consumption Brackets */}
               <div className="bg-slate-900 p-4 border-b border-slate-800 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block">MoM Volume Trajectory</span>
-                  <div className="text-xl font-black text-emerald-400 mt-0.5 flex items-center space-x-1">
-                    <TrendingUp className="h-4 w-4" />
+                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 flex flex-col justify-between min-w-0">
+                  <span className="text-[10px] uppercase font-semibold tracking-wider text-slate-400 truncate">MoM Volume Trajectory</span>
+                  <div className="text-lg font-bold font-mono tabular-nums text-emerald-400 mt-1.5 flex items-center gap-1.5 leading-none">
+                    <TrendingUp className="h-4 w-4 shrink-0" />
                     <span>+{consumptionTrendData.momChangePercent}% vs Last Cycle</span>
                   </div>
-                  <span className="text-[10px] text-slate-500">+{consumptionTrendData.momChangeM3.toLocaleString()} m³ monthly net expansion</span>
+                  <span className="text-[11px] text-slate-500 mt-1.5">+{consumptionTrendData.momChangeM3.toLocaleString()} m³ monthly net expansion</span>
                 </div>
 
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Average Household Usage</span>
-                  <div className="text-xl font-black text-blue-400 mt-0.5 font-mono">
+                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 flex flex-col justify-between min-w-0">
+                  <span className="text-[10px] uppercase font-semibold tracking-wider text-slate-400 truncate">Average Household Usage</span>
+                  <div className="text-lg font-bold font-mono tabular-nums text-blue-400 mt-1.5 leading-none">
                     {consumptionTrendData.avgPerAccount} m³ / Account
                   </div>
-                  <span className="text-[10px] text-slate-500">Tagoloan residential baseline: 21.5 m³</span>
+                  <span className="text-[11px] text-slate-500 mt-1.5">Tagoloan residential baseline: 21.5 m³</span>
                 </div>
 
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Lifeline Brackets (0 - 10 m³)</span>
-                  <div className="text-xl font-black text-amber-300 mt-0.5 font-mono">
+                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 flex flex-col justify-between min-w-0">
+                  <span className="text-[10px] uppercase font-semibold tracking-wider text-slate-400 truncate">Lifeline Brackets (0 - 10 m³)</span>
+                  <div className="text-lg font-bold font-mono tabular-nums text-amber-300 mt-1.5 leading-none">
                     {consumptionTrendData.lifelinePct}% ({consumptionTrendData.lifelineCount} accts)
                   </div>
-                  <span className="text-[10px] text-slate-500">Qualified for lifeline water subsidies</span>
+                  <span className="text-[11px] text-slate-500 mt-1.5">Qualified for lifeline water subsidies</span>
                 </div>
 
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Expected Revenue from Volume</span>
-                  <div className="text-xl font-black text-white mt-0.5 font-mono">
+                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 flex flex-col justify-between min-w-0">
+                  <span className="text-[10px] uppercase font-semibold tracking-wider text-slate-400 truncate">Expected Revenue from Volume</span>
+                  <div className="text-lg font-bold font-mono tabular-nums text-white mt-1.5 leading-none">
                     ₱{consumptionTrendData.expectedCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                   </div>
-                  <span className="text-[10px] text-emerald-400 font-bold">95% Collection Realization</span>
+                  <span className="text-[11px] text-emerald-400 font-medium mt-1.5">95% Collection Realization</span>
                 </div>
               </div>
 

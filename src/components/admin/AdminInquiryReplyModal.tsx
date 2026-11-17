@@ -6,7 +6,6 @@ import {
   Image as ImageIcon,
   Maximize2,
   Send,
-  X,
 } from 'lucide-react';
 import { ConsumerReport, User as UserType } from '../../types';
 import { mockDb } from '../../mockDb';
@@ -19,7 +18,7 @@ import {
   normalizeMeterStatus,
 } from '../../utils/meterStatusNotification';
 import { normalizeCompactParagraphs } from '../../utils/notificationContext';
-import { Modal, ModalHeader, ModalBody, ModalButton } from '../ui/Modal';
+import { Modal, ModalHeader, NotificationModalHeader, ModalBody, ModalButton, ModalTone } from '../ui/Modal';
 
 export const ADMIN_REPORT_CATEGORY_LABELS: Record<string, string> = {
   leak: 'Water Leak / Burst',
@@ -272,14 +271,14 @@ export function AdminInquiryReplyModal({
       ? 'text-amber-300 font-semibold'
       : 'text-slate-400';
 
-  const statusBadgeClass =
+  const statusTone: ModalTone =
     report.status === 'pending'
-      ? 'bg-amber-950/70 text-amber-300 border-amber-700/60'
+      ? 'warning'
       : report.status === 'in_progress'
-      ? 'bg-sky-950/70 text-sky-300 border-sky-700/60'
+      ? 'info'
       : report.status === 'resolved'
-      ? 'bg-emerald-950/70 text-emerald-300 border-emerald-700/60'
-      : 'bg-slate-800 text-slate-300 border-slate-700';
+      ? 'success'
+      : 'neutral';
 
   const meterTag = report.meterNumber || ref?.meterNumber;
 
@@ -295,79 +294,58 @@ export function AdminInquiryReplyModal({
         zIndexClass="z-[150]"
         ariaLabelledBy="admin-inquiry-modal-title"
       >
-        {/* 1. Header: Inquiry Identification, Dominant Title, Consumer Details, Status & Close */}
-        <div className="px-4 sm:px-5 py-2.5 bg-slate-950 border-b border-slate-800 shrink-0 space-y-1">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] min-w-0">
-              <span className="font-mono tabular-nums font-semibold text-sky-400">
-                {report.ticketNumber}
-              </span>
-              <span aria-hidden="true" className="text-slate-600">·</span>
+        {/* 1. Compact Header: Title + Close Row, Single-Line Meta Row (ID, Status, Category, Timestamp), Consumer Context */}
+        <NotificationModalHeader
+          titleId="admin-inquiry-modal-title"
+          title={report.title}
+          idCode={report.ticketNumber}
+          status={{ label: statusLabel, tone: statusTone }}
+          category={
+            <>
               <span className="text-slate-300 font-medium">{categoryLabel}</span>
-              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span aria-hidden="true" className="text-slate-600 mx-1.5">·</span>
               <span className={priorityColorClass}>{priorityLabel}</span>
-              <span aria-hidden="true" className="text-slate-600">·</span>
-              <span className="font-mono tabular-nums text-slate-400">{formattedTime}</span>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <span
-                className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold leading-tight whitespace-nowrap ${statusBadgeClass}`}
-              >
-                {statusLabel}
-              </span>
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Close modal"
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
-          <h3
-            id="admin-inquiry-modal-title"
-            className="text-[15px] sm:text-base font-bold text-white leading-snug tracking-tight break-words"
-          >
-            {report.title}
-          </h3>
-
-          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11.5px] text-slate-400 leading-tight">
-            <span className="font-medium text-slate-200">{report.consumerName}</span>
-            <span aria-hidden="true" className="text-slate-600">·</span>
-            <span className="font-mono tabular-nums text-sky-300">#{report.accountNumber}</span>
-            {meterTag && (
-              <>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span className="font-mono tabular-nums text-slate-300">Meter #{meterTag}</span>
-              </>
-            )}
-            {report.barangay && (
-              <>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span>{report.barangay}</span>
-              </>
-            )}
-            {report.consumerPhone && (
-              <>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span className="font-mono tabular-nums">{report.consumerPhone}</span>
-              </>
-            )}
-          </div>
-        </div>
+            </>
+          }
+          timestamp={formattedTime}
+          context={
+            <>
+              <span className="font-medium text-slate-200">{report.consumerName}</span>
+              <span aria-hidden="true" className="text-slate-600 mx-1.5">·</span>
+              <span className="font-mono text-[11px] tabular-nums text-sky-300 whitespace-nowrap">#{report.accountNumber}</span>
+              {meterTag && (
+                <>
+                  <span aria-hidden="true" className="text-slate-600 mx-1.5">·</span>
+                  <span className="font-mono text-[11px] tabular-nums text-slate-300 whitespace-nowrap">Meter #{meterTag}</span>
+                </>
+              )}
+              {report.barangay && (
+                <>
+                  <span aria-hidden="true" className="text-slate-600 mx-1.5">·</span>
+                  <span className="whitespace-nowrap">{report.barangay}</span>
+                </>
+              )}
+              {report.consumerPhone && (
+                <>
+                  <span aria-hidden="true" className="text-slate-600 mx-1.5">·</span>
+                  <span className="font-mono text-[11px] tabular-nums whitespace-nowrap">{report.consumerPhone}</span>
+                </>
+              )}
+            </>
+          }
+          onClose={onClose}
+          closeLabel="Close modal"
+        />
 
         {/* 2. Reference Information: Collapsible Original Notification / Advisory */}
         {ref && (
-          <details className="group bg-slate-950/60 border-b border-slate-800 px-4 sm:px-5 py-1.5 text-xs shrink-0">
+          <details className="group bg-slate-950/45 border-b border-slate-800 px-4 sm:px-5 py-1.5 text-xs shrink-0">
             <summary className="flex items-center justify-between gap-2 cursor-pointer list-none select-none">
               <div className="flex items-center gap-1.5 min-w-0 truncate">
                 <span className="text-[11px] font-medium text-slate-400 shrink-0">
                   Referenced Notice:
                 </span>
-                <span className="text-xs font-semibold text-sky-300 truncate">{ref.subject}</span>
+                <span className="text-xs font-medium text-sky-300 truncate">{ref.subject}</span>
               </div>
               <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 group-hover:text-slate-200 shrink-0">
                 <span className="hidden sm:inline">Details</span>
@@ -430,7 +408,7 @@ export function AdminInquiryReplyModal({
 
         {/* 3. Conversation Body: Distinct Consumer vs Admin Bubbles */}
         <ModalBody className="bg-slate-900 px-4 sm:px-5 py-3 space-y-2.5">
-          {/* Initial Consumer Message (Left-aligned, cool slate surface) */}
+          {/* Initial Consumer Message */}
           <div className="flex flex-col items-start gap-0.5">
             <div className="flex items-center gap-1.5 text-[11px] leading-tight text-slate-400 px-1">
               <span className="font-medium text-slate-300">{report.consumerName}</span>
@@ -439,7 +417,7 @@ export function AdminInquiryReplyModal({
               <span aria-hidden="true" className="text-slate-600">·</span>
               <span className="font-mono tabular-nums text-slate-400">{formattedTime}</span>
             </div>
-            <div className="w-fit max-w-[82%] sm:max-w-[70%] rounded-2xl rounded-tl-sm bg-slate-800 border border-slate-700/85 px-3 py-2 text-[13.5px] text-slate-100 leading-[1.55] space-y-1.5 break-words">
+            <div className="w-fit max-w-[82%] sm:max-w-[70%] rounded-xl rounded-tl-sm bg-slate-800/90 border border-slate-700/75 px-3 py-2 text-[13.5px] text-slate-100 leading-[1.55] space-y-1.5 break-words">
               {initialParagraphs.length > 0 ? (
                 initialParagraphs.map((p, idx) => <p key={idx}>{p}</p>)
               ) : (
@@ -458,7 +436,7 @@ export function AdminInquiryReplyModal({
                     referrerPolicy="no-referrer"
                     className="h-9 w-9 object-cover rounded border border-slate-700 shrink-0"
                   />
-                  <span className="text-xs font-semibold text-sky-300 inline-flex items-center gap-1 pr-1.5 whitespace-nowrap">
+                  <span className="text-xs font-medium text-sky-300 inline-flex items-center gap-1 pr-1.5 whitespace-nowrap">
                     <span>View Photo</span>
                     <Maximize2 className="h-3.5 w-3.5" />
                   </span>
@@ -498,10 +476,10 @@ export function AdminInquiryReplyModal({
                 </div>
 
                 <div
-                  className={`w-fit max-w-[82%] sm:max-w-[70%] rounded-2xl px-3 py-2 text-[13.5px] leading-[1.55] space-y-1.5 border break-words ${
+                  className={`w-fit max-w-[82%] sm:max-w-[70%] rounded-xl px-3 py-2 text-[13.5px] leading-[1.55] space-y-1.5 border break-words ${
                     isAdmin
-                      ? 'rounded-tr-sm bg-[#132b4f] text-slate-50 border-blue-600/45'
-                      : 'rounded-tl-sm bg-slate-800 text-slate-100 border-slate-700/85'
+                      ? 'rounded-tr-sm bg-blue-950/75 text-slate-50 border-blue-700/50'
+                      : 'rounded-tl-sm bg-slate-800/90 text-slate-100 border-slate-700/75'
                   }`}
                 >
                   {paragraphs.length > 0 ? (
@@ -514,7 +492,7 @@ export function AdminInquiryReplyModal({
                       <Check className="h-3 w-3 text-emerald-400 shrink-0" />
                       <span>
                         Status updated to{' '}
-                        <strong className="text-white capitalize">
+                        <strong className="text-white capitalize font-medium">
                           {reply.statusUpdate.replace('_', ' ')}
                         </strong>
                       </span>
@@ -531,7 +509,7 @@ export function AdminInquiryReplyModal({
         {/* 4. Reply & Action Section: Aligned Controls, Compact Input, Slim Delivery Bar */}
         <form
           onSubmit={handleSubmitReply}
-          className="px-4 sm:px-5 py-2 bg-slate-950 border-t border-slate-800 shrink-0 space-y-1.5"
+          className="px-4 sm:px-5 py-2 bg-slate-900 border-t border-slate-800 shrink-0 space-y-1.5"
         >
           {/* Row 1: Neatly Aligned Status, Department/Crew, Quick Reply */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
@@ -539,7 +517,7 @@ export function AdminInquiryReplyModal({
               value={replyStatus}
               onChange={e => setReplyStatus(e.target.value as ConsumerReport['status'])}
               aria-label="Set inquiry status"
-              className="h-8 w-full px-2.5 bg-slate-900 border border-slate-700 rounded-lg text-[11.5px] font-medium text-slate-100 focus:border-blue-500 focus:outline-none"
+              className="h-8 w-full px-2.5 bg-slate-950 border border-slate-700 rounded-lg text-[11.5px] font-medium text-slate-100 focus:border-blue-500 focus:outline-none"
             >
               <option value="pending">Status: Pending Review</option>
               <option value="in_progress">Status: In Progress</option>

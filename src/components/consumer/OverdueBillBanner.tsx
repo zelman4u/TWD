@@ -401,7 +401,7 @@ export const OverdueBillBanner: React.FC<OverdueBillBannerProps> = ({
   // Standard Overdue Banner (< 3 months)
   return (
     <div
-      className="bg-slate-900 border border-amber-500/45 rounded-2xl p-6 text-slate-100 shadow-xl space-y-5 animate-slide-down"
+      className="bg-slate-900 border border-amber-500/45 rounded-2xl p-6 text-slate-100 shadow-xl space-y-5 animate-fade-in"
       id="overdue-bill-notification-banner"
     >
       {/* Eyebrow + Window Controls */}

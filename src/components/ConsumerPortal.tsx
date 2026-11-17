@@ -82,13 +82,21 @@ import { ConsumerReportsSection } from './consumer/ConsumerReportsSection';
 import { ConsumerInstallationSection } from './consumer/ConsumerInstallationSection';
 import {
   Modal,
-  ModalHeader,
+  NotificationModalHeader,
   ModalBody,
   ModalFooter,
   NoticeDetailGrid,
   ActionGuidanceBox,
   ModalButton,
+  ModalTone,
 } from './ui/Modal';
+import {
+  NotificationBellButton,
+  NotificationDropdownShell,
+  NotificationItemCard,
+  InlineNotificationBanner,
+  NotificationTone,
+} from './ui/NotificationCenter';
 import { downloadOfficialReceiptPdf, printCleanElement } from '../utils/receiptPdfGenerator';
 import { useToast } from '../context/ToastContext';
 import { useLoading } from '../context/LoadingContext';
@@ -940,6 +948,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           .then(res => (res ? res.json() : null))
           .then(nData => {
             if (nData?.success && Array.isArray(nData.notifications) && nData.notifications.length > 0) {
+              nData.notifications.forEach((n: ConsumerNotification) => {
+                if (n) {
+                  seenLiveNotifKeysRef.current.add(getNotificationSemanticKey(n));
+                }
+              });
               if (mockDb.mergeExternalNotifications(nData.notifications)) {
                 const refreshed = getConsumerNotificationsFromLocal();
                 notifsRef.current = refreshed;
@@ -1154,6 +1167,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
     confirmedIssuedAccRef.current = accNum;
 
+    const wasPendingTransition = wasAccountPendingRef.current === true;
+
     // 4. Refresh React state immediately so portal unlocks without reload
     if (JSON.stringify(consumerRecordRef.current) !== JSON.stringify(normalizedConsumer)) {
       consumerRecordRef.current = normalizedConsumer;
@@ -1184,8 +1199,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
     const alreadySeenAcc =
       lastAnnouncedAccountRef.current === accNum ||
       persistedBanners.seenAccounts.includes(accNum) ||
-      alreadyReadAccountNotif ||
-      wasAccountPendingRef.current === false;
+      alreadyReadAccountNotif;
 
     if (alreadySeenAcc) {
       lastAnnouncedAccountRef.current = accNum;
@@ -1195,7 +1209,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           seenAccounts: [...prev.seenAccounts, accNum],
         }));
       }
-    } else if (triggerBanner && wasAccountPendingRef.current === true) {
+    } else if (triggerBanner && wasPendingTransition) {
       lastAnnouncedAccountRef.current = accNum;
       updateConsumerBannerState(viewerKey, (prev) => ({
         ...prev,
@@ -1210,7 +1224,8 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       toast.success(
         isUpdate ? `Account Updated to #${accNum}` : 'Official Account Confirmed & Activated!',
         `Account #${accNum} and Meter Tag #${meterNum} have been issued by Administration. Your portal and notifications are now live.`,
-        7000
+        7000,
+        { sessionDedupeKey: `consumer-id-confirmed:${accNum}:${isUpdate ? 'upd' : 'new'}` }
       );
     }
   };
@@ -1709,14 +1724,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             toast.info(
               `Water Bill Issued — ${bill.billingPeriod}`,
               `Dial: ${formatOdometerReading(bill.previousReading)} → ${formatOdometerReading(presDial)} (${bill.consumption} m³ used). Total Due: ₱${grossTotal.toFixed(2)}.`,
-              6500
+              6500,
+              { sessionDedupeKey: `consumer-bill-issued:${bill.id}` }
             );
           } else if (newlyIssuedForToast.length > 1) {
             const totalAmt = newlyIssuedForToast.reduce((s, item) => s + item.grossTotal, 0);
+            const batchKey = newlyIssuedForToast.map(i => i.bill.id).sort().slice(0, 6).join(',');
             toast.info(
               `${newlyIssuedForToast.length} New Water Bills Issued`,
               `Latest billing cycle: ${newlyIssuedForToast[0].bill.billingPeriod}. Combined amount due: ₱${totalAmt.toFixed(2)}. Open My Bills to review.`,
-              6500
+              6500,
+              { sessionDedupeKey: `consumer-bill-issued:${batchKey}` }
             );
           }
         } else {
@@ -2076,6 +2094,41 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       lastAnnouncedAccountRef.current = persisted.seenAccounts[persisted.seenAccounts.length - 1];
     }
 
+    // Seed baseline live-notification keys from already persisted local notifications, advisories,
+    // installation statuses, and report replies so WS/sync replays never pop existing items as new.
+    const existingBaselineNotifs = getConsumerNotificationsFromLocal(matchedOnMount || initialRec);
+    const existingBaselineAnns = mockDb.getAnnouncements();
+    const existingBaselineInsts = filterInstallationRequestsForConsumer(
+      matchedOnMount || initialRec,
+      mockDb.getInstallationRequests(),
+      currentUser.email,
+      currentUser.id
+    );
+    const existingBaselineReports = getConsumerReportsFromLocal(matchedOnMount || initialRec);
+    const baselineKeysToSeed: string[] = [];
+    existingBaselineNotifs.forEach((n) => {
+      baselineKeysToSeed.push(getNotificationSemanticKey(n));
+      if (inferNotificationType(n) === 'announcement' && n.title) {
+        baselineKeysToSeed.push(`ann:${String(n.title).trim().toLowerCase()}`);
+      }
+    });
+    existingBaselineAnns.forEach((a) => {
+      if (a.id) baselineKeysToSeed.push(`ann:${a.id}`);
+      if (a.title) baselineKeysToSeed.push(`ann:${String(a.title).trim().toLowerCase()}`);
+    });
+    existingBaselineInsts.forEach((inst) => {
+      if (inst.status) {
+        baselineKeysToSeed.push(`inst:${inst.applicationNumber || inst.id || ''}::${inst.status}`);
+      }
+    });
+    existingBaselineReports.forEach((rep) => {
+      const adminReplies = (rep.replies || []).filter((m) => m.senderRole === 'admin');
+      adminReplies.forEach((m) => {
+        baselineKeysToSeed.push(`rep:${rep.id || rep.ticketNumber || ''}::${m.id || ''}`);
+      });
+    });
+    baselineKeysToSeed.forEach((k) => seenLiveNotifKeysRef.current.add(k));
+
     ensureRealtimeFirestoreListeners();
     loadConsumerInfo();
 
@@ -2206,9 +2259,17 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         const notif = data.payload?.notification;
         if (notif && doesPayloadBelongToCurrentUser(notif)) {
           const notifSemKey = getNotificationSemanticKey(notif);
+          const effType = inferNotificationType(notif);
+          const pairedKeys: string[] = [notifSemKey];
+          if (effType === 'installation' && notif.installationStatus) {
+            pairedKeys.push(`inst:${notif.applicationNumber || notif.installationRequestId || ''}::${notif.installationStatus}`);
+          }
+          if (effType === 'announcement' && notif.title) {
+            pairedKeys.push(`ann:${String(notif.title).trim().toLowerCase()}`);
+          }
           const alreadyHad =
             notifsRef.current.some(existing => existing.id === notif.id || getNotificationSemanticKey(existing) === notifSemKey) ||
-            seenLiveNotifKeysRef.current.has(notifSemKey) ||
+            pairedKeys.some((k) => seenLiveNotifKeysRef.current.has(k)) ||
             Boolean(notif.read) ||
             isNotificationReadPersistently(notif);
           mockDb.mergeExternalNotifications([notif]);
@@ -2218,29 +2279,36 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             setNotifications(refreshedNotifs);
           }
           if (!alreadyHad) {
-            seenLiveNotifKeysRef.current.add(notifSemKey);
+            pairedKeys.forEach((k) => seenLiveNotifKeysRef.current.add(k));
             updateConsumerBannerState(viewerKey, (prev) => ({
               ...prev,
-              seenLiveNotifs: [...prev.seenLiveNotifs, notifSemKey],
+              seenLiveNotifs: [...prev.seenLiveNotifs, ...pairedKeys],
             }));
-            if (inferNotificationType(notif) === 'meter_status') {
+            if (effType === 'meter_status') {
               const statusNorm = normalizeMeterStatus(notif.meterStatus);
               const statusText = formatMeterStatusLabel(statusNorm);
               if (statusNorm === 'active') {
                 toast.success(
                   'Water Meter Status Update',
-                  `Your water meter status has been updated to ${statusText}. Check your Notification Center for details.`
+                  `Your water meter status has been updated to ${statusText}. Check your Notification Center for details.`,
+                  undefined,
+                  { sessionDedupeKey: notifSemKey }
                 );
               } else {
                 toast.warning(
                   'Important Notice Regarding Your Water Meter',
-                  `Your water meter status has been marked as ${statusText}. Open your Notification Center for full details.`
+                  `Your water meter status has been marked as ${statusText}. Open your Notification Center for full details.`,
+                  undefined,
+                  { sessionDedupeKey: notifSemKey }
                 );
               }
-            } else if (inferNotificationType(notif) === 'installation') {
+            } else if (effType === 'installation') {
+              const instSessionKey = pairedKeys[1] || notifSemKey;
               toast.info(
                 notif.title || 'Water Meter Installation Update',
-                'A new update on your water meter installation request is available in your Notification Center.'
+                'A new update on your water meter installation request is available in your Notification Center.',
+                undefined,
+                { sessionDedupeKey: instSessionKey }
               );
             }
           }
@@ -2251,6 +2319,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       ) {
         const payload = data.payload;
         const incomingReq = payload?.request as WaterMeterInstallationRequest | undefined;
+        const priorInst = incomingReq
+          ? installationsRef.current.find(
+              (r) =>
+                (incomingReq.id && r.id === incomingReq.id) ||
+                (incomingReq.applicationNumber && r.applicationNumber === incomingReq.applicationNumber)
+            )
+          : undefined;
+        const prevStatusBeforeMerge = priorInst?.status;
+
         if (incomingReq) {
           mockDb.mergeExternalInstallations([incomingReq]);
         }
@@ -2282,22 +2359,37 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               return;
             }
             const instKey = `inst:${effectiveReq?.applicationNumber || effectiveReq?.id || ''}::${effectiveStatus}`;
+            const pairedNotifSemKey = payload?.notification
+              ? getNotificationSemanticKey(payload.notification)
+              : '';
+            const statusUnchanged = Boolean(prevStatusBeforeMerge && prevStatusBeforeMerge === effectiveStatus);
             const notifAlreadyRead = payload?.notification && (payload.notification.read || isNotificationReadPersistently(payload.notification));
-            if (!seenLiveNotifKeysRef.current.has(instKey) && !notifAlreadyRead) {
-              seenLiveNotifKeysRef.current.add(instKey);
+            const alreadyHandled =
+              statusUnchanged ||
+              seenLiveNotifKeysRef.current.has(instKey) ||
+              (pairedNotifSemKey && seenLiveNotifKeysRef.current.has(pairedNotifSemKey)) ||
+              notifAlreadyRead;
+
+            if (!alreadyHandled) {
+              const keysToRecord = pairedNotifSemKey ? [instKey, pairedNotifSemKey] : [instKey];
+              keysToRecord.forEach((k) => seenLiveNotifKeysRef.current.add(k));
               updateConsumerBannerState(viewerKey, (prev) => ({
                 ...prev,
-                seenLiveNotifs: [...prev.seenLiveNotifs, instKey],
+                seenLiveNotifs: [...prev.seenLiveNotifs, ...keysToRecord],
               }));
               if (effectiveStatus === 'Installed') {
                 toast.success(
                   'Your Water Meter Has Been Installed!',
-                  `Application ${effectiveReq?.applicationNumber || payload?.applicationNumber || ''} is now awaiting administrative validation. Please wait while we update your account and issue your official Account & Meter Tag Numbers.`
+                  `Application ${effectiveReq?.applicationNumber || payload?.applicationNumber || ''} is now awaiting administrative validation. Please wait while we update your account and issue your official Account & Meter Tag Numbers.`,
+                  undefined,
+                  { sessionDedupeKey: instKey }
                 );
               } else {
                 toast.info(
                   `Installation Update — ${effectiveStatus}`,
-                  `Application ${effectiveReq?.applicationNumber || payload?.applicationNumber || ''} status updated to ${effectiveStatus}.`
+                  `Application ${effectiveReq?.applicationNumber || payload?.applicationNumber || ''} status updated to ${effectiveStatus}.`,
+                  undefined,
+                  { sessionDedupeKey: instKey }
                 );
               }
             }
@@ -2334,12 +2426,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             if (statusNorm === 'active') {
               toast.success(
                 'Water Meter Status Update',
-                `Your water meter status has been updated to ${statusText}. Check your Notification Center for details.`
+                `Your water meter status has been updated to ${statusText}. Check your Notification Center for details.`,
+                undefined,
+                { sessionDedupeKey: notifSemKey }
               );
             } else {
               toast.warning(
                 'Important Notice Regarding Your Water Meter',
-                `Your water meter status has been marked as ${statusText}. Open your Notification Center for full details.`
+                `Your water meter status has been marked as ${statusText}. Open your Notification Center for full details.`,
+                undefined,
+                { sessionDedupeKey: notifSemKey }
               );
             }
           }
@@ -2354,6 +2450,16 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           doesPayloadBelongToCurrentUser(payload) ||
           doesPayloadBelongToCurrentUser(payload?.report) ||
           doesPayloadBelongToCurrentUser(payload?.notification);
+        const repId = payload?.report?.id || payload?.ticketNumber || payload?.reportId || '';
+        const replyId = payload?.reply?.id || payload?.replyId || (payload?.notification ? getNotificationSemanticKey(payload.notification) : '') || (payload?.message || '').slice(0, 60);
+        const existingLocalReport = repId
+          ? getConsumerReportsFromLocal().find((r) => r.id === repId || r.ticketNumber === repId)
+          : undefined;
+        const replyAlreadyPresent = Boolean(
+          payload?.reply?.id &&
+            existingLocalReport?.replies?.some((m) => m.id === payload.reply.id)
+        );
+
         if (payload?.report) {
           mockDb.mergeExternalReports([payload.report]);
         }
@@ -2366,19 +2472,26 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           notifsRef.current = refreshedNotifs;
           setNotifications(refreshedNotifs);
 
-          const repId = payload?.report?.id || payload?.ticketNumber || payload?.reportId || '';
-          const replyId = payload?.reply?.id || payload?.replyId || (payload?.notification ? getNotificationSemanticKey(payload.notification) : '') || (payload?.message || '').slice(0, 60);
           const replyDedupeKey = `rep:${repId}::${replyId}`;
+          const notifSemKey = payload?.notification ? getNotificationSemanticKey(payload.notification) : '';
           const notifAlreadyRead = Boolean(payload?.notification && (payload.notification.read || isNotificationReadPersistently(payload.notification)));
-          if (!seenLiveNotifKeysRef.current.has(replyDedupeKey) && !notifAlreadyRead) {
-            seenLiveNotifKeysRef.current.add(replyDedupeKey);
+          if (
+            !replyAlreadyPresent &&
+            !seenLiveNotifKeysRef.current.has(replyDedupeKey) &&
+            (!notifSemKey || !seenLiveNotifKeysRef.current.has(notifSemKey)) &&
+            !notifAlreadyRead
+          ) {
+            const keysToSave = notifSemKey ? [replyDedupeKey, notifSemKey] : [replyDedupeKey];
+            keysToSave.forEach((k) => seenLiveNotifKeysRef.current.add(k));
             updateConsumerBannerState(viewerKey, (prev) => ({
               ...prev,
-              seenLiveNotifs: [...prev.seenLiveNotifs, replyDedupeKey],
+              seenLiveNotifs: [...prev.seenLiveNotifs, ...keysToSave],
             }));
             toast.info(
               'New Administrative Reply',
-              payload?.message || 'The water district desk replied to your report.'
+              payload?.message || 'The water district desk replied to your report.',
+              undefined,
+              { sessionDedupeKey: replyDedupeKey }
             );
           }
         }
@@ -2386,17 +2499,39 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       } else if (data.type === 'ANNOUNCEMENT_PUBLISHED') {
         const ann = data.payload?.announcement;
         if (ann && !isTransactionalPaymentOrReceiptItem(ann)) {
+          const cleanAnnTitle = String(ann.title || '').trim().toLowerCase();
+          const existedBefore = announcementsRef.current.some(
+            (existing) =>
+              (ann.id && existing.id === ann.id) ||
+              (cleanAnnTitle && String(existing.title || '').trim().toLowerCase() === cleanAnnTitle)
+          );
           const merged = mockDb.mergeExternalAnnouncements([ann]);
           announcementsRef.current = merged;
           setAnnouncements(merged);
-          const annKey = `ann:${ann.id || (ann.title || '').trim().toLowerCase()}`;
-          if (!seenLiveNotifKeysRef.current.has(annKey)) {
-            seenLiveNotifKeysRef.current.add(annKey);
+          const annIdKey = ann.id ? `ann:${ann.id}` : '';
+          const annTitleKey = cleanAnnTitle ? `ann:${cleanAnnTitle}` : '';
+          const annKey = annIdKey || annTitleKey || `ann:${Date.now()}`;
+          if (
+            !existedBefore &&
+            (!annIdKey || !seenLiveNotifKeysRef.current.has(annIdKey)) &&
+            (!annTitleKey || !seenLiveNotifKeysRef.current.has(annTitleKey))
+          ) {
+            if (annIdKey) seenLiveNotifKeysRef.current.add(annIdKey);
+            if (annTitleKey) seenLiveNotifKeysRef.current.add(annTitleKey);
             updateConsumerBannerState(viewerKey, (prev) => ({
               ...prev,
-              seenLiveNotifs: [...prev.seenLiveNotifs, annKey],
+              seenLiveNotifs: [
+                ...prev.seenLiveNotifs,
+                ...(annIdKey ? [annIdKey] : []),
+                ...(annTitleKey ? [annTitleKey] : []),
+              ],
             }));
-            toast.info('Official District Advisory', ann.title || 'A new water district advisory has been posted.');
+            toast.info(
+              'Official District Advisory',
+              ann.title || 'A new water district advisory has been posted.',
+              undefined,
+              { sessionDedupeKey: annKey }
+            );
           }
         }
         loadConsumerInfo(true);
@@ -2436,6 +2571,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           : payload?.reading
             ? [payload.reading]
             : [];
+        const preExistingById = new Map(readingsRef.current.map((r) => [r.id, r]));
         if (incomingBills.length > 0) {
           mockDb.mergeExternalReadings(incomingBills);
         }
@@ -2453,8 +2589,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           const newSeenIds: string[] = [];
           incomingBills.forEach((rawBill: any) => {
             const bill = rawBill as MeterReading;
+            const prevLocal = preExistingById.get(bill.id);
+            const wasAlreadyIssuedLocal = Boolean(prevLocal && isOfficialBillIssued(prevLocal));
             const billToastKey = `bill-toast:${bill.id}`;
             if (
+              !wasAlreadyIssuedLocal &&
               !announcedIssuedBillIdsRef.current.has(bill.id) &&
               !seenLiveNotifKeysRef.current.has(billToastKey) &&
               !isBillNotificationAlreadyRead(bill)
@@ -2481,17 +2620,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               toast.info(
                 `Water Bill Issued — ${primary.billingPeriod}`,
                 `Meter reading: ${primary.consumption} m³ (Dial: ${formatOdometerReading(primary.currentReading)}). Total Due: ₱${calculateCostOf(primary, consumerRecordRef.current?.consumerType).toFixed(2)}.`,
-                6500
+                6500,
+                { sessionDedupeKey: `consumer-bill-issued:${primary.id}` }
               );
             } else {
               const totalDue = toToast.reduce(
                 (sum, b) => sum + calculateCostOf(b, consumerRecordRef.current?.consumerType),
                 0
               );
+              const batchKey = toToast.map((b) => b.id).sort().slice(0, 6).join(',');
               toast.info(
                 `${toToast.length} New Water Bills Issued`,
                 `Latest period: ${primary.billingPeriod}. Combined amount due: ₱${totalDue.toFixed(2)}.`,
-                6500
+                6500,
+                { sessionDedupeKey: `consumer-bill-issued:${batchKey}` }
               );
             }
           }
@@ -3830,242 +3972,177 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               </button>
             )}
 
-            {/* Responsive Notification Bell with Dropdown Popover */}
+            {/* Responsive Notification Bell with Shared NotificationCenter UI */}
             <div className="relative" ref={notifDropdownRef}>
-              <button
-                type="button"
-                onClick={() => setShowNotifDropdown(prev => !prev)}
-                aria-expanded={showNotifDropdown}
-                aria-label="Open Notifications Menu"
-                className={`relative p-2.5 min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl border transition cursor-pointer ${
-                  showNotifDropdown
-                    ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-600/30'
-                    : 'bg-slate-800/90 text-slate-200 hover:text-white hover:bg-slate-800 border-slate-700'
-                }`}
-                title="Notifications & Advisories"
+              <NotificationBellButton
                 id="header-notif-bell-btn"
-              >
-                <Bell className="h-4 w-4 sm:h-[18px] sm:w-[18px]" />
-                {unreadNotifCount > 0 && (
-                  <span className="absolute -top-1 -right-1 flex h-4.5 min-w-[18px] px-1 items-center justify-center rounded-full bg-rose-500 text-[9px] font-black text-white ring-2 ring-slate-900 tabular-nums">
-                    {unreadNotifCount > 99 ? '99+' : unreadNotifCount}
-                  </span>
-                )}
-              </button>
+                unreadCount={unreadNotifCount}
+                isOpen={showNotifDropdown}
+                onClick={() => setShowNotifDropdown(prev => !prev)}
+                title="Notifications & Advisories"
+                ariaLabel="Open Notifications Menu"
+              />
 
-              {/* Quick Notification Dropdown Popover - Responsive Fixed on Mobile, Anchored Popover on Desktop */}
               {showNotifDropdown && (
-                <div 
-                  className="fixed inset-x-3 top-16 sm:inset-x-auto sm:top-auto sm:absolute sm:right-0 sm:mt-2 sm:w-[430px] bg-slate-900 text-slate-100 rounded-2xl shadow-2xl border border-slate-800 z-50 overflow-hidden animate-slide-down"
+                <NotificationDropdownShell
                   id="header-notif-dropdown"
-                >
-                  <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Bell className="h-4 w-4 text-blue-400 shrink-0" />
-                      <span className="text-sm font-bold text-white truncate">
-                        Notifications
-                      </span>
-                      {unreadNotifCount > 0 && (
-                        <>
-                          <span aria-hidden="true" className="text-slate-600">·</span>
-                          <span className="text-xs font-mono tabular-nums font-bold text-blue-400 whitespace-nowrap">
-                            {unreadNotifCount} unread
-                          </span>
-                        </>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {unreadNotifCount > 0 && (
-                        <button
-                          type="button"
-                          onClick={handleMarkAllNotifsRead}
-                          className="text-xs font-semibold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer whitespace-nowrap"
-                        >
-                          Mark all read
-                        </button>
-                      )}
+                  title="Notifications"
+                  unreadCount={unreadNotifCount}
+                  isEmpty={notifications.length === 0}
+                  emptyText="No notifications yet."
+                  onMarkAllRead={handleMarkAllNotifsRead}
+                  onClose={() => setShowNotifDropdown(false)}
+                  footer={
+                    <div className="text-center">
                       <button
                         type="button"
-                        onClick={() => setShowNotifDropdown(false)}
-                        className="sm:hidden p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
-                        aria-label="Close notifications"
+                        onClick={() => {
+                          setActiveTab('notifications');
+                          setShowNotifDropdown(false);
+                        }}
+                        className="text-xs font-semibold text-sky-400 hover:text-sky-300 hover:underline cursor-pointer"
                       >
-                        <X className="h-4 w-4" />
+                        View All Notifications ({notifications.length})
                       </button>
                     </div>
-                  </div>
+                  }
+                >
+                  {notifications.slice(0, 25).map((n, idx) => {
+                    const effectiveType = inferNotificationType(n);
+                    const isReport = isReportNotification(n) || effectiveType === 'report';
+                    const isAnnouncement = !isReport && effectiveType === 'announcement';
+                    const isInstallation = !isReport && !isAnnouncement && effectiveType === 'installation';
+                    const isMeterStatus = !isReport && !isAnnouncement && !isInstallation && effectiveType === 'meter_status';
+                    const meterStatusNorm = isMeterStatus ? normalizeMeterStatus(n.meterStatus) : 'active';
+                    const isBilling = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && (effectiveType === 'billing' || effectiveType === 'balance');
+                    const isReceiptUpload = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'receipt_upload';
+                    const isPayment = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && (effectiveType === 'payment' || isReceiptUpload);
+                    const isAccountIssue = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'account_issue';
+                    const isDisconnection = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'disconnection';
+                    const isPartialAlert =
+                      !isReport &&
+                      (isPayment || isBilling) &&
+                      ((n.title || '').toLowerCase().includes('partial') ||
+                        (n.message || '').toLowerCase().includes('remaining'));
 
-                  <div className="max-h-[65vh] sm:max-h-96 overflow-y-auto divide-y divide-slate-800/80">
-                    {notifications.length === 0 ? (
-                      <div className="p-8 text-center text-sm text-slate-400">
-                        No notifications yet.
-                      </div>
+                    const categoryLabel = isReport
+                      ? 'Support Inquiry'
+                      : isAnnouncement
+                      ? 'District Advisory'
+                      : isInstallation
+                      ? `Meter Installation${n.installationStatus ? ` · ${n.installationStatus}` : ''}`
+                      : isMeterStatus
+                      ? `Meter Status · ${formatMeterStatusLabel(meterStatusNorm)}`
+                      : isDisconnection
+                      ? 'Disconnection Notice'
+                      : isAccountIssue
+                      ? 'Account & ID'
+                      : isPartialAlert
+                      ? 'Balance Notice'
+                      : isBilling
+                      ? 'Bill Issued'
+                      : isReceiptUpload
+                      ? 'Receipt Verified'
+                      : isPayment
+                      ? 'Payment Receipt'
+                      : 'Notice';
+
+                    const tone: NotificationTone = isReport || isAnnouncement
+                      ? 'indigo'
+                      : isInstallation
+                      ? 'cyan'
+                      : isMeterStatus
+                      ? meterStatusNorm === 'damaged'
+                        ? 'danger'
+                        : meterStatusNorm === 'maintenance'
+                        ? 'warning'
+                        : meterStatusNorm === 'active'
+                        ? 'success'
+                        : 'neutral'
+                      : isDisconnection
+                      ? 'danger'
+                      : isAccountIssue
+                      ? 'purple'
+                      : isPartialAlert
+                      ? 'warning'
+                      : isBilling
+                      ? 'info'
+                      : isPayment
+                      ? 'success'
+                      : 'neutral';
+
+                    const iconNode = isReport ? (
+                      <MessageSquare className="h-4 w-4" />
+                    ) : isAnnouncement ? (
+                      <Bell className="h-4 w-4" />
+                    ) : isInstallation ? (
+                      <Wrench className="h-4 w-4" />
+                    ) : isMeterStatus ? (
+                      <Gauge className="h-4 w-4" />
+                    ) : isDisconnection ? (
+                      <AlertOctagon className="h-4 w-4" />
+                    ) : isAccountIssue ? (
+                      <UserCheck className="h-4 w-4" />
+                    ) : isPartialAlert ? (
+                      <AlertTriangle className="h-4 w-4" />
+                    ) : isBilling ? (
+                      <ReceiptText className="h-4 w-4" />
+                    ) : isPayment ? (
+                      <CheckCircle2 className="h-4 w-4" />
                     ) : (
-                      notifications.slice(0, 25).map((n, idx) => {
-                        const effectiveType = inferNotificationType(n);
-                        const isReport = isReportNotification(n) || effectiveType === 'report';
-                        const isAnnouncement = !isReport && effectiveType === 'announcement';
-                        const isInstallation = !isReport && !isAnnouncement && effectiveType === 'installation';
-                        const isMeterStatus = !isReport && !isAnnouncement && !isInstallation && effectiveType === 'meter_status';
-                        const meterStatusNorm = isMeterStatus ? normalizeMeterStatus(n.meterStatus) : 'active';
-                        const isBilling = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && (effectiveType === 'billing' || effectiveType === 'balance');
-                        const isReceiptUpload = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'receipt_upload';
-                        const isPayment = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && (effectiveType === 'payment' || isReceiptUpload);
-                        const isAccountIssue = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'account_issue';
-                        const isDisconnection = !isReport && !isAnnouncement && !isInstallation && !isMeterStatus && effectiveType === 'disconnection';
-                        const isPartialAlert =
-                          !isReport &&
-                          (isPayment || isBilling) &&
-                          ((n.title || '').toLowerCase().includes('partial') ||
-                            (n.message || '').toLowerCase().includes('remaining'));
+                      <Info className="h-4 w-4" />
+                    );
 
-                        const categoryLabel = isReport
-                          ? 'Support Inquiry'
-                          : isAnnouncement
-                          ? 'District Advisory'
-                          : isInstallation
-                          ? `Meter Installation${n.installationStatus ? ` · ${n.installationStatus}` : ''}`
-                          : isMeterStatus
-                          ? `Meter Status · ${formatMeterStatusLabel(meterStatusNorm)}`
-                          : isDisconnection
-                          ? 'Disconnection Notice'
-                          : isAccountIssue
-                          ? 'Account & ID'
-                          : isPartialAlert
-                          ? 'Balance Notice'
-                          : isBilling
-                          ? 'Bill Issued'
-                          : isReceiptUpload
-                          ? 'Receipt Verified'
-                          : isPayment
-                          ? 'Payment Receipt'
-                          : 'Notice';
+                    const attribution = getNotificationAdminAttribution(n);
+                    const linkedThread = findLinkedReportForNotification(n, reports);
+                    const secondaryMeta = attribution.isFromAdmin
+                      ? attribution.senderBadgeLabel
+                      : isReport && n.referencedNotice
+                      ? n.referencedNotice.meterStatus
+                        ? `Re: Meter (${formatMeterStatusLabel(n.referencedNotice.meterStatus)})`
+                        : `Re: ${n.referencedNotice.subject}`
+                      : undefined;
+                    const referenceLabel =
+                      linkedThread && !isReport
+                        ? `#${linkedThread.ticketNumber}`
+                        : n.ticketNumber
+                        ? `#${n.ticketNumber}`
+                        : n.billingPeriod || '';
 
-                        const attribution = getNotificationAdminAttribution(n);
-                        const linkedThread = findLinkedReportForNotification(n, reports);
-
-                        return (
-                          <button
-                            type="button"
-                            key={`dropdown-notif-${n.id || idx}`}
-                            onClick={() => handleOpenNotificationDetailModal(n)}
-                            className={`w-full text-left px-5 py-3.5 hover:bg-slate-800/75 transition cursor-pointer flex items-start gap-3 group ${
-                              !n.read ? 'bg-blue-950/30' : ''
-                            }`}
-                          >
-                            <div className={`p-2 rounded-xl shrink-0 mt-0.5 border ${
-                              isReport || isAnnouncement
-                                ? 'bg-indigo-950/80 text-indigo-300 border-indigo-800/60'
-                                : isInstallation
-                                ? 'bg-cyan-950/80 text-cyan-300 border-cyan-800/60'
-                                : isMeterStatus
-                                ? meterStatusNorm === 'damaged'
-                                  ? 'bg-rose-950/80 text-rose-300 border-rose-800/60'
-                                  : meterStatusNorm === 'maintenance'
-                                  ? 'bg-amber-950/80 text-amber-300 border-amber-800/60'
-                                  : meterStatusNorm === 'active'
-                                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
-                                  : 'bg-slate-800 text-slate-300 border-slate-700'
-                                : isDisconnection
-                                ? 'bg-rose-950/80 text-rose-300 border-rose-800/60'
-                                : isAccountIssue
-                                ? 'bg-purple-950/80 text-purple-300 border-purple-800/60'
-                                : isPartialAlert
-                                ? 'bg-amber-950/80 text-amber-300 border-amber-800/60'
-                                : isBilling
-                                ? 'bg-blue-950/80 text-blue-300 border-blue-800/60'
-                                : isPayment
-                                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
-                                : 'bg-slate-800 text-slate-300 border-slate-700'
-                            }`}>
-                              {isReport ? (
-                                <MessageSquare className="h-4 w-4" />
-                              ) : isAnnouncement ? (
-                                <Bell className="h-4 w-4" />
-                              ) : isInstallation ? (
-                                <Wrench className="h-4 w-4" />
-                              ) : isMeterStatus ? (
-                                <Gauge className="h-4 w-4" />
-                              ) : isDisconnection ? (
-                                <AlertOctagon className="h-4 w-4" />
-                              ) : isAccountIssue ? (
-                                <UserCheck className="h-4 w-4" />
-                              ) : isPartialAlert ? (
-                                <AlertTriangle className="h-4 w-4" />
-                              ) : isBilling ? (
-                                <ReceiptText className="h-4 w-4" />
-                              ) : isPayment ? (
-                                <CheckCircle2 className="h-4 w-4" />
-                              ) : (
-                                <Info className="h-4 w-4" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0 space-y-1">
-                              <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
-                                <div className="flex items-center gap-1.5 min-w-0 truncate">
-                                  <span className="font-semibold text-slate-300 truncate">{categoryLabel}</span>
-                                  {attribution.isFromAdmin && (
-                                    <>
-                                      <span aria-hidden="true" className="text-slate-600">·</span>
-                                      <span className="text-sky-300 font-semibold truncate">{attribution.senderBadgeLabel}</span>
-                                    </>
-                                  )}
-                                  {linkedThread && !isReport && (
-                                    <>
-                                      <span aria-hidden="true" className="text-slate-600">·</span>
-                                      <span className="font-mono tabular-nums text-indigo-300 shrink-0">{linkedThread.ticketNumber}</span>
-                                    </>
-                                  )}
-                                  {isReport && n.referencedNotice && (
-                                    <>
-                                      <span aria-hidden="true" className="text-slate-600">·</span>
-                                      <span className="text-indigo-300 truncate">
-                                        {n.referencedNotice.meterStatus
-                                          ? `Re: Meter (${formatMeterStatusLabel(n.referencedNotice.meterStatus)})`
-                                          : `Re: ${n.referencedNotice.subject}`}
-                                      </span>
-                                    </>
-                                  )}
-                                </div>
-                                {!n.read && (
-                                  <span className="h-2 w-2 rounded-full bg-blue-400 shrink-0" aria-label="Unread notification"></span>
-                                )}
-                              </div>
-                              <h4 className="text-[13px] font-bold text-white leading-snug line-clamp-1">
-                                {n.title || n.subject}
-                              </h4>
-                              <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed">
-                                {normalizeSingleLinePreview(n.message)}
-                              </p>
-                              <div className="flex items-center justify-between gap-2 pt-1 text-xs text-slate-400">
-                                <span className="font-mono tabular-nums shrink-0">
-                                  {new Date(n.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                                </span>
-                                <span className="font-semibold text-blue-400 group-hover:text-blue-300 inline-flex items-center gap-0.5 shrink-0">
-                                  <span>{attribution.canReplyDirectly ? 'Read & Reply' : 'Read full info'}</span>
-                                  <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-                                </span>
-                              </div>
-                            </div>
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-
-                  <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 text-center">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveTab('notifications');
-                        setShowNotifDropdown(false);
-                      }}
-                      className="text-xs font-bold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer"
-                    >
-                      View All Notifications ({notifications.length})
-                    </button>
-                  </div>
-                </div>
+                    return (
+                      <NotificationItemCard
+                        key={`dropdown-notif-${n.id || idx}`}
+                        tone={tone}
+                        icon={iconNode}
+                        categoryLabel={categoryLabel}
+                        secondaryMeta={secondaryMeta}
+                        timestampLabel={new Date(n.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                        title={n.title || n.subject || 'Official Notice'}
+                        preview={normalizeSingleLinePreview(n.message)}
+                        referenceLabel={referenceLabel}
+                        actionLabel={attribution.canReplyDirectly ? 'Read & Reply' : 'Read full info'}
+                        isUnread={!n.read}
+                        onClick={() => handleOpenNotificationDetailModal(n)}
+                        onMarkRead={
+                          !n.read && n.id
+                            ? () => {
+                                acknowledgeNotificationBanners([n]);
+                                mockDb.markNotificationRead(n.id);
+                                const targetSem = getNotificationSemanticKey(n);
+                                const updated = notifications.map(item =>
+                                  item.id === n.id || getNotificationSemanticKey(item) === targetSem
+                                    ? { ...item, read: true }
+                                    : item
+                                );
+                                notifsRef.current = updated;
+                                setNotifications(updated);
+                              }
+                            : undefined
+                        }
+                      />
+                    );
+                  })}
+                </NotificationDropdownShell>
               )}
             </div>
 
@@ -4091,33 +4168,20 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
         {/* IMMEDIATE REAL-TIME ACCOUNT & METER ID CONFIRMATION BANNER */}
         {idConfirmedBanner && (
-          <div className="bg-slate-900 border border-emerald-500/45 text-slate-100 rounded-2xl p-5 sm:p-6 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-slide-down">
-            <div className="flex items-start gap-3.5 min-w-0">
-              <div className="p-2.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-emerald-400 shrink-0 mt-0.5">
-                <UserCheck className="h-5 w-5" />
-              </div>
-              <div className="space-y-1.5 min-w-0">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
-                  <span className="font-semibold text-emerald-400">Official Confirmation</span>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span className="font-mono tabular-nums text-slate-200 font-semibold">
-                    Account #{idConfirmedBanner.accountNumber}
-                  </span>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span className="font-mono tabular-nums text-slate-300">
-                    Meter #{idConfirmedBanner.meterNumber}
-                  </span>
-                </div>
-                <h4 className="text-base sm:text-lg font-bold text-white leading-snug">
-                  {idConfirmedBanner.isUpdate ? 'Account Number Updated & Confirmed' : 'Official Account & Meter Confirmed'}
-                </h4>
-                <p className="text-sm text-slate-200 leading-[1.6] max-w-3xl">
-                  Tagoloan Water District Administration has officially issued and confirmed your water service identifiers ({idConfirmedBanner.confirmedAt}). Your Consumer Portal dashboard, telemetry history, billing ledger, and official activation notification are now active.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+          <InlineNotificationBanner
+            tone="success"
+            icon={<UserCheck className="h-4 w-4" />}
+            eyebrow="Official Confirmation"
+            meta={`Account #${idConfirmedBanner.accountNumber} · Meter #${idConfirmedBanner.meterNumber}`}
+            title={
+              idConfirmedBanner.isUpdate
+                ? 'Account Number Updated & Confirmed'
+                : 'Official Account & Meter Confirmed'
+            }
+            description={`Tagoloan Water District Administration has officially issued and confirmed your water service identifiers (${idConfirmedBanner.confirmedAt}). Your Consumer Portal dashboard, telemetry history, billing ledger, and official activation notification are now active.`}
+            actions={
               <button
+                type="button"
                 onClick={() => {
                   if (idConfirmedBanner?.accountNumber) {
                     const cleanAcc = idConfirmedBanner.accountNumber.replace(/^#/, '').trim().toUpperCase();
@@ -4131,144 +4195,104 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                   setNotifFilter('account_issue');
                   setIdConfirmedBanner(null);
                 }}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-xs whitespace-nowrap shrink-0"
+                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-xs whitespace-nowrap shrink-0"
               >
                 View Notification
               </button>
-              <button
-                onClick={() => {
-                  if (idConfirmedBanner?.accountNumber) {
-                    const cleanAcc = idConfirmedBanner.accountNumber.replace(/^#/, '').trim().toUpperCase();
-                    lastAnnouncedAccountRef.current = cleanAcc;
-                    updateConsumerBannerState(getViewerBannerStorageKey(), (prev) => ({
-                      ...prev,
-                      seenAccounts: [...prev.seenAccounts, cleanAcc],
-                    }));
-                  }
-                  setIdConfirmedBanner(null);
-                }}
-                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
-                aria-label="Dismiss confirmation banner"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
+            }
+            onDismiss={() => {
+              if (idConfirmedBanner?.accountNumber) {
+                const cleanAcc = idConfirmedBanner.accountNumber.replace(/^#/, '').trim().toUpperCase();
+                lastAnnouncedAccountRef.current = cleanAcc;
+                updateConsumerBannerState(getViewerBannerStorageKey(), (prev) => ({
+                  ...prev,
+                  seenAccounts: [...prev.seenAccounts, cleanAcc],
+                }));
+              }
+              setIdConfirmedBanner(null);
+            }}
+            dismissAriaLabel="Dismiss confirmation banner"
+          />
         )}
 
-        {/* IMMEDIATE REAL-TIME PAYMENT CONFIRMATION BANNER / TOAST */}
+        {/* IMMEDIATE REAL-TIME PAYMENT CONFIRMATION BANNER */}
         {paymentConfirmationToast && (
-          <div className={`bg-slate-900 text-slate-100 rounded-2xl p-5 sm:p-6 shadow-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-slide-down ${
-            paymentConfirmationToast.isPartial
-              ? 'border-amber-500/45'
-              : 'border-emerald-500/45'
-          }`}>
-            <div className="flex items-start gap-3.5 min-w-0">
-              <div className={`p-2.5 rounded-xl border shrink-0 mt-0.5 ${
-                paymentConfirmationToast.isPartial
-                  ? 'bg-amber-500/15 border-amber-500/30 text-amber-400'
-                  : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
-              }`}>
-                <CheckCircle2 className="h-5 w-5" />
-              </div>
-              <div className="space-y-1.5 min-w-0">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
-                  <span className={`font-semibold ${paymentConfirmationToast.isPartial ? 'text-amber-300' : 'text-emerald-400'}`}>
-                    {paymentConfirmationToast.isPartial ? 'Partial Settlement' : 'Payment Confirmed'}
-                  </span>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span className="font-mono tabular-nums text-slate-200 font-semibold">
-                    Official Receipt #{paymentConfirmationToast.reference}
-                  </span>
-                </div>
-                <h4 className="text-base sm:text-lg font-bold text-white leading-snug">
-                  {paymentConfirmationToast.isPartial
-                    ? 'Partial Payment Credited'
-                    : 'Payment Settlement Confirmed'}
-                </h4>
-                <p className="text-sm text-slate-200 leading-[1.6] max-w-3xl">
-                  {paymentConfirmationToast.isPartial ? (
-                    <>
-                      Your partial payment of <strong className="font-mono tabular-nums text-white">₱{paymentConfirmationToast.amount.toFixed(2)}</strong> for billing cycle <strong className="text-white">{paymentConfirmationToast.period}</strong> has been credited on {paymentConfirmationToast.date}. Remaining balance due: <strong className="font-mono tabular-nums text-amber-300">₱{(paymentConfirmationToast.remaining ?? 0).toFixed(2)}</strong>.
-                    </>
-                  ) : (
-                    <>
-                      Your water tariff payment of <strong className="font-mono tabular-nums text-white">₱{paymentConfirmationToast.amount.toFixed(2)}</strong> for billing cycle <strong className="text-white">{paymentConfirmationToast.period}</strong> has been cleared and stamped into the central district records on {paymentConfirmationToast.date}. Outstanding balance updated.
-                    </>
-                  )}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-              {(() => {
-                const targetReceiptReading = billedReadings.find(
-                  b =>
-                    (paymentConfirmationToast.reference &&
-                      (b.orNumber || b.paymentReference || '').toUpperCase() ===
-                        paymentConfirmationToast.reference.toUpperCase()) ||
-                    b.billingPeriod === paymentConfirmationToast.period
-                );
-                if (!targetReceiptReading) return null;
-                return (
-                  <button
-                    type="button"
-                    onClick={() => setReceiptDetailModal(targetReceiptReading)}
-                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0"
-                  >
-                    <ReceiptText className="h-3.5 w-3.5 text-emerald-400" />
-                    <span>View Receipt</span>
-                  </button>
-                );
-              })()}
-              <button
-                onClick={() => {
-                  const matchedBill = billedReadings.find(
-                    b =>
-                      (paymentConfirmationToast.reference &&
-                        (b.orNumber || b.paymentReference || '').toUpperCase() ===
-                          paymentConfirmationToast.reference.toUpperCase()) ||
-                      b.billingPeriod === paymentConfirmationToast.period
-                  );
-                  const pk = buildPaymentBannerKey(
-                    matchedBill?.id || paymentConfirmationToast.period,
-                    paymentConfirmationToast.amount,
-                    paymentConfirmationToast.reference
-                  );
-                  seenPaymentKeysRef.current.add(pk);
-                  updateConsumerBannerState(getViewerBannerStorageKey(), (prev) => ({
-                    ...prev,
-                    seenPayments: [...prev.seenPayments, pk],
-                  }));
-                  setPaymentConfirmationToast(null);
-                }}
-                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
-                aria-label="Dismiss payment confirmation"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
+          <InlineNotificationBanner
+            tone={paymentConfirmationToast.isPartial ? 'warning' : 'success'}
+            icon={<CheckCircle2 className="h-4 w-4" />}
+            eyebrow={paymentConfirmationToast.isPartial ? 'Partial Settlement' : 'Payment Confirmed'}
+            meta={`Official Receipt #${paymentConfirmationToast.reference}`}
+            title={
+              paymentConfirmationToast.isPartial
+                ? 'Partial Payment Credited'
+                : 'Payment Settlement Confirmed'
+            }
+            description={
+              paymentConfirmationToast.isPartial ? (
+                <>
+                  Your partial payment of <strong className="font-mono tabular-nums text-white">₱{paymentConfirmationToast.amount.toFixed(2)}</strong> for billing cycle <strong className="text-white">{paymentConfirmationToast.period}</strong> has been credited on {paymentConfirmationToast.date}. Remaining balance due: <strong className="font-mono tabular-nums text-amber-300">₱{(paymentConfirmationToast.remaining ?? 0).toFixed(2)}</strong>.
+                </>
+              ) : (
+                <>
+                  Your water tariff payment of <strong className="font-mono tabular-nums text-white">₱{paymentConfirmationToast.amount.toFixed(2)}</strong> for billing cycle <strong className="text-white">{paymentConfirmationToast.period}</strong> has been cleared and stamped into the central district records on {paymentConfirmationToast.date}. Outstanding balance updated.
+                </>
+              )
+            }
+            actions={(() => {
+              const targetReceiptReading = billedReadings.find(
+                b =>
+                  (paymentConfirmationToast.reference &&
+                    (b.orNumber || b.paymentReference || '').toUpperCase() ===
+                      paymentConfirmationToast.reference.toUpperCase()) ||
+                  b.billingPeriod === paymentConfirmationToast.period
+              );
+              if (!targetReceiptReading) return null;
+              return (
+                <button
+                  type="button"
+                  onClick={() => setReceiptDetailModal(targetReceiptReading)}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                >
+                  <ReceiptText className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>View Receipt</span>
+                </button>
+              );
+            })()}
+            onDismiss={() => {
+              const matchedBill = billedReadings.find(
+                b =>
+                  (paymentConfirmationToast.reference &&
+                    (b.orNumber || b.paymentReference || '').toUpperCase() ===
+                      paymentConfirmationToast.reference.toUpperCase()) ||
+                  b.billingPeriod === paymentConfirmationToast.period
+              );
+              const pk = buildPaymentBannerKey(
+                matchedBill?.id || paymentConfirmationToast.period,
+                paymentConfirmationToast.amount,
+                paymentConfirmationToast.reference
+              );
+              seenPaymentKeysRef.current.add(pk);
+              updateConsumerBannerState(getViewerBannerStorageKey(), (prev) => ({
+                ...prev,
+                seenPayments: [...prev.seenPayments, pk],
+              }));
+              setPaymentConfirmationToast(null);
+            }}
+            dismissAriaLabel="Dismiss payment confirmation"
+          />
         )}
 
-        {/* STATUS / ERROR TOAST */}
+        {/* STATUS / ERROR BANNER */}
         {statusMsg && (
-          <div className={`px-5 py-4 rounded-2xl text-sm flex items-center justify-between gap-3 shadow-md ${
-            statusMsg.type === 'success'
-              ? 'bg-slate-900 text-emerald-200 border border-emerald-500/45'
-              : 'bg-slate-900 text-rose-200 border border-rose-500/45'
-          }`}>
-            <div className="flex items-center gap-3 min-w-0">
-              <AlertCircle className={`h-5 w-5 shrink-0 ${statusMsg.type === 'success' ? 'text-emerald-400' : 'text-rose-400'}`} />
-              <span className="font-semibold leading-relaxed">{statusMsg.msg}</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setStatusMsg(null)}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+          <InlineNotificationBanner
+            tone={statusMsg.type === 'success' ? 'success' : 'danger'}
+            icon={<AlertCircle className="h-4 w-4" />}
+            eyebrow={statusMsg.type === 'success' ? 'Confirmed' : 'Attention'}
+            title={statusMsg.type === 'success' ? 'Update Complete' : 'Action Required'}
+            description={statusMsg.msg}
+            onDismiss={() => setStatusMsg(null)}
+            dismissAriaLabel="Dismiss status notice"
+          />
         )}
 
         {/* AUTOMATED OVERDUE BILL NOTIFICATION BANNER (non-Dashboard tabs; Dashboard renders DynamicDueAlert) */}
@@ -4681,7 +4705,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               const spotSt = getCanonicalBillSettlement(spotlightReading, consumerRecord?.consumerType);
               return (
               <div 
-                className="bg-slate-900 border border-blue-500/60 rounded-3xl p-6 shadow-xl relative overflow-hidden animate-slide-down ring-2 ring-blue-500/20 text-slate-100"
+                className="bg-slate-900 border border-sky-500/45 rounded-2xl p-5 shadow-lg relative overflow-hidden animate-fade-in text-slate-100"
                 id="dashboard-reading-spotlight"
               >
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-5 border-b border-slate-800">
@@ -7223,9 +7247,9 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                       <div 
                         key={`notif-tab-${n.id || idx}`}
                         onClick={() => handleOpenNotificationDetailModal(n)}
-                        className={`border rounded-2xl p-5 sm:p-6 shadow-md flex flex-col lg:flex-row items-start justify-between gap-4 transition cursor-pointer ${
+                        className={`border rounded-2xl p-4 sm:p-5 shadow-md flex flex-col lg:flex-row items-start justify-between gap-4 transition cursor-pointer ${
                           !n.read
-                            ? 'bg-blue-950/30 border-blue-500/45 text-white hover:border-blue-400/70'
+                            ? 'bg-sky-950/30 border-sky-500/45 border-l-2 border-l-sky-400 text-white hover:border-sky-400/70'
                             : 'bg-slate-900 border-slate-800 text-slate-100 hover:border-slate-700'
                         }`}
                       >
@@ -7621,7 +7645,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           read: true,
                         })
                       }
-                      className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-5 sm:p-6 shadow-md flex items-start justify-between gap-4 text-slate-100 transition cursor-pointer"
+                      className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-4 sm:p-5 shadow-md flex items-start justify-between gap-4 text-slate-100 transition cursor-pointer"
                     >
                       <div className="flex items-start gap-3.5 min-w-0">
                         <div className="p-2.5 bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 rounded-xl shrink-0 mt-0.5">
@@ -8067,14 +8091,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
               <X className="h-4 w-4" />
             </button>
 
-            <div className="text-center space-y-1 pt-1">
-              <div className="h-10 w-10 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-xl mx-auto flex items-center justify-center">
-                <ShieldCheck className="h-5 w-5" />
+            <div className="text-center space-y-0.5 pt-1">
+              <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-400 print:text-emerald-700">
+                <ShieldCheck className="h-4 w-4 shrink-0" />
+                <span>Tagoloan Water District</span>
               </div>
-              <p className="text-[11px] font-semibold text-slate-400 print:text-slate-500">
-                Tagoloan Water District
-              </p>
-              <h3 className="text-sm sm:text-base font-bold text-white print:text-slate-900 leading-tight">
+              <h3 className="text-sm sm:text-base font-semibold text-white print:text-slate-900 leading-tight">
                 Official Electronic Payment Receipt
               </h3>
             </div>
@@ -8334,9 +8356,12 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
       >
         {viewingReceiptReading && (
           <>
-            <ModalHeader
-              eyebrow="Official Physical Receipt Verification"
+            <NotificationModalHeader
               title="Validated Cashier Slip"
+              idCode={viewingReceiptReading.orNumber || 'OR-PENDING'}
+              status={{ label: 'Verified Receipt', tone: 'success' }}
+              category="Official Physical Receipt Verification"
+              timestamp={viewingReceiptReading.paymentDate || undefined}
               tone="success"
               icon={<ShieldCheck className="h-4 w-4" />}
               onClose={() => setViewingReceiptReading(null)}
@@ -8401,9 +8426,11 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         zIndexClass="z-[120]"
         ariaLabel="Water Tariff Rates and Adjustment Schedule"
       >
-        <ModalHeader
-          eyebrow={`Official Schedule · ${activeTariff.resolutionNumber}`}
+        <NotificationModalHeader
           title="Water Tariff Rates & Price Adjustment Schedule"
+          idCode={activeTariff.resolutionNumber}
+          status={{ label: 'Official Schedule', tone: 'info' }}
+          timestamp={activeTariff.effectiveDate}
           tone="info"
           icon={<FileText className="h-4 w-4" />}
           onClose={() => setShowTariffScheduleModal(false)}
@@ -8695,15 +8722,21 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
           <Info className="h-4 w-4" />
         );
 
-        const reportStatusBadge = matchedReport
+        const headerStatus: { label: string; tone: ModalTone } | undefined = matchedReport
           ? matchedReport.status === 'pending'
-            ? { label: 'Pending Review', cls: 'bg-amber-950/70 text-amber-300 border-amber-700/60' }
+            ? { label: 'Pending Review', tone: 'warning' }
             : matchedReport.status === 'in_progress'
-            ? { label: 'In Progress', cls: 'bg-sky-950/70 text-sky-300 border-sky-700/60' }
+            ? { label: 'In Progress', tone: 'info' }
             : matchedReport.status === 'resolved'
-            ? { label: 'Resolved', cls: 'bg-emerald-950/70 text-emerald-300 border-emerald-700/60' }
-            : { label: 'Closed', cls: 'bg-slate-800 text-slate-300 border-slate-700' }
-          : null;
+            ? { label: 'Resolved', tone: 'success' }
+            : { label: 'Closed', tone: 'neutral' }
+          : isMeterStatus
+          ? { label: meterStatusLabel, tone: modalTone }
+          : isInstallation && n.installationStatus
+          ? { label: n.installationStatus, tone: 'info' }
+          : undefined;
+
+        const ticketOrCode = matchedReport?.ticketNumber || n.ticketNumber || undefined;
 
         return (
           <Modal
@@ -8714,75 +8747,36 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             zIndexClass="z-[130]"
             ariaLabel={n.title || n.subject || 'Notification details'}
           >
-            {/* 1. Header: Organized Metadata Groups, Prominent Title, Status & Close */}
-            <div className="px-4 sm:px-5 py-2.5 bg-slate-950 border-b border-slate-800 shrink-0 space-y-1">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] min-w-0 text-slate-400">
-                  <span
-                    className={`inline-flex items-center gap-1 font-semibold ${
-                      modalTone === 'danger'
-                        ? 'text-rose-400'
-                        : modalTone === 'warning'
-                        ? 'text-amber-300'
-                        : modalTone === 'success'
-                        ? 'text-emerald-400'
-                        : modalTone === 'info'
-                        ? 'text-sky-400'
-                        : 'text-slate-300'
-                    }`}
-                  >
-                    {notifIcon}
-                    <span>{categoryLabel}</span>
-                  </span>
-                  {(matchedReport?.ticketNumber || n.ticketNumber) && (
-                    <>
-                      <span aria-hidden="true" className="text-slate-600">·</span>
-                      <span className="font-mono tabular-nums font-semibold text-indigo-300">
-                        {matchedReport?.ticketNumber || n.ticketNumber}
-                      </span>
-                    </>
-                  )}
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span className="font-mono tabular-nums">{formattedTimestamp}</span>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  {reportStatusBadge && (
-                    <span
-                      className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold leading-tight whitespace-nowrap ${reportStatusBadge.cls}`}
-                    >
-                      {reportStatusBadge.label}
+            {/* 1. Compact Header: Title + Close, Single-Line Meta (ID, Status, Category, Timestamp), Sender Context */}
+            <NotificationModalHeader
+              icon={notifIcon}
+              tone={modalTone}
+              title={n.title || n.subject}
+              idCode={ticketOrCode}
+              status={headerStatus}
+              category={
+                <span className="font-medium text-slate-300">{categoryLabel}</span>
+              }
+              timestamp={formattedTimestamp}
+              context={
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                  <div>
+                    <span className="text-slate-200 font-medium">
+                      {attribution.isFromAdmin ? attribution.senderBadgeLabel : scopeLabel}
                     </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setSelectedBellNotification(null)}
-                    aria-label="Close dialog"
-                    className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
+                    {matchedReport?.assignedStaff && (
+                      <>
+                        <span aria-hidden="true" className="text-slate-600 mx-1.5">·</span>
+                        <span className="whitespace-nowrap">
+                          Assigned: <span className="text-slate-200">{matchedReport.assignedStaff}</span>
+                        </span>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-
-              <h3 className="text-[15px] sm:text-base font-bold text-white leading-snug tracking-tight break-words">
-                {n.title || n.subject}
-              </h3>
-
-              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11.5px] text-slate-400 leading-tight">
-                <span className="text-slate-300 font-medium">
-                  {attribution.isFromAdmin ? attribution.senderBadgeLabel : scopeLabel}
-                </span>
-                {matchedReport?.assignedStaff && (
-                  <>
-                    <span aria-hidden="true" className="text-slate-600">·</span>
-                    <span>
-                      Assigned: <span className="text-slate-200">{matchedReport.assignedStaff}</span>
-                    </span>
-                  </>
-                )}
-              </div>
-            </div>
+              }
+              onClose={() => setSelectedBellNotification(null)}
+            />
 
             {/* 2. Reference Information: Collapsible Original Notice Strip */}
             {isReport && effectiveRefNotice && (() => {
@@ -8791,13 +8785,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                 : null;
               const refMeterLabel = refMeterNorm ? formatMeterStatusLabel(refMeterNorm) : null;
               return (
-                <details className="group bg-slate-950/60 border-b border-slate-800 px-4 sm:px-5 py-1.5 text-xs shrink-0">
+                <details className="group bg-slate-950/45 border-b border-slate-800 px-4 sm:px-5 py-1.5 text-xs shrink-0">
                   <summary className="flex items-center justify-between gap-2 cursor-pointer list-none select-none">
                     <div className="flex items-center gap-1.5 min-w-0 truncate">
                       <span className="text-[11px] font-medium text-slate-400 shrink-0">
                         Referenced Notice:
                       </span>
-                      <span className="text-xs font-semibold text-sky-300 truncate">
+                      <span className="text-xs font-medium text-sky-300 truncate">
                         {effectiveRefNotice.subject}
                       </span>
                     </div>
@@ -9040,7 +9034,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         })}
                       </span>
                     </div>
-                    <div className="w-fit max-w-[82%] sm:max-w-[70%] rounded-2xl rounded-tr-sm bg-slate-800 border border-slate-700/85 px-3 py-2 text-[13.5px] text-slate-100 leading-[1.55] space-y-1.5 break-words">
+                    <div className="w-fit max-w-[82%] sm:max-w-[70%] rounded-xl rounded-tr-sm bg-slate-800/90 border border-slate-700/75 px-3 py-2 text-[13.5px] text-slate-100 leading-[1.55] space-y-1.5 break-words">
                       {normalizeCompactParagraphs(matchedReport.description).map((p, idx) => (
                         <p key={idx}>{p}</p>
                       ))}
@@ -9077,10 +9071,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           </span>
                         </div>
                         <div
-                          className={`w-fit max-w-[82%] sm:max-w-[70%] rounded-2xl px-3 py-2 text-[13.5px] leading-[1.55] space-y-1.5 border break-words ${
+                          className={`w-fit max-w-[82%] sm:max-w-[70%] rounded-xl px-3 py-2 text-[13.5px] leading-[1.55] space-y-1.5 border break-words ${
                             fromAdmin
-                              ? 'rounded-tl-sm bg-[#132b4f] text-slate-50 border-blue-600/45'
-                              : 'rounded-tr-sm bg-slate-800 text-slate-100 border-slate-700/85'
+                              ? 'rounded-tl-sm bg-blue-950/75 text-slate-50 border-blue-700/50'
+                              : 'rounded-tr-sm bg-slate-800/90 text-slate-100 border-slate-700/75'
                           }`}
                         >
                           {repParagraphs.map((p, pIdx) => (
@@ -9127,7 +9121,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                         <span className="font-semibold text-slate-200">
                           Conversation on This Notice
                         </span>
-                        <span className="font-mono tabular-nums text-indigo-300 font-semibold">
+                        <span className="font-mono tabular-nums text-sky-300 font-medium">
                           {matchedReport.ticketNumber}
                         </span>
                       </div>
@@ -9144,7 +9138,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                             })}
                           </span>
                         </div>
-                        <div className="w-fit max-w-[82%] sm:max-w-[70%] rounded-2xl rounded-tr-sm bg-slate-800 border border-slate-700/85 px-3 py-2 text-[13.5px] text-slate-100 leading-[1.55] space-y-1.5 break-words">
+                        <div className="w-fit max-w-[82%] sm:max-w-[70%] rounded-xl rounded-tr-sm bg-slate-800/90 border border-slate-700/75 px-3 py-2 text-[13.5px] text-slate-100 leading-[1.55] space-y-1.5 break-words">
                           {normalizeCompactParagraphs(matchedReport.description).map((p, idx) => (
                             <p key={idx}>{p}</p>
                           ))}
@@ -9176,10 +9170,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                               </span>
                             </div>
                             <div
-                              className={`w-fit max-w-[82%] sm:max-w-[70%] rounded-2xl px-3 py-2 text-[13.5px] leading-[1.55] space-y-1.5 border break-words ${
+                              className={`w-fit max-w-[82%] sm:max-w-[70%] rounded-xl px-3 py-2 text-[13.5px] leading-[1.55] space-y-1.5 border break-words ${
                                 fromAdmin
-                                  ? 'rounded-tl-sm bg-[#132b4f] text-slate-50 border-blue-600/45'
-                                  : 'rounded-tr-sm bg-slate-800 text-slate-100 border-slate-700/85'
+                                  ? 'rounded-tl-sm bg-blue-950/75 text-slate-50 border-blue-700/50'
+                                  : 'rounded-tr-sm bg-slate-800/90 text-slate-100 border-slate-700/75'
                               }`}
                             >
                               {normalizeCompactParagraphs(rep.message, {
@@ -9204,7 +9198,7 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
             </ModalBody>
 
             {/* 4. Reply & Action Section: Compact Input + Aligned Action Row */}
-            <div className="px-4 sm:px-5 py-2 bg-slate-950 border-t border-slate-800 shrink-0 space-y-1.5">
+            <div className="px-4 sm:px-5 py-2 bg-slate-900 border-t border-slate-800 shrink-0 space-y-1.5">
               {canReplyInModal && (
                 <form onSubmit={handleSendBellNotificationReply}>
                   <div className="flex items-end gap-2">
@@ -9220,13 +9214,13 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
                           ? 'Write a follow-up reply to Administration...'
                           : 'Write a reply or question to Administration...'
                       }
-                      className="flex-1 min-h-[42px] max-h-24 px-3 py-2 bg-slate-900 border border-slate-700 focus:border-blue-500 rounded-xl text-[13.5px] text-white placeholder:text-slate-500 focus:outline-none resize-y leading-snug"
+                      className="flex-1 min-h-[40px] max-h-24 px-3 py-2 bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg text-[13.5px] text-white placeholder:text-slate-500 focus:outline-none resize-y leading-snug"
                     />
                     <ModalButton
                       type="submit"
                       variant="primary"
                       disabled={isSubmittingBellReply || !bellReplyText.trim()}
-                      className="h-[42px] px-4"
+                      className="h-[40px] px-4"
                     >
                       <Send className="h-3.5 w-3.5" />
                       <span>{isSubmittingBellReply ? 'Sending...' : 'Send Reply'}</span>
@@ -9359,13 +9353,15 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
 
           return (
             <>
-              <ModalHeader
-                eyebrow={
-                  <span className="font-mono tabular-nums">
-                    {r.billingPeriod || 'Field Cycle'} · Record #{r.id}
-                  </span>
-                }
+              <NotificationModalHeader
                 title="Meter Reading & Consumption Details"
+                idCode={`#${r.id}`}
+                status={{
+                  label: r.status === 'flagged_abnormal' ? 'Flagged' : r.status === 'pending' ? 'Pending' : isCleared ? 'Cleared' : 'Verified',
+                  tone: r.status === 'flagged_abnormal' ? 'danger' : r.status === 'pending' ? 'warning' : 'success',
+                }}
+                category={r.billingPeriod || 'Field Cycle'}
+                timestamp={r.readingDate}
                 tone="info"
                 icon={<Activity className="h-4 w-4" />}
                 onClose={() => setSelectedUsageReadingModal(null)}
@@ -9502,9 +9498,10 @@ export default function ConsumerPortal({ currentUser, onLogout }: ConsumerPortal
         zIndexClass="z-50"
         ariaLabel="Request Days Extension"
       >
-        <ModalHeader
-          eyebrow="Disconnection Deferral Request"
+        <NotificationModalHeader
           title="Request Days Extension"
+          idCode={consumerRecord?.accountNumber ? `#${consumerRecord.accountNumber}` : undefined}
+          status={{ label: 'Deferral Request', tone: 'warning' }}
           tone="warning"
           icon={<Clock className="h-4 w-4" />}
           onClose={() => setIsExtensionModalOpen(false)}

@@ -94,12 +94,18 @@ import { BaymaxChatWidget } from './common/BaymaxChatWidget';
 import {
   Modal,
   ModalHeader,
+  NotificationModalHeader,
   ModalBody,
   ModalFooter,
   NoticeDetailGrid,
   ActionGuidanceBox,
   ModalButton,
 } from './ui/Modal';
+import {
+  NotificationBellButton,
+  NotificationDropdownShell,
+  NotificationItemCard,
+} from './ui/NotificationCenter';
 import AdminAnalyticsSection from './charts/AdminAnalyticsSection';
 import { BillDetails } from './consumer/BillDetails';
 import { DistrictProfileSection } from './common/DistrictProfileSection';
@@ -865,14 +871,52 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
   const lastPushedBillingsSigRef = useRef<string>('');
   const seenAdminToastKeysRef = useRef<Map<string, number>>(new Map());
 
-  const emitAdminToastOnce = (key: string, fn: () => void, cooldownMs = 6000) => {
+  const hasSeenAdminSessionToast = (sessionKey: string): boolean => {
+    if (typeof window === 'undefined' || !sessionKey) return false;
+    try {
+      const raw = window.sessionStorage?.getItem('twd_admin_seen_event_toasts_v1');
+      if (!raw) return false;
+      const list = JSON.parse(raw);
+      return Array.isArray(list) && list.includes(sessionKey);
+    } catch {
+      return false;
+    }
+  };
+
+  const markSeenAdminSessionToast = (sessionKey: string) => {
+    if (typeof window === 'undefined' || !sessionKey) return;
+    try {
+      const raw = window.sessionStorage?.getItem('twd_admin_seen_event_toasts_v1');
+      const parsed = raw ? JSON.parse(raw) : [];
+      const list = Array.isArray(parsed) ? parsed : [];
+      if (!list.includes(sessionKey)) {
+        const next = [...list, sessionKey].slice(-250);
+        window.sessionStorage?.setItem('twd_admin_seen_event_toasts_v1', JSON.stringify(next));
+      }
+    } catch {
+      // Ignore storage restriction
+    }
+  };
+
+  const emitAdminToastOnce = (
+    key: string,
+    fn: () => void,
+    cooldownMs = 15000,
+    persistInSession = false
+  ) => {
+    const cleanKey = key.trim().toLowerCase();
+    if (!cleanKey) return;
+    if (persistInSession && hasSeenAdminSessionToast(cleanKey)) return;
     const now = Date.now();
     for (const [k, ts] of seenAdminToastKeysRef.current.entries()) {
       if (now - ts > 60000) seenAdminToastKeysRef.current.delete(k);
     }
-    const lastTs = seenAdminToastKeysRef.current.get(key) || 0;
+    const lastTs = seenAdminToastKeysRef.current.get(cleanKey) || 0;
     if (now - lastTs < cooldownMs) return;
-    seenAdminToastKeysRef.current.set(key, now);
+    seenAdminToastKeysRef.current.set(cleanKey, now);
+    if (persistInSession) {
+      markSeenAdminSessionToast(cleanKey);
+    }
     fn();
   };
 
@@ -1631,6 +1675,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         data.type === 'staff:registered'
       ) {
         const incomingReader = data.payload?.reader;
+        let existedBefore = false;
         if (incomingReader && incomingReader.name) {
           const incomingRoutes = resolveReaderAssignedRoutes(incomingReader);
           const joinedIncomingRoutes = incomingRoutes.join(', ');
@@ -1640,6 +1685,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             (incomingReader.employeeId && lr.employeeId === incomingReader.employeeId) ||
             (incomingReader.username && lr.username && lr.username.toLowerCase() === String(incomingReader.username).toLowerCase())
           );
+          existedBefore = matchIdx >= 0;
           const formattedReader: MeterReader = {
             ...(matchIdx >= 0 ? currentReaders[matchIdx] : {}),
             id: incomingReader.id || `reader-${Date.now()}`,
@@ -1667,10 +1713,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
           }
           mockDb.saveReaders(currentReaders);
         }
-        const readerKey = `reader:${incomingReader?.id || incomingReader?.username || incomingReader?.employeeId || data.payload?.message || 'new'}`;
-        emitAdminToastOnce(readerKey, () => {
-          toast.info('Meter Reader Registered', data.payload?.message || 'New field staff registered via mobile app.');
-        });
+        if (!existedBefore) {
+          const readerKey = `admin-reader:${incomingReader?.id || incomingReader?.username || incomingReader?.employeeId || incomingReader?.name || 'new'}`;
+          emitAdminToastOnce(
+            readerKey,
+            () => {
+              toast.info(
+                'Meter Reader Registered',
+                data.payload?.message || 'New field staff registered via mobile app.',
+                undefined,
+                { sessionDedupeKey: readerKey }
+              );
+            },
+            30000,
+            true
+          );
+        }
         loadAllDataFromStore(false);
       } else if (data.type === 'READER_TERMINATED' || data.type === 'READER_ACCOUNT_TERMINATED' || data.type === 'staff:terminated') {
         if (data.payload?.readerId || data.payload?.username) {
@@ -1684,10 +1742,43 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         data.type === 'readings:new' ||
         data.type === 'READINGS_BATCH_SYNCED'
       ) {
-        // Coalesce burst incoming reading submissions so one field sync never floods multiple stacked banners
-        emitAdminToastOnce('readings:incoming-batch', () => {
-          toast.info('Field Readings Received', data.payload?.message || 'Incoming meter readings queued for review.');
-        }, 5000);
+        const incomingReads = Array.isArray(data.payload?.readings)
+          ? data.payload.readings
+          : data.payload?.reading
+            ? [data.payload.reading]
+            : [];
+        const existingReadings = mockDb.getReadings();
+        const existingReadIds = new Set(existingReadings.map((r) => String(r.id || '').trim()).filter(Boolean));
+        const incomingIds = incomingReads.map((r: any) => String(r?.id || '').trim()).filter(Boolean);
+        const hasGenuineNewReadings =
+          incomingIds.length === 0
+            ? true
+            : incomingIds.some((id: string) => !existingReadIds.has(id));
+
+        if (incomingReads.length > 0) {
+          mockDb.mergeExternalReadings(incomingReads);
+        }
+        if (hasGenuineNewReadings) {
+          const batchKey =
+            incomingIds.length > 0
+              ? `admin-readings:${incomingIds.slice().sort().slice(0, 8).join(',')}`
+              : `admin-readings:batch:${String(data.payload?.message || '').trim().toLowerCase()}`;
+          emitAdminToastOnce(
+            batchKey,
+            () => {
+              toast.info(
+                'Field Readings Received',
+                data.payload?.message || 'Incoming meter readings queued for review.',
+                undefined,
+                incomingIds.length > 0
+                  ? { sessionDedupeKey: batchKey }
+                  : { dedupeKey: batchKey, cooldownMs: 30000 }
+              );
+            },
+            30000,
+            incomingIds.length > 0
+          );
+        }
         loadAllDataFromStore(false);
       } else if (
         data.type === 'PAYMENT_RECORDED' ||
@@ -1731,17 +1822,35 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       ) {
         loadAllDataFromStore(false);
       } else if (data.type === 'CONSUMER_REPORT_CREATED' || data.type === 'consumer:report:created') {
-        if (data.payload?.report) {
-          const merged = mockDb.mergeExternalReports([data.payload.report]);
+        const incomingReport = data.payload?.report;
+        const incomingReportId = String(incomingReport?.id || data.payload?.reportId || '').trim();
+        const incomingTicket = String(incomingReport?.ticketNumber || data.payload?.ticketNumber || '').trim().toUpperCase();
+        const existingReports = mockDb.getReports();
+        const existedBefore = existingReports.some(
+          (r) =>
+            (incomingReportId && r.id === incomingReportId) ||
+            (incomingTicket && r.ticketNumber?.trim().toUpperCase() === incomingTicket)
+        );
+        if (incomingReport) {
+          const merged = mockDb.mergeExternalReports([incomingReport]);
           applyIfChanged(setReports, merged);
         }
-        const reportKey = `report-new:${data.payload?.report?.id || data.payload?.ticketNumber || data.payload?.reportId || ''}`;
-        emitAdminToastOnce(reportKey, () => {
-          toast.warning(
-            'New Consumer Concern Filed',
-            data.payload?.message || `${data.payload?.consumerName || 'A consumer'} submitted report #${data.payload?.ticketNumber || data.payload?.reportId || ''}`
+        if (!existedBefore) {
+          const reportKey = `admin-report-new:${incomingReportId || incomingTicket || Date.now()}`;
+          emitAdminToastOnce(
+            reportKey,
+            () => {
+              toast.warning(
+                'New Consumer Concern Filed',
+                data.payload?.message || `${data.payload?.consumerName || 'A consumer'} submitted report #${incomingTicket || incomingReportId}`,
+                undefined,
+                { sessionDedupeKey: reportKey }
+              );
+            },
+            30000,
+            true
           );
-        });
+        }
         syncAdminReportsLive();
       } else if (
         data.type === 'CONSUMER_REPORT_REPLY' ||
@@ -1757,20 +1866,38 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         }
         syncAdminReportsLive();
       } else if (data.type === 'INSTALLATION_REQUEST_SUBMITTED') {
-        if (data.payload?.request) {
-          const mergedInst = mockDb.mergeExternalInstallations([data.payload.request]);
+        const incomingReq = data.payload?.request;
+        const incomingInstId = String(incomingReq?.id || '').trim();
+        const incomingAppNo = String(incomingReq?.applicationNumber || data.payload?.applicationNumber || '').trim().toUpperCase();
+        const existingInstallations = mockDb.getInstallationRequests();
+        const existedBefore = existingInstallations.some(
+          (inst) =>
+            (incomingInstId && inst.id === incomingInstId) ||
+            (incomingAppNo && inst.applicationNumber?.trim().toUpperCase() === incomingAppNo)
+        );
+        if (incomingReq) {
+          const mergedInst = mockDb.mergeExternalInstallations([incomingReq]);
           applyIfChanged(setInstallationRequests, mergedInst);
         } else {
           applyIfChanged(setInstallationRequests, mockDb.getInstallationRequests());
         }
-        const instKey = `inst-new:${data.payload?.request?.id || data.payload?.applicationNumber || ''}`;
-        emitAdminToastOnce(instKey, () => {
-          toast.info(
-            'New Meter Installation Request',
-            data.payload?.message ||
-              `${data.payload?.consumerName || 'A newly registered consumer'} submitted application ${data.payload?.applicationNumber || ''} for meter installation.`
+        if (!existedBefore) {
+          const instKey = `admin-inst-new:${incomingInstId || incomingAppNo || Date.now()}`;
+          emitAdminToastOnce(
+            instKey,
+            () => {
+              toast.info(
+                'New Meter Installation Request',
+                data.payload?.message ||
+                  `${data.payload?.consumerName || 'A newly registered consumer'} submitted application ${incomingAppNo} for meter installation.`,
+                undefined,
+                { sessionDedupeKey: instKey }
+              );
+            },
+            30000,
+            true
           );
-        });
+        }
         loadAllDataFromStore(false);
       } else if (data.type === 'INSTALLATION_REQUEST_UPDATED') {
         if (data.payload?.request) {
@@ -4662,287 +4789,167 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
 
               return (
                 <div ref={adminBellRef} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setShowAdminBellDropdown(prev => !prev)}
-                    className="relative p-2.5 min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 transition cursor-pointer shadow-xs"
-                    title="Installation Requests, Consumer Replies & Official Notice Inquiries"
-                    aria-label="Admin Notification Bell"
+                  <NotificationBellButton
                     id="admin-notification-bell-btn"
-                  >
-                    <Bell className="h-4 w-4 text-sky-400" />
-                    {unreadAdminCount > 0 && (
-                      <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-mono tabular-nums font-black flex items-center justify-center border border-slate-950">
-                        {unreadAdminCount > 99 ? '99+' : unreadAdminCount}
-                      </span>
-                    )}
-                  </button>
+                    unreadCount={unreadAdminCount}
+                    isOpen={showAdminBellDropdown}
+                    onClick={() => setShowAdminBellDropdown(prev => !prev)}
+                    title="Notifications, Installations & Consumer Inquiries"
+                    ariaLabel="Admin Notification Bell"
+                  />
 
                   {showAdminBellDropdown && (
-                    <div className="fixed inset-x-3 top-16 sm:inset-x-auto sm:top-auto sm:absolute sm:right-0 sm:mt-2 sm:w-[430px] bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl z-[120] overflow-hidden text-slate-100">
-                      <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <Bell className="h-4 w-4 text-sky-400 shrink-0" />
-                          <h4 className="text-sm font-bold text-white truncate">
-                            Installations &amp; Inquiries
-                          </h4>
+                    <NotificationDropdownShell
+                      id="admin-notification-dropdown"
+                      title="Notifications"
+                      unreadCount={unreadAdminCount}
+                      isEmpty={combinedAlerts.length === 0}
+                      emptyText="No installation requests or consumer inquiries yet."
+                      onMarkAllRead={handleMarkAllAdminNotificationsRead}
+                      onClose={() => setShowAdminBellDropdown(false)}
+                      footer={
+                        <div className="flex items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowAdminBellDropdown(false);
+                              setActiveTab('meters');
+                              setMetersSubTab('installations');
+                              mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+                            }}
+                            className="text-xs font-semibold text-sky-400 hover:text-sky-300 hover:underline cursor-pointer whitespace-nowrap"
+                          >
+                            Installations ({installationRequests.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowAdminBellDropdown(false);
+                              setActiveTab('announcements');
+                              setAnnouncementsSubTab('customer_service');
+                              mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+                            }}
+                            className="text-xs font-semibold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer whitespace-nowrap"
+                          >
+                            Inquiries ({reports.length})
+                          </button>
                         </div>
-                        {unreadAdminCount > 0 && (
-                          <div className="flex items-center gap-2.5 shrink-0">
-                            <span className="text-xs font-mono tabular-nums font-semibold text-rose-400">
-                              {unreadAdminCount} unread
-                            </span>
-                            <button
-                              type="button"
-                              onClick={handleMarkAllAdminNotificationsRead}
-                              className="text-xs font-semibold text-sky-400 hover:text-sky-300 transition cursor-pointer whitespace-nowrap"
-                              title="Mark all notifications as read"
-                            >
-                              Mark all read
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      }
+                    >
+                      {combinedAlerts.slice(0, 18).map((item) => {
+                        if (item.kind === 'installation') {
+                          const { req, isUnread } = item;
+                          const schedDate = req.confirmedInstallationDate || req.preferredInstallationDate;
+                          const openInstallationNotification = () => {
+                            setShowAdminBellDropdown(false);
+                            setIsTabLoading(false);
+                            const nextList = mockDb.markInstallationReadByAdmin(req.id, req);
+                            setInstallationRequests(
+                              Array.isArray(nextList) && nextList.length > 0
+                                ? nextList
+                                : mockDb.getInstallationRequests()
+                            );
+                            setActiveTab('meters');
+                            setMetersSubTab('installations');
+                            mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+                            setSelectedInstallationRequestId(`${req.id}::${Date.now()}`);
+                          };
 
-                      <div className="max-h-[65vh] sm:max-h-[420px] overflow-y-auto divide-y divide-slate-800/80">
-                        {combinedAlerts.length === 0 ? (
-                          <div className="p-8 text-center text-sm text-slate-400">
-                            No installation requests or consumer inquiries yet.
-                          </div>
-                        ) : (
-                          combinedAlerts.slice(0, 18).map((item) => {
-                            if (item.kind === 'installation') {
-                              const { req, isUnread } = item;
-                              const schedDate = req.confirmedInstallationDate || req.preferredInstallationDate;
-                              const openInstallationNotification = () => {
-                                setShowAdminBellDropdown(false);
-                                setIsTabLoading(false);
+                          return (
+                            <NotificationItemCard
+                              key={`admin-bell-inst-${req.id}`}
+                              tone={
+                                req.status === 'Installed' && req.accountValidationStatus !== 'validated'
+                                  ? 'success'
+                                  : 'cyan'
+                              }
+                              icon={<Wrench className="h-4 w-4" />}
+                              categoryLabel="Meter Installation"
+                              secondaryMeta={req.consumerName}
+                              timestampLabel={new Date(req.updatedAt || req.submissionDate).toLocaleDateString([], {
+                                month: 'short',
+                                day: 'numeric',
+                              })}
+                              title={`${req.status}${req.status === 'Installed' && req.accountValidationStatus !== 'validated' ? ' (Validate & Issue IDs)' : ''}`}
+                              preview={`Brgy. ${req.barangay} · Preferred/Scheduled: ${formatInstallationDateDisplay(schedDate)}${req.consumerRemarks ? ` — "${req.consumerRemarks}"` : ''}`}
+                              referenceLabel={`#${req.applicationNumber} · ${req.contactNumber}`}
+                              actionLabel={
+                                req.status === 'Pending Review'
+                                  ? 'Accept / Update'
+                                  : req.status === 'Installed' && req.accountValidationStatus !== 'validated'
+                                  ? 'Validate & Issue IDs'
+                                  : 'Update Status'
+                              }
+                              isUnread={isUnread}
+                              onClick={openInstallationNotification}
+                              onMarkRead={() => {
                                 const nextList = mockDb.markInstallationReadByAdmin(req.id, req);
                                 setInstallationRequests(
                                   Array.isArray(nextList) && nextList.length > 0
                                     ? nextList
                                     : mockDb.getInstallationRequests()
                                 );
-                                setActiveTab('meters');
-                                setMetersSubTab('installations');
-                                mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
-                                setSelectedInstallationRequestId(`${req.id}::${Date.now()}`);
-                              };
+                              }}
+                            />
+                          );
+                        }
 
-                              return (
-                                <div
-                                  key={`admin-bell-inst-${req.id}`}
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={openInstallationNotification}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' || e.key === ' ') {
-                                      e.preventDefault();
-                                      openInstallationNotification();
-                                    }
-                                  }}
-                                  className={`w-full text-left px-5 py-3.5 hover:bg-slate-800/70 transition cursor-pointer space-y-1.5 group ${
-                                    isUnread ? 'bg-sky-950/30' : ''
-                                  }`}
-                                >
-                                  <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
-                                    <div className="flex items-center gap-1.5 min-w-0 truncate">
-                                      <span className="font-semibold text-slate-200 truncate">
-                                        {req.consumerName}
-                                      </span>
-                                      <span aria-hidden="true" className="text-slate-600">·</span>
-                                      <span className="font-mono tabular-nums font-semibold text-emerald-400 shrink-0">
-                                        #{req.applicationNumber}
-                                      </span>
-                                    </div>
-                                    <div className="flex items-center gap-2 shrink-0">
-                                      <span className="font-mono tabular-nums">
-                                        {new Date(req.updatedAt || req.submissionDate).toLocaleDateString([], {
-                                          month: 'short',
-                                          day: 'numeric',
-                                        })}
-                                      </span>
-                                      {isUnread && (
-                                        <>
-                                          <span className="h-2 w-2 rounded-full bg-sky-400 shrink-0" />
-                                          <button
-                                            type="button"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              const nextList = mockDb.markInstallationReadByAdmin(req.id, req);
-                                              setInstallationRequests(
-                                                Array.isArray(nextList) && nextList.length > 0
-                                                  ? nextList
-                                                  : mockDb.getInstallationRequests()
-                                              );
-                                            }}
-                                            className="text-xs font-semibold text-sky-400 hover:text-sky-300 transition cursor-pointer whitespace-nowrap"
-                                            title="Mark this notification as read"
-                                          >
-                                            Mark read
-                                          </button>
-                                        </>
-                                      )}
-                                    </div>
-                                  </div>
+                        const { rep, isUnread } = item;
+                        const consumerReplies = (rep.replies || []).filter(
+                          m => m.senderRole === 'consumer'
+                        );
+                        const rawPreview =
+                          consumerReplies.length > 0
+                            ? consumerReplies[consumerReplies.length - 1].message
+                            : rep.description;
+                        const cleanPreview = normalizeSingleLinePreview(rawPreview);
+                        const ref = rep.referencedNotice;
+                        const openReportNotification = () => {
+                          setShowAdminBellDropdown(false);
+                          const nextReports = mockDb.markReportReadByAdmin(rep.id, rep);
+                          setReports(
+                            Array.isArray(nextReports) && nextReports.length > 0
+                              ? nextReports
+                              : mockDb.getReports()
+                          );
+                          setActiveAdminBellReportId(rep.id);
+                        };
 
-                                  <div className="text-[13px] font-bold text-white truncate">
-                                    Meter Installation · {req.status}
-                                    {req.status === 'Installed' && req.accountValidationStatus !== 'validated' ? ' (Validate & Issue IDs)' : ''}
-                                  </div>
-
-                                  <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed">
-                                    Brgy. {req.barangay} · Preferred/Scheduled: {formatInstallationDateDisplay(schedDate)}
-                                    {req.consumerRemarks ? ` — "${req.consumerRemarks}"` : ''}
-                                  </p>
-
-                                  <div className="flex items-center justify-between pt-0.5 text-xs text-slate-400">
-                                    <span className="font-mono tabular-nums">{req.contactNumber}</span>
-                                    <span className="font-semibold text-sky-400 group-hover:text-sky-300 inline-flex items-center gap-0.5">
-                                      <span>
-                                        {req.status === 'Pending Review'
-                                          ? 'Accept / Update'
-                                          : req.status === 'Installed' && req.accountValidationStatus !== 'validated'
-                                          ? 'Validate & Issue IDs'
-                                          : 'Update Status'}
-                                      </span>
-                                      <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-                                    </span>
-                                  </div>
-                                </div>
-                              );
+                        return (
+                          <NotificationItemCard
+                            key={`admin-bell-${rep.id}`}
+                            tone={rep.urgency === 'emergency' ? 'danger' : rep.urgency === 'urgent' ? 'warning' : 'indigo'}
+                            icon={<MessageSquare className="h-4 w-4" />}
+                            categoryLabel={rep.category || 'Consumer Inquiry'}
+                            secondaryMeta={rep.consumerName}
+                            timestampLabel={new Date(rep.updatedAt || rep.createdAt).toLocaleDateString([], {
+                              month: 'short',
+                              day: 'numeric',
+                            })}
+                            title={
+                              ref
+                                ? ref.meterStatus
+                                  ? `Re: Water Meter (${formatMeterStatusLabel(ref.meterStatus)})${ref.meterNumber ? ` · #${ref.meterNumber}` : ''}`
+                                  : `Re: ${ref.subject}`
+                                : rep.title
                             }
-
-                            const { rep, isUnread } = item;
-                            const consumerReplies = (rep.replies || []).filter(
-                              m => m.senderRole === 'consumer'
-                            );
-                            const rawPreview =
-                              consumerReplies.length > 0
-                                ? consumerReplies[consumerReplies.length - 1].message
-                                : rep.description;
-                            const cleanPreview = normalizeSingleLinePreview(rawPreview);
-                            const ref = rep.referencedNotice;
-                            const openReportNotification = () => {
-                              setShowAdminBellDropdown(false);
+                            preview={cleanPreview}
+                            referenceLabel={`#${rep.accountNumber} · #${rep.ticketNumber}`}
+                            actionLabel="Read & Reply"
+                            isUnread={isUnread}
+                            onClick={openReportNotification}
+                            onMarkRead={() => {
                               const nextReports = mockDb.markReportReadByAdmin(rep.id, rep);
                               setReports(
                                 Array.isArray(nextReports) && nextReports.length > 0
                                   ? nextReports
                                   : mockDb.getReports()
                               );
-                              setActiveAdminBellReportId(rep.id);
-                            };
-
-                            return (
-                              <div
-                                key={`admin-bell-${rep.id}`}
-                                role="button"
-                                tabIndex={0}
-                                onClick={openReportNotification}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' || e.key === ' ') {
-                                    e.preventDefault();
-                                    openReportNotification();
-                                  }
-                                }}
-                                className={`w-full text-left px-5 py-3.5 hover:bg-slate-800/70 transition cursor-pointer space-y-1.5 group ${
-                                  isUnread ? 'bg-blue-950/30' : ''
-                                }`}
-                              >
-                                <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
-                                  <div className="flex items-center gap-1.5 min-w-0 truncate">
-                                    <span className="font-semibold text-slate-200 truncate">
-                                      {rep.consumerName}
-                                    </span>
-                                    <span aria-hidden="true" className="text-slate-600">·</span>
-                                    <span className="font-mono tabular-nums font-semibold text-sky-400 shrink-0">
-                                      #{rep.accountNumber}
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    <span className="font-mono tabular-nums">
-                                      {new Date(rep.updatedAt || rep.createdAt).toLocaleDateString([], {
-                                        month: 'short',
-                                        day: 'numeric',
-                                      })}
-                                    </span>
-                                    {isUnread && (
-                                      <>
-                                        <span className="h-2 w-2 rounded-full bg-rose-400 shrink-0" />
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            const nextReports = mockDb.markReportReadByAdmin(rep.id, rep);
-                                            setReports(
-                                              Array.isArray(nextReports) && nextReports.length > 0
-                                                ? nextReports
-                                                : mockDb.getReports()
-                                            );
-                                          }}
-                                          className="text-xs font-semibold text-sky-400 hover:text-sky-300 transition cursor-pointer whitespace-nowrap"
-                                          title="Mark this notification as read"
-                                        >
-                                          Mark read
-                                        </button>
-                                      </>
-                                    )}
-                                  </div>
-                                </div>
-
-                                <div className="text-[13px] font-bold text-white truncate">
-                                  {ref
-                                    ? ref.meterStatus
-                                      ? `Re: Water Meter (${formatMeterStatusLabel(ref.meterStatus)})${ref.meterNumber ? ` · #${ref.meterNumber}` : ''}`
-                                      : `Re: ${ref.subject}`
-                                    : rep.title}
-                                </div>
-
-                                <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed">
-                                  {cleanPreview}
-                                </p>
-
-                                <div className="flex items-center justify-between pt-0.5 text-xs text-slate-400">
-                                  <span className="font-mono tabular-nums">#{rep.ticketNumber}</span>
-                                  <span className="font-semibold text-blue-400 group-hover:text-blue-300 inline-flex items-center gap-0.5">
-                                    <span>Read &amp; Reply</span>
-                                    <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-
-                      <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowAdminBellDropdown(false);
-                            setActiveTab('meters');
-                            setMetersSubTab('installations');
-                            mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
-                          }}
-                          className="text-xs font-semibold text-sky-400 hover:text-sky-300 hover:underline cursor-pointer whitespace-nowrap"
-                        >
-                          Installations ({installationRequests.length})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowAdminBellDropdown(false);
-                            setActiveTab('announcements');
-                            setAnnouncementsSubTab('customer_service');
-                            mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
-                          }}
-                          className="text-xs font-semibold text-blue-400 hover:text-blue-300 hover:underline cursor-pointer whitespace-nowrap"
-                        >
-                          Inquiries ({reports.length})
-                        </button>
-                      </div>
-                    </div>
+                            }}
+                          />
+                        );
+                      })}
+                    </NotificationDropdownShell>
                   )}
                 </div>
               );
@@ -11437,24 +11444,19 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
             ariaLabel={`Barangay ${bg.name} Details`}
           >
               {/* Modal Header */}
-              <div className="bg-slate-950 px-4 sm:px-5 py-2.5 sm:py-3 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="p-2 bg-sky-500/15 border border-sky-500/30 rounded-xl text-sky-400 shrink-0">
-                    <MapPin className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
-                      <span className="font-mono font-semibold text-sky-400">{bg.code || 'ZONE'}</span>
-                      <span aria-hidden="true" className="text-slate-600">·</span>
-                      <span className="font-mono tabular-nums text-emerald-400">{allInBarangay.length} Registered Consumers</span>
-                      <span aria-hidden="true" className="text-slate-600">·</span>
-                      <span>Lead: <strong className="text-slate-200">{bg.supervisor || 'Operations Lead'}</strong></span>
-                    </div>
-                    <h3 className="text-sm sm:text-base font-bold text-white leading-snug truncate">Barangay {bg.name}</h3>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1.5 shrink-0">
+              <ModalHeader
+                code={bg.code || 'ZONE'}
+                eyebrow={
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="font-mono tabular-nums text-emerald-400">{allInBarangay.length} Consumers</span>
+                    <span aria-hidden="true" className="text-slate-600">·</span>
+                    <span className="truncate">Lead: <span className="text-slate-200 font-medium">{bg.supervisor || 'Operations Lead'}</span></span>
+                  </span>
+                }
+                title={`Barangay ${bg.name}`}
+                tone="info"
+                icon={<MapPin className="h-4 w-4" />}
+                actions={
                   <ModalButton
                     variant="secondary"
                     size="sm"
@@ -11465,18 +11467,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
                     <Edit2 className="h-3.5 w-3.5 text-sky-400" />
                     <span>Edit Zone</span>
                   </ModalButton>
-
-                  <button 
-                    type="button"
-                    onClick={() => setSelectedBarangayForDetail(null)}
-                    className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
-                    title="Close Details Modal (Esc)"
-                    aria-label="Close Barangay details"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
+                }
+                onClose={() => setSelectedBarangayForDetail(null)}
+                closeLabel="Close Barangay details"
+              />
 
               {/* Modal Scrollable Body */}
               <div className="overflow-y-auto px-5 py-4 space-y-4 flex-1 min-h-0">
@@ -11922,39 +11916,22 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         {selectedConsumerModal && (
           <>
             {/* Modal Header (Non-scrolling) */}
-            <div className="shrink-0 bg-slate-950 text-white px-4 sm:px-5 py-2.5 sm:py-3 border-b border-slate-800 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap text-xs text-slate-400">
-                  <span className="font-mono tabular-nums">
-                    Account #{selectedConsumerModal.accountNumber || 'Pending'}
-                  </span>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span className="font-mono tabular-nums">
-                    Meter #{selectedConsumerModal.meterNumber || 'Unassigned'}
-                  </span>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span className={`font-semibold capitalize ${
-                    selectedConsumerModal.status === 'blocked'
-                      ? 'text-rose-400'
-                      : selectedConsumerModal.status === 'active'
-                      ? 'text-emerald-400'
-                      : 'text-amber-300'
-                  }`}>
-                    {selectedConsumerModal.status.replace('_', ' ')}
-                  </span>
-                </div>
-                <h3 className="text-sm sm:text-base font-bold tracking-tight text-white truncate mt-0.5">{selectedConsumerModal.name}</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedConsumerModal(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
-                title="Close Modal"
-                aria-label="Close consumer details"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+            <ModalHeader
+              code={`Account #${selectedConsumerModal.accountNumber || 'Pending'}`}
+              eyebrow={`Meter #${selectedConsumerModal.meterNumber || 'Unassigned'}`}
+              status={{
+                label: selectedConsumerModal.status.replace('_', ' '),
+                tone:
+                  selectedConsumerModal.status === 'blocked'
+                    ? 'danger'
+                    : selectedConsumerModal.status === 'active'
+                    ? 'success'
+                    : 'warning',
+              }}
+              title={selectedConsumerModal.name}
+              onClose={() => setSelectedConsumerModal(null)}
+              closeLabel="Close consumer details"
+            />
 
             {/* Modal Tab Buttons (Non-scrolling) */}
             <div className="shrink-0 flex border-b border-slate-800 bg-slate-950/90 px-5 pt-2.5 gap-2 overflow-x-auto">
@@ -12659,9 +12636,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       >
         {extensionModalConsumer && (
           <>
-            <ModalHeader
-              eyebrow={`Account #${extensionModalConsumer.accountNumber}`}
+            <NotificationModalHeader
               title="Grant Disconnection Extension"
+              idCode={`#${extensionModalConsumer.accountNumber}`}
+              status={{ label: 'Extension Notice', tone: 'warning' }}
               tone="warning"
               icon={<Clock className="h-4 w-4" />}
               onClose={() => setExtensionModalConsumer(null)}
@@ -12760,9 +12738,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       >
         {disconnectModalConsumer && (
           <>
-            <ModalHeader
-              eyebrow={`Account #${disconnectModalConsumer.accountNumber}`}
+            <NotificationModalHeader
               title="Confirm Service Disconnection"
+              idCode={`#${disconnectModalConsumer.accountNumber}`}
+              status={{ label: 'Disconnection Action', tone: 'danger' }}
               tone="danger"
               icon={<ShieldAlert className="h-4 w-4" />}
               onClose={() => setDisconnectModalConsumer(null)}
@@ -12826,9 +12805,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       >
         {assumeModalConsumer && (
           <>
-            <ModalHeader
-              eyebrow={`Transfer Line #${assumeModalConsumer.accountNumber} · 6+ Months Inactive`}
+            <NotificationModalHeader
               title="Assume Inactive Water Connection"
+              idCode={`#${assumeModalConsumer.accountNumber}`}
+              status={{ label: '6+ Months Inactive', tone: 'info' }}
               tone="info"
               icon={<UserCheck className="h-4 w-4" />}
               onClose={() => setAssumeModalConsumer(null)}
@@ -13638,9 +13618,17 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
         zIndexClass="z-50"
         ariaLabel={confirmDialog.title || 'Action Confirmation'}
       >
-        <ModalHeader
-          eyebrow="Action Confirmation"
+        <NotificationModalHeader
           title={confirmDialog.title}
+          status={{
+            label: 'Action Confirmation',
+            tone:
+              confirmDialog.confirmVariant === 'success'
+                ? 'success'
+                : confirmDialog.confirmVariant === 'primary'
+                ? 'info'
+                : 'danger',
+          }}
           tone={
             confirmDialog.confirmVariant === 'success'
               ? 'success'
@@ -13702,9 +13690,10 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       >
         {cancelBillModal.bill && (
           <>
-            <ModalHeader
-              eyebrow={`Statement ID #${cancelBillModal.bill.id}`}
+            <NotificationModalHeader
               title="Cancel Water Billing Statement"
+              idCode={`#${cancelBillModal.bill.id}`}
+              status={{ label: 'Bill Cancellation', tone: 'danger' }}
               tone="danger"
               icon={<XCircle className="h-4 w-4" />}
               onClose={() => setCancelBillModal({ isOpen: false, bill: null, reason: '' })}
@@ -14548,16 +14537,12 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       >
         {viewingAnnouncementModal && (
           <>
-            <ModalHeader
-              eyebrow={
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="capitalize">{viewingAnnouncementModal.category}</span>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span className="font-mono tabular-nums">{viewingAnnouncementModal.date}</span>
-                </span>
-              }
+            <NotificationModalHeader
               title={viewingAnnouncementModal.title}
-              subtitle={`Posted by ${viewingAnnouncementModal.postedBy}`}
+              idCode={viewingAnnouncementModal.id}
+              status={{ label: viewingAnnouncementModal.category, tone: 'info' }}
+              category={`Posted by ${viewingAnnouncementModal.postedBy}`}
+              timestamp={viewingAnnouncementModal.date}
               tone="info"
               icon={<BookOpen className="h-4 w-4" />}
               onClose={() => setViewingAnnouncementModal(null)}

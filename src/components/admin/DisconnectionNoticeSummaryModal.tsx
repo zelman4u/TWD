@@ -4,21 +4,20 @@
  */
 
 import React, { useState } from 'react';
-import { 
-  X, 
-  Printer, 
-  AlertOctagon, 
-  Calendar, 
-  Clock, 
-  ShieldAlert, 
-  CheckCircle2, 
-  UserCheck, 
+import {
+  Printer,
+  AlertOctagon,
+  Calendar,
+  Clock,
+  ShieldAlert,
+  CheckCircle2,
+  UserCheck,
   FileText,
   Building2,
   Filter
 } from 'lucide-react';
 import { Consumer, MeterReading } from '../../types';
-import { Modal } from '../ui/Modal';
+import { Modal, NotificationModalHeader } from '../ui/Modal';
 
 interface DisconnectionNoticeSummaryModalProps {
   isOpen: boolean;
@@ -76,52 +75,37 @@ export const DisconnectionNoticeSummaryModal: React.FC<DisconnectionNoticeSummar
       dialogClassName="bg-slate-900 border border-slate-800 text-slate-100 rounded-2xl w-full max-w-[calc(100vw-1.5rem)] sm:max-w-2xl lg:max-w-4xl max-h-[88vh] h-auto flex flex-col shadow-2xl overflow-hidden print:border-none print:shadow-none print:bg-white print:text-black print:max-h-none print:rounded-none"
       ariaLabel="Official Disconnection Notice Summary and Cutoff Roster"
     >
-        {/* Compact Modal Header (Hidden on print) */}
-        <div className="px-4 sm:px-5 py-2.5 sm:py-3 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0 bg-slate-950 print:hidden">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="p-2 bg-rose-500/15 text-rose-400 rounded-xl border border-rose-500/30 shrink-0">
-              <AlertOctagon className="h-4 w-4" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="text-sm sm:text-base font-bold text-white leading-snug truncate">
-                Official Disconnection Notice Summary &amp; Cutoff Roster
-              </h3>
-              <p className="text-xs text-slate-400 truncate">
-                Tagoloan Water District · 2-Month Delinquent Accounts Roster
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            {activeView === 'single_notice' && (
+        {/* Compact Unified Modal Header (Hidden on print) */}
+        <NotificationModalHeader
+          className="print:hidden"
+          icon={<AlertOctagon className="h-4 w-4" />}
+          tone="danger"
+          title="Official Disconnection Notice Summary & Cutoff Roster"
+          status={{ label: 'Cutoff Roster', tone: 'danger' }}
+          category="Tagoloan Water District · 2-Month Delinquent Accounts"
+          actions={
+            <>
+              {activeView === 'single_notice' && (
+                <button
+                  type="button"
+                  onClick={() => setActiveView('summary')}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 rounded-md transition cursor-pointer whitespace-nowrap"
+                >
+                  Back to Summary
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => setActiveView('summary')}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 rounded-lg transition cursor-pointer whitespace-nowrap"
+                onClick={handlePrint}
+                className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs rounded-md transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
-                Back to Summary
+                <Printer className="h-3.5 w-3.5" />
+                <span>Print Report</span>
               </button>
-            )}
-
-            <button
-              type="button"
-              onClick={handlePrint}
-              className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-            >
-              <Printer className="h-3.5 w-3.5" />
-              <span>Print Report</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer shrink-0"
-              aria-label="Close modal"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
+            </>
+          }
+          onClose={onClose}
+        />
 
         {/* Slim Filter Toolbar (Hidden on print) */}
         <div className="px-5 py-2.5 border-b border-slate-800/80 bg-slate-900/60 flex flex-wrap items-center justify-between gap-2.5 text-xs print:hidden">

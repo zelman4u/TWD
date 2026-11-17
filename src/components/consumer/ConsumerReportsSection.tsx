@@ -24,7 +24,6 @@ import {
   Filter, 
   RefreshCw,
   ArrowLeft,
-  X,
   Building,
   Check,
   AlertOctagon,
@@ -39,7 +38,7 @@ import { useToast } from '../../context/ToastContext';
 import { SmartSearchBar } from '../common/SmartSearchBar';
 import { smartMatch } from '../../utils/smartSearch';
 import { formatMeterStatusLabel, formatMeterStatusUpdateDate, normalizeMeterStatus } from '../../utils/meterStatusNotification';
-import { Modal, ModalHeader, ModalBody, ModalFooter, ModalButton } from '../ui/Modal';
+import { Modal, ModalHeader, NotificationModalHeader, ModalBody, ModalFooter, ModalButton, ModalTone } from '../ui/Modal';
 
 interface ConsumerReportsSectionProps {
   consumer: Consumer;
@@ -628,66 +627,52 @@ export function ConsumerReportsSection({
 
         {/* Right Column: Active Conversation Thread View (7 cols) */}
         {activeThreadReport && (
-          <div className="lg:col-span-7 bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden flex flex-col max-h-[82vh] h-auto min-h-[380px] sticky top-4 text-slate-100">
+          <div className="lg:col-span-7 bg-slate-900 rounded-xl border border-slate-800 shadow-xl overflow-hidden flex flex-col max-h-[82vh] h-auto min-h-[380px] sticky top-4 text-slate-100">
             
-            {/* 1. Thread Header: Identification + Status + Close, Dominant Title, Assigned Crew */}
-            <div className="bg-slate-950 text-white px-4 sm:px-5 py-2.5 border-b border-slate-800 shrink-0 space-y-1">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] min-w-0 text-slate-400">
-                  <span className="font-mono tabular-nums font-semibold text-sky-400">
-                    {activeThreadReport.ticketNumber}
-                  </span>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span className="capitalize">{activeThreadReport.urgency}</span>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
+            {/* 1. Compact Header: Unified NotificationModalHeader */}
+            <NotificationModalHeader
+              title={activeThreadReport.title}
+              idCode={activeThreadReport.ticketNumber}
+              status={{
+                label: activeThreadReport.status.replace('_', ' '),
+                tone: (
+                  activeThreadReport.status === 'pending'
+                    ? 'warning'
+                    : activeThreadReport.status === 'in_progress'
+                    ? 'info'
+                    : activeThreadReport.status === 'resolved'
+                    ? 'success'
+                    : 'neutral'
+                ) as ModalTone,
+              }}
+              category={
+                <>
+                  <span className="capitalize text-slate-300 font-medium">{activeThreadReport.urgency}</span>
+                  <span aria-hidden="true" className="text-slate-600 mx-1.5">·</span>
                   <span>{activeThreadReport.barangay}</span>
-                  <span aria-hidden="true" className="text-slate-600">·</span>
-                  <span className="font-mono tabular-nums">
-                    {new Date(activeThreadReport.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </>
+              }
+              timestamp={new Date(activeThreadReport.createdAt).toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+              })}
+              context={
+                activeThreadReport.assignedStaff ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Building className="h-3 w-3 text-sky-400 shrink-0" />
+                    <span>
+                      Assigned: <span className="text-slate-200 font-medium">{activeThreadReport.assignedStaff}</span>
+                    </span>
                   </span>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <span
-                    className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold leading-tight capitalize whitespace-nowrap ${
-                      activeThreadReport.status === 'pending'
-                        ? 'bg-amber-950/70 text-amber-300 border-amber-700/60'
-                        : activeThreadReport.status === 'in_progress'
-                        ? 'bg-sky-950/70 text-sky-300 border-sky-700/60'
-                        : activeThreadReport.status === 'resolved'
-                        ? 'bg-emerald-950/70 text-emerald-300 border-emerald-700/60'
-                        : 'bg-slate-800 text-slate-300 border-slate-700'
-                    }`}
-                  >
-                    {activeThreadReport.status.replace('_', ' ')}
-                  </span>
-                  <button
-                    onClick={() => {
-                      setActiveThreadReport(null);
-                      if (onClearSelectedReport) onClearSelectedReport();
-                    }}
-                    className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer shrink-0"
-                    title="Close Thread"
-                    aria-label="Close thread"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-
-              <h3 className="text-[15px] sm:text-base font-bold text-white leading-snug tracking-tight break-words">
-                {activeThreadReport.title}
-              </h3>
-
-              {activeThreadReport.assignedStaff && (
-                <div className="flex items-center gap-1.5 text-[11.5px] text-slate-400 leading-tight">
-                  <Building className="h-3 w-3 text-sky-400 shrink-0" />
-                  <span>
-                    Assigned: <span className="text-slate-200 font-medium">{activeThreadReport.assignedStaff}</span>
-                  </span>
-                </div>
-              )}
-            </div>
+                ) : undefined
+              }
+              onClose={() => {
+                setActiveThreadReport(null);
+                if (onClearSelectedReport) onClearSelectedReport();
+              }}
+              closeLabel="Close thread"
+            />
 
             {/* 2. Reference Information: Collapsible Official Admin Notice */}
             {activeThreadReport.referencedNotice && (() => {
@@ -695,12 +680,12 @@ export function ConsumerReportsSection({
               const meterNorm = ref.meterStatus ? normalizeMeterStatus(ref.meterStatus) : null;
               const meterLabel = meterNorm ? formatMeterStatusLabel(meterNorm) : null;
               return (
-                <details className="group bg-slate-950/60 border-b border-slate-800 px-4 sm:px-5 py-1.5 text-xs shrink-0">
+                <details className="group bg-slate-950/45 border-b border-slate-800 px-4 sm:px-5 py-1.5 text-xs shrink-0">
                   <summary className="flex items-center justify-between gap-2 cursor-pointer list-none select-none">
                     <div className="flex items-center gap-1.5 min-w-0 truncate">
                       <Bell className="h-3 w-3 text-sky-400 shrink-0" />
                       <span className="text-[11px] font-medium text-slate-400 shrink-0">Referenced Notice:</span>
-                      <span className="font-semibold text-sky-300 truncate">{ref.subject}</span>
+                      <span className="font-medium text-sky-300 truncate">{ref.subject}</span>
                     </div>
                     <span className="text-[11px] text-slate-400 group-hover:text-slate-200 shrink-0">
                       Details
@@ -746,7 +731,7 @@ export function ConsumerReportsSection({
                     {new Date(activeThreadReport.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
-                <div className="w-fit max-w-[82%] sm:max-w-[72%] bg-slate-800 border border-slate-700/85 rounded-2xl rounded-tr-sm px-3 py-2 text-[13.5px] text-slate-100 leading-[1.55] space-y-2 break-words">
+                <div className="w-fit max-w-[82%] sm:max-w-[72%] bg-slate-800/90 border border-slate-700/75 rounded-xl rounded-tr-sm px-3 py-2 text-[13.5px] text-slate-100 leading-[1.55] space-y-2 break-words">
                   <p>{activeThreadReport.description}</p>
 
                   {activeThreadReport.photoUrl && (
@@ -790,12 +775,12 @@ export function ConsumerReportsSection({
                     </div>
 
                     <div
-                      className={`w-fit max-w-[82%] sm:max-w-[72%] rounded-2xl px-3 py-2 text-[13.5px] leading-[1.55] border break-words ${
+                      className={`w-fit max-w-[82%] sm:max-w-[72%] rounded-xl px-3 py-2 text-[13.5px] leading-[1.55] border break-words ${
                         isAutoAck
-                          ? 'rounded-tl-sm bg-slate-950/90 text-slate-200 border-indigo-500/40'
+                          ? 'rounded-tl-sm bg-slate-950/80 text-slate-200 border-indigo-500/40'
                           : isAdmin
-                          ? 'rounded-tl-sm bg-[#132b4f] text-slate-50 border-blue-600/45'
-                          : 'rounded-tr-sm bg-slate-800 text-slate-100 border-slate-700/85'
+                          ? 'rounded-tl-sm bg-blue-950/75 text-slate-50 border-blue-700/50'
+                          : 'rounded-tr-sm bg-slate-800/90 text-slate-100 border-slate-700/75'
                       }`}
                     >
                       <p>{reply.message}</p>
@@ -803,7 +788,7 @@ export function ConsumerReportsSection({
                       {reply.statusUpdate && (
                         <div className="mt-1.5 pt-1 border-t border-white/10 text-[11.5px] font-medium text-slate-300 flex items-center gap-1.5">
                           <RefreshCw className="h-3 w-3 text-sky-400 shrink-0" />
-                          <span>Status updated to <strong className="text-white capitalize">{reply.statusUpdate.replace('_', ' ')}</strong></span>
+                          <span>Status updated to <strong className="text-white capitalize font-medium">{reply.statusUpdate.replace('_', ' ')}</strong></span>
                         </div>
                       )}
                     </div>
@@ -814,21 +799,21 @@ export function ConsumerReportsSection({
             </div>
 
             {/* 4. Compact Reply Composer Input Form */}
-            <form onSubmit={handleSendReply} className="px-4 sm:px-5 py-2 bg-slate-950 border-t border-slate-800 shrink-0">
+            <form onSubmit={handleSendReply} className="px-4 sm:px-5 py-2 bg-slate-900 border-t border-slate-800 shrink-0">
               <div className="flex items-center gap-2">
                 <input
                   type="text"
                   value={replyMessage}
                   onChange={(e) => setReplyMessage(e.target.value)}
                   placeholder="Write your reply to Administration..."
-                  className="flex-grow h-[40px] px-3 bg-slate-900 border border-slate-700 rounded-xl text-[13.5px] focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-white placeholder:text-slate-500 transition"
+                  className="flex-grow h-[38px] px-3 bg-slate-950 border border-slate-700 rounded-lg text-[13.5px] focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-white placeholder:text-slate-500 transition"
                   disabled={isSendingReply}
                 />
                 <ModalButton
                   type="submit"
                   variant="primary"
                   disabled={isSendingReply || !replyMessage.trim()}
-                  className="h-[40px] px-4"
+                  className="h-[38px] px-4"
                 >
                   <Send className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">{isSendingReply ? 'Sending...' : 'Reply'}</span>

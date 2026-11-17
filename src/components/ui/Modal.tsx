@@ -27,28 +27,28 @@ const MODAL_SIZE_CLASSES: Record<ModalSize, string> = {
   full: 'max-w-[calc(100vw-1.5rem)]',
 };
 
-const TONE_ICON_BOX: Record<ModalTone, string> = {
-  neutral: 'bg-slate-800/80 border-slate-700 text-slate-300',
-  info: 'bg-sky-500/15 border-sky-500/30 text-sky-400',
-  success: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400',
-  warning: 'bg-amber-500/15 border-amber-500/30 text-amber-400',
-  danger: 'bg-rose-500/15 border-rose-500/30 text-rose-400',
-};
-
-const TONE_EYEBROW_TEXT: Record<ModalTone, string> = {
-  neutral: 'text-slate-400',
+const TONE_TEXT: Record<ModalTone, string> = {
+  neutral: 'text-slate-300',
   info: 'text-sky-400',
   success: 'text-emerald-400',
   warning: 'text-amber-300',
   danger: 'text-rose-400',
 };
 
+const TONE_DOT: Record<ModalTone, string> = {
+  neutral: 'bg-slate-400',
+  info: 'bg-sky-400',
+  success: 'bg-emerald-400',
+  warning: 'bg-amber-400',
+  danger: 'bg-rose-400',
+};
+
 const TONE_SURFACE: Record<ModalTone, string> = {
-  neutral: 'bg-slate-950/75 border-slate-800 text-slate-200',
-  info: 'bg-sky-950/30 border-sky-500/25 text-slate-200',
-  success: 'bg-emerald-950/30 border-emerald-500/25 text-slate-200',
-  warning: 'bg-amber-950/30 border-amber-500/30 text-slate-200',
-  danger: 'bg-rose-950/30 border-rose-500/30 text-slate-200',
+  neutral: 'bg-slate-950/60 border-slate-800 text-slate-200',
+  info: 'bg-sky-950/25 border-sky-500/25 text-slate-200',
+  success: 'bg-emerald-950/25 border-emerald-500/25 text-slate-200',
+  warning: 'bg-amber-950/25 border-amber-500/30 text-slate-200',
+  danger: 'bg-rose-950/25 border-rose-500/30 text-slate-200',
 };
 
 const TONE_HEADING: Record<ModalTone, string> = {
@@ -121,13 +121,13 @@ const ModalRoot: React.FC<ModalProps> = ({
       }}
       className={
         backdropClassName ||
-        `fixed inset-0 ${zIndexClass} bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-fade-in`
+        `fixed inset-0 ${zIndexClass} bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4 animate-fade-in`
       }
     >
       <div
         className={
           dialogClassName ||
-          `w-full ${MODAL_SIZE_CLASSES[size]} ${maxHeightClass} h-auto flex flex-col overflow-hidden rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl text-slate-100 ${className}`
+          `w-full ${MODAL_SIZE_CLASSES[size]} ${maxHeightClass} h-auto flex flex-col overflow-hidden rounded-xl bg-slate-900 border border-slate-800 shadow-2xl text-slate-100 ${className}`
         }
         onClick={(e) => e.stopPropagation()}
       >
@@ -143,10 +143,148 @@ const ModalRoot: React.FC<ModalProps> = ({
   return content;
 };
 
+const TONE_BADGE: Record<ModalTone, string> = {
+  neutral: 'bg-slate-800/90 border-slate-700/80 text-slate-300',
+  info: 'bg-sky-500/10 border-sky-500/25 text-sky-300',
+  success: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300',
+  warning: 'bg-amber-500/10 border-amber-500/25 text-amber-300',
+  danger: 'bg-rose-500/10 border-rose-500/25 text-rose-300',
+};
+
+export interface ModalHeaderStatus {
+  label: React.ReactNode;
+  tone?: ModalTone;
+}
+
+export interface NotificationModalHeaderProps {
+  title: React.ReactNode;
+  idCode?: React.ReactNode;
+  status?: ModalHeaderStatus;
+  timestamp?: React.ReactNode;
+  category?: React.ReactNode;
+  context?: React.ReactNode;
+  icon?: React.ReactNode;
+  tone?: ModalTone;
+  actions?: React.ReactNode;
+  onClose?: () => void;
+  closeLabel?: string;
+  titleId?: string;
+  className?: string;
+}
+
+/**
+ * Unified, compact header for all notification, advisory, inquiry, and alert modals.
+ * - Row 1 (Flexbox): Prominent title + optional inline icon + close/action controls
+ * - Row 2 (Single-line Flexbox): ID code, status pill, category/priority, and timestamp
+ * - Optional Context Strip: Compact secondary sender/account line when applicable
+ */
+export const NotificationModalHeader: React.FC<NotificationModalHeaderProps> = ({
+  title,
+  idCode,
+  status,
+  timestamp,
+  category,
+  context,
+  icon,
+  tone = 'neutral',
+  actions,
+  onClose,
+  closeLabel = 'Close dialog',
+  titleId,
+  className = '',
+}) => {
+  const statusTone = status?.tone || tone;
+  const hasMetaRow = Boolean(idCode || status || category || timestamp);
+
+  return (
+    <div
+      className={`px-4 sm:px-5 py-2.5 bg-slate-900 border-b border-slate-800 shrink-0 ${className}`}
+    >
+      {/* Row 1: Flexbox alignment for Title + Actions + Close */}
+      <div className="flex items-start justify-between gap-3 min-w-0">
+        <div className="flex items-start gap-2 min-w-0 flex-1 pt-0.5">
+          {icon && (
+            <span
+              className={`shrink-0 inline-flex items-center justify-center mt-[2px] ${TONE_TEXT[tone]}`}
+            >
+              {icon}
+            </span>
+          )}
+          <h3
+            id={titleId}
+            className="text-[15px] sm:text-base font-semibold text-white leading-snug tracking-tight break-words min-w-0"
+          >
+            {title}
+          </h3>
+        </div>
+
+        {(actions || onClose) && (
+          <div className="flex items-center gap-1.5 shrink-0 whitespace-nowrap">
+            {actions}
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label={closeLabel}
+                title="Close"
+                className="inline-flex items-center justify-center h-6 w-6 -mr-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Row 2: Single-line Meta-Information (ID, Status, Category, Timestamp) */}
+      {hasMetaRow && (
+        <div className="mt-1.5 flex items-center justify-between gap-2.5 flex-nowrap min-w-0">
+          <div className="flex items-center flex-nowrap gap-2 min-w-0 flex-1 overflow-hidden">
+            {idCode && (
+              <span className="inline-flex items-center h-5 px-1.5 rounded bg-slate-800/90 border border-slate-700/80 font-mono text-[11px] leading-none font-medium text-slate-200 tabular-nums whitespace-nowrap shrink-0">
+                {idCode}
+              </span>
+            )}
+            {status && (
+              <span
+                className={`inline-flex items-center gap-1.5 h-5 px-2 rounded border text-[11px] leading-none font-medium whitespace-nowrap shrink-0 ${TONE_BADGE[statusTone]}`}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${TONE_DOT[statusTone]}`} />
+                <span>{status.label}</span>
+              </span>
+            )}
+            {category && (
+              <span className="min-w-0 truncate text-[11.5px] leading-5 text-slate-400">
+                {category}
+              </span>
+            )}
+          </div>
+
+          {timestamp && (
+            <span className="inline-flex items-center h-5 font-mono text-[11px] leading-none tabular-nums text-slate-400 whitespace-nowrap shrink-0">
+              {timestamp}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Optional Compact Secondary Context (Consumer / Sender details) */}
+      {context && (
+        <div className="mt-1.5 pt-1.5 border-t border-slate-800/75 text-[11.5px] leading-snug text-slate-400">
+          {context}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export interface ModalHeaderProps {
   title: React.ReactNode;
+  code?: React.ReactNode;
   eyebrow?: React.ReactNode;
   subtitle?: React.ReactNode;
+  subtitleRight?: React.ReactNode;
+  status?: ModalHeaderStatus;
   icon?: React.ReactNode;
   tone?: ModalTone;
   onClose?: () => void;
@@ -158,8 +296,11 @@ export interface ModalHeaderProps {
 
 export const ModalHeader: React.FC<ModalHeaderProps> = ({
   title,
+  code,
   eyebrow,
   subtitle,
+  subtitleRight,
+  status,
   icon,
   tone = 'neutral',
   onClose,
@@ -168,51 +309,115 @@ export const ModalHeader: React.FC<ModalHeaderProps> = ({
   titleId,
   className = '',
 }) => {
-  return (
-    <div
-      className={`px-4 sm:px-5 py-2.5 sm:py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2.5 shrink-0 ${className}`}
-    >
-      <div className="flex items-center gap-2.5 min-w-0 flex-1">
-        {icon && (
-          <div
-            className={`p-1.5 rounded-lg border shrink-0 flex items-center justify-center ${TONE_ICON_BOX[tone]}`}
-          >
-            {icon}
+  const hasTopBarMeta = Boolean(code || eyebrow || status);
+  const statusTone = status?.tone || tone;
+
+  if (!hasTopBarMeta) {
+    return (
+      <div
+        className={`px-4 sm:px-5 py-2.5 bg-slate-900 border-b border-slate-800 shrink-0 ${className}`}
+      >
+        <div className="flex items-center justify-between gap-3 min-h-[24px]">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            {icon && (
+              <span className={`shrink-0 inline-flex items-center justify-center ${TONE_TEXT[tone]}`}>
+                {icon}
+              </span>
+            )}
+            <h3
+              id={titleId}
+              className="text-[15px] sm:text-base font-semibold text-white leading-snug tracking-tight truncate"
+            >
+              {title}
+            </h3>
           </div>
-        )}
-        <div className="min-w-0 flex-1">
-          {eyebrow && (
-            <div className={`text-[11px] font-semibold leading-tight truncate ${TONE_EYEBROW_TEXT[tone]}`}>
-              {eyebrow}
-            </div>
-          )}
-          <h3
-            id={titleId}
-            className="text-sm sm:text-[15px] font-bold text-white leading-snug tracking-tight break-words line-clamp-2"
-          >
-            {title}
-          </h3>
-          {subtitle && (
-            <div className="text-[11px] text-slate-400 leading-tight mt-0.5 truncate">
-              {subtitle}
+
+          {(actions || onClose) && (
+            <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
+              {actions}
+              {onClose && (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  aria-label={closeLabel}
+                  className="inline-flex items-center justify-center h-6 w-6 -mr-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
             </div>
           )}
         </div>
+        {(subtitle || subtitleRight) && (
+          <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-slate-400 leading-normal">
+            {subtitle && <div className="min-w-0">{subtitle}</div>}
+            {subtitleRight && <div className="shrink-0 ml-auto">{subtitleRight}</div>}
+          </div>
+        )}
       </div>
+    );
+  }
 
-      {(actions || onClose) && (
-        <div className="flex items-center gap-1.5 shrink-0">
+  return (
+    <div
+      className={`px-4 sm:px-5 py-2.5 bg-slate-900 border-b border-slate-800 shrink-0 ${className}`}
+    >
+      {/* Row 1: Single-line aligned bar for code, metadata, status, actions, and close */}
+      <div className="flex items-center justify-between gap-3 min-h-[24px] min-w-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          {icon && (
+            <span className={`shrink-0 inline-flex items-center justify-center h-5 ${TONE_TEXT[tone]}`}>
+              {icon}
+            </span>
+          )}
+          {code && (
+            <span className="inline-flex items-center h-5 px-1.5 rounded bg-slate-800/90 border border-slate-700/80 font-mono text-[11px] leading-none font-medium text-slate-200 tabular-nums shrink-0 whitespace-nowrap">
+              {code}
+            </span>
+          )}
+          {eyebrow && (
+            <div className="min-w-0 truncate text-xs leading-5 text-slate-400">
+              {eyebrow}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
+          {status && (
+            <span
+              className={`inline-flex items-center gap-1.5 h-5 px-2 rounded border text-[11px] leading-none font-medium whitespace-nowrap ${TONE_BADGE[statusTone]}`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${TONE_DOT[statusTone]}`} />
+              <span>{status.label}</span>
+            </span>
+          )}
           {actions}
           {onClose && (
             <button
               type="button"
               onClick={onClose}
               aria-label={closeLabel}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
+              className="inline-flex items-center justify-center h-6 w-6 -mr-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
             >
               <X className="h-4 w-4" />
             </button>
           )}
+        </div>
+      </div>
+
+      {/* Row 2: Prominent Title */}
+      <h3
+        id={titleId}
+        className="text-[15px] sm:text-base font-semibold text-white leading-snug tracking-tight mt-1 break-words"
+      >
+        {title}
+      </h3>
+
+      {/* Row 3: Baseline-aligned secondary metadata */}
+      {(subtitle || subtitleRight) && (
+        <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-slate-400 leading-normal">
+          {subtitle && <div className="min-w-0">{subtitle}</div>}
+          {subtitleRight && <div className="shrink-0 ml-auto">{subtitleRight}</div>}
         </div>
       )}
     </div>
@@ -233,7 +438,7 @@ export const ModalBody: React.FC<ModalBodyProps> = ({
   return (
     <div
       className={`flex-1 min-h-0 overflow-y-auto ${
-        noPadding ? '' : 'px-4 sm:px-5 py-3 sm:py-3.5 space-y-3'
+        noPadding ? '' : 'px-4 sm:px-5 py-3 space-y-3'
       } text-[13.5px] leading-[1.6] text-slate-200 break-words ${className}`}
     >
       {children}
@@ -261,7 +466,7 @@ export const ModalFooter: React.FC<ModalFooterProps> = ({
 
   return (
     <div
-      className={`px-4 sm:px-5 py-2.5 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center ${alignClass} gap-2 shrink-0 ${className}`}
+      className={`px-4 sm:px-5 py-2 bg-slate-900 border-t border-slate-800 flex flex-wrap items-center ${alignClass} gap-2 shrink-0 ${className}`}
     >
       {children}
     </div>

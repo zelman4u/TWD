@@ -365,70 +365,70 @@ export const RecordsArchiveView: React.FC<RecordsArchiveViewProps> = ({
   return (
     <div className="space-y-6" id="records-archive-view">
       {/* 1. ARCHIVE CONTEXT STATS BAR */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-bold uppercase tracking-wider">Master Accounts</span>
-            <Building2 className="h-4 w-4 text-blue-400" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-3">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3.5 flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px] text-slate-400">
+            <span className="text-[11px] font-semibold uppercase tracking-wider truncate">Master Accounts</span>
+            <Building2 className="h-4 w-4 text-blue-400 shrink-0" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-white tabular-nums">{totalConsumers.toLocaleString()}</div>
-            <div className="text-[10px] text-slate-400 font-mono tabular-nums mt-0.5">{activeConsumers} Active Connected</div>
+            <div className="text-xl font-bold font-mono text-white tabular-nums leading-none">{totalConsumers.toLocaleString()}</div>
+            <div className="text-xs text-slate-400 font-mono tabular-nums mt-1.5">{activeConsumers} Active Connected</div>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-bold uppercase tracking-wider">Meters Tracked</span>
-            <Gauge className="h-4 w-4 text-cyan-400" />
+        <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3.5 flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px] text-slate-400">
+            <span className="text-[11px] font-semibold uppercase tracking-wider truncate">Meters Tracked</span>
+            <Gauge className="h-4 w-4 text-cyan-400 shrink-0" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-white tabular-nums">{totalMeters.toLocaleString()}</div>
-            <div className="text-[10px] text-slate-400 font-mono tabular-nums mt-0.5">{activeMeters} Operational</div>
+            <div className="text-xl font-bold font-mono text-white tabular-nums leading-none">{totalMeters.toLocaleString()}</div>
+            <div className="text-xs text-slate-400 font-mono tabular-nums mt-1.5">{activeMeters} Operational</div>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-bold uppercase tracking-wider">Field Readings</span>
-            <Activity className="h-4 w-4 text-emerald-400" />
+        <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3.5 flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px] text-slate-400">
+            <span className="text-[11px] font-semibold uppercase tracking-wider truncate">Field Readings</span>
+            <Activity className="h-4 w-4 text-emerald-400 shrink-0" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-emerald-400 tabular-nums">{totalReadings.toLocaleString()}</div>
-            <div className="text-[10px] text-slate-400 font-mono tabular-nums mt-0.5">{verifiedReadings} Verified Records</div>
+            <div className="text-xl font-bold font-mono text-emerald-400 tabular-nums leading-none">{totalReadings.toLocaleString()}</div>
+            <div className="text-xs text-slate-400 font-mono tabular-nums mt-1.5">{verifiedReadings} Verified Records</div>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-bold uppercase tracking-wider">Billed Assessments</span>
-            <Receipt className="h-4 w-4 text-sky-400" />
+        <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3.5 flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px] text-slate-400">
+            <span className="text-[11px] font-semibold uppercase tracking-wider truncate">Billed Assessments</span>
+            <Receipt className="h-4 w-4 text-sky-400 shrink-0" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-white tabular-nums">{bills.length.toLocaleString()}</div>
-            <div className="text-[10px] text-slate-400 font-mono tabular-nums mt-0.5">{bills.length - paidBills.length} Pending Collections</div>
+            <div className="text-xl font-bold font-mono text-white tabular-nums leading-none">{bills.length.toLocaleString()}</div>
+            <div className="text-xs text-slate-400 font-mono tabular-nums mt-1.5">{bills.length - paidBills.length} Pending Collections</div>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-bold uppercase tracking-wider">Cash Collections</span>
-            <CreditCard className="h-4 w-4 text-emerald-400" />
+        <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3.5 flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px] text-slate-400">
+            <span className="text-[11px] font-semibold uppercase tracking-wider truncate">Cash Collections</span>
+            <CreditCard className="h-4 w-4 text-emerald-400 shrink-0" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-emerald-400 tabular-nums">₱{totalCollectedAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-            <div className="text-[10px] text-emerald-300 font-mono tabular-nums mt-0.5">{paidBills.length} Valid Official Receipts</div>
+            <div className="text-xl font-bold font-mono text-emerald-400 tabular-nums leading-none truncate">₱{totalCollectedAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+            <div className="text-xs text-emerald-300 font-mono tabular-nums mt-1.5">{paidBills.length} Valid Official Receipts</div>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-md">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[10px] font-bold uppercase tracking-wider">Audit Security</span>
-            <ShieldCheck className="h-4 w-4 text-indigo-400" />
+        <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3.5 flex flex-col justify-between min-w-0">
+          <div className="flex items-center justify-between gap-2 min-h-[18px] text-slate-400">
+            <span className="text-[11px] font-semibold uppercase tracking-wider truncate">Audit Security</span>
+            <ShieldCheck className="h-4 w-4 text-indigo-400 shrink-0" />
           </div>
           <div className="mt-2">
-            <div className="text-xl font-black text-white tabular-nums">{auditLogs.length.toLocaleString()}</div>
-            <div className="text-[10px] text-slate-400 font-mono mt-0.5">Immutable System Events</div>
+            <div className="text-xl font-bold font-mono text-white tabular-nums leading-none">{auditLogs.length.toLocaleString()}</div>
+            <div className="text-xs text-slate-400 font-mono mt-1.5">Immutable System Events</div>
           </div>
         </div>
       </div>

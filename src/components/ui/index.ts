@@ -4,3 +4,4 @@
  */
 
 export * from './Modal';
+export * from './NotificationCenter';

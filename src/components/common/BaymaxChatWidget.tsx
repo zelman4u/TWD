@@ -26,7 +26,6 @@ import {
   Copy,
   Check,
   Globe,
-  Sparkles,
   Heart,
   ShieldCheck,
   Droplets,
@@ -648,19 +647,17 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                 <X className="h-3.5 w-3.5" />
               </button>
               <div className="flex items-start gap-2.5 pr-5">
-                <div className={`p-1.5 rounded-xl shrink-0 border mt-0.5 ${
-                  isConsumer
-                    ? 'bg-sky-500/15 text-sky-400 border-sky-500/30'
-                    : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                <div className={`shrink-0 mt-0.5 ${
+                  isConsumer ? 'text-sky-400' : 'text-emerald-400'
                 }`}>
                   {isConsumer ? <Heart className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
                 </div>
-                <div className="min-w-0 space-y-1">
+                <div className="min-w-0 space-y-0.5">
                   <div className="flex items-center gap-1.5 text-xs">
-                    <span className="font-bold text-white">{botName}</span>
+                    <span className="font-semibold text-white">{botName}</span>
                     <span aria-hidden="true" className="text-slate-600">·</span>
                     <span className={isConsumer ? 'font-medium text-sky-400' : 'font-medium text-emerald-400'}>
-                      Assistant Ready
+                      Ready
                     </span>
                   </div>
                   <p className="text-xs text-slate-200 leading-relaxed">
@@ -682,14 +679,14 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
             onClick={handleLauncherClick}
             onDoubleClick={resetLauncherPosition}
             title="Grab and drag anywhere to avoid blocking buttons behind • Click to open • Double-click to snap back"
-            className={`pointer-events-auto touch-none group relative flex items-center space-x-2 px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-full shadow-2xl transition-[box-shadow,transform,ring] duration-150 select-none ${
+            className={`pointer-events-auto touch-none group relative flex items-center space-x-2 px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-full shadow-xl transition-[box-shadow,transform] duration-150 select-none border ${
               isDraggingLauncher
-                ? 'cursor-grabbing scale-105 ring-4 ring-sky-400/70 shadow-sky-500/50 opacity-95'
-                : 'cursor-grab hover:scale-105 active:scale-95'
+                ? 'cursor-grabbing scale-105 ring-2 ring-sky-400/70 opacity-95'
+                : 'cursor-grab hover:scale-[1.03] active:scale-95'
             } ${
               isConsumer
-                ? 'bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-600 text-white hover:shadow-sky-500/30 hover:ring-4 hover:ring-sky-500/20'
-                : 'bg-slate-900 border border-emerald-500/50 text-white hover:border-emerald-400 hover:shadow-emerald-500/20'
+                ? 'bg-blue-600 hover:bg-blue-500 border-blue-500/60 text-white'
+                : 'bg-slate-900 border-emerald-500/50 text-white hover:border-emerald-400'
             }`}
           >
             <div
@@ -700,14 +697,14 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
             </div>
 
             <div className="relative flex items-center justify-center shrink-0">
-              <div className={`p-1.5 rounded-full ${isConsumer ? 'bg-white/15' : 'bg-emerald-500/20 text-emerald-400'}`}>
+              <div className={`p-1 rounded-full ${isConsumer ? 'bg-white/15' : 'bg-emerald-500/15 text-emerald-400'}`}>
                 <Bot className="h-4 w-4" />
               </div>
             </div>
 
             <div className="text-left hidden sm:block pr-1">
-              <div className="text-xs font-bold tracking-tight leading-none">{botName}</div>
-              <div className="text-[11px] text-slate-200/85 font-medium leading-none mt-1">
+              <div className="text-xs font-semibold tracking-tight leading-none">{botName}</div>
+              <div className="text-[11px] text-slate-200/85 leading-none mt-1">
                 {botSubtitle}
               </div>
             </div>
@@ -730,7 +727,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                   zIndex: 9999,
                 }
           }
-          className={`z-50 transition-[box-shadow,border-color] duration-150 flex flex-col shadow-2xl overflow-hidden bg-slate-900 border border-slate-800 rounded-2xl ${
+          className={`z-50 transition-[box-shadow,border-color] duration-150 flex flex-col shadow-2xl overflow-hidden bg-slate-900 border border-slate-800 rounded-xl ${
             isExpanded
               ? 'fixed inset-3 sm:inset-6 md:inset-10'
               : 'w-[calc(100vw-1.5rem)] sm:w-[410px] min-h-[380px] h-[min(560px,80vh)] max-h-[84vh]'
@@ -744,7 +741,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
             onPointerCancel={handleModalPointerUp}
             onDoubleClick={resetModalPosition}
             title={isExpanded ? undefined : 'Drag header to move chat window • Double-click to snap back'}
-            className={`px-4 py-3 flex items-center justify-between border-b border-slate-800 bg-slate-950 shrink-0 select-none touch-none ${
+            className={`px-4 py-2 flex items-center justify-between gap-2 border-b border-slate-800 bg-slate-900 shrink-0 select-none touch-none ${
               !isExpanded ? (isDraggingModal ? 'cursor-grabbing' : 'cursor-grab') : ''
             }`}
           >
@@ -754,28 +751,18 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                   <GripVertical className="h-4 w-4" />
                 </div>
               )}
-              <div
-                className={`p-1.5 rounded-xl border shrink-0 ${
-                  isConsumer
-                    ? 'bg-sky-500/15 border-sky-500/30 text-sky-400'
-                    : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
-                }`}
-              >
-                <Bot className="h-4 w-4" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <h3 className="text-sm font-bold text-white truncate tracking-tight leading-snug">{botName}</h3>
-                  <span className="text-slate-600 text-xs" aria-hidden="true">·</span>
-                  <span className={`text-[11px] font-semibold truncate ${isConsumer ? 'text-sky-400' : 'text-emerald-400'}`}>
-                    {isConsumer ? 'Consumer Help' : 'Admin Companion'}
-                  </span>
-                </div>
+              <Bot className={`h-4 w-4 shrink-0 ${isConsumer ? 'text-sky-400' : 'text-emerald-400'}`} />
+              <div className="flex items-center gap-1.5 min-w-0">
+                <h3 className="text-sm font-semibold text-white truncate tracking-tight leading-snug">{botName}</h3>
+                <span className="text-slate-600 text-xs" aria-hidden="true">·</span>
+                <span className={`text-[11.5px] font-medium truncate ${isConsumer ? 'text-sky-400' : 'text-emerald-400'}`}>
+                  {isConsumer ? 'Consumer Help' : 'Admin Help'}
+                </span>
               </div>
             </div>
 
             <div
-              className="flex items-center gap-0.5 shrink-0 ml-2"
+              className="flex items-center gap-0.5 shrink-0 whitespace-nowrap"
               onPointerDown={(e) => e.stopPropagation()}
             >
               {!isExpanded && (
@@ -784,7 +771,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                   data-no-drag="true"
                   onClick={resetModalPosition}
                   title="Snap chat window back to corner"
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition cursor-pointer"
+                  className="p-1 rounded-md text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition cursor-pointer"
                 >
                   <LocateFixed className="h-3.5 w-3.5" />
                 </button>
@@ -795,7 +782,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                 data-no-drag="true"
                 onClick={() => setSoundEnabled(!soundEnabled)}
                 title={soundEnabled ? 'Mute sound' : 'Enable sound'}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
               >
                 {soundEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
               </button>
@@ -805,7 +792,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                 data-no-drag="true"
                 onClick={() => setConfirmingReset((prev) => !prev)}
                 title="Reset conversation"
-                className={`p-1.5 rounded-lg transition cursor-pointer ${
+                className={`p-1 rounded-md transition cursor-pointer ${
                   confirmingReset
                     ? 'bg-amber-500/20 text-amber-300'
                     : 'text-slate-400 hover:text-amber-300 hover:bg-slate-800'
@@ -819,7 +806,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                 data-no-drag="true"
                 onClick={() => setIsExpanded(!isExpanded)}
                 title={isExpanded ? 'Restore size' : 'Expand'}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer hidden sm:block"
+                className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer hidden sm:block"
               >
                 {isExpanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
               </button>
@@ -829,29 +816,29 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                 data-no-drag="true"
                 onClick={() => setIsOpen(false)}
                 title="Close chat"
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                className="p-1 -mr-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
           </div>
 
           {/* Inline Reset Confirmation Bar */}
           {confirmingReset && (
-            <div className="px-4 py-2 bg-amber-950/60 border-b border-amber-500/30 flex items-center justify-between gap-2 text-xs shrink-0">
+            <div className="px-4 py-1.5 bg-amber-950/50 border-b border-amber-500/30 flex items-center justify-between gap-2 text-xs shrink-0">
               <span className="text-amber-200 font-medium">Start a fresh conversation?</span>
               <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => setConfirmingReset(false)}
-                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold cursor-pointer whitespace-nowrap"
+                  className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium cursor-pointer whitespace-nowrap"
                 >
                   Keep Chat
                 </button>
                 <button
                   type="button"
                   onClick={handleClearHistory}
-                  className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold cursor-pointer whitespace-nowrap"
+                  className="px-2.5 py-1 rounded-md bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold cursor-pointer whitespace-nowrap"
                 >
                   Reset
                 </button>
@@ -860,10 +847,10 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
           )}
 
           {/* Slim Language Selector Sub-bar */}
-          <div className="px-4 py-1.5 bg-slate-950/50 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0 text-xs">
+          <div className="px-4 py-1.5 bg-slate-950/40 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0 text-xs">
             <div className="flex items-center gap-1.5 text-slate-400 font-medium">
               <Globe className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-              <span className="text-[11px]">Reply Language</span>
+              <span className="text-[11px]">Language</span>
             </div>
             <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
               {([
@@ -876,10 +863,10 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
                   key={langOpt.id}
                   type="button"
                   onClick={() => setLanguage(langOpt.id)}
-                  className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium transition cursor-pointer whitespace-nowrap shrink-0 ${
                     language === langOpt.id
-                      ? 'bg-sky-600 text-white'
-                      : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700'
+                      ? 'bg-blue-600 text-white'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
                   }`}
                 >
                   {langOpt.label}
@@ -889,19 +876,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
           </div>
 
           {/* Scrollable Message Thread */}
-          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3 bg-slate-900 text-slate-100">
-            {/* Compact helper tip shown only before user starts conversing */}
-            {messages.length <= 1 && (
-              <div className="rounded-xl bg-slate-950/75 border border-slate-800 px-3 py-2 flex items-center gap-2 text-xs text-slate-300">
-                <Sparkles className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-                <span className="leading-snug">
-                  {isConsumer
-                    ? 'Understands English, Tagalog, and Bisaya — ask about bills, 50% partial payment, or leaks.'
-                    : 'Operational guidance ready for arrears, disconnection scanning, and reader telemetry.'}
-                </span>
-              </div>
-            )}
-
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-2.5 bg-slate-900 text-slate-100">
             {/* Conversation Messages */}
             {messages.map((m) => {
               const isUser = m.role === 'user';
@@ -950,10 +925,10 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
 
                   {/* Compact Content-Proportioned Message Bubble */}
                   <div
-                    className={`w-fit max-w-[84%] sm:max-w-[min(78%,60ch)] rounded-2xl px-3 py-2 text-[13.5px] leading-[1.55] break-words ${
+                    className={`w-fit max-w-[84%] sm:max-w-[min(78%,60ch)] rounded-xl px-3 py-2 text-[13.5px] leading-[1.55] break-words border ${
                       isUser
-                        ? 'rounded-tr-sm bg-blue-600 text-white border border-blue-500/70'
-                        : 'rounded-tl-sm bg-slate-950 border border-slate-800 text-slate-100'
+                        ? 'rounded-tr-sm bg-blue-950/75 text-slate-50 border-blue-700/50'
+                        : 'rounded-tl-sm bg-slate-800/90 border-slate-700/75 text-slate-100'
                     }`}
                   >
                     <div className="space-y-1.5">{renderFormattedText(m.text, isUser)}</div>
@@ -967,11 +942,11 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
               <div className="flex flex-col items-start">
                 <div className="space-y-1">
                   <div className="flex items-center gap-1.5 text-[11px] text-slate-400 px-0.5">
-                    <span className={`font-semibold ${isConsumer ? 'text-sky-300' : 'text-emerald-300'}`}>
+                    <span className={`font-medium ${isConsumer ? 'text-sky-300' : 'text-emerald-300'}`}>
                       {botName}
                     </span>
                   </div>
-                  <div className="bg-slate-950 border border-slate-800 rounded-2xl px-3.5 py-2 text-xs text-slate-200 flex items-center gap-2">
+                  <div className="bg-slate-800/90 border border-slate-700/75 rounded-xl rounded-tl-sm px-3 py-2 text-xs text-slate-200 flex items-center gap-2">
                     <span>Thinking</span>
                     <div className="flex items-center space-x-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-sky-400 animate-bounce [animation-delay:-0.3s]"></span>
@@ -987,14 +962,14 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
           </div>
 
           {/* Quick Prompt Suggestions */}
-          <div className="px-4 py-2 bg-slate-950/60 border-t border-slate-800 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
+          <div className="px-4 py-1.5 bg-slate-950/40 border-t border-slate-800 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
             {getSuggestions().map((s, idx) => (
               <button
                 key={idx}
                 type="button"
                 onClick={() => handleSendMessage(s)}
                 disabled={isTyping}
-                className="whitespace-nowrap shrink-0 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-[11px] font-medium transition cursor-pointer disabled:opacity-50"
+                className="whitespace-nowrap shrink-0 px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-[11px] font-medium transition cursor-pointer disabled:opacity-50"
               >
                 {s}
               </button>
@@ -1002,7 +977,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
           </div>
 
           {/* Compact Footer Input Composer */}
-          <div className="px-4 py-3 bg-slate-950 border-t border-slate-800 shrink-0">
+          <div className="px-4 py-2 bg-slate-900 border-t border-slate-800 shrink-0">
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -1010,7 +985,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
               }}
               className="flex items-end gap-2"
             >
-              <div className="flex-1 bg-slate-900 border border-slate-700 focus-within:border-sky-500 rounded-xl px-3 py-2 transition">
+              <div className="flex-1 bg-slate-950 border border-slate-700 focus-within:border-sky-500 rounded-lg px-3 py-1.5 transition">
                 <textarea
                   ref={inputRef}
                   value={inputMessage}
@@ -1034,7 +1009,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
               <button
                 type="submit"
                 disabled={!inputMessage.trim() || isTyping}
-                className={`px-3 py-2 rounded-xl text-white font-semibold transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0 flex items-center gap-1.5 text-xs whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-white font-medium transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0 flex items-center gap-1.5 text-xs whitespace-nowrap ${
                   isConsumer
                     ? 'bg-blue-600 hover:bg-blue-500'
                     : 'bg-emerald-600 hover:bg-emerald-500'
@@ -1046,7 +1021,7 @@ I provide operational assistance in **English, Tagalog, and Bisaya** for billing
               </button>
             </form>
 
-            <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1.5">
+            <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1">
               <span>Enter to send · Shift+Enter for new line</span>
               <span>Tagoloan Water District</span>
             </div>

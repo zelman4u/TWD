@@ -12,6 +12,8 @@ export type ToastType = 'success' | 'error' | 'warning' | 'info';
 export interface ToastOptions {
   id?: string;
   dedupeKey?: string;
+  sessionDedupeKey?: string;
+  cooldownMs?: number;
   type?: ToastType;
   title: string;
   description?: string;
@@ -30,25 +32,66 @@ export interface ToastItem extends ToastOptions {
   repeatCount?: number;
 }
 
+type ToastHelperExtraOptions = Omit<ToastOptions, 'type' | 'title' | 'description' | 'duration'>;
+
 interface ToastContextType {
   toasts: ToastItem[];
   showToast: (options: ToastOptions) => string;
-  success: (title: string, description?: string, duration?: number) => string;
+  success: (title: string, description?: string, duration?: number, options?: ToastHelperExtraOptions) => string;
   error: (title: string, description?: string, duration?: number) => string;
-  warning: (title: string, description?: string, duration?: number) => string;
-  info: (title: string, description?: string, duration?: number) => string;
+  warning: (title: string, description?: string, duration?: number, options?: ToastHelperExtraOptions) => string;
+  info: (title: string, description?: string, duration?: number, options?: ToastHelperExtraOptions) => string;
   dismissToast: (id: string) => void;
   dismissAll: () => void;
 }
 
 const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
-const TOAST_DEDUPE_WINDOW_MS = 6500;
+const TOAST_DEDUPE_WINDOW_MS = 15000;
+const TOAST_DEDUPE_RETENTION_MS = 60000;
 const MAX_VISIBLE_TOASTS = 3;
+const SESSION_TOAST_KEYS_STORAGE = 'twd_seen_session_toasts_v1';
+const MAX_SESSION_TOAST_KEYS = 250;
+
+function readSeenSessionToastKeys(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = window.sessionStorage?.getItem(SESSION_TOAST_KEYS_STORAGE);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === 'string' && Boolean(k)) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function recordSeenSessionToastKey(key?: string): void {
+  if (!key || typeof window === 'undefined') return;
+  try {
+    const clean = key.trim().toLowerCase();
+    if (!clean) return;
+    const current = Array.from(readSeenSessionToastKeys());
+    if (current.includes(clean)) return;
+    const next = [...current, clean].slice(-MAX_SESSION_TOAST_KEYS);
+    window.sessionStorage?.setItem(SESSION_TOAST_KEYS_STORAGE, JSON.stringify(next));
+  } catch {
+    // Ignore storage restriction
+  }
+}
+
+function hasSeenSessionToastKey(key?: string): boolean {
+  if (!key || typeof window === 'undefined') return false;
+  const clean = key.trim().toLowerCase();
+  if (!clean) return false;
+  return readSeenSessionToastKeys().has(clean);
+}
 
 function buildToastSemanticKey(options: ToastOptions, type: ToastType): string {
   if (options.dedupeKey) {
     return `k:${options.dedupeKey.trim().toLowerCase()}`;
+  }
+  if (options.sessionDedupeKey) {
+    return `sk:${options.sessionDedupeKey.trim().toLowerCase()}`;
   }
   if (options.id) {
     return `id:${options.id.trim().toLowerCase()}`;
@@ -61,6 +104,7 @@ function buildToastSemanticKey(options: ToastOptions, type: ToastType): string {
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const recentSemanticMapRef = useRef<Map<string, { id: string; timestamp: number }>>(new Map());
+  const activeToastsRef = useRef<ToastItem[]>([]);
   const toastTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const clearToastTimer = useCallback((id: string) => {
@@ -73,41 +117,60 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
   const dismissToast = useCallback((id: string) => {
     clearToastTimer(id);
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    setToasts((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      activeToastsRef.current = next;
+      return next;
+    });
   }, [clearToastTimer]);
 
   const dismissAll = useCallback(() => {
     toastTimersRef.current.forEach((timer) => clearTimeout(timer));
     toastTimersRef.current.clear();
+    activeToastsRef.current = [];
     setToasts([]);
   }, []);
 
   const showToast = useCallback((options: ToastOptions): string => {
     const type: ToastType = options.type || 'info';
     const duration = options.duration !== undefined ? options.duration : 4200;
+    const cooldownMs = options.cooldownMs !== undefined ? options.cooldownMs : TOAST_DEDUPE_WINDOW_MS;
     const semanticKey = buildToastSemanticKey(options, type);
     const now = Date.now();
 
-    // Prune expired semantic entries (> 20s) to keep map bounded
+    // Suppress one-time live event toasts already displayed in this browser session
+    if (options.sessionDedupeKey && hasSeenSessionToastKey(options.sessionDedupeKey)) {
+      return `suppressed:${options.sessionDedupeKey}`;
+    }
+
+    // Prune expired semantic entries (> 60s) to keep map bounded
     for (const [k, entry] of recentSemanticMapRef.current.entries()) {
-      if (now - entry.timestamp > 20000) {
+      if (now - entry.timestamp > TOAST_DEDUPE_RETENTION_MS) {
         recentSemanticMapRef.current.delete(k);
       }
     }
 
-    const recentEntry = recentSemanticMapRef.current.get(semanticKey);
-    const isWithinDedupeWindow = Boolean(
-      recentEntry && now - recentEntry.timestamp < TOAST_DEDUPE_WINDOW_MS
+    // Suppress if the exact semantic toast is currently visible OR was recently shown within cooldownMs
+    // (Do NOT re-insert at top or reset dismiss timer, which previously caused "keep popping" loops!)
+    const activeMatch = activeToastsRef.current.find(
+      (t) => (options.id && t.id === options.id) || t.semanticKey === semanticKey
     );
+    if (activeMatch) {
+      return activeMatch.id;
+    }
+
+    const recentEntry = recentSemanticMapRef.current.get(semanticKey);
+    if (recentEntry && now - recentEntry.timestamp < cooldownMs) {
+      return recentEntry.id;
+    }
 
     const targetId =
-      options.id ||
-      (isWithinDedupeWindow && recentEntry
-        ? recentEntry.id
-        : `toast-${now}-${Math.random().toString(36).substring(2, 7)}`);
+      options.id || `toast-${now}-${Math.random().toString(36).substring(2, 7)}`;
 
-    // Suppress back-to-back duplicate banner emissions (e.g. WebSocket + BroadcastChannel + Firestore + Polling firing together)
     recentSemanticMapRef.current.set(semanticKey, { id: targetId, timestamp: now });
+    if (options.sessionDedupeKey) {
+      recordSeenSessionToastKey(options.sessionDedupeKey);
+    }
 
     const newToast: ToastItem = {
       ...options,
@@ -120,22 +183,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     };
 
     setToasts((prev) => {
-      const existingIdx = prev.findIndex(
-        (t) => t.id === targetId || t.semanticKey === semanticKey
-      );
-      if (existingIdx >= 0) {
-        // Refresh existing banner in place instead of spawning a second rapid banner
-        const existing = prev[existingIdx];
-        const refreshed: ToastItem = {
-          ...existing,
-          ...newToast,
-          id: existing.id,
-          repeatCount: existing.repeatCount || 1,
-        };
-        const rest = prev.filter((_, idx) => idx !== existingIdx);
-        return [refreshed, ...rest].slice(0, MAX_VISIBLE_TOASTS);
+      if (prev.some((t) => t.id === targetId || t.semanticKey === semanticKey)) {
+        return prev;
       }
-      return [newToast, ...prev].slice(0, MAX_VISIBLE_TOASTS);
+      const next = [newToast, ...prev].slice(0, MAX_VISIBLE_TOASTS);
+      activeToastsRef.current = next;
+      return next;
     });
 
     clearToastTimer(targetId);
@@ -150,8 +203,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   }, [clearToastTimer, dismissToast]);
 
   const success = useCallback(
-    (title: string, description?: string, duration?: number) =>
-      showToast({ type: 'success', title, description, duration }),
+    (title: string, description?: string, duration?: number, options?: ToastHelperExtraOptions) =>
+      showToast({ ...options, type: 'success', title, description, duration }),
     [showToast]
   );
 
@@ -162,14 +215,14 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   );
 
   const warning = useCallback(
-    (title: string, description?: string, duration?: number) =>
-      showToast({ type: 'warning', title, description, duration }),
+    (title: string, description?: string, duration?: number, options?: ToastHelperExtraOptions) =>
+      showToast({ ...options, type: 'warning', title, description, duration }),
     [showToast]
   );
 
   const info = useCallback(
-    (title: string, description?: string, duration?: number) =>
-      showToast({ type: 'info', title, description, duration }),
+    (title: string, description?: string, duration?: number, options?: ToastHelperExtraOptions) =>
+      showToast({ ...options, type: 'info', title, description, duration }),
     [showToast]
   );
 
