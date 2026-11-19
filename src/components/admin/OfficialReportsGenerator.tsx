@@ -8,7 +8,6 @@ import {
   MapPin, 
   Users, 
   Gauge, 
-  DollarSign, 
   CheckCircle2, 
   AlertTriangle, 
   TrendingUp, 

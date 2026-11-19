@@ -20,8 +20,6 @@ import {
   RefreshCw,
   Lock,
   Sparkles,
-  Hash,
-  Tag,
   Gauge,
   Building,
   Home,
@@ -56,6 +54,7 @@ export interface WaterMeterInstallationsManagerProps {
   adminUser: User;
   initialSelectedRequestId?: string | null;
   onClearInitialSelection?: () => void;
+  onOpenConsumerForRequest?: (req: WaterMeterInstallationRequest) => void;
   onRefreshData: () => void;
 }
 
@@ -95,16 +94,19 @@ function getStatusBadgeClasses(status: InstallationStatus): string {
 export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsManagerProps> = ({
   requests,
   consumers,
-  barangays,
+  barangays: _barangays,
   adminUser,
   initialSelectedRequestId,
   onClearInitialSelection,
+  onOpenConsumerForRequest,
   onRefreshData,
 }) => {
   const toast = useToast();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'All' | InstallationStatus | 'Awaiting Validation'>('All');
+  const [statusFilter, setStatusFilter] = useState<
+    'All' | InstallationStatus | 'Awaiting Meter ID' | 'Pending Consumer IDs'
+  >('All');
   const [currentPage, setCurrentPage] = useState(1);
 
   // Modal 0: Complete Read-Only Request & Applicant Details Viewer (Row Click)
@@ -118,13 +120,11 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
   const [editAdminRemarks, setEditAdminRemarks] = useState('');
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
 
-  // Modal 2: Post-Installation Meter Registration & Account Validation
+  // Modal 2: Physical Water Meter ID Issuance (Water Meters Module ONLY — Account & Tag # issued in Consumers module)
   const [validatingRequest, setValidatingRequest] = useState<WaterMeterInstallationRequest | null>(null);
   const [valSerialNumber, setValSerialNumber] = useState('');
   const [valMeterBrand, setValMeterBrand] = useState('EVER');
   const [valMeterSize, setValMeterSize] = useState('1/2"');
-  const [valMeterTagNumber, setValMeterTagNumber] = useState('');
-  const [valAccountNumber, setValAccountNumber] = useState('');
   const [valCompletionDate, setValCompletionDate] = useState('');
   const [valError, setValError] = useState<string | null>(null);
   const [isValidatingAccount, setIsValidatingAccount] = useState(false);
@@ -147,53 +147,21 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
     setEditAdminRemarks(req.adminRemarks || '');
   };
 
-  const generateSuggestedAccountNumber = (req: WaterMeterInstallationRequest): string => {
-    const matchedBrgy = barangays.find(
-      (b) =>
-        (req.barangayId && b.id === req.barangayId) ||
-        (req.barangay && b.name.toLowerCase() === req.barangay.toLowerCase())
-    );
-    const brgyPrefix = matchedBrgy?.id || req.barangayId || 'BRG-01';
-    const existingSet = new Set(
-      consumers.map((c) => (c.accountNumber || '').trim().toUpperCase())
-    );
-    for (let i = 0; i < 30; i++) {
-      const suffix = Math.floor(1000 + Math.random() * 9000);
-      const candidate = `${brgyPrefix}-${suffix}`.toUpperCase();
-      if (!existingSet.has(candidate)) return candidate;
-    }
-    return `${brgyPrefix}-${Date.now().toString().slice(-4)}`.toUpperCase();
-  };
-
-  const generateSuggestedMeterTag = (): string => {
-    const meters = mockDb.getMeters();
-    const existingTags = new Set([
-      ...meters.map((m) => (m.meterNumber || '').trim().toUpperCase()),
-      ...consumers.map((c) => (c.meterNumber || '').trim().toUpperCase()),
-    ]);
-    for (let i = 0; i < 30; i++) {
-      const num = Math.floor(10000 + Math.random() * 90000);
-      const candidate = `MT-${num}`;
-      if (!existingTags.has(candidate)) return candidate;
-    }
-    return `MT-${Date.now().toString().slice(-5)}`;
-  };
-
-  const generateSuggestedSerialNumber = (): string => {
+  const generateSuggestedWaterMeterId = (): string => {
     const year = new Date().getFullYear();
     for (let i = 0; i < 30; i++) {
       const rand = Math.floor(100000 + Math.random() * 900000);
-      const candidate = `SN-TWD-${year}-${rand}`;
+      const candidate = `WM-TWD-${year}-${rand}`;
       if (!mockDb.checkDuplicateMeterSerial(candidate)) return candidate;
     }
-    return `SN-TWD-${year}-${Date.now().toString().slice(-6)}`;
+    return `WM-TWD-${year}-${Date.now().toString().slice(-6)}`;
   };
 
   const openValidationModal = (req: WaterMeterInstallationRequest) => {
     if (req.status !== 'Installed') {
       toast.warning(
         'Installation Confirmation Required',
-        `Account validation is locked until physical installation status is confirmed as "Installed" (currently "${req.status}").`
+        `Water Meter ID issuance is locked until physical installation status is confirmed as "Installed" (currently "${req.status}").`
       );
       return;
     }
@@ -202,15 +170,11 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
     if (wasUnread) {
       onRefreshData();
     }
-    const suggestedTag = req.assignedMeterTagNumber || generateSuggestedMeterTag();
-    const suggestedAcc = req.assignedAccountNumber || generateSuggestedAccountNumber(req);
 
     setValidatingRequest({ ...req, hasUnreadAdminAlert: false });
     setValSerialNumber(req.meterSerialNumber || '');
     setValMeterBrand(req.meterBrand || 'EVER');
     setValMeterSize(req.meterSize || (req.consumerType === 'Commercial' ? '3/4"' : '1/2"'));
-    setValMeterTagNumber(suggestedTag);
-    setValAccountNumber(suggestedAcc);
     setValCompletionDate(req.completionDate || new Date().toISOString().split('T')[0]);
     setValError(null);
   };
@@ -232,7 +196,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
       setStatusFilter('All');
       setSearchQuery('');
       setViewingRequestDetail(null);
-      if (found.status === 'Installed' && found.accountValidationStatus !== 'validated') {
+      if (found.status === 'Installed' && !found.meterSerialNumber) {
         openValidationModal(found);
       } else {
         openReviewModal(found);
@@ -248,18 +212,36 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
     const scheduledActive = requests.filter((r) =>
       ['Approved', 'Scheduled', 'Rescheduled', 'Installation in Progress'].includes(r.status)
     ).length;
-    const awaitingValidation = requests.filter(
-      (r) => r.status === 'Installed' && r.accountValidationStatus !== 'validated'
+    const awaitingMeterId = requests.filter(
+      (r) => r.status === 'Installed' && !r.meterSerialNumber
+    ).length;
+    const meterIdIssued = requests.filter(
+      (r) => r.status === 'Installed' && Boolean(r.meterSerialNumber)
+    ).length;
+    const pendingConsumerIds = requests.filter(
+      (r) => r.status === 'Installed' && Boolean(r.meterSerialNumber) && r.accountValidationStatus !== 'validated'
     ).length;
     const validated = requests.filter((r) => r.accountValidationStatus === 'validated').length;
-    return { total, pendingReview, scheduledActive, awaitingValidation, validated };
+    return {
+      total,
+      pendingReview,
+      scheduledActive,
+      awaitingMeterId,
+      meterIdIssued,
+      pendingConsumerIds,
+      validated,
+    };
   }, [requests]);
 
   const filteredRequests = useMemo(() => {
     return requests
       .filter((r) => {
-        if (statusFilter === 'Awaiting Validation') {
-          if (!(r.status === 'Installed' && r.accountValidationStatus !== 'validated')) return false;
+        if (statusFilter === 'Awaiting Meter ID') {
+          if (!(r.status === 'Installed' && !r.meterSerialNumber)) return false;
+        } else if (statusFilter === 'Pending Consumer IDs') {
+          if (!(r.status === 'Installed' && Boolean(r.meterSerialNumber) && r.accountValidationStatus !== 'validated')) {
+            return false;
+          }
         } else if (statusFilter !== 'All' && r.status !== statusFilter) {
           return false;
         }
@@ -362,7 +344,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
         if (updated.status === 'Installed') {
           toast.success(
             'Water Meter Marked Installed · Consumer Notified',
-            `${updated.consumerName} has been notified that their water meter is installed and to wait while their account is validated. You may now validate & issue IDs.`
+            `${updated.consumerName} has been notified that their water meter is installed. Issue the physical Water Meter ID below, then assign Account # & Meter Tag # in Consumers.`
           );
         } else {
           toast.success(
@@ -380,26 +362,18 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
     }
   };
 
-  const handleValidateAndActivateSubmit = async (e: React.FormEvent) => {
+  const handleIssueWaterMeterIdSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validatingRequest) return;
     setValError(null);
 
     if (validatingRequest.status !== 'Installed') {
-      setValError('Physical installation must be confirmed as "Installed" before issuing Account and Meter Tag Numbers.');
+      setValError('Physical installation must be confirmed as "Installed" before issuing the Water Meter ID.');
       return;
     }
 
     if (!valSerialNumber.trim()) {
-      setValError('Please enter the physical Water Meter Serial Number.');
-      return;
-    }
-    if (!valMeterTagNumber.trim()) {
-      setValError('Please assign the official Meter Tag Number.');
-      return;
-    }
-    if (!valAccountNumber.trim()) {
-      setValError('Please generate or enter the official Account Number.');
+      setValError('Please enter or generate the physical Water Meter ID.');
       return;
     }
     if (!valCompletionDate.trim()) {
@@ -409,44 +383,35 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
 
     setIsValidatingAccount(true);
     try {
-      const result = await mockDb.validateInstallationAndActivateAccount({
+      const result = await mockDb.registerInstalledWaterMeterId({
         requestId: validatingRequest.id,
         meterSerialNumber: valSerialNumber.trim(),
-        meterTagNumber: valMeterTagNumber.trim(),
         meterBrand: valMeterBrand,
         meterSize: valMeterSize,
-        accountNumber: valAccountNumber.trim(),
         completionDate: valCompletionDate.trim(),
         adminId: adminUser.id,
         adminName: adminUser.name || 'TWD Administrator',
       });
 
-      if (!result.success || !result.request || !result.consumer) {
-        setValError(result.error || 'Unable to validate meter installation. Please verify your inputs.');
+      if (!result.success || !result.request) {
+        setValError(result.error || 'Unable to register Water Meter ID. Please verify your inputs.');
         return;
       }
 
       sendRealtimeMessage('INSTALLATION_REQUEST_UPDATED', {
+        request: result.request,
         requestId: result.request.id,
         applicationNumber: result.request.applicationNumber,
         status: result.request.status,
-        accountValidationStatus: 'validated',
-        accountNumber: result.consumer.accountNumber,
-        meterNumber: result.consumer.meterNumber,
-      });
-
-      sendRealtimeMessage('CONSUMER_IDS_ISSUED', {
-        accountNumber: result.consumer.accountNumber,
-        meterNumber: result.consumer.meterNumber,
-        email: result.consumer.email,
-        linkedUserId: result.consumer.linkedUserId,
-        name: result.consumer.name,
+        accountValidationStatus: result.request.accountValidationStatus,
+        consumerEmail: result.request.consumerEmail,
+        userId: result.request.linkedUserId,
       });
 
       onRefreshData();
       toast.success(
-        'Account Validated & Activated',
-        `Official Account #${result.consumer.accountNumber} and Meter Tag #${result.consumer.meterNumber} issued to ${result.consumer.name}.`
+        'Water Meter ID Issued',
+        `Water Meter ID ${result.request.meterSerialNumber} registered for ${result.request.consumerName}. Issue official Account # & Meter Tag # in the Consumers module.`
       );
       setValidatingRequest(null);
     } finally {
@@ -530,44 +495,56 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
         <button
           type="button"
           onClick={() =>
-            setStatusFilter(statusFilter === 'Awaiting Validation' ? 'All' : 'Awaiting Validation')
+            setStatusFilter(statusFilter === 'Awaiting Meter ID' ? 'All' : 'Awaiting Meter ID')
           }
           className={`h-full text-left bg-slate-900 border rounded-2xl p-4 shadow-md grid grid-rows-[20px_36px_auto] content-start gap-1.5 transition cursor-pointer ${
-            statusFilter === 'Awaiting Validation'
+            statusFilter === 'Awaiting Meter ID'
               ? 'border-cyan-500 ring-1 ring-cyan-500/30'
-              : stats.awaitingValidation > 0
+              : stats.awaitingMeterId > 0
               ? 'border-cyan-500/40 hover:border-cyan-400'
               : 'border-slate-800 hover:border-slate-700'
           }`}
         >
           <div className="h-5 flex items-center justify-between gap-2 text-cyan-300">
-            <span className="text-[10px] font-bold uppercase tracking-wider truncate">Awaiting Validation</span>
-            <ShieldCheck className="h-4 w-4 text-cyan-400 shrink-0" />
+            <span className="text-[10px] font-bold uppercase tracking-wider truncate">Awaiting Meter ID</span>
+            <Gauge className="h-4 w-4 text-cyan-400 shrink-0" />
           </div>
           <div className="h-9 flex items-center">
             <span className="text-2xl leading-none font-black text-cyan-400 font-mono tabular-nums">
-              {stats.awaitingValidation}
+              {stats.awaitingMeterId}
             </span>
           </div>
           <div className="text-[11px] leading-snug text-slate-400 self-start">
-            Installed · Ready to issue IDs
+            Installed · Issue Water Meter ID
           </div>
         </button>
 
-        <div className="h-full bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md grid grid-rows-[20px_36px_auto] content-start gap-1.5 text-left col-span-2 sm:col-span-1">
+        <button
+          type="button"
+          onClick={() =>
+            setStatusFilter(statusFilter === 'Pending Consumer IDs' ? 'All' : 'Pending Consumer IDs')
+          }
+          className={`h-full text-left bg-slate-900 border rounded-2xl p-4 shadow-md grid grid-rows-[20px_36px_auto] content-start gap-1.5 transition cursor-pointer col-span-2 sm:col-span-1 ${
+            statusFilter === 'Pending Consumer IDs'
+              ? 'border-emerald-500 ring-1 ring-emerald-500/30'
+              : 'border-slate-800 hover:border-slate-700'
+          }`}
+        >
           <div className="h-5 flex items-center justify-between gap-2 text-emerald-300">
-            <span className="text-[10px] font-bold uppercase tracking-wider truncate">Validated &amp; Active</span>
-            <UserCheck className="h-4 w-4 text-emerald-400 shrink-0" />
+            <span className="text-[10px] font-bold uppercase tracking-wider truncate">Meter ID Issued</span>
+            <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
           </div>
           <div className="h-9 flex items-center">
             <span className="text-2xl leading-none font-black text-emerald-400 font-mono tabular-nums">
-              {stats.validated}
+              {stats.meterIdIssued}
             </span>
           </div>
           <div className="text-[11px] leading-snug text-slate-400 self-start">
-            Account &amp; Meter Tag issued
+            {stats.pendingConsumerIds > 0
+              ? `${stats.pendingConsumerIds} pending Account & Tag in Consumers`
+              : `${stats.validated} active with Account & Tag`}
           </div>
-        </div>
+        </button>
       </div>
 
       {/* CLEAR 3-STEP ADMINISTRATIVE WORKFLOW GUIDE */}
@@ -575,10 +552,10 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
         <div className="flex items-center justify-between gap-2 mb-3">
           <span className="text-[11px] font-extrabold uppercase tracking-wider text-sky-300 flex items-center gap-1.5">
             <Sparkles className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-            <span>Administrative Installation &amp; Account Validation Workflow</span>
+            <span>Water Meter Installation &amp; Meter ID Issuance Workflow</span>
           </span>
           <span className="text-[11px] text-slate-400 hidden sm:inline">
-            Consumers are notified automatically at every step
+            Water Meters issues Meter ID only · Consumers issues Account &amp; Tag #
           </span>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
@@ -602,7 +579,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
             <div>
               <div className="font-bold text-emerald-300">Mark Water Meter Installed</div>
               <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">
-                Update status to <strong className="text-emerald-300">Installed</strong>. This automatically notifies the Consumer that their water meter is installed and to wait for account validation.
+                Update status to <strong className="text-emerald-300">Installed</strong>. This notifies the consumer to wait while their Water Meter ID and service account are processed.
               </p>
             </div>
           </div>
@@ -612,9 +589,9 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               3
             </span>
             <div>
-              <div className="font-bold text-cyan-300">Validate Account &amp; Issue IDs</div>
+              <div className="font-bold text-cyan-300">Issue Water Meter ID Only</div>
               <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">
-                Click <strong className="text-cyan-300">Validate &amp; Issue IDs</strong> to record the Meter Serial # and issue the Consumer&apos;s official Account # &amp; Meter Tag #.
+                Click <strong className="text-cyan-300">Issue Water Meter ID</strong> to register the physical Water Meter ID here. Then issue <strong className="text-white">Account # &amp; Meter Tag #</strong> in the <strong className="text-white">Consumers</strong> module.
               </p>
             </div>
           </div>
@@ -631,15 +608,14 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               onChange={setSearchQuery}
               resultCount={filteredRequests.length}
               totalCount={requests.length}
-              placeholder="Search by consumer name, application #, barangay, phone, serial #, meter tag #, or account #..."
+              placeholder="Search by consumer name, application #, barangay, phone, water meter ID, meter tag #, or account #..."
               id="admin-installations-smart-search"
             />
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-400 shrink-0">
-            <ShieldCheck className="h-4 w-4 text-cyan-400 shrink-0" />
+            <Gauge className="h-4 w-4 text-cyan-400 shrink-0" />
             <span>
-              Official Account &amp; Meter Tag issuance unlocks strictly once status is{' '}
-              <strong className="text-emerald-400">Installed</strong>.
+              Water Meter ID unlocks at <strong className="text-emerald-400">Installed</strong>; Account &amp; Tag # are issued in <strong className="text-white">Consumers</strong>.
             </span>
           </div>
         </div>
@@ -655,7 +631,8 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
               'Rescheduled',
               'Installation in Progress',
               'Installed',
-              'Awaiting Validation',
+              'Awaiting Meter ID',
+              'Pending Consumer IDs',
               'Cancelled',
             ] as const
           ).map((tab) => {
@@ -696,7 +673,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                   Installation Status
                 </th>
                 <th className="px-4 py-3.5 border-r border-slate-800/80">
-                  Validation &amp; Meter Details
+                  Water Meter ID &amp; Consumer Status
                 </th>
                 <th className="px-4 py-3.5 border-r border-slate-800/80">Administrator Remarks</th>
                 <th className="px-4 py-3.5 text-right whitespace-nowrap">Actions</th>
@@ -705,6 +682,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
             <tbody className="divide-y divide-slate-800/80 text-slate-200 bg-slate-900">
               {paginatedRequests.map((req) => {
                 const isInstalled = req.status === 'Installed';
+                const hasMeterId = Boolean(req.meterSerialNumber && req.meterSerialNumber.trim());
                 const isValidated = req.accountValidationStatus === 'validated';
                 const isUnreadAlert = mockDb.isInstallationUnreadForAdmin(req);
                 const submittedDisplay = formatInstallationDateDisplay(req.submissionDate);
@@ -831,42 +809,60 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                             Step 2: Mark Installed
                           </span>
                         )}
-                        {isInstalled && !isValidated && (
+                        {isInstalled && !hasMeterId && (
                           <span className="text-[10px] font-bold text-cyan-300 whitespace-nowrap">
-                            Consumer Notified · Validate IDs
+                            Step 3: Issue Water Meter ID
+                          </span>
+                        )}
+                        {isInstalled && hasMeterId && !isValidated && (
+                          <span className="text-[10px] font-bold text-amber-300 whitespace-nowrap">
+                            Ready for Consumers Module
                           </span>
                         )}
                       </div>
                     </td>
 
-                    {/* Account Validation & Meter Details (Serial Number visible ONLY inside Admin Water Meters module) */}
-                    <td className="px-4 py-3.5 border-r border-slate-800/80 align-top min-w-[200px]">
+                    {/* Water Meter ID & Consumer Validation Status */}
+                    <td className="px-4 py-3.5 border-r border-slate-800/80 align-top min-w-[210px]">
                       {isValidated ? (
                         <div className="space-y-0.5 text-[11px]">
                           <div className="inline-flex items-center gap-1 text-emerald-400 font-bold uppercase text-[10px]">
                             <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                             <span>Validated &amp; Active</span>
                           </div>
-                          <div className="text-slate-300 font-mono tabular-nums">
-                            Account: <strong className="text-sky-400">#{req.assignedAccountNumber}</strong>
-                          </div>
-                          <div className="text-slate-300 font-mono tabular-nums">
-                            Meter Tag: <strong className="text-white">#{req.assignedMeterTagNumber}</strong>
-                          </div>
                           {req.meterSerialNumber && (
-                            <div className="text-slate-400 font-mono tabular-nums text-[10px]">
-                              Serial #: <strong className="text-amber-300">{req.meterSerialNumber}</strong>
+                            <div className="text-slate-300 font-mono tabular-nums">
+                              Water Meter ID: <strong className="text-amber-300">{req.meterSerialNumber}</strong>
                             </div>
                           )}
+                          <div className="text-slate-300 font-mono tabular-nums text-[10px]">
+                            Account: <strong className="text-sky-400">#{req.assignedAccountNumber}</strong>
+                            {req.assignedMeterTagNumber ? (
+                              <> · Tag: <strong className="text-white">#{req.assignedMeterTagNumber}</strong></>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : isInstalled && hasMeterId ? (
+                        <div className="space-y-1 text-[11px]">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold uppercase whitespace-nowrap">
+                            <CheckCircle2 className="h-3 w-3 shrink-0" />
+                            <span>Water Meter ID Issued</span>
+                          </span>
+                          <div className="text-slate-200 font-mono tabular-nums">
+                            Meter ID: <strong className="text-amber-300">{req.meterSerialNumber}</strong>
+                          </div>
+                          <p className="text-[10px] text-slate-400 leading-snug">
+                            Issue Account # &amp; Meter Tag # in Consumers module.
+                          </p>
                         </div>
                       ) : isInstalled ? (
                         <div className="space-y-1">
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/40 text-[10px] font-bold uppercase whitespace-nowrap">
                             <Sparkles className="h-3 w-3 shrink-0" />
-                            <span>Awaiting Validation</span>
+                            <span>Awaiting Water Meter ID</span>
                           </span>
                           <p className="text-[11px] text-slate-300 leading-snug">
-                            Consumer notified &amp; waiting. Issue Account # &amp; Meter Tag # now.
+                            Meter installed. Issue physical Water Meter ID here first.
                           </p>
                         </div>
                       ) : (
@@ -876,7 +872,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                             <span>Locked until Installed</span>
                           </span>
                           <p className="text-[10px] text-slate-500 leading-snug">
-                            Update status to &ldquo;Installed&rdquo; first to notify consumer &amp; unlock IDs.
+                            Update status to &ldquo;Installed&rdquo; first to issue Water Meter ID.
                           </p>
                         </div>
                       )}
@@ -928,18 +924,34 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                           </span>
                         </button>
 
-                        {isValidated ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openValidationModal(req);
-                            }}
-                            className="px-3 py-1.5 rounded-xl bg-emerald-950/80 hover:bg-emerald-900/80 border border-emerald-700/60 text-emerald-300 text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer flex items-center gap-1"
-                          >
-                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                            <span>Validated Details</span>
-                          </button>
+                        {hasMeterId ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openValidationModal(req);
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-emerald-950/80 hover:bg-emerald-900/80 border border-emerald-700/60 text-emerald-300 text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer flex items-center gap-1"
+                            >
+                              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                              <span>{isValidated ? 'Meter ID Details' : 'Edit Meter ID'}</span>
+                            </button>
+                            {!isValidated && onOpenConsumerForRequest && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenConsumerForRequest(req);
+                                }}
+                                className="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold whitespace-nowrap shrink-0 transition cursor-pointer flex items-center gap-1 shadow-sm"
+                                title="Open Consumer profile in Consumers module to issue Account Number & Meter Tag Number"
+                              >
+                                <UserCheck className="h-3.5 w-3.5 shrink-0" />
+                                <span>Issue IDs in Consumers</span>
+                              </button>
+                            )}
+                          </>
                         ) : (
                           <button
                             type="button"
@@ -950,8 +962,8 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                             }}
                             title={
                               isInstalled
-                                ? 'Register installed meter serial number and issue official Account Number & Meter Tag Number'
-                                : 'Locked: Update installation status to Installed first before issuing official Account & Meter Tag Numbers'
+                                ? 'Register physical Water Meter ID in Water Meters inventory (Account # and Meter Tag # are issued separately in Consumers module)'
+                                : 'Locked: Update installation status to Installed first before issuing Water Meter ID'
                             }
                             className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 transition flex items-center gap-1 ${
                               isInstalled
@@ -960,11 +972,11 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                             }`}
                           >
                             {isInstalled ? (
-                              <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+                              <Gauge className="h-3.5 w-3.5 shrink-0" />
                             ) : (
                               <Lock className="h-3 w-3 shrink-0" />
                             )}
-                            <span>Validate &amp; Issue IDs</span>
+                            <span>Issue Water Meter ID</span>
                           </button>
                         )}
                       </div>
@@ -1304,13 +1316,13 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                 Cancel
               </ModalButton>
 
-              {editStatus === 'Installed' && reviewingRequest.accountValidationStatus !== 'validated' && (
+              {editStatus === 'Installed' && !reviewingRequest.meterSerialNumber && (
                 <ModalButton
                   variant="primary"
                   disabled={isSavingSchedule}
                   onClick={() => handleSaveScheduleAndStatus(true)}
                 >
-                  <span>Save &amp; Validate Account</span>
+                  <span>Save &amp; Issue Water Meter ID</span>
                   <ArrowRight className="h-3.5 w-3.5 shrink-0" />
                 </ModalButton>
               )}
@@ -1330,8 +1342,8 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
       </Modal>
 
       {/* =====================================================================
-          MODAL 2: POST-INSTALLATION METER REGISTRATION & ACCOUNT VALIDATION
-          (Strictly unlocked ONLY when status === 'Installed')
+          MODAL 2: PHYSICAL WATER METER ID ISSUANCE (WATER METERS MODULE ONLY)
+          (Account Number and Meter Tag Number are issued in Consumers Module)
       ====================================================================== */}
       <Modal
         portal
@@ -1339,23 +1351,31 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
         onClose={() => setValidatingRequest(null)}
         size="lg"
         zIndexClass="z-[165]"
-        ariaLabel="Meter Registration and Account Validation"
+        ariaLabel="Issue Physical Water Meter ID"
       >
         {validatingRequest && (
           <form
-            onSubmit={handleValidateAndActivateSubmit}
+            onSubmit={handleIssueWaterMeterIdSubmit}
             className="flex flex-col flex-1 min-h-0 overflow-hidden"
           >
             <ModalHeader
-              icon={<ShieldCheck className="h-4 w-4" />}
+              icon={<Gauge className="h-4 w-4" />}
               tone="info"
               code={validatingRequest.applicationNumber}
-              eyebrow="Post-Installation Activation"
-              status={{ label: 'Meter Installed', tone: 'success' }}
+              eyebrow="Water Meters Module"
+              status={
+                validatingRequest.accountValidationStatus === 'validated'
+                  ? { label: 'Validated & Active', tone: 'success' }
+                  : validatingRequest.meterSerialNumber
+                  ? { label: 'Meter ID Issued', tone: 'info' }
+                  : { label: 'Meter Installed', tone: 'success' }
+              }
               title={
                 validatingRequest.accountValidationStatus === 'validated'
-                  ? 'Validated Meter Registration & Activated Account'
-                  : 'Meter Registration & Account Validation'
+                  ? 'Water Meter ID & Linked Consumer Account'
+                  : validatingRequest.meterSerialNumber
+                  ? 'Update Physical Water Meter ID'
+                  : 'Issue Physical Water Meter ID'
               }
               subtitle={
                 <>
@@ -1376,7 +1396,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                 </div>
               )}
 
-              {/* Step 1: Verified Consumer & Installation Context */}
+              {/* Consumer & Installation Context */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-bold">Consumer Name</span>
@@ -1398,26 +1418,14 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                 <div className="bg-emerald-950/25 border border-emerald-800/60 rounded-2xl p-5 space-y-4 text-xs">
                   <div className="flex items-center gap-2 text-emerald-400 font-extrabold uppercase tracking-wider">
                     <CheckCircle2 className="h-4 w-4 shrink-0" />
-                    <span>Official Service Account Validated &amp; Activated</span>
+                    <span>Water Meter ID Registered &amp; Consumer IDs Issued</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Official Account Number</span>
-                      <strong className="text-sky-300 font-mono tabular-nums text-base">
-                        #{validatingRequest.assignedAccountNumber}
-                      </strong>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Official Meter Tag Number</span>
-                      <strong className="text-white font-mono tabular-nums text-base">
-                        #{validatingRequest.assignedMeterTagNumber}
-                      </strong>
-                    </div>
-                    <div>
                       <span className="text-slate-400 block text-[10px] uppercase font-bold">
-                        Water Meter Serial Number (Admin Meters Only)
+                        Physical Water Meter ID
                       </span>
-                      <strong className="text-amber-300 font-mono tabular-nums text-sm">
+                      <strong className="text-amber-300 font-mono tabular-nums text-base">
                         {validatingRequest.meterSerialNumber}
                       </strong>
                     </div>
@@ -1428,15 +1436,25 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                       </strong>
                     </div>
                     <div>
-                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Installation Completion Date</span>
-                      <strong className="text-slate-200 font-mono tabular-nums">
-                        {formatInstallationDateDisplay(validatingRequest.completionDate)}
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">
+                        Official Account Number (Issued in Consumers)
+                      </span>
+                      <strong className="text-sky-300 font-mono tabular-nums text-sm">
+                        #{validatingRequest.assignedAccountNumber}
                       </strong>
                     </div>
                     <div>
-                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Field Route Assignment</span>
-                      <strong className="text-slate-200">
-                        {validatingRequest.responsiblePersonnel || 'Auto-Assigned via Mobile Field Terminal'}
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">
+                        Official Meter Tag Number (Issued in Consumers)
+                      </span>
+                      <strong className="text-white font-mono tabular-nums text-sm">
+                        #{validatingRequest.assignedMeterTagNumber}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Installation Completion Date</span>
+                      <strong className="text-slate-200 font-mono tabular-nums">
+                        {formatInstallationDateDisplay(validatingRequest.completionDate)}
                       </strong>
                     </div>
                     <div>
@@ -1445,7 +1463,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                     </div>
                     {validatingRequest.validatedBy && (
                       <div className="sm:col-span-2 pt-2 border-t border-emerald-800/40 text-slate-400">
-                        Validated by <strong className="text-white">{validatingRequest.validatedBy}</strong> on{' '}
+                        Consumer IDs issued by <strong className="text-white">{validatingRequest.validatedBy}</strong> on{' '}
                         <span className="font-mono tabular-nums">
                           {validatingRequest.validatedAt
                             ? new Date(validatingRequest.validatedAt).toLocaleString()
@@ -1457,15 +1475,15 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                 </div>
               ) : (
                 <>
-                  {/* Physical Water Meter Registration Fields (Serial Number restricted to Water Meters module!) */}
+                  {/* Physical Water Meter ID Registration Fields ONLY */}
                   <div className="space-y-4">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       <h4 className="text-xs font-extrabold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
                         <Gauge className="h-4 w-4 shrink-0" />
-                        <span>1. Physical Water Meter Registration</span>
+                        <span>Physical Water Meter ID Registration</span>
                       </h4>
                       <span className="text-[11px] text-amber-300/90">
-                        Serial # visible only in Admin Water Meters
+                        Visible only in Admin Water Meters
                       </span>
                     </div>
 
@@ -1473,14 +1491,14 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="text-xs font-bold text-slate-200">
-                            Water Meter Serial Number <span className="text-rose-400">*</span>
+                            Water Meter ID / Serial Number <span className="text-rose-400">*</span>
                           </label>
                           <button
                             type="button"
-                            onClick={() => setValSerialNumber(generateSuggestedSerialNumber())}
+                            onClick={() => setValSerialNumber(generateSuggestedWaterMeterId())}
                             className="text-[11px] font-bold text-amber-400 hover:text-amber-300 cursor-pointer"
                           >
-                            Auto-Fill Sample Serial #
+                            Generate Water Meter ID
                           </button>
                         </div>
                         <input
@@ -1488,11 +1506,11 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                           required
                           value={valSerialNumber}
                           onChange={(e) => setValSerialNumber(e.target.value.toUpperCase())}
-                          placeholder="e.g., SN-TWD-2026-482910"
+                          placeholder="e.g., WM-TWD-2026-482910"
                           className="w-full bg-slate-950 border border-amber-700/60 rounded-xl px-3.5 py-2.5 text-xs font-mono tabular-nums text-amber-200 placeholder-slate-500 focus:outline-none focus:border-amber-400"
                         />
                         <p className="text-[11px] text-slate-400 mt-1">
-                          Manufacturer chassis serial number recorded strictly inside the Admin Water Meters inventory.
+                          Unique Water Meter ID recorded in the Admin Water Meters hardware catalog.
                         </p>
                       </div>
 
@@ -1547,100 +1565,55 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                     </div>
                   </div>
 
-                  {/* Step 2: Official Consumer Identifiers Issuance */}
-                  <div className="space-y-4 pt-4 border-t border-slate-800">
-                    <h4 className="text-xs font-extrabold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
-                      <UserCheck className="h-4 w-4 shrink-0" />
-                      <span>2. Official Account Number &amp; Meter Tag Issuance</span>
-                    </h4>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="text-xs font-bold text-slate-200">
-                            Account Number <span className="text-rose-400">*</span>
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => setValAccountNumber(generateSuggestedAccountNumber(validatingRequest))}
-                            className="text-[11px] font-bold text-sky-400 hover:text-sky-300 cursor-pointer"
-                          >
-                            Generate
-                          </button>
-                        </div>
-                        <input
-                          type="text"
-                          required
-                          value={valAccountNumber}
-                          onChange={(e) => setValAccountNumber(e.target.value.toUpperCase())}
-                          placeholder="BRG-01-4821"
-                          className="w-full bg-slate-950 border border-sky-700/60 rounded-xl px-3.5 py-2.5 text-xs font-mono tabular-nums font-bold text-sky-300 focus:outline-none focus:border-sky-400"
-                        />
-                      </div>
-
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="text-xs font-bold text-slate-200">
-                            Meter Tag Number <span className="text-rose-400">*</span>
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => setValMeterTagNumber(generateSuggestedMeterTag())}
-                            className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 cursor-pointer"
-                          >
-                            Generate
-                          </button>
-                        </div>
-                        <input
-                          type="text"
-                          required
-                          value={valMeterTagNumber}
-                          onChange={(e) => setValMeterTagNumber(e.target.value.toUpperCase())}
-                          placeholder="MT-48210"
-                          className="w-full bg-slate-950 border border-cyan-700/60 rounded-xl px-3.5 py-2.5 text-xs font-mono tabular-nums font-bold text-white focus:outline-none focus:border-cyan-400"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="bg-slate-950 border border-emerald-900/60 rounded-xl p-3.5 text-xs text-slate-300 leading-relaxed space-y-1.5">
-                      <div>
-                        <strong className="text-emerald-400">Consumer Account Activation:</strong> Completing validation will activate{' '}
-                        <strong className="text-white">{validatingRequest.consumerName}</strong>&apos;s water service account with initial 5-digit odometer dial{' '}
-                        <strong className="font-mono tabular-nums text-emerald-300">{formatOdometerReading(0)}</strong>, link Meter Tag{' '}
-                        <strong className="font-mono tabular-nums text-white">#{valMeterTagNumber || '—'}</strong> to Account{' '}
-                        <strong className="font-mono tabular-nums text-sky-300">#{valAccountNumber || '—'}</strong>, and automatically send the official Account Activated notification to their Consumer Portal (without exposing the physical Meter Serial Number).
-                      </div>
-                      <div className="text-[11px] text-sky-300/90 pt-1.5 border-t border-slate-800/80">
-                        Field meter reader assignment for <strong className="text-white">Brgy. {validatingRequest.barangay}</strong> is handled automatically by the Mobile Field Terminal.
-                      </div>
+                  <div className="bg-slate-950 border border-sky-900/60 rounded-xl p-3.5 text-xs text-slate-300 leading-relaxed space-y-1.5">
+                    <div>
+                      <strong className="text-sky-300">Next Step — Consumers Module:</strong> The Water Meters module only issues the physical <strong className="text-amber-300">Water Meter ID</strong>. Once saved, open the <strong className="text-white">Consumers</strong> module to issue <strong className="text-white">{validatingRequest.consumerName}</strong>&apos;s official <strong className="text-sky-300">Account Number</strong> and <strong className="text-white">Meter Tag Number</strong> and activate their portal account.
                     </div>
                   </div>
                 </>
               )}
             </div>
 
-            <ModalFooter>
-              <ModalButton
-                variant="secondary"
-                onClick={() => setValidatingRequest(null)}
-              >
-                {validatingRequest.accountValidationStatus === 'validated' ? 'Close' : 'Cancel'}
-              </ModalButton>
-
-              {validatingRequest.accountValidationStatus !== 'validated' && (
+            <ModalFooter align={validatingRequest.meterSerialNumber && validatingRequest.accountValidationStatus !== 'validated' && onOpenConsumerForRequest ? 'between' : 'end'}>
+              {validatingRequest.meterSerialNumber && validatingRequest.accountValidationStatus !== 'validated' && onOpenConsumerForRequest && (
                 <ModalButton
-                  type="submit"
-                  variant="success"
-                  disabled={isValidatingAccount}
+                  variant="primary"
+                  onClick={() => {
+                    const targetReq = validatingRequest;
+                    setValidatingRequest(null);
+                    onOpenConsumerForRequest(targetReq);
+                  }}
                 >
-                  <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    {isValidatingAccount
-                      ? 'Validating & Activating...'
-                      : 'Verify Installation, Issue IDs & Activate Account'}
-                  </span>
+                  <UserCheck className="h-3.5 w-3.5 shrink-0" />
+                  <span>Issue Account &amp; Tag in Consumers</span>
                 </ModalButton>
               )}
+
+              <div className="flex items-center gap-2 ml-auto">
+                <ModalButton
+                  variant="secondary"
+                  onClick={() => setValidatingRequest(null)}
+                >
+                  {validatingRequest.accountValidationStatus === 'validated' ? 'Close' : 'Cancel'}
+                </ModalButton>
+
+                {validatingRequest.accountValidationStatus !== 'validated' && (
+                  <ModalButton
+                    type="submit"
+                    variant="success"
+                    disabled={isValidatingAccount}
+                  >
+                    <Gauge className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      {isValidatingAccount
+                        ? 'Saving Water Meter ID...'
+                        : validatingRequest.meterSerialNumber
+                        ? 'Update Water Meter ID'
+                        : 'Issue Water Meter ID'}
+                    </span>
+                  </ModalButton>
+                )}
+              </div>
             </ModalFooter>
           </form>
         )}
@@ -1742,9 +1715,9 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                   </span>
                 </div>
                 <div>
-                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Meter Serial #</span>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Water Meter ID / Serial #</span>
                   <span className="font-mono tabular-nums font-bold text-amber-300">
-                    {viewingRequestDetail.meterSerialNumber || 'Not recorded yet'}
+                    {viewingRequestDetail.meterSerialNumber || 'Not issued yet'}
                   </span>
                 </div>
               </div>
@@ -1800,7 +1773,7 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
             </div>
 
             <ModalFooter align="between">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <ModalButton
                   variant="warning"
                   onClick={() => {
@@ -1822,14 +1795,30 @@ export const WaterMeterInstallationsManager: React.FC<WaterMeterInstallationsMan
                       openValidationModal(target);
                     }}
                   >
-                    <ShieldCheck className="h-3.5 w-3.5" />
+                    <Gauge className="h-3.5 w-3.5" />
                     <span>
-                      {viewingRequestDetail.accountValidationStatus === 'validated'
-                        ? 'Validated Details'
-                        : 'Validate & Issue IDs'}
+                      {viewingRequestDetail.meterSerialNumber
+                        ? 'Water Meter ID Details'
+                        : 'Issue Water Meter ID'}
                     </span>
                   </ModalButton>
                 )}
+                {viewingRequestDetail.status === 'Installed' &&
+                  Boolean(viewingRequestDetail.meterSerialNumber) &&
+                  viewingRequestDetail.accountValidationStatus !== 'validated' &&
+                  onOpenConsumerForRequest && (
+                    <ModalButton
+                      variant="success"
+                      onClick={() => {
+                        const target = viewingRequestDetail;
+                        setViewingRequestDetail(null);
+                        onOpenConsumerForRequest(target);
+                      }}
+                    >
+                      <UserCheck className="h-3.5 w-3.5" />
+                      <span>Issue IDs in Consumers</span>
+                    </ModalButton>
+                  )}
               </div>
 
               <ModalButton

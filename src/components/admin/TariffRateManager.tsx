@@ -6,7 +6,7 @@
 import React, { useState, useId } from 'react';
 import { 
   TrendingUp, 
-  DollarSign, 
+  PhilippinePeso, 
   Bell, 
   CheckCircle2, 
   AlertTriangle, 
@@ -520,7 +520,7 @@ export const TariffRateManager: React.FC<TariffRateManagerProps> = ({
                       quickType === 'flat_m3' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    <DollarSign className="h-3.5 w-3.5" />
+                    <PhilippinePeso className="h-3.5 w-3.5" />
                     <span>Flat Increase (+₱/m³)</span>
                   </button>
                   <button

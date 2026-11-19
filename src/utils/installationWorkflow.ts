@@ -135,13 +135,26 @@ export function canConsumerSubmitInstallationRequest(
   return { allowed: true };
 }
 
+export function isPendingMeterTag(meterNumber?: string | null): boolean {
+  const clean = String(meterNumber || '').trim().toUpperCase();
+  return (
+    !clean ||
+    clean.startsWith('PENDING') ||
+    clean === 'UNASSIGNED' ||
+    clean === 'UNISSUED' ||
+    clean === 'N/A'
+  );
+}
+
 /**
  * STRICT GATING RULE:
  * Determines whether an Administrator is allowed to issue finalized Account Numbers and Meter Tag Numbers
- * for a consumer.
+ * for a consumer in the Consumers module.
  * - If the consumer registered WITHOUT an installed water meter (`hasExistingMeter === false`, or status is
  *   `pending_installation` / `installation_not_scheduled`), official Account Number and Meter Tag Number
- *   issuance is STRICTLY LOCKED until their water meter installation status is confirmed as `'Installed'`.
+ *   issuance is STRICTLY LOCKED until:
+ *   1) Their water meter installation status is confirmed as `'Installed'`, AND
+ *   2) A physical Water Meter ID (`meterSerialNumber`) has been issued in the Water Meters module.
  * - If the consumer registered WITH an existing physical meter (`hasExistingMeter === true`), or already has
  *   an active issued account, Admin may verify and issue/update IDs.
  */
@@ -151,6 +164,7 @@ export function canAdminIssueIdentifiersForConsumer(
 ): {
   allowed: boolean;
   requiresInstallationFirst: boolean;
+  requiresWaterMeterIdFirst?: boolean;
   latestRequest?: WaterMeterInstallationRequest;
   reason?: string;
 } {
@@ -179,7 +193,7 @@ export function canAdminIssueIdentifiersForConsumer(
       allowed: false,
       requiresInstallationFirst: true,
       reason:
-        'This applicant indicated that they do not yet have an installed water meter and has not scheduled an installation yet. Physical water meter installation must be scheduled and confirmed as Installed before Account Number and Meter Tag Number can be issued.',
+        'This applicant indicated that they do not yet have an installed water meter and has not scheduled an installation yet. Physical water meter installation must be scheduled, confirmed as Installed, and assigned a Water Meter ID in the Water Meters module before Account Number and Meter Tag Number can be issued here.',
     };
   }
 
@@ -188,13 +202,24 @@ export function canAdminIssueIdentifiersForConsumer(
       allowed: false,
       requiresInstallationFirst: true,
       latestRequest: latestReq,
-      reason: `Water meter installation (${latestReq.applicationNumber}) is currently "${latestReq.status}". Official Account Number and Meter Tag Number issuance unlocks only after physical installation is confirmed as "Installed".`,
+      reason: `Water meter installation (${latestReq.applicationNumber}) is currently "${latestReq.status}". Official Account Number and Meter Tag Number issuance unlocks only after physical installation is confirmed as "Installed" and assigned a Water Meter ID in the Water Meters module.`,
+    };
+  }
+
+  if (!latestReq.meterSerialNumber || !latestReq.meterSerialNumber.trim()) {
+    return {
+      allowed: false,
+      requiresInstallationFirst: true,
+      requiresWaterMeterIdFirst: true,
+      latestRequest: latestReq,
+      reason: `Water meter installation (${latestReq.applicationNumber}) is marked "Installed", but the physical Water Meter ID has not been issued yet in the Water Meters module. Issue the Water Meter ID in Water Meters first before assigning the Account Number and Meter Tag Number here.`,
     };
   }
 
   return {
     allowed: true,
     requiresInstallationFirst: true,
+    requiresWaterMeterIdFirst: false,
     latestRequest: latestReq,
   };
 }

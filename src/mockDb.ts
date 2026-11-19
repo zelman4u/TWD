@@ -59,6 +59,7 @@ import {
 } from './utils/announcementSanitizer';
 import {
   isPendingConsumerStatus,
+  isPendingMeterTag,
   generateApplicationNumber,
   buildInstallationReceivedNotification,
   buildInstallationStatusUpdateNotification,
@@ -3744,7 +3745,7 @@ export const mockDb = {
     return updatedReq;
   },
 
-  checkDuplicateMeterSerial: (serialNumber: string, excludeMeterNumber?: string): WaterMeter | undefined => {
+  checkDuplicateMeterSerial: (serialNumber: string, excludeMeterNumber?: string, excludeRequestId?: string): WaterMeter | undefined => {
     const cleanSerial = (serialNumber || '').trim().toUpperCase();
     if (!cleanSerial) return undefined;
     const meters = mockDb.getMeters();
@@ -3752,8 +3753,218 @@ export const mockDb = {
       if (excludeMeterNumber && m.meterNumber.trim().toUpperCase() === excludeMeterNumber.trim().toUpperCase()) {
         return false;
       }
+      if (excludeRequestId && (m.installationRequestId === excludeRequestId || m.applicationNumber === excludeRequestId)) {
+        return false;
+      }
       return (m.serialNumber || '').trim().toUpperCase() === cleanSerial;
     });
+  },
+
+  /**
+   * Stage 1 (Water Meters Module ONLY):
+   * Registers / issues ONLY the physical Water Meter ID (serialNumber) in the Water Meters inventory
+   * once physical installation status is "Installed".
+   * Official Account Number and Meter Tag Number are NOT issued here — they are issued separately
+   * inside the Consumers module.
+   */
+  registerInstalledWaterMeterId: async (params: {
+    requestId: string;
+    meterSerialNumber: string;
+    meterBrand: string;
+    meterSize: string;
+    completionDate: string;
+    responsiblePersonnel?: string;
+    adminId: string;
+    adminName: string;
+  }): Promise<{
+    success: boolean;
+    error?: string;
+    request?: WaterMeterInstallationRequest;
+    meter?: WaterMeter;
+  }> => {
+    const list = getStored<WaterMeterInstallationRequest[]>(KEYS.INSTALLATIONS, []);
+    const reqIdx = list.findIndex((r) => r.id === params.requestId || r.applicationNumber === params.requestId);
+    if (reqIdx === -1) {
+      return { success: false, error: 'Installation request record not found.' };
+    }
+
+    const reqRecord = list[reqIdx];
+    if (reqRecord.status !== 'Installed') {
+      return {
+        success: false,
+        error: `Water Meter ID cannot be issued yet because physical installation status is "${reqRecord.status}". Confirm status as "Installed" first.`,
+      };
+    }
+
+    const cleanSerial = params.meterSerialNumber.trim().toUpperCase();
+    const cleanCompletionDate = params.completionDate.trim() || reqRecord.completionDate || new Date().toISOString().split('T')[0];
+
+    if (!cleanSerial) {
+      return {
+        success: false,
+        error: 'Water Meter ID / Serial Number is required.',
+      };
+    }
+
+    const allMeters = mockDb.getMeters();
+    const existingMeter = allMeters.find(
+      (m) =>
+        (m.installationRequestId && m.installationRequestId === reqRecord.id) ||
+        (reqRecord.applicationNumber && m.applicationNumber === reqRecord.applicationNumber) ||
+        (reqRecord.meterSerialNumber && (m.serialNumber || '').trim().toUpperCase() === reqRecord.meterSerialNumber.trim().toUpperCase())
+    );
+
+    const dupSerial = mockDb.checkDuplicateMeterSerial(cleanSerial, existingMeter?.meterNumber, reqRecord.id);
+    if (dupSerial) {
+      return {
+        success: false,
+        error: `Water Meter ID "${cleanSerial}" is already registered in the Water Meters inventory${!isPendingMeterTag(dupSerial.meterNumber) ? ` (Meter Tag #${dupSerial.meterNumber})` : ''}.`,
+      };
+    }
+
+    const dupReqSerial = list.find(
+      (r) =>
+        r.id !== reqRecord.id &&
+        (r.meterSerialNumber || '').trim().toUpperCase() === cleanSerial
+    );
+    if (dupReqSerial) {
+      return {
+        success: false,
+        error: `Water Meter ID "${cleanSerial}" is already assigned to installation application #${dupReqSerial.applicationNumber} (${dupReqSerial.consumerName}).`,
+      };
+    }
+
+    const matchedMobileReader = mockDb.getReaders().find((mr) => {
+      if (mr.employmentStatus === 'inactive') return false;
+      const routes =
+        Array.isArray(mr.assignedRoutes) && mr.assignedRoutes.length > 0
+          ? mr.assignedRoutes
+          : ([mr.targetRoute, mr.zone].filter(Boolean) as string[]);
+      const brgyLower = (reqRecord.barangay || '').trim().toLowerCase();
+      return brgyLower ? routes.some((rt) => rt.toLowerCase().includes(brgyLower)) : false;
+    });
+
+    const cleanPersonnel =
+      params.responsiblePersonnel?.trim() ||
+      reqRecord.responsiblePersonnel?.trim() ||
+      (matchedMobileReader?.name
+        ? `${matchedMobileReader.name} (Auto-Routed via Mobile Terminal)`
+        : 'Auto-Assigned via Mobile Field Terminal');
+
+    const now = new Date().toISOString();
+    const hasOfficialTag = Boolean(
+      (existingMeter?.meterNumber && !isPendingMeterTag(existingMeter.meterNumber)) ||
+      (reqRecord.assignedMeterTagNumber && !isPendingMeterTag(reqRecord.assignedMeterTagNumber))
+    );
+    const meterKey = hasOfficialTag
+      ? (reqRecord.assignedMeterTagNumber || existingMeter!.meterNumber).trim().toUpperCase()
+      : `PENDING-TAG-${cleanSerial}`;
+    const prevMeterKey = existingMeter?.meterNumber;
+
+    const meterRecord: WaterMeter = {
+      ...(existingMeter || {}),
+      meterNumber: meterKey,
+      serialNumber: cleanSerial,
+      brand: params.meterBrand || existingMeter?.brand || 'EVER',
+      type: existingMeter?.type || 'standard',
+      size: params.meterSize || existingMeter?.size || '1/2"',
+      installationDate: cleanCompletionDate,
+      completionDate: cleanCompletionDate,
+      installedBy: cleanPersonnel,
+      installationRequestId: reqRecord.id,
+      applicationNumber: reqRecord.applicationNumber,
+      lastReadingDate: existingMeter?.lastReadingDate || cleanCompletionDate,
+      lastReadingValue: existingMeter?.lastReadingValue ?? 0,
+      status: hasOfficialTag && existingMeter?.linkedAccountNumber && isRealIssuedAccountNumber(existingMeter.linkedAccountNumber)
+        ? existingMeter.status === 'unassigned' ? 'active' : existingMeter.status
+        : 'unassigned',
+      linkedAccountNumber: hasOfficialTag ? (existingMeter?.linkedAccountNumber || reqRecord.assignedAccountNumber || '') : '',
+      statusUpdatedAt: now,
+      statusUpdatedBy: params.adminName,
+    };
+
+    await mockDb.saveMeterAsync(meterRecord, prevMeterKey);
+
+    const nextValidationStatus: WaterMeterInstallationRequest['accountValidationStatus'] =
+      reqRecord.accountValidationStatus === 'validated' ? 'validated' : 'awaiting_validation';
+
+    const historyEntry: InstallationHistoryEntry = {
+      id: `HIST-MTR-${Date.now()}`,
+      status: 'Installed',
+      timestamp: now,
+      actorName: params.adminName,
+      actorRole: 'admin',
+      action: existingMeter ? 'Updated Physical Water Meter ID' : 'Issued Physical Water Meter ID',
+      scheduledDate: cleanCompletionDate,
+      remarks: `Registered physical Water Meter ID ${cleanSerial} (${meterRecord.brand}, ${meterRecord.size}) in Water Meters inventory. ${
+        nextValidationStatus === 'validated'
+          ? 'Consumer account already validated.'
+          : 'Ready for Account Number and Meter Tag Number issuance in the Consumers module.'
+      }`,
+    };
+
+    const updatedReq: WaterMeterInstallationRequest = {
+      ...reqRecord,
+      status: 'Installed',
+      completionDate: cleanCompletionDate,
+      responsiblePersonnel: cleanPersonnel,
+      meterSerialNumber: cleanSerial,
+      meterBrand: meterRecord.brand,
+      meterSize: meterRecord.size,
+      accountValidationStatus: nextValidationStatus,
+      hasUnreadAdminAlert: false,
+      updatedAt: now,
+      history: [...(reqRecord.history || []), historyEntry],
+    };
+
+    const nextReqs = [...list];
+    nextReqs[reqIdx] = updatedReq;
+    mockDb.saveInstallationRequests(nextReqs);
+
+    // Sync meter hardware details onto Consumer record without activating or issuing Account/Tag Numbers
+    const targetEmail = (reqRecord.consumerEmail || '').trim().toLowerCase();
+    const consumers = mockDb.getConsumers();
+    let consumerChanged = false;
+    const nextConsumers = consumers.map((c) => {
+      const matches =
+        c.installationRequestId === reqRecord.id ||
+        (reqRecord.applicationNumber && c.applicationNumber === reqRecord.applicationNumber) ||
+        (targetEmail && c.email && c.email.trim().toLowerCase() === targetEmail) ||
+        (reqRecord.linkedUserId && c.linkedUserId === reqRecord.linkedUserId);
+      if (!matches) return c;
+      consumerChanged = true;
+      return {
+        ...c,
+        installationRequestId: reqRecord.id,
+        installationStatus: 'Installed' as const,
+        accountValidationStatus: nextValidationStatus,
+        meterBrand: meterRecord.brand,
+        meterSize: meterRecord.size,
+      };
+    });
+    if (consumerChanged) {
+      mockDb.saveConsumers(nextConsumers);
+    }
+
+    safeBackendFetch(`/api/installations/${encodeURIComponent(updatedReq.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request: updatedReq }),
+    }).catch(() => {});
+
+    mockDb.addAuditLog(
+      params.adminId,
+      params.adminName,
+      'admin',
+      'Issue Water Meter ID',
+      `Issued physical Water Meter ID ${cleanSerial} (${meterRecord.brand}, ${meterRecord.size}) for ${reqRecord.consumerName} (App #${reqRecord.applicationNumber}). Account Number and Meter Tag Number remain pending issuance in Consumers module.`
+    );
+
+    return {
+      success: true,
+      request: updatedReq,
+      meter: meterRecord,
+    };
   },
 
   validateInstallationAndActivateAccount: async (params: {

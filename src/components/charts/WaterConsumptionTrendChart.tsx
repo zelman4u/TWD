@@ -18,7 +18,7 @@ import {
   Legend,
 } from 'recharts';
 import { MonthlyConsumptionTrend } from '../../utils/analytics';
-import { Activity, Droplets, TrendingUp, DollarSign, BarChart2, Layers } from 'lucide-react';
+import { Activity, Droplets, TrendingUp, PhilippinePeso, BarChart2, Layers } from 'lucide-react';
 
 interface WaterConsumptionTrendChartProps {
   data: MonthlyConsumptionTrend[];
@@ -131,7 +131,7 @@ export default function WaterConsumptionTrendChart({ data }: WaterConsumptionTre
                 viewMode === 'revenue' ? 'bg-white text-emerald-700 shadow-xs font-bold' : 'hover:text-slate-900'
               }`}
             >
-              <DollarSign className="h-3.5 w-3.5" />
+              <PhilippinePeso className="h-3.5 w-3.5" />
               <span>Billed Revenue</span>
             </button>
           </div>
