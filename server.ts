@@ -6887,12 +6887,12 @@ app.post("/api/meters/reconcile", (req, res) => {
 
 // ============================================================================
 // 11. BIDIRECTIONAL LIVE BRIDGE TO SYSTEM SITE & MOBILE FIELD TERMINAL
-// Connects Central Node <-> https://twd-427m.onrender.com <-> https://mobile-li9q.onrender.com
+// Connects Central Node <-> https://twd-6pqd.onrender.com <-> https://meterreader.onrender.com
 // ============================================================================
 const SYSTEM_SITE_URL = (
   process.env.SYSTEM_SITE_URL ||
   process.env.VITE_SYSTEM_SITE_URL ||
-  "https://twd-427m.onrender.com"
+  "https://twd-6pqd.onrender.com"
 ).replace(/\/+$/, "");
 
 const SYSTEM_SITE_WS_URL =
@@ -6902,7 +6902,7 @@ const SYSTEM_SITE_HOST = (() => {
   try {
     return new URL(SYSTEM_SITE_URL).host.toLowerCase();
   } catch {
-    return "twd-427m.onrender.com";
+    return "twd-6pqd.onrender.com";
   }
 })();
 
@@ -6935,7 +6935,7 @@ const rawMobileEnvUrl = (
 const MOBILE_TERMINAL_URL =
   rawMobileEnvUrl && !rawMobileEnvUrl.toLowerCase().includes(SYSTEM_SITE_HOST)
     ? rawMobileEnvUrl
-    : "https://mobile-li9q.onrender.com";
+    : "https://meterreader.onrender.com";
 
 const MOBILE_TERMINAL_WS_URL =
   MOBILE_TERMINAL_URL.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:") + "/ws";
@@ -7627,7 +7627,7 @@ async function syncWithSystemSitePeer(forceAll = false): Promise<void> {
   let storeChanged = false;
   let billingsChanged = false;
 
-  // 1. Pull official billings from https://twd-427m.onrender.com/api/billings so consumer odometer baselines stay current
+  // 1. Pull official billings from https://twd-6pqd.onrender.com/api/billings so consumer odometer baselines stay current
   try {
     const bResp = await fetchSystemSite("/api/billings", { method: "GET" });
     if (bResp.ok) {
@@ -7659,7 +7659,7 @@ async function syncWithSystemSitePeer(forceAll = false): Promise<void> {
     saveBillingsSyncStore();
   }
 
-  // 2. Pull live consumers (including newly validated accounts like BRG-03-2114) from https://twd-427m.onrender.com
+  // 2. Pull live consumers (including newly validated accounts like BRG-03-2114) from https://twd-6pqd.onrender.com
   try {
     const cResp = await fetchSystemSite("/api/consumers?includePending=true", { method: "GET" });
     if (cResp.ok) {
@@ -7739,7 +7739,7 @@ async function syncWithSystemSitePeer(forceAll = false): Promise<void> {
     // Non-fatal
   }
 
-  // 3. Push active Mobile Field Readers -> https://twd-427m.onrender.com/api/readers/register
+  // 3. Push active Mobile Field Readers -> https://twd-6pqd.onrender.com/api/readers/register
   try {
     let remoteReaderIds = new Set<string>();
     const rCheck = await fetchSystemSite("/api/readers", { method: "GET" });
@@ -7800,7 +7800,7 @@ async function syncWithSystemSitePeer(forceAll = false): Promise<void> {
     // Non-fatal
   }
 
-  // 4. Sync Pending & Approved Readings <-> https://twd-427m.onrender.com/api/readings
+  // 4. Sync Pending & Approved Readings <-> https://twd-6pqd.onrender.com/api/readings
   try {
     let systemReadingMap = new Map<string, any>();
     const rdCheck = await fetchSystemSite("/api/readings", { method: "GET" });
@@ -7861,7 +7861,7 @@ async function syncWithSystemSitePeer(forceAll = false): Promise<void> {
     // Non-fatal
   }
 
-  // 5. Bidirectional Sync of Water Meter Installation Requests <-> https://twd-427m.onrender.com/api/installations
+  // 5. Bidirectional Sync of Water Meter Installation Requests <-> https://twd-6pqd.onrender.com/api/installations
   try {
     const instResp = await fetchSystemSite("/api/installations", { method: "GET" });
     if (instResp.ok) {

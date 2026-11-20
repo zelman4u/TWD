@@ -308,7 +308,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                 Register New Account
               </button>
               <a
-                href="https://mobile-li9q.onrender.com/"
+                href="https://meterreader.onrender.com/"
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={() => setMobileMenuOpen(false)}
@@ -999,9 +999,9 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
             <div className="md:col-span-4 space-y-4">
               <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Connected Systems</h4>
               <div className="space-y-2.5">
-                {typeof window !== 'undefined' && window.location.hostname.toLowerCase() !== 'twd-427m.onrender.com' && (
+                {typeof window !== 'undefined' && window.location.hostname.toLowerCase() !== 'twd-6pqd.onrender.com' && (
                   <a
-                    href="https://twd-427m.onrender.com/"
+                    href="https://twd-6pqd.onrender.com/"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center justify-between p-3 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-800 text-xs font-bold text-blue-300 transition group"
@@ -1011,7 +1011,7 @@ export default function LandingPage({ announcements, onNavigate }: LandingPagePr
                   </a>
                 )}
                 <a
-                  href="https://mobile-li9q.onrender.com/"
+                  href="https://meterreader.onrender.com/"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center justify-between p-3 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-800 text-xs font-bold text-sky-300 transition group"

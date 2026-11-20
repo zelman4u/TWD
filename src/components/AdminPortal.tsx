@@ -195,7 +195,7 @@ import {
 } from '../utils/odometer';
 
 const SYSTEM_SITE_URL = (
-  (import.meta as any).env?.VITE_SYSTEM_SITE_URL || 'https://twd-427m.onrender.com'
+  (import.meta as any).env?.VITE_SYSTEM_SITE_URL || 'https://twd-6pqd.onrender.com'
 ).replace(/\/+$/, '');
 
 const rawViteMobileTerminalUrl = (
@@ -203,13 +203,13 @@ const rawViteMobileTerminalUrl = (
 ).replace(/\/+$/, '');
 
 const MOBILE_FIELD_TERMINAL_URL =
-  rawViteMobileTerminalUrl && !rawViteMobileTerminalUrl.toLowerCase().includes('twd-427m.onrender.com')
+  rawViteMobileTerminalUrl && !rawViteMobileTerminalUrl.toLowerCase().includes('twd-6pqd.onrender.com')
     ? rawViteMobileTerminalUrl
-    : 'https://mobile-li9q.onrender.com';
+    : 'https://meterreader.onrender.com';
 
 const IS_HOSTED_ON_SYSTEM_SITE =
   typeof window !== 'undefined' &&
-  window.location.hostname.toLowerCase() === 'twd-427m.onrender.com';
+  window.location.hostname.toLowerCase() === 'twd-6pqd.onrender.com';
 
 function resolveReaderAssignedRoutes(r: any): string[] {
   const collected: string[] = [];
@@ -2952,7 +2952,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     // Permanently erase across all keys, users, readers, route assignments, and Firestore
     mockDb.deleteReader(reader.id, reader.employeeId, reader.email, reader.username, reader.name);
     
-    // Propagate termination to Central Web & Mobile Field Terminal (https://mobile-li9q.onrender.com)
+    // Propagate termination to Central Web & Mobile Field Terminal (https://meterreader.onrender.com)
     try {
       await apiClient.delete(`/api/staff/${encodeURIComponent(reader.id)}`, { 
         employeeId: reader.employeeId, 
@@ -3146,7 +3146,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
       const savedMeters = await mockDb.saveMeterAsync(updatedMeterObj, lookupSerial || updatedMeterObj.meterNumber);
       setMeters(savedMeters);
 
-      // 1b. Dispatch real-time meter status update to Central Backend & Mobile Field Terminal (https://mobile-li9q.onrender.com)
+      // 1b. Dispatch real-time meter status update to Central Backend & Mobile Field Terminal (https://meterreader.onrender.com)
       apiClient
         .syncMeterStatus(updatedMeterObj.meterNumber, {
           status: newStatus,
@@ -3898,7 +3898,7 @@ export default function AdminPortal({ currentUser, onLogout }: AdminPortalProps)
     loadAllDataFromStore();
   };
 
-  // Action: Manual Two-Way Sync with Live Mobile Field Terminal (https://mobile-li9q.onrender.com)
+  // Action: Manual Two-Way Sync with Live Mobile Field Terminal (https://meterreader.onrender.com)
   const handleSyncMobileTerminalNow = async () => {
     if (isSyncingMobileBridge) return;
     setIsSyncingMobileBridge(true);

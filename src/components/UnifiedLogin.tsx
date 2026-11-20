@@ -745,7 +745,7 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
             </p>
             <div className="pt-0.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
               <a
-                href="https://mobile-li9q.onrender.com/"
+                href="https://meterreader.onrender.com/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-400 hover:text-sky-300 transition"
@@ -754,9 +754,9 @@ export default function UnifiedLogin({ onLoginSuccess, onBackToHome, onNavigateT
                 <span>Handheld Reader Terminal</span>
                 <ExternalLink className="h-2.5 w-2.5 opacity-80 shrink-0" />
               </a>
-              {typeof window !== 'undefined' && window.location.hostname.toLowerCase() !== 'twd-427m.onrender.com' && (
+              {typeof window !== 'undefined' && window.location.hostname.toLowerCase() !== 'twd-6pqd.onrender.com' && (
                 <a
-                  href="https://twd-427m.onrender.com/"
+                  href="https://twd-6pqd.onrender.com/"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-400 hover:text-blue-300 transition"
